@@ -19,7 +19,7 @@ pub trait ModerationStore: Send + Sync {
     async fn list_reports(&self) -> PersistenceResult<Vec<Value>>;
     async fn list_actions(&self) -> PersistenceResult<Vec<Value>>;
 
-    /// Append a `ck.moderation.decision` record. The JSON must carry at
+    /// Append a `ak.moderation.decision` record. The JSON must carry at
     /// least `decision_id`, `target_ref`, `action`, `decided_by`,
     /// `decided_at`. Idempotent on `decision_id`.
     async fn append_decision(&self, _decision: Value) -> PersistenceResult<()> {
@@ -34,7 +34,7 @@ pub trait ModerationStore: Send + Sync {
         Ok(None)
     }
     /// Mark a decision as lifted (used when an appeal verdict=overturn
-    /// is paired with `ck.moderation.decision.lift`). Stores the lift
+    /// is paired with `ak.moderation.decision.lift`). Stores the lift
     /// record verbatim; readers MUST join against `list_decisions` to
     /// determine the current active state.
     async fn append_decision_lift(&self, _lift: Value) -> PersistenceResult<()> {

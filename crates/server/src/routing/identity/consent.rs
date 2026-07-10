@@ -1,7 +1,7 @@
 //! Holder-private consent cell routes.
 //!
 //! This is the G3.S4 minimal reducer surface for
-//! `ck.component.consent.grant.v1`: the in-process projection stores one
+//! `ak.component.consent.grant.v1`: the in-process projection stores one
 //! OR-set-like cell per `(holder_did, peer_did, scope)`, and contact
 //! requests consult that projection before opening or accepting a request.
 
@@ -644,7 +644,7 @@ pub(crate) fn active_invite_consent_grant_ref(
 
 /// Spec `contact-and-direct-conversation.md` §3 — a contact accept (and the
 /// requester-side grant a contact request opens) MUST write a real
-/// target/requester-controlled `ck.consent.grant` whose **event ref** is
+/// target/requester-controlled `ak.consent.grant` whose **event ref** is
 /// referenced from `consent_grant_refs[]` / `requester_consent_refs[]`.
 ///
 /// The minted grant dot therefore uses the event-bearing
@@ -700,7 +700,7 @@ pub(crate) struct ConsentCellMutation {
     pub updated: ConsentCellRecord,
 }
 
-/// Spec contact-and-direct-conversation.md §3 — `ck.self.contact.command.tombstone`
+/// Spec contact-and-direct-conversation.md §3 — `ak.self.contact.command.tombstone`
 /// MUST enumerate and revoke the holder's contact-managed active grant
 /// dots toward `peer`. When `scopes` is empty, default to every scope the
 /// holder currently grants `peer` (the recommended `revoke_scopes` default).
@@ -1090,14 +1090,14 @@ fn consent_key(holder: &str, peer: &str, scope: &str) -> ConsentCellKey {
 
 fn consent_cell_id(holder: &str, peer: &str, scope: &str) -> String {
     let digest = sha256_hex(format!("{holder}\0{peer}\0{scope}").as_bytes());
-    format!("ak:cell:ck.component.consent.grant.v1:{}", &digest[..32])
+    format!("ak:cell:ak.component.consent.grant.v1:{}", &digest[..32])
 }
 
 fn consent_cell_id_for_consent_id(consent_id: &str) -> String {
     if consent_id.starts_with("ak:cell:") {
         consent_id.to_owned()
     } else {
-        format!("ak:cell:ck.component.consent.grant.v1:{consent_id}")
+        format!("ak:cell:ak.component.consent.grant.v1:{consent_id}")
     }
 }
 

@@ -1,8 +1,8 @@
-//! G3.S2 — `ck.realm.policy_server` reducer.
+//! G3.S2 — `ak.realm.policy_server` reducer.
 //!
-//! Projects the per-Realm `ck.realm.policy_server` declaration into:
+//! Projects the per-Realm `ak.realm.policy_server` declaration into:
 //!
-//! 1. the canonical `ck.component.realm.policy_server.v1` cas-register cell (per SDK
+//! 1. the canonical `ak.component.realm.policy_server.v1` cas-register cell (per SDK
 //!    `lattice_registry::RealmPolicyServer`); and
 //! 2. the structured side-band cache [`crate::reducer::ProjectionState::realm_policy_servers`].
 //!
@@ -33,7 +33,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 2000;
 /// for any Realm that does not opt-out.
 const DEFAULT_ON_TIMEOUT: &str = "fail_closed";
 
-/// Apply a `ck.realm.policy_server` event to projection state.
+/// Apply a `ak.realm.policy_server` event to projection state.
 ///
 /// Payload schema (subset enforced here):
 /// ```json
@@ -117,10 +117,10 @@ pub fn apply_realm_policy_server(
 
     let now = operation.created_at;
 
-    // Cell write — `ck.component.realm.policy_server.v1` (cas-register,
+    // Cell write — `ak.component.realm.policy_server.v1` (cas-register,
     // keyed by realm_id per SDK lattice_registry).
     if let Ok(cell_id) = CellRef::new(format!(
-        "ak:cell:ck.component.realm.policy_server.v1:{realm_id}"
+        "ak:cell:ak.component.realm.policy_server.v1:{realm_id}"
     )) {
         let value = serde_json::json!({
             "realm_id": realm_id,
@@ -230,7 +230,7 @@ mod tests {
 
         // Cell projection.
         let cell_id = CellRef::new(format!(
-            "ak:cell:ck.component.realm.policy_server.v1:{REALM_CHILD}"
+            "ak:cell:ak.component.realm.policy_server.v1:{REALM_CHILD}"
         ))
         .unwrap();
         let value = state.cell_value(&cell_id).expect("cell present");

@@ -16,7 +16,7 @@ const MOD_REQUEST_DIGEST: &str =
 
 fn mod_decision_cell_ref() -> CellRef {
     CellRef::new(format!(
-        "ak:cell:ck.component.moderation_state.v1:{MOD_TARGET_REF}"
+        "ak:cell:ak.component.moderation_state.v1:{MOD_TARGET_REF}"
     ))
     .unwrap()
 }

@@ -299,7 +299,7 @@ fn membership_join_leave() {
     // `membership=join` MUST carry `delivery_status` per
     // arkret-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
     // We use `unroutable` so the projection write path does not
-    // additionally require a projected `ck.realm.delivery_binding_policy`
+    // additionally require a projected `ak.realm.delivery_binding_policy`
     // cell (`routable` joins are exercised by the delivery-binding
     // suite).
     state.apply(

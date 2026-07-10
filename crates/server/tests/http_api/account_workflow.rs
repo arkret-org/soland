@@ -954,7 +954,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
 
     // Protocol snapshot head fails closed: soland cannot produce a signed
-    // ak.schema.snapshot.v1 manifest, so `ck.self.snapshot.query.manifest_head` answers
+    // ak.schema.snapshot.v1 manifest, so `ak.self.snapshot.query.manifest_head` answers
     // `not_implemented` (spec service-surface.md §5.2).
     let mut protocol_head = TestClient::get(format!(
         "http://server/_arkret/self/snapshot/head?realm_id={realm_id}"
@@ -1105,7 +1105,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(forbidden_audit.status_code.unwrap().as_u16(), 403);
 
     // Exercise the canonical spec path `/_arkret/gate/account/logout`
-    // (ck.gate.account.command.logout) — the only device-logout surface.
+    // (ak.gate.account.command.logout) — the only device-logout surface.
     let logout: Value = TestClient::post("http://server/_arkret/gate/account/logout")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))

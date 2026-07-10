@@ -3,14 +3,14 @@
 //!
 //! Surfaces for the current sync/event wire layout:
 //! - `GET  /_arkret/self/account/describe`
-//! - `GET  /_arkret/self/account/subscribe`       — `ck.self.account.stream.subscribe`
+//! - `GET  /_arkret/self/account/subscribe`       — `ak.self.account.stream.subscribe`
 //!   (account-aggregate NDJSON: timeline, presence, typing, to_device).
-//! - `POST /_arkret/self/ephemeral`               — `ck.self.ephemeral.command.send` (broadcast
+//! - `POST /_arkret/self/ephemeral`               — `ak.self.ephemeral.command.send` (broadcast
 //!   ephemeral)
-//! - `GET  /_arkret/self/events/subscribe`        — `ck.self.events.stream.subscribe`. Multi-Realm
+//! - `GET  /_arkret/self/events/subscribe`        — `ak.self.events.stream.subscribe`. Multi-Realm
 //!   / multi-actor stream; frame `kind` field replaces `type`.
-//! - `GET  /_arkret/self/events`                  — `ck.self.events.query.scan` (replaces
-//!   `ck.events.list` + `ck.sync.backfill` via `direction=forward|backward`).
+//! - `GET  /_arkret/self/events`                  — `ak.self.events.query.scan` (replaces
+//!   `ak.events.list` + `ak.sync.backfill` via `direction=forward|backward`).
 //! - `GET  /_arkret/self/snapshot/head`
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,

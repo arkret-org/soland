@@ -64,7 +64,7 @@ fn bottom_entry_from_camel_case_kind_normalises_to_snake_case() {
     });
     let entry = bottom_entry_from(
         "ak:space:01904100-0000-7000-8000-2dd3431bd65a",
-        "ak:cell:ck.component.space.title.v1:ak:space:01904100-0000-7000-8000-2dd3431bd65a",
+        "ak:cell:ak.component.space.title.v1:ak:space:01904100-0000-7000-8000-2dd3431bd65a",
         &bottom,
     );
     assert_eq!(entry.kind, "conflict");
@@ -83,7 +83,7 @@ fn bottom_entry_from_non_conflict_kind_has_no_candidate_heads() {
     });
     let entry = bottom_entry_from(
         "ak:space:01904100-0000-7000-8000-2dd3431bd65a",
-        "ak:cell:ck.component.member.state.v1:did.web.alice",
+        "ak:cell:ak.component.member.state.v1:did.web.alice",
         &bottom,
     );
     assert_eq!(entry.kind, "invalid_transition");
@@ -181,7 +181,7 @@ fn notary_cell_for_builds_canonical_cell_ref() {
     let cell = notary_cell_for("ak:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
     assert_eq!(
         cell.as_str(),
-        "ak:cell:ck.component.notary.v1:ak:space:01904100-0000-7000-8000-2dd3431bd65a"
+        "ak:cell:ak.component.notary.v1:ak:space:01904100-0000-7000-8000-2dd3431bd65a"
     );
 }
 

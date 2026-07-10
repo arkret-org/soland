@@ -599,7 +599,7 @@ pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<St
 }
 
 /// SOL-ORG-05 — the organization DIDs whose active, in-window
-/// `ck.realm.organization` statement endorses `realm_id` with a
+/// `ak.realm.organization` statement endorses `realm_id` with a
 /// `moderation_policy` control scope. This is the ONLY basis on which an
 /// organization's moderation policy may flow into the Realm's effective policy;
 /// `owning_organizations` declared hints no longer qualify. Returns a stable,
@@ -625,7 +625,7 @@ pub(crate) fn effective_policy_for_realm(
     realm_id: &str,
 ) -> RealmEffectiveModerationPolicyOutcome {
     // SOL-ORG-05 — only organizations with a verified, active, in-window
-    // `ck.realm.organization` statement carrying the `moderation_policy`
+    // `ak.realm.organization` statement carrying the `moderation_policy`
     // control scope drive the effective moderation policy. Declared
     // `owning_organizations` hints no longer qualify.
     let org_ids = verified_moderation_organization_ids(state, realm_id);

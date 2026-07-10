@@ -1,7 +1,7 @@
 //! Reducer-level tests for Join Policy `principal_admission`.
 //!
 //! The gate is a hard pre-admission constraint: when the projected
-//! `ck.realm.policy_components.join_policy` contains it, `membership=join`
+//! `ak.realm.policy_components.join_policy` contains it, `membership=join`
 //! must pass before the member FSM is updated.
 
 use chrono::{Duration, Utc};

@@ -1,7 +1,7 @@
 use super::*;
 
-/// CKP-0010 — agent participation policy persistence. Controller
-/// selections (`ck.agent.participation.v1`) and the governance ceiling
+/// AKP-0010 — agent participation policy persistence. Controller
+/// selections (`ak.agent.participation.v1`) and the governance ceiling
 /// projection are stored as JSON records mirroring the
 /// `arkret_core::AgentParticipation*` wire shape (keys:
 /// agent_principal_id, scope, scope_kind, scope_key, realm_id, reply,
@@ -290,7 +290,7 @@ impl AgentParticipationStore for PgAgentParticipationStore {
     }
 }
 
-/// CKP-0008 — native personal agent principal persistence (provision /
+/// AKP-0008 — native personal agent principal persistence (provision /
 /// list / get / lifecycle). JSON Value records carry the soland-internal
 /// agent_principal columns: agent_principal_id, controller_did, agent_id,
 /// display_name, agent_slug, state, created_at, updated_at. The wire boundary

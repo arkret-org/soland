@@ -25,7 +25,7 @@ fn applet_projection_namespace(payload: &serde_json::Value) -> String {
 }
 
 impl ProjectionState {
-    /// Apply `ck.applet.registration`. Upserts the
+    /// Apply `ak.applet.registration`. Upserts the
     /// AppletProjection keyed by `service_did`. Re-registration with
     /// the same DID is allowed (replace capabilities + bump
     /// updated_at), matching the spec convention that registration is
@@ -72,7 +72,7 @@ impl ProjectionState {
         ProjectionEffect::AppletProjectionUpdated { service_did }
     }
 
-    /// Apply `ck.applet.discovery`. Updates the manifest
+    /// Apply `ak.applet.discovery`. Updates the manifest
     /// on an existing AppletProjection. If the applet hasn't registered
     /// yet (causal / backfill window), creates a stub entry with the
     /// manifest and empty namespace; subsequent registration will fill
@@ -109,7 +109,7 @@ impl ProjectionState {
         ProjectionEffect::AppletProjectionUpdated { service_did }
     }
 
-    /// Apply `ck.agent.endpoint`. Upserts the SolandAgentProjection keyed by
+    /// Apply `ak.agent.endpoint`. Upserts the SolandAgentProjection keyed by
     /// `agent_id`. If the payload carries an endpoint URL field it
     /// is captured into the projection so the bridge can echo it back
     /// on `interop_session.result`.
@@ -238,9 +238,9 @@ impl ProjectionState {
     /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — apply
     /// an `ck.agent.{pause,resume,deactivate}` FSM transition. The
     /// lattice is `fsm` with `bottom=reject`; allowed transitions are:
-    ///   - Active → Paused                 via `ck.self.agent.pause`
-    ///   - Paused → Active                 via `ck.self.agent.resume`
-    ///   - {Active,Paused} → Deactivated   via `ck.self.agent.deactivate`
+    ///   - Active → Paused                 via `ak.self.agent.pause`
+    ///   - Paused → Active                 via `ak.self.agent.resume`
+    ///   - {Active,Paused} → Deactivated   via `ak.self.agent.deactivate`
     ///
     /// `Deactivated` is terminal — any further transition (including a
     /// resume) is rejected.

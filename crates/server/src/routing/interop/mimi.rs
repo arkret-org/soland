@@ -4,14 +4,14 @@
 //! `mimi-protocol-directory`. Writes from the MIMI side map into the
 //! canonical Arkret reducer chain:
 //!
-//!   * `POST /mimi/strands/{strand_id}/messages` -> emits a `MessageRecord` + a `ck.message.create`
+//!   * `POST /mimi/strands/{strand_id}/messages` -> emits a `MessageRecord` + a `ak.message.create`
 //!     projection event so the MIMI ingress shows up on the canonical Arkret timeline.
-//!   * `POST /mimi/strands/{strand_id}/update` -> emits a `ck.mimi.room_binding` projection event
+//!   * `POST /mimi/strands/{strand_id}/update` -> emits a `ak.mimi.room_binding` projection event
 //!     whenever the update body carries a `room_binding` block.
 //!   * `POST /mimi/strands/{strand_id}/notify` -> broadcasts a synthetic
-//!     `ck.open.mimi.command.notify` projection event so live subscribers observe MIMI fanout.
+//!     `ak.open.mimi.command.notify` projection event so live subscribers observe MIMI fanout.
 //!   * `POST /mimi/report-abuse` -> persists the moderation report row AND emits a
-//!     `ck.self.moderation.report` projection event so the audit timeline reflects the report.
+//!     `ak.self.moderation.report` projection event so the audit timeline reflects the report.
 //!
 //! Each canonical event carries `payload.mimi_provenance` metadata
 //! (provider id, original MIMI envelope hash, MIMI message id) so

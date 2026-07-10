@@ -12,7 +12,7 @@
 //!   payloads MUST pass.
 //! - `validate_content_blocks` / `validate_mentions` / `validate_content_block` — message body
 //!   shape.
-//! - `validate_encrypted_payload_envelope` — `ck.profile.encrypted_envelope.v1` envelope shape (MLS
+//! - `validate_encrypted_payload_envelope` — `ak.profile.encrypted_envelope.v1` envelope shape (MLS
 //!   sender / scheme / version / `key_ref`).
 //! - `validate_device_message_target` — to-device transport shape (typed `DeviceMessageTarget`).
 //! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields is validated via the SDK

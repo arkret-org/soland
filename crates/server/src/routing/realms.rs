@@ -2,18 +2,18 @@
 //!
 //! Surfaces:
 //! - `GET /_arkret/self/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...
-//!   ` — list the typed cross-Realm links projected from `ck.realm.link` events. Powered by
+//!   ` — list the typed cross-Realm links projected from `ak.realm.link` events. Powered by
 //!   [`crate::reducer::ProjectionState::realm_links_query`].
-//! - `POST /_arkret/self/realms/{realm_id}/links` — write a `ck.realm.link` Move from `realm_id →
+//! - `POST /_arkret/self/realms/{realm_id}/links` — write a `ak.realm.link` Move from `realm_id →
 //!   target_realm_id`. The reducer runs the `realm_link_*` validators including cycle detection
 //!   (G3.S5); a rejected payload comes back as HTTP 422 with the spec reason code (e.g.
 //!   `realm_link_cycle`, `realm_link_self_reference`).
 //! - `DELETE /_arkret/self/realms/{realm_id}/links/{target_realm_id}` — write a tombstoning
-//!   `ck.realm.link` Move (status = `tombstoned`) for the `(realm_id, target_realm_id, link_kind)`
+//!   `ak.realm.link` Move (status = `tombstoned`) for the `(realm_id, target_realm_id, link_kind)`
 //!   triple. `link_kind` defaults to `governed_by`; callers may override via query param.
 //! - `GET /_arkret/self/realms/{realm_id}/effective-policy` — return the merged effective policy
 //!   after walking `governed_by` / `inherits_policy_from` ancestors per the realm's
-//!   `ck.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
+//!   `ak.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
 //!   effective_policy, inheritance_chain, inheritance_mode}`.
 
 use std::collections::BTreeMap;
@@ -47,7 +47,7 @@ use crate::routing::organizations;
 use crate::state::AppState;
 
 /// Protocol-surface realm governance routes, mounted under
-/// `/_arkret/self/realms/...`. Only spec-registered `ck.self.realm_link.*`
+/// `/_arkret/self/realms/...`. Only spec-registered `ak.self.realm_link.*`
 /// operations live here — every URL has an `operation-registry.json` entry.
 pub(crate) fn router() -> Router {
     Router::with_path("realms")
@@ -66,7 +66,7 @@ pub(crate) fn router() -> Router {
 /// is a spec **candidate** workflow concept (`governance/join-policy.md` §7.2,
 /// `conformance/schema-registry.md:178`) that MUST NOT use the `ck.*` prefix or
 /// occupy the `/_arkret/...` protocol root before formal registration. It is
-/// gated behind the `ck.profile.candidate.join_policy.v1` profile and uses the
+/// gated behind the `ak.profile.candidate.join_policy.v1` profile and uses the
 /// reverse-domain `org.arkret.soland.*` operation namespace.
 pub(crate) fn local_router() -> Router {
     Router::with_path("realms")
@@ -203,8 +203,8 @@ pub struct MemberApplicationListOutcome {
 /// the `ck.*` namespace until formally registered, so this read surface lives on
 /// the product-local `/_soland/self/realms/{realm_id}/applications` URL under the
 /// reverse-domain `org.arkret.soland.*` namespace and is fail-closed (404) unless
-/// the deployment declares `ck.profile.candidate.join_policy.v1`. Each reviewer
-/// read of an application body is logged as `ck.audit.accessed` (§8.1).
+/// the deployment declares `ak.profile.candidate.join_policy.v1`. Each reviewer
+/// read of an application body is logged as `ak.audit.accessed` (§8.1).
 #[endpoint(
     operation_id = "org.arkret.soland.member_application.query.list",
     tags("soland-local"),
@@ -250,7 +250,7 @@ async fn list_member_applications(
         let receipts = projection.member_application_receipts(realm_id.as_str());
         (applications, viewer_is_reviewer, receipts)
     };
-    // §8.1 — write one `ck.audit.accessed` per reviewer body read.
+    // §8.1 — write one `ak.audit.accessed` per reviewer body read.
     if viewer_is_reviewer {
         for receipt_digest in receipts {
             super::admin::audit::append_audit_log(
@@ -276,7 +276,7 @@ async fn list_member_applications(
     })
 }
 
-/// G3.S5 — POST a new `ck.realm.link` Move. Builds an `Operation` for
+/// G3.S5 — POST a new `ak.realm.link` Move. Builds an `Operation` for
 /// `arkret_sdk::events::kinds::REALM_LINK` and routes through the standard
 /// `accept_local_operations` pipeline so reducer-level validators
 /// (cycle detection, kind validation, self-reference rejection) all run.
@@ -354,7 +354,7 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
         .with_wire_code(reason)
 }
 
-/// G3.S5 — DELETE a `ck.realm.link`. Writes a `tombstoned`-status
+/// G3.S5 — DELETE a `ak.realm.link`. Writes a `tombstoned`-status
 /// Move for the `(realm_id, target_realm_id, link_kind)` triple. The
 /// underlying cell is or_set keyed on the triple, so the tombstone
 /// flip replaces the previous status in place (spec §4).
@@ -448,7 +448,7 @@ async fn delete_realm_link(
 /// ```
 ///
 /// Per spec `realm-links.md §5`, `inheritance_mode = "none"` when the
-/// realm has not projected a `ck.realm.inheritance_policy` — the
+/// realm has not projected a `ak.realm.inheritance_policy` — the
 /// `effective_policy` collapses to the realm's own local policy in
 /// that case.
 #[endpoint(

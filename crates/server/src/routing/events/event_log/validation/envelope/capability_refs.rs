@@ -187,7 +187,7 @@ pub(super) fn validate_data_event_joined_capability_view(
     grant_id: &str,
 ) -> Result<(), EventValidationError> {
     let cell_ref = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.capability.grant.v1:{grant_id}"
+        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
     .map_err(|_| {
         event_validation_error(
@@ -334,7 +334,7 @@ pub(super) fn data_event_grants_from_state_at_ref(
     state_at_ref: &std::collections::BTreeMap<arkret_sdk::CellRef, arkret_sdk::lattice::CellState>,
 ) -> std::collections::BTreeMap<String, crate::authz::Grant> {
     let mut grants = std::collections::BTreeMap::new();
-    const CAPABILITY_GRANT_CELL_PREFIX: &str = "ak:cell:ck.component.capability.grant.v1:";
+    const CAPABILITY_GRANT_CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
     for (cell_ref, cell_state) in state_at_ref {
         let Some(grant_id) = cell_ref.as_str().strip_prefix(CAPABILITY_GRANT_CELL_PREFIX) else {
             continue;
@@ -427,7 +427,7 @@ pub(super) fn seal_view_declares_relaxed_e2ee(
     state_at_ref: &std::collections::BTreeMap<arkret_sdk::CellRef, arkret_sdk::lattice::CellState>,
 ) -> bool {
     let Ok(policy_cell) = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.realm.policy_components.v1:{}",
+        "ak:cell:ak.component.realm.policy_components.v1:{}",
         realm.as_str()
     )) else {
         return false;

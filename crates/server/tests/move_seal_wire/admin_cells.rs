@@ -48,7 +48,7 @@ async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
     // Cell family is registered (member.state.v1 lives in the SDK default
     // registry) but no Move ever wrote to this subject — so the cell is
     // "absent" and the endpoint returns 404 with the canonical envelope.
-    let unknown = "ak:cell:ck.component.member.state.v1:did.web.nobody.example";
+    let unknown = "ak:cell:ak.component.member.state.v1:did.web.nobody.example";
     let mut resp = TestClient::get(format!(
         "http://server/_soland/admin/cells/{unknown}?realm_id={}",
         realm_id().as_str()
@@ -134,9 +134,9 @@ async fn admin_list_cells_filters_by_prefix() {
         .await
         .unwrap();
 
-    // List with prefix=ck.component.consent. → only the consent.grant cell.
+    // List with prefix=ak.component.consent. → only the consent.grant cell.
     let mut resp = TestClient::get(format!(
-        "http://server/_soland/admin/cells?realm_id={}&prefix=ck.component.consent.",
+        "http://server/_soland/admin/cells?realm_id={}&prefix=ak.component.consent.",
         realm_id().as_str()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
@@ -156,7 +156,7 @@ async fn admin_list_cells_filters_by_prefix() {
     for cell in cells {
         let cid = cell["cell_id"].as_str().unwrap_or("");
         assert!(
-            cid.contains(":ck.component.consent."),
+            cid.contains(":ak.component.consent."),
             "every listed cell must match the prefix filter; got `{cid}`"
         );
     }

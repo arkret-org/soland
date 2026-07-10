@@ -1,4 +1,4 @@
-//! Ephemeral signal admission (`ck.self.ephemeral.command.send`): typing /
+//! Ephemeral signal admission (`ak.self.ephemeral.command.send`): typing /
 //! presence / read-receipt validation + persistence. Split out of `sync.rs`
 //! (SOL-07-002) as a self-contained unit — no cross-module callers other than
 //! the parent router, which references `ephemeral::submit_ephemeral`.
@@ -76,9 +76,9 @@ pub(super) async fn submit_ephemeral(
             false
         }
         "ak.call.signal" => {
-            // `service-http-binding.md` §162 — sending a `ck.call.signal`
+            // `service-http-binding.md` §162 — sending a `ak.call.signal`
             // envelope on `/_arkret/self/ephemeral` requires the realm-scoped
-            // `ck.call.signal.send` capability (registered in
+            // `ak.call.signal.send` capability (registered in
             // `capability-action-registry.json`). Realm membership stays a
             // precondition (checked above); signal-send authority is an
             // explicit capability so a member without it cannot relay call
@@ -126,7 +126,7 @@ pub(super) async fn submit_ephemeral(
     })
 }
 
-/// `webrtc-signaling.md` §5 — persist the verbatim signed `ck.call.signal`
+/// `webrtc-signaling.md` §5 — persist the verbatim signed `ak.call.signal`
 /// envelope into the realm-broadcast relay so subscribers in the Realm pick it
 /// up off `ephemeral.call_signals` and verify the carried `proof`. The
 /// envelope is stored unmodified (proof intact) and pruned at its TTL.
@@ -196,7 +196,7 @@ fn validate_ephemeral_envelope(
     // ephemeral-envelope.schema.json: every broadcast ephemeral kind MUST
     // carry `device_id` and a detached-JWS `proof` whose verification_method
     // is `{actor_id}#{device_id}` and whose event_digest covers the canonical
-    // envelope bytes without `proof`. (`ck.realm_key.request` is a targeted
+    // envelope bytes without `proof`. (`ak.realm_key.request` is a targeted
     // to-device relay, not one of the four broadcast kinds, and keeps its own
     // admission rules in realm_key_request.rs.)
     if matches!(
@@ -447,7 +447,7 @@ async fn admit_ephemeral_read_receipt(
     Ok(())
 }
 
-/// `webrtc-signaling.md` §5 — structural admission for `ck.call.signal`
+/// `webrtc-signaling.md` §5 — structural admission for `ak.call.signal`
 /// envelopes arriving on the canonical `/ephemeral` channel (the path the
 /// canonical client takes). We reuse the SDK
 /// [`arkret_sdk::validate_call_signal_envelope`] as the single truth source

@@ -5,10 +5,10 @@
 use super::*;
 
 impl ProjectionState {
-    /// Apply `ck.strand.create` — populate the `strands` projection from
+    /// Apply `ak.strand.create` — populate the `strands` projection from
     /// the wire `object` field. Spec: common-fields.md §5 + strand schema.
     /// Idempotent: re-create with same id overwrites the existing entry
-    /// (LWW), but the preflight will accept it since `ck.strand.create` has
+    /// (LWW), but the preflight will accept it since `ak.strand.create` has
     /// no source-state guard.
     pub(crate) fn apply_strand_create(
         &mut self,
@@ -62,7 +62,7 @@ impl ProjectionState {
                 };
             }
         };
-        // CKP-0007: intra-Realm discussion boundaries are expressed via
+        // AKP-0007: intra-Realm discussion boundaries are expressed via
         // `scope_circle_id` (Circle); when present, validate the Circle is in
         // this Realm and active.
         if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
@@ -151,7 +151,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ck.strand.update` — patch title / summary on an existing Strand.
+    /// Apply `ak.strand.update` — patch title / summary on an existing Strand.
     /// Spec common-fields.md §5.1: update on non-active object MUST fail
     /// with `strand_not_active`. Unknown Strand is queued for pending replay.
     pub(crate) fn apply_strand_update(
@@ -165,7 +165,7 @@ impl ProjectionState {
                 reason: "strand_update_missing_target_ref".to_owned(),
             };
         };
-        // CKP-0007: Strand scope is set at create time; `scope_circle_id`
+        // AKP-0007: Strand scope is set at create time; `scope_circle_id`
         // rebinds fail below with `scope_rebind_forbidden`.
         let Some(strand) = self.strands.get_mut(&strand_id) else {
             return self.queue_pending_replay(strand_id, operation, "strand_unknown");
@@ -219,7 +219,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ck.strand.archive` / `ck.strand.restore`. Spec
+    /// Apply `ak.strand.archive` / `ak.strand.restore`. Spec
     /// `common-fields.md §5.1` + `event-payload.schema.json`
     /// `object_lifecycle_payload`. Unknown Strand is queued for pending replay. The target id is
     /// carried by `target_ref` per spec.
@@ -273,7 +273,7 @@ impl ProjectionState {
         }
     }
 
-    /// Read-only preflight for `ck.strand.tracks.update`. Spec
+    /// Read-only preflight for `ak.strand.tracks.update`. Spec
     /// common-fields.md §5.1 update-on-non-active rule: track mutations
     /// are a kind of update; parent Strand MUST be Active or the admission
     /// MUST `failed_precondition` with `strand_not_active` before
@@ -308,9 +308,9 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Apply `ck.strand.move` / `ck.strand.reorder`. These events
+    /// Apply `ak.strand.move` / `ak.strand.reorder`. These events
     /// don't affect Strand lifecycle state — they write to the
-    /// `ck.component.strand.position.v1` cell family on the Move/Seal
+    /// `ak.component.strand.position.v1` cell family on the Move/Seal
     /// pipeline. The Event-Envelope reducer just bumps `updated_at` /
     /// `updated_by` on the Strand projection so read-after-write sees the
     /// touch. Unknown Strand is queued for pending replay.
@@ -371,7 +371,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ck.strand.tracks.update` server-side. State guard runs in
+    /// Apply `ak.strand.tracks.update` server-side. State guard runs in
     /// `check_strand_tracks_transition` preflight; by the time this reducer
     /// fires, the parent Strand is known to be Active. Unknown Strand targets
     /// are queued for pending replay.
@@ -427,8 +427,8 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ck.strand.watch.set`. Writes the watch cell on the
-    /// Move/Seal pipeline (cas-register `ck.component.strand.watch.v1`);
+    /// Apply `ak.strand.watch.set`. Writes the watch cell on the
+    /// Move/Seal pipeline (cas-register `ak.component.strand.watch.v1`);
     /// the soland projection records the materialised value into
     /// `projection_strand_watches` via `ProjectionEffect::StrandWatchUpdated`.
     /// The Strand's `updated_at` is NOT bumped — watch is a per-(strand, actor)
@@ -436,7 +436,7 @@ impl ProjectionState {
     /// / backfill).
     ///
     /// Reducer invariant: `payload.watcher_actor_id == operation.sender` unless
-    /// the writer is gated by `ck.strand.watch.set.others` (capability
+    /// the writer is gated by `ak.strand.watch.set.others` (capability
     /// check happens at the routing layer; this projection only records).
     pub(crate) fn apply_strand_watch_set(
         &mut self,

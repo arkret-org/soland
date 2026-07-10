@@ -166,7 +166,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ak.open.agent_pairing.command.submit_runtime_key_request",
         "submit agent runtime key request for controller approval",
     ),
-    // Circle admin surface (`ck.self.circle.*`) was promoted to the protocol
+    // Circle admin surface (`ak.self.circle.*`) was promoted to the protocol
     // surface at `/_arkret/self/circles*`; its operation ids are now emitted by
     // the typed `#[endpoint]` handlers in `circles.rs`, so they no longer appear
     // in this soland-extension table.
@@ -457,7 +457,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ak.self.authz.query.check",
         "check authorization",
     ),
-    // policy_document CRUD (`ck.self.policy_document.*`) was promoted to the
+    // policy_document CRUD (`ak.self.policy_document.*`) was promoted to the
     // protocol surface at `/_arkret/self/policies*`; its operation ids are now
     // emitted by the typed `#[endpoint]` handlers in `access/policy.rs`. The
     // soland-local PATCH compatibility route stays on the product surface but is
@@ -630,7 +630,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ak.open.mimi.command.proxy_download",
         "MIMI proxy download",
     ),
-    // CKP-0008 / CKP-0009 (spec head 37ce729) — Personal Agent + Sidecar
+    // AKP-0008 / AKP-0009 (spec head 37ce729) — Personal Agent + Sidecar
     // operations. Implementation lives at
     // `routing::identity::agents`; the table here makes the operations
     // visible to the OpenAPI snapshot + the 404/405 disambiguator.
@@ -704,7 +704,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ak.self.agent.grant.resource.delete",
         "detach a capability grant from a personal agent",
     ),
-    // CKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
+    // AKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
     // token exchange + signed ICE config. Canonical wire paths now live on
     // the `self` trust segment (`/_arkret/self/rtc/...`); the historical
     // `/arkret/v1/...` and `/api/v1/...` aliases are gone.

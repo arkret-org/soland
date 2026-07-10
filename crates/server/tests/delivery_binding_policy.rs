@@ -1,5 +1,5 @@
-//! Reducer-level tests for the `ck.realm.delivery_binding_policy`
-//! cell projection + `ck.member.state{join,routable}` validation
+//! Reducer-level tests for the `ak.realm.delivery_binding_policy`
+//! cell projection + `ak.member.state{join,routable}` validation
 //! (Round C46, spec join-policy.md §5.1).
 //!
 //! These tests drive `ProjectionState` directly so they stay tight on
@@ -296,7 +296,7 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
 
-    // No `ck.realm.delivery_binding_policy` was projected for this Realm.
+    // No `ak.realm.delivery_binding_policy` was projected for this Realm.
     assert!(
         state
             .realm_delivery_binding_policy_cell_value(REALM_A)

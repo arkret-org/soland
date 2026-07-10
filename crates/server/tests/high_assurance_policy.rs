@@ -83,7 +83,7 @@ fn high_assurance_accepts_closed_restricted_and_quarantine() {
     }
 }
 
-/// After a high_assurance Realm exists, a later `ck.realm.update` that
+/// After a high_assurance Realm exists, a later `ak.realm.update` that
 /// tries to switch `federation_policy=open` MUST be rejected even
 /// though the update event itself doesn't carry security_class.
 #[test]
@@ -108,7 +108,7 @@ fn high_assurance_rejects_post_create_open_federation_update() {
     ));
 
     // Mirror the create event into the organization cell too — in real
-    // operation `ck.realm.update` carries the canonical
+    // operation `ak.realm.update` carries the canonical
     // security_class/federation_policy snapshot. We do a follow-up
     // update to install both fields into the cas-register cell so the
     // R3.4 guard has a projected value to look up.

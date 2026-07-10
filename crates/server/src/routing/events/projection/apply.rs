@@ -587,7 +587,7 @@ async fn project_accepted_operations_inner(
         ensure_projected_realm(state, origin, operation).await;
         if kinds::operation_is_message_create(operation) {
             project_federated_message(state, origin, operation).await;
-            // CKP-0016 §9.4.5 — derive mention notifications with the agent
+            // AKP-0016 §9.4.5 — derive mention notifications with the agent
             // third-party mention gate.
             crate::routing::events::notify::dispatch_message_notifications(state, operation).await;
         } else if kinds::operation_is_invite_create(operation) {
@@ -614,7 +614,7 @@ async fn project_accepted_operations_inner(
             project_membership_operation(state, origin, operation).await;
         }
         // MID-3 (R3.1, arkret-spec @ 7157ee8) — persist accepted
-        // `ck.member.identity.update` events into the in-memory registry.
+        // `ak.member.identity.update` events into the in-memory registry.
         // Reducer-shape validation (segment whitelist, cross-cell guard,
         // digest binding) runs inside `project_member_identity_update`;
         // plaintext Ed25519 proof verification has already run at event
@@ -627,7 +627,7 @@ async fn project_accepted_operations_inner(
         // Cache ak.realm.read_receipt_policy state into ProjectionState so
         // ephemeral ak.receipt.read fanout (and other readers) can hit a
         // BTreeMap lookup instead of scanning the durable Event store.
-        // (R1.2 renamed `ck.space.read_receipt_policy` to `ck.realm.*`.)
+        // (R1.2 renamed `ak.space.read_receipt_policy` to `ck.realm.*`.)
         if kinds::canonical_kind_string(operation) == "ak.realm.read_receipt_policy" {
             project_read_receipt_policy(state, operation);
         }
@@ -650,7 +650,7 @@ async fn project_accepted_operations_inner(
             )
             .await;
         }
-        // Device-identity Phase 1 — persist an accepted `ck.device.authorize`'s
+        // Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
         // `payload.device_public_key` into the devices table so the
         // `keys/query` signing-key directory resolves devices that were
         // authorized but never opened a session (previously the key only
@@ -679,7 +679,7 @@ async fn project_accepted_operations_inner(
             mirror_mls_effect_to_persistence(state, origin, source_device_id, operation, &effect)
                 .await;
             mirror_moderation_effect_to_persistence(state, operation, &effect).await;
-            // SOL-ORG-04 — persist an accepted `ck.realm.organization`
+            // SOL-ORG-04 — persist an accepted `ak.realm.organization`
             // relationship statement projection durably.
             mirror_realm_organization_effect_to_persistence(state, &effect).await;
             // P1 — fold the projected capability grant cell back into the
@@ -702,7 +702,7 @@ async fn project_accepted_operations_inner(
         if kinds::canonical_kind_string(operation) == arkret_sdk::events::kinds::STRAND_UPDATE {
             crate::routing::events::notify::dispatch_schedule_notifications(state, operation).await;
         }
-        // CKP-0016 — mirror agent_participation ceiling changes into the
+        // AKP-0016 — mirror agent_participation ceiling changes into the
         // agent_participation_ceiling projection table (read by
         // participation.set / .get ceiling resolution).
         if let Some(record) =
@@ -738,8 +738,8 @@ async fn project_accepted_operations_inner(
             );
         }
         // Reference applet bridge: if the accepted operation is
-        // `ck.applet.interop_session.start`, emit a synthetic
-        // `ck.applet.interop_session.status` (echo response)
+        // `ak.applet.interop_session.start`, emit a synthetic
+        // `ak.applet.interop_session.status` (echo response)
         // immediately afterwards so the timeline observes the full
         // round trip without a real applet service plugged in. See
         // `routing::events::applet_bridge::maybe_emit_echo_status_for_session_start`
@@ -749,9 +749,9 @@ async fn project_accepted_operations_inner(
         )
         .await;
         // Reference agent runtime: if the accepted operation is
-        // `ck.agent.interop_session.start`, fan out a synthetic
-        // `ck.agent.interop_session.status` (running) followed by a
-        // terminal `ck.agent.interop_session.result` (completed) with
+        // `ak.agent.interop_session.start`, fan out a synthetic
+        // `ak.agent.interop_session.status` (running) followed by a
+        // terminal `ak.agent.interop_session.result` (completed) with
         // an `audit_binding` placeholder so the lifecycle is observable
         // end-to-end. See
         // `routing::events::agent_bridge::maybe_emit_echo_result_for_session_start`.
@@ -806,7 +806,7 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
     }
 }
 
-/// SOL-ORG-04 — persist an accepted `ck.realm.organization` relationship
+/// SOL-ORG-04 — persist an accepted `ak.realm.organization` relationship
 /// statement. The reducer has already verified (organization side) and
 /// projected the row into `ProjectionState::realm_organization_statements`;
 /// here we snapshot that row (under lock) and upsert it into the durable
@@ -1019,12 +1019,12 @@ async fn project_realm_key_share_to_device(
     }
 }
 
-/// Relay an ephemeral `ck.realm_key.request` to the provider device named by
+/// Relay an ephemeral `ak.realm_key.request` to the provider device named by
 /// `target_source_ref`. Mirrors [`project_realm_key_share_to_device`] /
 /// [`project_mls_welcome_to_device`]: the request rides the provider device's
-/// to-device queue so the provider can answer with a `ck.realm_key.share`.
+/// to-device queue so the provider can answer with a `ak.realm_key.share`.
 ///
-/// Unlike the durable `ck.realm_key.share` projection, `ck.realm_key.request`
+/// Unlike the durable `ak.realm_key.share` projection, `ak.realm_key.request`
 /// is wire-scope ephemeral (reducer_input=false) — there is no projected
 /// operation here. The caller (the ephemeral relay) has already verified the
 /// sender's membership/device signature and resolved the provider principal
@@ -1114,7 +1114,7 @@ fn realm_key_request_device_message_content(
     })
 }
 
-/// Device-identity Phase 1 — persist an accepted `ck.device.authorize`'s
+/// Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
 /// authoritative `device_public_key` into the devices inventory so the
 /// `keys/query` signing-key directory (`device-lifecycle.md` §8.2) can resolve
 /// a device that was authorized but never opened a session. Idempotent and
@@ -1241,7 +1241,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
 /// P1 — fold a projected capability grant cell back into the
 /// `SolandAuthzEngine` read index after the reducer wrote it. Called per
 /// accepted capability event. The grant cell
-/// (`ck.component.capability.grant.v1`) is the source of truth; this keeps
+/// (`ak.component.capability.grant.v1`) is the source of truth; this keeps
 /// the engine's in-memory index (read by `SolandAuthzEngine::check`) in sync
 /// with the projection without HTTP handlers writing it directly.
 fn refresh_authz_index_from_capability_effect(
@@ -1249,7 +1249,7 @@ fn refresh_authz_index_from_capability_effect(
     effect: &crate::reducer::ProjectionEffect,
 ) {
     use crate::reducer::ProjectionEffect;
-    // CKP-0008 §4.5 / D3 — pairing completion clears
+    // AKP-0008 §4.5 / D3 — pairing completion clears
     // `effective_after_first_authorized_key` on the agent's pending grants;
     // re-fold each cleared grant so it enters the engine read index now that
     // it is active.

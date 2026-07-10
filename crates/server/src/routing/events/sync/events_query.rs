@@ -1,11 +1,11 @@
-//! Multi-Realm / multi-actor event stream (`ck.self.events.stream.subscribe`),
-//! projection-aware events query (`ck.self.events.query.scan` + body form),
+//! Multi-Realm / multi-actor event stream (`ak.self.events.stream.subscribe`),
+//! projection-aware events query (`ak.self.events.query.scan` + body form),
 //! signed snapshot-manifest head, plus the NDJSON framing and reconnect-gate
 //! helpers shared by both subscribe surfaces.
 
 use super::*;
 
-/// `ck.self.events.stream.subscribe` at `GET /_arkret/self/events/subscribe`. NDJSON
+/// `ak.self.events.stream.subscribe` at `GET /_arkret/self/events/subscribe`. NDJSON
 /// streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
 ///
@@ -652,7 +652,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
     events
 }
 
-/// `ck.self.events.query.scan` at `GET /_arkret/self/events`.
+/// `ak.self.events.query.scan` at `GET /_arkret/self/events`.
 /// Reads from the projection layer so callers writing through
 /// `POST /_arkret/self/events` see their messages here.
 ///
@@ -819,7 +819,7 @@ async fn events_query_impl(
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
     // encryption-and-audit.md §2.10.8 — realms the caller may scan ONLY as a
     // recovery recipient (non-member). Per-event visibility for these realms is
-    // restricted to the caller's own RRK-targeted `ck.realm_key.share` events.
+    // restricted to the caller's own RRK-targeted `ak.realm_key.share` events.
     let mut recovery_only_realms: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
     for realm in realms {
@@ -984,7 +984,7 @@ async fn events_query_impl(
 /// this delegates to [`projection_record_visible_to_session`]. For a realm the
 /// caller reached ONLY via the recovery-recipient gate
 /// (`recovery_only == true`, encryption-and-audit.md §2.10.8), visibility is
-/// narrowed to the caller's own RRK-targeted `ck.realm_key.share` events — the
+/// narrowed to the caller's own RRK-targeted `ak.realm_key.share` events — the
 /// recovery org reads exactly the opaque ciphertext it can HPKE-open and nothing
 /// else from the realm timeline.
 async fn events_query_event_visible(
@@ -1012,7 +1012,7 @@ async fn events_query_event_visible(
 
 /// Enrich visible projection rows to full spec `Event` envelopes by fetching
 /// each event's canonical record from the durable Event store, so the
-/// Realm-scoped `ck.self.events.query` path returns the spec
+/// Realm-scoped `ak.self.events.query` path returns the spec
 /// `EventsQueryOutcome { events: Vec<Event> }` shape uniformly with the
 /// actor-scoped durable reader (SOL-05-003). Rows whose canonical record is
 /// absent (e.g. fully redacted / tombstoned) are dropped. Visibility and

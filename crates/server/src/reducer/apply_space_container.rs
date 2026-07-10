@@ -19,13 +19,13 @@ impl ProjectionState {
             None => return Ok(()),
         };
 
-        // `ck.space.create` is unconditional (only constraint is that no
+        // `ak.space.create` is unconditional (only constraint is that no
         // existing Space container with the same id — but LWW overwrite is fine
         // per the reducer's existing `insert`).
-        // `ck.space.update` / `ck.space.parent` require Active source.
-        // `ck.space.archive` requires Active.
-        // `ck.space.restore` requires Archived.
-        // `ck.space.tombstone` requires {Active, Archived}.
+        // `ak.space.update` / `ak.space.parent` require Active source.
+        // `ak.space.archive` requires Active.
+        // `ak.space.restore` requires Archived.
+        // `ak.space.tombstone` requires {Active, Archived}.
         let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
             arkret_sdk::events::kinds::SPACE_CREATE => return Ok(()),
             arkret_sdk::events::kinds::SPACE_UPDATE | arkret_sdk::events::kinds::SPACE_PARENT => {
@@ -63,7 +63,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Apply `ck.space.create` — populate the Space-container projection from
+    /// Apply `ak.space.create` — populate the Space-container projection from
     /// the wire `object` field. Idempotent: re-create with the same id
     /// overwrites the existing entry per LWW.
     pub(crate) fn apply_space_container_create(
@@ -85,7 +85,7 @@ impl ProjectionState {
                 reason: "space_create_missing_id".to_owned(),
             };
         };
-        // CKP-0007 — validate optional `scope_circle_id` /
+        // AKP-0007 — validate optional `scope_circle_id` /
         // `default_scope_circle_id` against the Realm + Circle state.
         // Either field MUST reference an active Circle in this Realm.
         for field in ["scope_circle_id", "default_scope_circle_id"] {
@@ -126,7 +126,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        // CKP-0007 rename batch 2026-05-25: wire field is `parent_space_id`.
+        // AKP-0007 rename batch 2026-05-25: wire field is `parent_space_id`.
         // The reducer keeps a transitional fallback to `parent_ref` so
         // soland's own internal reducer tests (which build payloads
         // directly without going through the wire validator) keep
@@ -191,7 +191,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ck.space.update` — patch title / rank / fields on an
+    /// Apply `ak.space.update` — patch title / rank / fields on an
     /// existing Space container. Per common-fields.md §5.1 ("update on non-active
     /// object MUST fail"): rejects with the spec `space_not_active` reason
     /// code if the target is not in Active state. Unknown Space container is
@@ -239,7 +239,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ck.space.parent` — update parent_ref. State-machine guard
+    /// Apply `ak.space.parent` — update parent_ref. State-machine guard
     /// (`parent on non-active MUST fail`) follows the same rule as
     /// `apply_space_container_update`.
     pub(crate) fn apply_space_container_parent(
@@ -316,7 +316,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply a `ck.space.archive` / `ck.space.restore` / `ck.space.tombstone`
+    /// Apply a `ak.space.archive` / `ak.space.restore` / `ak.space.tombstone`
     /// event with the canonical state-machine guard from
     /// `common-fields.md §5.1`. Unknown Space container (no prior
     /// ak.space.create in the projection) is queued for pending replay so causal /

@@ -26,7 +26,7 @@ pub(super) fn participation_from_value(row: &Value) -> AgentParticipation {
 /// Strand). Reads the `agent_participation_ceiling` projection for the
 /// enclosing scope_key chain and intersects each row over the deployment
 /// default; a scope with no ceiling rows inherits the deployment default
-/// (CKP-0010 §4.4, fail-closed by intersection).
+/// (AKP-0010 §4.4, fail-closed by intersection).
 pub(super) async fn resolve_effective_ceiling(
     state: &AppState,
     scope: &AgentParticipationScope,
@@ -70,7 +70,7 @@ pub(super) async fn set_agent_participation(
     let selection_value = serde_json::to_value(body.selection).unwrap_or(Value::Null);
     let ceiling_value = serde_json::to_value(ceiling).unwrap_or(Value::Null);
     let effective_value = serde_json::to_value(effective).unwrap_or(Value::Null);
-    // Persist the controller selection (ck.agent.participation.v1).
+    // Persist the controller selection (ak.agent.participation.v1).
     state
         .persistence
         .agent_participation()
@@ -102,10 +102,10 @@ pub(super) async fn set_agent_participation(
         "accepted",
     )
     .await;
-    // CKP-0016 §5.2 / CKP-0008 §4.9 (dev option B) — materialise the effective
+    // AKP-0016 §5.2 / AKP-0008 §4.9 (dev option B) — materialise the effective
     // participation decision into a durable capability grant. effective reply
-    // ⇒ `ck.capability.grant` (ck.message.create + ak.reaction.add over the
-    // scope resource); otherwise `ck.capability.revoke` (idempotent). The
+    // ⇒ `ak.capability.grant` (ak.message.create + ak.reaction.add over the
+    // scope resource); otherwise `ak.capability.revoke` (idempotent). The
     // grant id is deterministic per (agent, scope_key) so set/unset/set
     // converge on a single cell. Production submits these from inkson.
     if state.config.development_mode {
@@ -133,7 +133,7 @@ pub(super) async fn set_agent_participation(
 
 /// Deterministic capability grant id for a materialised participation
 /// selection, keyed by (agent_principal_id, scope_key) so toggling the
-/// selection converges on one grant cell (CKP-0016 §5.2).
+/// selection converges on one grant cell (AKP-0016 §5.2).
 pub(super) fn participation_grant_id(agent_principal_id: &str, scope_key: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();

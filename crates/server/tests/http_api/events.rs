@@ -374,11 +374,11 @@ async fn events_describe_and_single_event_submit_work() {
         .unwrap();
     assert_eq!(second_submitted["status"], "accepted");
 
-    // Round 13: `ck.strand.create` now has a schema requirement (payload
+    // Round 13: `ak.strand.create` now has a schema requirement (payload
     // MUST carry `object`) because it's in the canonical-kind registry;
     // prior to round 13 it passed as an opaque envelope. Use a real Strand
     // object payload so this smoke test still exercises the cross-family
-    // accept path (kind/schema combo distinct from `ck.message.create`).
+    // accept path (kind/schema combo distinct from `ak.message.create`).
     let artifact_kind_payload = serde_json::json!({
         "object": {
             "id": "ak:strand:01904100-0000-7000-8000-aa11ccff0001",
@@ -589,7 +589,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             "created_at": created_at
         }
     });
-    let cell = format!("ak:cell:ck.component.realm.create.v1:{realm_id}");
+    let cell = format!("ak:cell:ak.component.realm.create.v1:{realm_id}");
     let mut event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-c7ea7e000001",
         1,

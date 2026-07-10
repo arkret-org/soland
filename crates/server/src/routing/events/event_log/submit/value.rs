@@ -178,7 +178,7 @@ pub(super) async fn submit_event_value_with_context(
                 reason,
             ));
         }
-        // CKP-0016 — reject agent_participation ceiling writes that widen
+        // AKP-0016 — reject agent_participation ceiling writes that widen
         // the parent scope's ceiling (tighten-only invariant).
         if let Err(reason) =
             validate_agent_participation_ceiling(state, std::slice::from_ref(operation)).await
@@ -189,7 +189,7 @@ pub(super) async fn submit_event_value_with_context(
                 reason,
             ));
         }
-        // CKP-0016 §5.2 / architecture §7 — native personal agent writes
+        // AKP-0016 §5.2 / architecture §7 — native personal agent writes
         // require an auditable agent_context plus the effective participation
         // bit for the write mode. Per 0016-agent-participation-policy.md §6,
         // missing materialised grants are preconditions, not auth-context
@@ -341,7 +341,7 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
-            // join-policy.md §7.5 — `ck.invite.create` with
+            // join-policy.md §7.5 — `ak.invite.create` with
             // `refs[role="join_authorised_by"]` MUST bind to a fresh,
             // unconsumed review accept whose reviewer still holds
             // `review_capability`.
@@ -473,7 +473,7 @@ pub(super) async fn submit_event_value_with_context(
 
     // SEC-04 — receiver-side independent 24h inception-key online-window cap
     // (`identity/key-management.md` §5.0.1 step 5). When an inception-bootstrap
-    // self-authorization (`ck.device.authorize` / `ak.session.grant` carrying a
+    // self-authorization (`ak.device.authorize` / `ak.session.grant` carrying a
     // `refs[role=did_inception]` evidence ref) is signed by the inception key,
     // the receiver MUST seal on the verifiable bootstrap timestamp
     // (`did:webvh` entry-0 `versionTime`) and reject the event when the
@@ -483,7 +483,7 @@ pub(super) async fn submit_event_value_with_context(
     // not on the projection operation payload.
     enforce_inception_key_online_window(state, &parsed, &envelope).await?;
 
-    // SPEC-SOL-003 follow-through — an accepted durable `ck.device.revoke`
+    // SPEC-SOL-003 follow-through — an accepted durable `ak.device.revoke`
     // is the canonical revocation trigger (device-lifecycle.md §2.2).
     // Validate the revocation against the submitting session, then flip the
     // device record the auth gate reads BEFORE persisting the event: a
@@ -593,7 +593,7 @@ pub(super) async fn submit_event_value_with_context(
         }
     }
 
-    // CKP-0007: stamp the authoritative top-level `effective_scope` onto the
+    // AKP-0007: stamp the authoritative top-level `effective_scope` onto the
     // stored envelope so read-path visibility gating
     // (`effective_scope_for_envelope` → `circle_event_visible_to_session`)
     // hides circle-scoped activity from realm members outside the Circle.

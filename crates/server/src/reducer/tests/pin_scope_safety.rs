@@ -161,7 +161,7 @@ fn pin_rejects_quarantined_message_target() {
     let hlc = ServerHlc::new("test");
     seed_scoped_message(&mut state, &hlc);
     state.cells.insert(
-        CellRef::new("ak:cell:ck.component.moderation_state.v1:decision-pin-quarantine").unwrap(),
+        CellRef::new("ak:cell:ak.component.moderation_state.v1:decision-pin-quarantine").unwrap(),
         CellState::Value(serde_json::json!([{
             "tag": "decision-pin-quarantine",
             "value": {
@@ -185,7 +185,7 @@ fn pin_rejects_active_moderation_decision_head() {
     seed_scoped_message(&mut state, &hlc);
     state.cells.insert(
         CellRef::new(format!(
-            "ak:cell:ck.component.moderation_state.v1:{MESSAGE_EVENT_ID}"
+            "ak:cell:ak.component.moderation_state.v1:{MESSAGE_EVENT_ID}"
         ))
         .unwrap(),
         CellState::Value(serde_json::json!([{

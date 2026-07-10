@@ -1,4 +1,4 @@
-//! CKP-0010 / R3 (REC-1) — recovery policy + recovery receipt endpoints.
+//! AKP-0010 / R3 (REC-1) — recovery policy + recovery receipt endpoints.
 //!
 //! Mounts recovery policy / receipt endpoints introduced in arkret-spec b47ff6ec:
 //!
@@ -112,8 +112,8 @@ pub(super) fn router() -> Router {
 }
 
 /// Deterministic principal control realm id for a principal DID
-/// (`ak:realm:<uuidv7>`). Device-control events (`ck.device.authorize`,
-/// `ck.device.list_update`, future `ck.cross_signing.publish`) land here. The
+/// (`ak:realm:<uuidv7>`). Device-control events (`ak.device.authorize`,
+/// `ak.device.list_update`, future `ak.cross_signing.publish`) land here. The
 /// realm is auto-materialized by the projector on the first accepted op.
 pub fn principal_control_realm_for_did(principal_did: &str) -> String {
     let mut hasher = Sha256::new();

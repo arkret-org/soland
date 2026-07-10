@@ -1,7 +1,7 @@
 //! Notification fanout for message mentions, assignment targets, and schedule
 //! changes.
 //!
-//! Message mention fanout keeps the CKP-0016 third-party agent gate: a native
+//! Message mention fanout keeps the AKP-0016 third-party agent gate: a native
 //! personal agent is only notified of a third-party mention (author != its
 //! controller) when its effective `accept_third_party_mention` bit (selection
 //! ∩ ceiling) is true for the message scope; otherwise the mention is dropped
@@ -276,7 +276,7 @@ async fn put_message_notification(
     .await;
 }
 
-/// Fan out message notifications for an accepted `ck.message.create`.
+/// Fan out message notifications for an accepted `ak.message.create`.
 pub(crate) async fn dispatch_message_notifications(
     state: &AppState,
     operation: &arkret_sdk::Operation,
@@ -342,7 +342,7 @@ pub(crate) async fn dispatch_message_notifications(
                 continue;
             }
         }
-        // CKP-0016 §9.4.5 — agent third-party mention gate.
+        // AKP-0016 §9.4.5 — agent third-party mention gate.
         if let Ok(Some(agent_record)) = state.persistence.agents().get(&subject).await {
             let controller = agent_record
                 .get("controller_did")
@@ -373,7 +373,7 @@ pub(crate) async fn dispatch_message_notifications(
     }
 }
 
-/// Fan out assignment notifications for an accepted `ck.relation.create`.
+/// Fan out assignment notifications for an accepted `ak.relation.create`.
 pub(crate) async fn dispatch_assignment_notifications(
     state: &AppState,
     operation: &arkret_sdk::Operation,
@@ -505,7 +505,7 @@ fn schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
 }
 
 /// Fan out due-date and calendar schedule notifications for an accepted
-/// `ck.strand.update`.
+/// `ak.strand.update`.
 pub(crate) async fn dispatch_schedule_notifications(
     state: &AppState,
     operation: &arkret_sdk::Operation,

@@ -89,11 +89,11 @@ pub(crate) fn active_direct_binding(
 }
 
 /// Spec contact-and-direct-conversation.md §6 step5 / §7 / §8 — resolve(create=true)
-/// stands up a *real event-log* DM Realm: it submits `ck.realm.create`
-/// (DM well-known shape), both participants' `ck.member.state{join}`, and
-/// the main `ck.strand.create`, then writes the direct conversation binding
+/// stands up a *real event-log* DM Realm: it submits `ak.realm.create`
+/// (DM well-known shape), both participants' `ak.member.state{join}`, and
+/// the main `ak.strand.create`, then writes the direct conversation binding
 /// fact. The realm becomes a true event Realm both sides can submit
-/// `ck.message.create` into (accepted, peer-readable) — not just a
+/// `ak.message.create` into (accepted, peer-readable) — not just a
 /// directory entry. Reuses soland's existing local operation acceptance +
 /// projection path (`accept_local_operations`); it does NOT build a parallel
 /// realm-materialization path.

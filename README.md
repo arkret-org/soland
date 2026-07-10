@@ -28,7 +28,7 @@ in-memory mode keeps the same API for fast local iteration.
 - **Space:** navigation container — board, list, section, calendar bucket
   inside a Realm.
 
-`ck.realm.link`, `ck.realm.inheritance_policy`, and `ck.capability.derived`
+`ak.realm.link`, `ak.realm.inheritance_policy`, and `ak.capability.derived`
 are the typed edges that wire boundaries together (governed_by /
 discoverable_from / mirror_of). Container lifecycle events use `ck.space.*`;
 security-boundary lifecycle and policy events use `ck.realm.*`.
@@ -41,10 +41,10 @@ on top of R2/R3. See [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and
 Operator-visible highlights:
 
 - **`trust_domain` is now immutable on a Realm** — captured by
-  `ck.realm.create` and locked thereafter. Cross-domain replays reject
+  `ak.realm.create` and locked thereafter. Cross-domain replays reject
   with `cross_domain_replay_rejected`.
-- **`ServiceDescribe` v2** — `ck.server.query.describe` / `ck.self.account.query.describe` /
-  `ck.self.events.query.describe` / `ck.edge.applet.query.describe` return the 17-field
+- **`ServiceDescribe` v2** — `ak.server.query.describe` / `ak.self.account.query.describe` /
+  `ak.self.events.query.describe` / `ak.edge.applet.query.describe` return the 17-field
   canonical envelope, including `trust_domain` / `plaintext_visibility` /
   `verified_profiles` / `development_mode` and a `rate_limit` oneOf.
 - **`/events/frontier` split by role** — `peer_role` query param routes
@@ -64,7 +64,7 @@ Operator-visible highlights:
 - **Delivery-binding handover error codes** —
   `delivery_binding_stale` (with `new_recipient_service_did` +
   `handover_frontier`) and `delivery_binding_handed_over`.
-- **`ck.cross_signing.publish` CAS** —
+- **`ak.cross_signing.publish` CAS** —
   `expected_previous_generation == current && new = current + 1`,
   verified before signature.
 
@@ -76,13 +76,13 @@ operator must address at boot — see
 [`../arkret-spec/CHANGELOG.md`](../arkret-spec/CHANGELOG.md) for the
 normative source. The key operational hooks:
 
-- **`SOLAND_TRUST_DOMAIN`** — required `ck:trust_domain:<scope>` value
+- **`SOLAND_TRUST_DOMAIN`** — required `ak:trust_domain:<scope>` value
   (defaults to a value derived from the configured `service_did`).
-  Enters the canonical transcript of every `ck.cross_signing.reset`
+  Enters the canonical transcript of every `ak.cross_signing.reset`
   proof; rotating this value invalidates outstanding proofs.
 - **Ephemeral kinds rejected on `POST /_arkret/self/events`** — producers
-  must route the 12 ephemeral kinds (`ck.call.signal`, `ck.presence`,
-  `ck.typing`, `ck.receipt.read`, `ck.key.verification.*`) through
+  must route the 12 ephemeral kinds (`ak.call.signal`, `ck.presence`,
+  `ck.typing`, `ak.receipt.read`, `ak.key.verification.*`) through
   the ephemeral envelope / device-message channels; no compatibility
   shim.
 - **Realm terminal-state, presign blob fail-closed, federation
@@ -337,7 +337,7 @@ and device binding into the local request-scoped account/device view. soland no
 longer exposes a Principal-local credential issuance endpoint for production
 grants.
 
-Account subscribe and Events API cursors are structured `ck:cursor:` tokens
+Account subscribe and Events API cursors are structured `ak:cursor:` tokens
 bound to the principal, device, service DID, filter hash, stream positions, and
 expiry. `/_arkret/self/account/subscribe` resumes with `after`; `/_arkret/self/events`
 paginates with `before` / `after`. Expired cursors fail with `cursor_expired`.
@@ -442,4 +442,4 @@ Apache-2.0 — see [LICENSE](LICENSE).
 <!-- circle-rollout milestone pointer -->
 > **Active milestone tracking** (local-only, gitignored): see
 > `_soland_todos.md` in the parent `arkret/` directory for the
-> circle-rollout (CKP-0007) work item list and per-stage checkpoints.
+> circle-rollout (AKP-0007) work item list and per-stage checkpoints.

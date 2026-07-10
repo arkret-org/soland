@@ -15,16 +15,16 @@ pub(crate) const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str =
 pub(crate) const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str =
     "circle_encryption_profile_create_locked";
 pub(crate) const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str = "circle_encryption_below_realm_floor";
-/// CKP-0007 §8 — pulling *another* actor into a Circle (none/left → active by
+/// AKP-0007 §8 — pulling *another* actor into a Circle (none/left → active by
 /// an actor other than the target) requires the requester to hold
-/// `ck.circle.member.manage` (narrowed by `allowed_circle_ids`) on this Circle.
+/// `ak.circle.member.manage` (narrowed by `allowed_circle_ids`) on this Circle.
 /// The HTTP surface runs the authoritative `SolandAuthzEngine::check` and stamps a
 /// verdict into the operation payload; the reducer fails closed when that
 /// verdict is absent or false, so an unauthorised one-way add is rejected even
 /// if it bypasses the HTTP gate.
 pub(crate) const CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED: &str =
     "circle_member_manage_capability_required";
-/// CKP-0007 §8 — a self-service join (none/left → active *by the target actor*)
+/// AKP-0007 §8 — a self-service join (none/left → active *by the target actor*)
 /// is only permitted on an `open` Circle. Self-joining a non-`open` Circle must
 /// go through an invite/manage path.
 pub(crate) const CIRCLE_JOIN_NOT_OPEN: &str = "circle_join_not_open";
@@ -51,9 +51,9 @@ pub(crate) const DURABILITY_SCHEME_INCOMPATIBLE: &str = "durability_scheme_incom
 /// len(recovery_recipients)`) is required when `mode=threshold`.
 pub(crate) const DURABILITY_POLICY_INVALID: &str = "durability_policy_invalid";
 
-/// R1.2 — pure validation for a `ck.member.state{join,routable}`
+/// R1.2 — pure validation for a `ak.member.state{join,routable}`
 /// `delivery_binding` against a projected
-/// `ck.realm.delivery_binding_policy` payload. Returns `Ok(())` when the
+/// `ak.realm.delivery_binding_policy` payload. Returns `Ok(())` when the
 /// binding is admissible; `Err(reason_code)` otherwise. Reason codes
 /// mirror the spec join-policy.md §5.1 catalogue.
 pub(crate) fn enforce_delivery_binding_policy(
@@ -795,7 +795,7 @@ pub(crate) fn parse_iso8601_duration(value: &str) -> Option<Duration> {
 /// `morph.md` §4.1 S3 — collect the opt-in conformance profile ids a Realm
 /// lifecycle event declares. Reads `active_profiles[]` / `profiles[]` from the
 /// payload root, the `object` block, and a `patch.active_profiles` register set
-/// (so `ck.realm.update` declarations are captured as well). Only well-formed
+/// (so `ak.realm.update` declarations are captured as well). Only well-formed
 /// `ck.profile.*` strings are returned.
 pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
     let mut profiles = Vec::new();
@@ -819,7 +819,7 @@ pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
                 .get("object")
                 .and_then(|object| object.get(field)),
         );
-        // `ck.realm.update` carries mutable fields in the patch register; a
+        // `ak.realm.update` carries mutable fields in the patch register; a
         // `patch.active_profiles: { "$op": "set", "value": [...] }` (or the
         // direct-array sugar) declares the profile set.
         if let Some(patch_field) = operation
@@ -922,7 +922,7 @@ pub(crate) fn encryption_profile_requires_content_encryption(profile: Option<&st
         .is_some_and(|profile| !matches!(profile, "none" | "plaintext" | "allow_plaintext"))
 }
 
-/// Extract an encryption-floor field from a `ck.realm.policy_components`
+/// Extract an encryption-floor field from a `ak.realm.policy_components`
 /// value, accepting both the top-level and `/components/`-nested wire forms
 /// (mirrors `realm_join_policy_cell_value`).
 pub(crate) fn policy_floor_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
@@ -952,7 +952,7 @@ pub(crate) fn metadata_floor_rank(floor: Option<&str>) -> u8 {
     }
 }
 
-/// Extract the Realm `content_scheme` field from a `ck.realm.policy_components`
+/// Extract the Realm `content_scheme` field from a `ak.realm.policy_components`
 /// value, accepting both the top-level and `/components/`-nested wire forms
 /// (mirrors [`policy_floor_field`]). Returns `None` when the field is absent.
 pub(crate) fn content_scheme_field(value: &Value) -> Option<&str> {
@@ -978,7 +978,7 @@ pub(crate) fn content_scheme_is_known(scheme: &str) -> bool {
     matches!(scheme.trim(), "mls-rfc9420" | "mls-exporter-aead-v1")
 }
 
-/// Extract the `durability_policy` object from a `ck.realm.policy_components`
+/// Extract the `durability_policy` object from a `ak.realm.policy_components`
 /// value, accepting both the top-level and `/components/`-nested wire forms
 /// (mirrors [`policy_floor_field`]). Returns `None` when the field is absent.
 pub(crate) fn durability_policy_field(value: &Value) -> Option<&Value> {

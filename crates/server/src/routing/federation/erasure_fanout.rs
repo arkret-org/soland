@@ -1,4 +1,4 @@
-//! Stream-F (Wave 2C) — `ck.audit.erasure_receipt` cross-Principal-
+//! Stream-F (Wave 2C) — `ak.audit.erasure_receipt` cross-Principal-
 //! Server fanout.
 //!
 //! Spec: `arkret-spec/spec/v1/zh/models/realm-and-space.md` §2.5.2.
@@ -6,7 +6,7 @@
 //! ## Surface
 //!
 //! - [`fanout_erasure_receipt`] — called from the projection write path after a
-//!   `ck.audit.erasure_receipt` lands. Looks up the federation peer set for the affected Realm
+//!   `ak.audit.erasure_receipt` lands. Looks up the federation peer set for the affected Realm
 //!   (currently `config.federation_peers` — the full peer set acts as the conservative super-set of
 //!   "peers that have received content from the Realm"; once per-Realm membership tracking ships
 //!   this scopes down), seeds the receipt's `peer_status` map, and lets the canonical Event fanout
@@ -22,7 +22,7 @@
 //! ## What this lands
 //!
 //! Real per-peer `sent_at` stamping. Real 7-day default timeout window with `incomplete` flip. The
-//! peer ACK path (inbound `ck.audit.erasure_receipt` referencing the same
+//! peer ACK path (inbound `ak.audit.erasure_receipt` referencing the same
 //! `receipt_id`) is wired up but currently relies on the reducer
 //! observing a follow-up receipt — full inbound-ACK correlation lands
 //! when the federation inbound handler grows a typed
@@ -54,7 +54,7 @@ struct ErasurePeerTarget {
 }
 
 /// Stream-F (Wave 2C) — federation fanout for a freshly-recorded
-/// `ck.audit.erasure_receipt`. Enqueues one outbox row per
+/// `ak.audit.erasure_receipt`. Enqueues one outbox row per
 /// federation peer and seeds the receipt's `peer_status` map. No-op
 /// when the receipt has no `scope.realm_id` (account-private scope)
 /// or when `config.federation_peers` is empty.
@@ -99,7 +99,7 @@ pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
     fanout_erasure_receipt_operation(state, &operation).await;
 }
 
-/// Fan out a durable `ck.audit.erasure_receipt` operation through the normal
+/// Fan out a durable `ak.audit.erasure_receipt` operation through the normal
 /// federation push batch wire shape.
 pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Operation) {
     if state.settings().federation_peers.is_empty() {

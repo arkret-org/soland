@@ -456,7 +456,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     let token = dev_token(state.clone()).await;
 
     let plaintext_policy =
-        TestClient::put("http://server/_arkret/self/account_data/ck.presence.visibility")
+        TestClient::put("http://server/_arkret/self/account_data/ak.presence.visibility")
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&serde_json::json!({
                 "content": {

@@ -32,7 +32,7 @@ fn test_config() -> crate::config::AppConfig {
 /// `service_id`.
 fn install_media_service_with_service_id(state: &AppState, service_id: &str, issuer_kid: &str) {
     let cell_id = CellRef::new(format!(
-        "ak:cell:ck.component.realm.media_service.v1:{REALM_ID}"
+        "ak:cell:ak.component.realm.media_service.v1:{REALM_ID}"
     ))
     .unwrap();
     state.projection.lock().cells.insert(

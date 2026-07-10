@@ -1,9 +1,9 @@
 //! Applet bridge runtime.
 //!
-//! When a client emits `ck.applet.interop_session.start` against an
-//! applet that has registered a `ck.applet.registration` row, the
+//! When a client emits `ak.applet.interop_session.start` against an
+//! applet that has registered a `ak.applet.registration` row, the
 //! bridge layer surfaces a corresponding
-//! `ck.applet.interop_session.status` event so the caller observes
+//! `ak.applet.interop_session.status` event so the caller observes
 //! the lifecycle.
 //!
 //! Two dispatch modes:
@@ -35,7 +35,7 @@ use crate::{ids, kinds};
 
 /// Upper bound on in-flight outbound applet-bridge HTTP tasks. Bridge URLs
 /// come from applet-registration data (lower trust); without a cap a high
-/// rate of `ck.applet.interop_session.start` operations could spawn
+/// rate of `ak.applet.interop_session.start` operations could spawn
 /// unbounded background tasks and outbound connections. When saturated the
 /// bridge fails closed with a `capacity_exhausted` bridge-error event.
 const MAX_CONCURRENT_APPLET_BRIDGE_TASKS: usize = 64;
@@ -73,7 +73,7 @@ fn lookup_bridge_url(state: &AppState, applet_id: &str) -> Option<String> {
 }
 
 /// Inspect `operation` and, when it carries a
-/// `ck.applet.interop_session.start` payload, dispatch the
+/// `ak.applet.interop_session.start` payload, dispatch the
 /// invocation. Idempotent (no-ops for any other kind).
 ///
 /// Called from `project_accepted_operations` AFTER the `start` event
@@ -197,7 +197,7 @@ enum AppletBridgeOutcome {
     /// 2xx response with a parseable JSON body.
     UpstreamSuccess { response_body: Value },
     /// Connection / HTTP / parse failure. Becomes a
-    /// `ck.applet.bridge_error` event.
+    /// `ak.applet.bridge_error` event.
     UpstreamFailure { code: String, message: String },
 }
 
@@ -268,8 +268,8 @@ async fn forward_to_applet_bridge(
     }
 }
 
-/// Emit either `ck.applet.interop_session.status` (success) or
-/// `ck.applet.bridge_error` (failure) based on the outcome.
+/// Emit either `ak.applet.interop_session.status` (success) or
+/// `ak.applet.bridge_error` (failure) based on the outcome.
 async fn emit_applet_outcome_event(
     state: &AppState,
     realm_id: &str,

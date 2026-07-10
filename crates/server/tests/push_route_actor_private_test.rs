@@ -1,7 +1,7 @@
-//! Reducer-level tests for the `ck.device.push_route` actor-private
+//! Reducer-level tests for the `ak.device.push_route` actor-private
 //! event projection (T4.2 / Round C46).
 //!
-//! Spec: `event-kind-registry.json` entry for `ck.device.push_route`
+//! Spec: `event-kind-registry.json` entry for `ak.device.push_route`
 //! (composite cell_subject `(recipient_service_did, principal_id,
 //! device_id, push_route)`) plus `device-lifecycle.md §5a.2`. The reducer
 //! lives at `soland::reducer::ProjectionState::apply_push_route` and is

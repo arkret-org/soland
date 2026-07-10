@@ -407,7 +407,7 @@ fn authz_state_for_draft(
 
 fn projected_capability_cell_revoked(state: &AppState, grant_id: &str) -> bool {
     let Ok(cell_ref) = CellRef::new(format!(
-        "ak:cell:ck.component.capability.grant.v1:{grant_id}"
+        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     )) else {
         return false;
     };

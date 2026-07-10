@@ -128,8 +128,8 @@ pub(crate) fn preflight_mls_projection_reject(
 /// reject the event with the canonical reason_code BEFORE it is committed.
 ///
 /// The clone sees the same already-applied cells as the real apply will —
-/// within an ordered submit batch the paired `ck.moderation.decision.lift` /
-/// new `ck.moderation.decision` were applied to the live projection by their
+/// within an ordered submit batch the paired `ak.moderation.decision.lift` /
+/// new `ak.moderation.decision` were applied to the live projection by their
 /// own earlier `submit_event_value` calls, so the cell already reflects them.
 pub(crate) fn preflight_moderation_projection_reject(
     proj: &crate::reducer::ProjectionState,

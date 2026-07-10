@@ -1,8 +1,8 @@
 //! Phase 4 — cross-signing subsystem (crypto-media/device-lifecycle.md §5).
 //!
-//! Maintains, per principal, the accepted `ck.cross_signing.publish` (PSK →
+//! Maintains, per principal, the accepted `ak.cross_signing.publish` (PSK →
 //! {SSK, USK}) and verifies device `cross_signing_binding` signatures so a
-//! `ck.device.authorize` is only trusted when its SSK binding checks out at the
+//! `ak.device.authorize` is only trusted when its SSK binding checks out at the
 //! currently accepted generation.
 //!
 //! The state machine itself is the SDK `DeviceManager` (held on `AppState`); we
@@ -26,14 +26,14 @@ use crate::state::{AppState, RecoveryPolicyRecord};
 
 const CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS: i64 = 90_000;
 
-/// Parse the `ck.cross_signing.publish` operation payload into the SDK content
+/// Parse the `ak.cross_signing.publish` operation payload into the SDK content
 /// type. Returns a wire reason code on malformed input.
 fn parse_publish(payload: &Value) -> Result<CrossSigningPublishContent, &'static str> {
     serde_json::from_value::<CrossSigningPublishContent>(payload.clone())
         .map_err(|_| "cross_signing_publish_malformed")
 }
 
-/// Validate a `ck.cross_signing.publish` BEFORE acceptance (read-only). Runs:
+/// Validate a `ak.cross_signing.publish` BEFORE acceptance (read-only). Runs:
 /// structural checks, PSK authenticity + control-set membership (the published
 /// PSK MUST resolve to a verification method in the principal's DID document and
 /// match it), PSK→SSK and PSK→USK binding signatures, and the CAS precondition
@@ -95,7 +95,7 @@ pub async fn validate_cross_signing_publish(
     Ok(())
 }
 
-/// Record an accepted `ck.cross_signing.publish` into the `DeviceManager`
+/// Record an accepted `ak.cross_signing.publish` into the `DeviceManager`
 /// (authoritative CAS bookkeeping). Called from the projector AFTER acceptance.
 /// Validation already ran in `validate_cross_signing_publish`; failures here are
 /// logged (the op was already accepted) but should not occur in practice.
@@ -113,7 +113,7 @@ pub fn project_cross_signing_publish(state: &AppState, payload: &Value) {
     }
 }
 
-/// Validate a `ck.cross_signing.reset` BEFORE acceptance (read-only). Verifies
+/// Validate a `ak.cross_signing.reset` BEFORE acceptance (read-only). Verifies
 /// the active-generation CAS precondition, replay fence, and one of the four
 /// reset proof families over the SDK canonical reset transcript.
 pub async fn validate_cross_signing_reset(
@@ -264,7 +264,7 @@ pub async fn validate_cross_signing_reset(
     }
 }
 
-/// Record an accepted `ck.cross_signing.reset` into the `DeviceManager` (drops
+/// Record an accepted `ak.cross_signing.reset` into the `DeviceManager` (drops
 /// the current publish + bumps the generation high-water; marks devices
 /// `needs_reverification`). Validation already ran pre-acceptance.
 pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
@@ -509,7 +509,7 @@ fn value_requires_attestation(value: &Value) -> bool {
     }
 }
 
-/// Verify a `ck.device.authorize` `cross_signing_binding` at recovery
+/// Verify a `ak.device.authorize` `cross_signing_binding` at recovery
 /// completion. The binding MUST be an SSK signature over the device-trust
 /// canonical input, at the currently accepted generation (device-lifecycle
 /// §5.2.1). Returns a typed `AppError` for the HTTP path.
@@ -562,7 +562,7 @@ fn device_binding_reason_to_app_error(reason: &'static str) -> AppError {
     }
 }
 
-/// 3a — reason-returning core for `ck.device.authorize` binding verification,
+/// 3a — reason-returning core for `ak.device.authorize` binding verification,
 /// shared by the recovery `/complete` path and the event-ingest validator.
 pub(crate) fn check_device_cross_signing_binding(
     state: &AppState,
@@ -614,7 +614,7 @@ pub(crate) fn check_device_cross_signing_binding(
     Ok(())
 }
 
-/// 3a — validate a `ck.device.authorize` operation payload's cross_signing_binding
+/// 3a — validate a `ak.device.authorize` operation payload's cross_signing_binding
 /// at event ingest, so ANY submission path (recovery, or a future client-submitted
 /// control event) is verified, not just recovery `/complete`. Bootstrap-first-device
 /// authorizations carry a `bootstrap_binding` instead and are validated elsewhere;
@@ -897,11 +897,11 @@ pub(crate) struct DeviceSigningDirectoryFacet {
     /// verification. Present only for a verified, non-revoked device that
     /// carries one (inception bootstrap devices have none).
     pub cross_signing_binding: Option<arkret_sdk::QueryDeviceCrossSigningBinding>,
-    /// Service-attested trust material echoed from `ck.device.authorize`.
+    /// Service-attested trust material echoed from `ak.device.authorize`.
     /// Present only for a verified, non-revoked device that was authorized by a
     /// designated enrollment authority.
     pub enrollment_authority_binding: Option<DeviceEnrollmentAuthorityBinding>,
-    /// Accepted `ck.device.authorize` event id anchoring the device-set
+    /// Accepted `ak.device.authorize` event id anchoring the device-set
     /// projection. Service-attested clients use this with
     /// `enrollment_authority_binding` as the hot-path trust anchor.
     pub device_authorize_event_id: Option<EventId>,
@@ -1014,7 +1014,7 @@ pub(crate) async fn resolve_device_signing_directory_facet(
 
 /// Resolve the per-principal Tier-2 `cross_signing` outcome material
 /// (device-lifecycle.md §8.2 / §8.3): the principal's current accepted
-/// `ck.cross_signing.publish` payload, rendered as the
+/// `ak.cross_signing.publish` payload, rendered as the
 /// `cross-signing-publish.schema.json` counterpart. Returns `None` when no
 /// publish is accepted (e.g. inception-only principals). Reuses the
 /// authoritative `DeviceManager::current_cross_signing` accepted state — the

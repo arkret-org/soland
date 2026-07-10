@@ -37,8 +37,8 @@ A successful `POST /_arkret/self/events` walks the following stages:
 
 3. **Reducer dispatch** (`src/reducer.rs`). The reducer maps each
    `event_kind` to an `apply_*_dispatch` arm and updates the in-memory
-   `ProjectionState`. CKP-0007 adds the Circle FSM, the
-   `ck.realm.link` / `ck.realm.inheritance_policy` edges, and the
+   `ProjectionState`. AKP-0007 adds the Circle FSM, the
+   `ak.realm.link` / `ak.realm.inheritance_policy` edges, and the
    `scope_circle_id` projection columns.
 
 4. **Persistence write** (`src/persistence.rs`). Each reducer mutation is
@@ -71,7 +71,7 @@ in-memory mirror) and a single in-process dispatcher per replica.
 ### Enqueue path
 
 1. A reducer that produces a federation side effect (e.g. accepting a
-   `ck.realm.create` whose participants include a remote DID) writes a
+   `ak.realm.create` whose participants include a remote DID) writes a
    `FederationOutboxRecord` via `FederationOutboxStore::enqueue` in the
    same transaction as the projection write. This guarantees the wire
    commit and the fanout intent are durable together.
@@ -109,29 +109,29 @@ See `examples/prometheus-alerts.yml` for ready-made alert rules.
 ## 3. MLS lifecycle
 
 MLS (RFC 9420) lives inside the same event log: every
-`ck.component.mls.*` event is a regular durable event with the standard
+`ak.component.mls.*` event is a regular durable event with the standard
 replay-window and signature verification. The lifecycle states the
 operator should be aware of:
 
-1. **Group create** (`ck.realm.create` + `ck.component.mls.epoch.v1`
+1. **Group create** (`ak.realm.create` + `ak.component.mls.epoch.v1`
    cell write). The reducer mints the initial epoch and seeds
    `MlsGroupProjection` (`src/reducer/mls.rs`).
 2. **Epoch rotation**. Any commit that touches the
-   `ck.component.mls.epoch.v1` cell triggers an
+   `ak.component.mls.epoch.v1` cell triggers an
    `EventNotificationKind::EpochRotation` broadcast on the
    `AppState::event_broadcast` channel. NDJSON subscribers receive a
    typed `EventsSubscribeFrame::epoch_rotation` so clients can re-fetch
    keys.
 3. **Member adds / removes**. Routed via `routing::spaces::mls` —
    the reducer hard-rejects any add for a principal that is not also
-   listed in the Realm's `ck.member.state` projection
+   listed in the Realm's `ak.member.state` projection
    (`circle_member_must_be_realm_member` invariant).
-4. **Group archive / tombstone**. `ck.circle.archive` / `ck.circle.tombstone`
+4. **Group archive / tombstone**. `ak.circle.archive` / `ak.circle.tombstone`
    move the projection row into a terminal state; the
-   `ck.component.mls.epoch.v1` cell remains addressable for forensic
+   `ak.component.mls.epoch.v1` cell remains addressable for forensic
    purposes but no new commits are accepted.
 
-The replay window for `ck.component.mls.epoch.v1` is intentionally
+The replay window for `ak.component.mls.epoch.v1` is intentionally
 tighter than the global default (60 s vs. 300 s) — see
 `AppConfig::default_replay_overrides` — because a stale epoch rotation
 can fork the group.

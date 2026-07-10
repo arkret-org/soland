@@ -1,7 +1,7 @@
 use super::*;
 
 /// Build one snapshot of the account-aggregate sync response for the next
-/// `ck.self.account.stream.subscribe` delta frame.
+/// `ak.self.account.stream.subscribe` delta frame.
 pub(crate) async fn build_sync_snapshot(
     state: &AppState,
     session: Option<&SessionRecord>,
@@ -18,7 +18,7 @@ pub(crate) async fn build_sync_snapshot(
     // handle_claims?, handle_claims_limited?}` — `handle` / display name MUST
     // NOT appear here. Identity is resolved by following
     // `identity_event_ids[]` into the separately delivered
-    // `ck.member.identity.update` event log; servers that lack the events for
+    // `ak.member.identity.update` event log; servers that lack the events for
     // the client SHOULD inline them via `identity_events[]` (gated on
     // `subject_id` disclosure).
     let candidate_realms: Vec<RealmDirectoryEntry> = {
@@ -147,7 +147,7 @@ pub(crate) async fn build_sync_snapshot(
             .and_then(|record| record.encryption_profile.clone())
             .unwrap_or_else(|| "none".to_owned());
         // §2.10 content scheme (capability axis) — projected from the
-        // `ck.component.realm.policy_components.v1` cell. Surfaced top-level so
+        // `ak.component.realm.policy_components.v1` cell. Surfaced top-level so
         // the client encrypt path can read the realm's declared scheme and
         // author content as `mls-exporter-aead-v1` (history-shareable) vs the
         // forward-secret `mls-rfc9420`. `None` ⇒ field is null ⇒ client treats
@@ -197,7 +197,7 @@ pub(crate) async fn build_sync_snapshot(
         // the cursor without emitting an empty Realm projection.
         //
         // Caveats: membership changes that don't bump a projection position
-        // (e.g. raw `ck.realm.member.update` events) will not propagate through
+        // (e.g. raw `ak.realm.member.update` events) will not propagate through
         // an incremental sync until either (a) a new timeline event arrives,
         // or (b) the client issues a full sync (no `after`). This is a known
         // limitation — see follow-up TODO to add per-realm activity tracking
@@ -333,7 +333,7 @@ pub(crate) async fn build_sync_snapshot(
 
     // Actor-private account data: hydrate every `(actor, data_type)` row
     // owned by the authenticated session so the client can join e.g.
-    // `ck.contacts.realm.<realm_id>` Realm remarks against the public
+    // `ak.contacts.realm.<realm_id>` Realm remarks against the public
     // Realm title during render. Spec: discovery/client-preferences.md
     // §2 (storage model) / §3.7 (Realm remarks).
     let account_data = if let Some(session) = session {
@@ -915,7 +915,7 @@ fn invite_notification_value(invite: &crate::state::RealmInviteRecord) -> Value 
 /// / `handle_claims` / `handle_claims_limited`) MUST be omitted together
 /// unless `subject_id` is disclosed by Realm policy. Clients resolve
 /// identity by following `identity_event_ids[]` into the separately
-/// delivered `ck.member.identity.update` event log; SYNC-MEM-3 inlines the
+/// delivered `ak.member.identity.update` event log; SYNC-MEM-3 inlines the
 /// original envelopes only when `subject_id` is disclosed.
 ///
 /// MIU-SOL-4: the effective set is multi-valued (no last-writer-wins); ALL

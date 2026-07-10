@@ -9,10 +9,10 @@ use crate::artifacts;
 pub const MLS_GOVERNANCE_BINDING_FULL_PROFILE: &str = "ak.profile.mls_governance_binding.full.v1";
 pub const MLS_REDUCER_PROFILE_V1: &str = "ak.reducer.v1";
 
-// CKP-0007 — typed Relation kind couples a "wide synthesis" Strand (often
+// AKP-0007 — typed Relation kind couples a "wide synthesis" Strand (often
 // Realm-default scope) to a "narrow discussion" Strand bound to a
-// `scope_circle_id` Circle. Stored on `ck.relation.create` /
-// `ck.relation.update` payloads as `relation_kind`. Spec
+// `scope_circle_id` Circle. Stored on `ak.relation.create` /
+// `ak.relation.update` payloads as `relation_kind`. Spec
 // `zh/models/circle.md` §7.2.
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
@@ -20,7 +20,7 @@ pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discuss
 // constant is exposed as `arkret_sdk::events::kinds::REALM_SET_DEFAULT_STRAND`.
 
 // Morph lifecycle (round 13). Same shape as Strand — no dedicated tombstone.
-// `ck.field.position.move` and `ck.field.position.reorder` were removed in
+// `ak.field.position.move` and `ak.field.position.reorder` were removed in
 // revision 0a5ab85 (see arkret-spec
 // `artifacts/registry/removed-event-kinds.json`). Field-level position move
 // was subsumed by track-relative ordering and the per-cell ordered-log
@@ -29,7 +29,7 @@ pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discuss
 // rejects them because they no longer appear in `active_durable_event_kinds`.
 // R3.1 spec-sync (2026-05-27, arkret-spec @ 7157ee8) — Realm-scoped
 // MemberIdentity append-only replacement event. Cell family
-// `ck.component.member.identity.v1`; lattice `ordered_log`; bottom
+// `ak.component.member.identity.v1`; lattice `ordered_log`; bottom
 // `expose`. Composite cell subject is
 // `(payload.realm_id, payload.actor_id, payload.segment)`. Reducer
 // dispatch lives in `reducer::apply_member_identity_update`; persistence
@@ -37,8 +37,8 @@ pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discuss
 // Realm security-boundary lifecycle (`ck.realm.*`). Spec
 // `arkret-spec/spec/v1/zh/models/realm-and-space.md` §2.6.
 //
-// `ck.realm.freeze` is reversible read-only hold. `ck.realm.tombstone` is a
-// terminal migration to a successor Realm. `ck.realm.destroy` is terminal
+// `ak.realm.freeze` is reversible read-only hold. `ak.realm.tombstone` is a
+// terminal migration to a successor Realm. `ak.realm.destroy` is terminal
 // no-successor retirement ("dissolve/close Realm" at product level).
 pub const CONFLICT_REPAIR: &str = "ak.conflict.repair";
 // Round 14e+ (2026-05-16) — Agent protocol family. Spec
@@ -55,32 +55,32 @@ pub const CONFLICT_REPAIR: &str = "ak.conflict.repair";
 // terminal. Reducer enforcement of the (active → paused → active →
 // deactivated) transitions lives in `reducer::apply_agent_lifecycle`
 // (REDU-1).
-// `ck.capability.derived` (capability / reducer_input): records a
+// `ak.capability.derived` (capability / reducer_input): records a
 // capability derived from a parent Realm's policy + a child Realm's
 // inheritance declaration. Reducer projects into
-// `ck.component.capability.derived.v1`; full derive logic now runs
+// `ak.component.capability.derived.v1`; full derive logic now runs
 // through the same chain as the rest of the Realm-graph family. Any
 // remaining cross-Realm derivation gaps are tracked as
 // TODO(circle-rollout-P2A.4): cross-Realm `allowed_circle_ids`
 // derivation under audited-high-risk policies.
-// `ck.device.push_route` is device-scoped.
+// `ak.device.push_route` is device-scoped.
 // G3.S1 — MLS / E2EE lifecycle event kinds.
 //
 // Canonical kinds per
 // `arkret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
-//   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
-//     HTTP operation_id layer (`ck.self.keys.keypackages.upload.create` /
-//     `ck.self.keys.keypackages.command.claim`); the event log stores only the canonical kind. The
+//   - `ak.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
+//     HTTP operation_id layer (`ak.self.keys.keypackages.upload.create` /
+//     `ak.self.keys.keypackages.command.claim`); the event log stores only the canonical kind. The
 //     reducer dispatches publish-vs-claim on the `payload.action == "publish" | "claim"` field.
-//   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue semantics
+//   - `ak.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue semantics
 //     are conveyed via payload shape; no separate `.enqueue` suffix.
-//   - `ck.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from
+//   - `ak.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from
 //     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the kind
 //     suffix.
-//   - `ck.mls.proposal`      — MLS proposal (Remove proposals are indexed for commit validation).
-//   - `ck.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered_seals
+//   - `ak.mls.proposal`      — MLS proposal (Remove proposals are indexed for commit validation).
+//   - `ak.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered_seals
 //     accumulator).
-//   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path (wire-only;
+//   - `ak.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path (wire-only;
 //     no reducer projection yet).
 //
 // TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
@@ -92,56 +92,56 @@ pub const CONFLICT_REPAIR: &str = "ak.conflict.repair";
 // accepted only in minimal routing form: opaque Welcome bytes plus the
 // recipient delivery tuple.
 // Audit model migration (spec @ 2026-06-04): the standing-audit-member
-// events `ck.audit.epoch_key_destruction` and `ck.realm.audit_policy_downgrade`
-// (and the `ck.audit.epoch_destruction_failsafe` remediation) were removed
+// events `ak.audit.epoch_key_destruction` and `ak.realm.audit_policy_downgrade`
+// (and the `ak.audit.epoch_destruction_failsafe` remediation) were removed
 // from the registry. Arkret v1 audit now uses the Audit Applet Binding +
-// sealed historical release session model (`ck.audit.applet_binding`,
-// `ck.audit.session.*`, `ck.audit.release`); audit applets are not MLS members
+// sealed historical release session model (`ak.audit.applet_binding`,
+// `ak.audit.session.*`, `ak.audit.release`); audit applets are not MLS members
 // and no epoch-key-destruction / downgrade event is accepted.
 
 // Round C45 (2026-05-18 main) — new event kinds.
 //
-// `ck.identity.accountability_grant` (identity / reducer_input): issuer-signed
+// `ak.identity.accountability_grant` (identity / reducer_input): issuer-signed
 //   endorsement that a subject DID is accountable to the issuer for a declared
 //   scope. Required to verify `Actor Profile.accountable_principal_ids[]`;
 //   reducer strips unverified DIDs from accountable_principal_ids (or rejects with
 //   `accountability_grant_missing`, per deployment policy). zh/models/actor.md §3.3.1.
-// `ck.morph.schema_migrate` (morph / reducer_input): one-shot Morph
+// `ak.morph.schema_migrate` (morph / reducer_input): one-shot Morph
 //   `schema_refs[]` evolution event with explicit compatibility class.
 //   zh/models/morph.md §4.1 S3.
-// `ck.attestation.range_completeness` (audit / non-reducer): range-bound
+// `ak.attestation.range_completeness` (audit / non-reducer): range-bound
 //   completeness attestation; backs cross-issuer fork detection.
 //   zh/sync/operations-sync.md §4.2.
 // Round C46 (2026-05-19; spec 0a5ab85) — Realm-scoped delivery binding
 // governance + per-device push route binding.
 //
-// `ck.realm.delivery_binding_policy` (realm / reducer_input): Realm
+// `ak.realm.delivery_binding_policy` (realm / reducer_input): Realm
 //   policy constraining which `binding_source` values are admissible,
 //   which recipient services are allowed, which endorsers are required,
 //   whether DID Document fallback / unroutable membership are permitted,
 //   and who may sign rebind. cell_family
-//   `ck.component.realm.delivery_binding_policy.v1`, cas-register.
-//   Governs reducer acceptance of `ck.member.state{join}`
+//   `ak.component.realm.delivery_binding_policy.v1`, cas-register.
+//   Governs reducer acceptance of `ak.member.state{join}`
 //   delivery_binding. The reducer projects the policy cell + applies
 //   binding-source / recipient-service / service-acceptance / policy-
 //   frontier checks against routable joins.
 //
-// `ck.device.push_route` (device / actor_private_event / reducer_input):
+// `ak.device.push_route` (device / actor_private_event / reducer_input):
 //   per-device push route binding for the composite tuple
 //   `(recipient_service_did, principal, device, push_route)`. MUST NOT be
 //   replicated outside the binding's recipient_service_did context. Stored
 //   as actor-private state on the recipient Principal Server only.
-// `ck.realm.inheritance_policy` (realm / reducer_input): declares which
+// `ak.realm.inheritance_policy` (realm / reducer_input): declares which
 // realm-scoped policies a child Realm inherits from its parent boundary.
-// Reducer maintains a `ck.component.realm.inheritance_policy.v1`
+// Reducer maintains a `ak.component.realm.inheritance_policy.v1`
 // cas-register cell; capability derivation runs against the projected
-// chain alongside `ck.capability.derived`.
+// chain alongside `ak.capability.derived`.
 // Realm graph + capability derivation event kinds. Reducer dispatch
 // (`apply_realm_link` / `apply_realm_inheritance_policy` /
 // `apply_capability_derived`) is fully wired in `src/reducer.rs`;
 // validators and HTTP surfaces live in `src/routing/realms.rs`.
 //
-// `ck.realm.link` (realm / reducer_input): typed link between Realm
+// `ak.realm.link` (realm / reducer_input): typed link between Realm
 // boundaries. Canonical `link_kind` parsing + cycle/self-reference
 // rejection runs in `reducer::realm_links::check_realm_link_admissible`
 // (R3.1). The canonical link kinds (`governed_by`, `inherits_policy_from`,
@@ -149,9 +149,9 @@ pub const CONFLICT_REPAIR: &str = "ak.conflict.repair";
 // `/_soland/self/realms/{realm_id}/effective-policy` surface walks the
 // ancestor chain per the inheritance declaration. Outstanding
 // follow-up: rich `link_kind`-specific authz constraints (TODO(P2B.x)).
-// G3.S2 — `ck.realm.policy_server` (realm / reducer_input): declares the
+// G3.S2 — `ak.realm.policy_server` (realm / reducer_input): declares the
 // pluggable policy-decision service for a Realm. cell_family
-// `ck.component.realm.policy_server.v1` (cas-register per SDK lattice
+// `ak.component.realm.policy_server.v1` (cas-register per SDK lattice
 // registry). Spec `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
@@ -331,8 +331,8 @@ pub fn realm_state_is_terminal(state: arkret_sdk::events::RealmLifecycleState) -
     arkret_sdk::events::is_terminal_realm_state(state)
 }
 
-/// Spec T23 — true when `ck.audit.ryw_receipt` may be accepted as a durable
-/// Event. Requires `ck.profile.attested_audit.e2ee.v1` to be in the Realm's
+/// Spec T23 — true when `ak.audit.ryw_receipt` may be accepted as a durable
+/// Event. Requires `ak.profile.attested_audit.e2ee.v1` to be in the Realm's
 /// active profile set.
 pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
     active_profiles
@@ -340,8 +340,8 @@ pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
         .any(|p| p == "ak.profile.attested_audit.e2ee.v1")
 }
 
-/// SEC-08 — does this Realm-lifecycle payload (`ck.realm.create` /
-/// `ck.realm.policy_components`) declare the minimal-metadata profile
+/// SEC-08 — does this Realm-lifecycle payload (`ak.realm.create` /
+/// `ak.realm.policy_components`) declare the minimal-metadata profile
 /// [`arkret_sdk::mls::MINIMAL_METADATA_REALM_PROFILE`]
 /// (`crypto-media/encryption-and-audit.md` §2.9)?
 ///

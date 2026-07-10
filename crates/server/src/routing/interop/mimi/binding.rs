@@ -2,7 +2,7 @@ use super::*;
 
 /// Look up which Arkret `realm_id` (if any) the MIMI `room_id` is
 /// bound to. Scans the persistence projection event log for the
-/// most recent `ck.mimi.room_binding` event whose
+/// most recent `ak.mimi.room_binding` event whose
 /// `payload.mimi_room_id` (or trailing segment of `mimi_room_uri`)
 /// matches `room_id`. Returns `None` when no binding has been
 /// recorded; callers translate that into a 404/400 rather than
@@ -396,7 +396,7 @@ pub(super) fn non_empty_json_value(value: &Value) -> bool {
     }
 }
 
-/// Emit a `ck.mimi.room_binding` projection event capturing the
+/// Emit a `ak.mimi.room_binding` projection event capturing the
 /// binding state. Returns the generated event_id so the caller can
 /// echo it back to the MIMI client. The binding payload is captured
 /// verbatim under `payload.binding` and `mimi_room_id` is hoisted to

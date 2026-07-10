@@ -54,14 +54,14 @@ const POLICY_FRESHNESS_CLOCK_SKEW_MS: i64 = 60_000;
 const POLICY_FRESHNESS_RETRY_AFTER_SECONDS: i64 = 30;
 
 /// Protocol surface (`/_arkret/self/...`): only the policy decision check is
-/// a v1 protocol operation (`ck.self.policy.query.check`).
+/// a v1 protocol operation (`ak.self.policy.query.check`).
 pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("policy/check").post(policy_check))
 }
 
 /// Product surface (`/_soland/self/...`): owner-scoped policy document storage
 /// CRUD. Deployment-local management capability backing
-/// `ck.self.policy.query.check`; kept off the protocol root per
+/// `ak.self.policy.query.check`; kept off the protocol root per
 /// `service-http-binding.md` §1007.
 pub(super) fn product_router() -> Router {
     Router::new()

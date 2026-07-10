@@ -1,11 +1,11 @@
-//! CKP-0007 Circle reducers + scope/membership read helpers. Inherent-impl
+//! AKP-0007 Circle reducers + scope/membership read helpers. Inherent-impl
 //! block on `ProjectionState`; methods resolve by type, so cross-family
 //! `self.apply_*` / `self.check_*` calls are unaffected.
 //!
 //! Spec source: `arkret-spec/spec/v1/zh/models/circle.md` +
 //! `spec/v1/artifacts/schemas/circle.schema.json`. The six on-wire
 //! reducer-input kinds are dispatched here (the seventh,
-//! `ck.circle.seal_commit`, is reducer-derived and emitted by the
+//! `ak.circle.seal_commit`, is reducer-derived and emitted by the
 //! notary cadence, not accepted as a submitted event).
 
 use super::*;
@@ -35,7 +35,7 @@ impl ProjectionState {
         // Spec invariant: Circle.realm_id MUST match the surrounding
         // operation's realm scope; the wire validator already binds
         // `operation.realm_id` to the envelope `realm_id`, so a mismatch
-        // surfaces as the registered CKP-0007 schema_violation reason
+        // surfaces as the registered AKP-0007 schema_violation reason
         // (`circle_realm_mismatch`).
         let realm_id = operation.realm_id.to_string();
         if let Some(payload_realm) = object.get("realm_id").and_then(Value::as_str)
@@ -284,10 +284,10 @@ impl ProjectionState {
         let Some(circle) = self.circles.get_mut(&circle_id) else {
             return ProjectionEffect::Ignored;
         };
-        // CKP-0007 transition matrix:
-        //   active -> archived   (ck.circle.archive)
-        //   archived -> active   (ck.circle.restore)
-        //   active | archived -> tombstoned   (ck.circle.tombstone)
+        // AKP-0007 transition matrix:
+        //   active -> archived   (ak.circle.archive)
+        //   archived -> active   (ak.circle.restore)
+        //   active | archived -> tombstoned   (ak.circle.tombstone)
         let allowed = match target {
             CircleLifecycleState::Archived => circle.state == CircleLifecycleState::Active,
             CircleLifecycleState::Active => circle.state == CircleLifecycleState::Archived,
@@ -397,7 +397,7 @@ impl ProjectionState {
         };
         // Snapshot the parent Realm id + the Circle's `join_rule` and the
         // target's current active-membership BEFORE taking a mutable borrow on
-        // the Circle entry so we can run the strict-subset and CKP-0007 §8
+        // the Circle entry so we can run the strict-subset and AKP-0007 §8
         // authorization checks against the parent Realm / Circle state.
         let (realm_id, join_rule, target_already_active) = match self.circles.get(&circle_id) {
             Some(c) => (
@@ -408,7 +408,7 @@ impl ProjectionState {
             None => return ProjectionEffect::Ignored,
         };
         if target_state == "join" {
-            // CKP-0007 strict subset invariant: Circle.members ⊆
+            // AKP-0007 strict subset invariant: Circle.members ⊆
             // Realm.members. Reducer reason
             // `circle_member_must_be_realm_member`.
             let parent_joined = self
@@ -420,7 +420,7 @@ impl ProjectionState {
                     reason: "circle_member_must_be_realm_member".to_owned(),
                 };
             }
-            // CKP-0007 §8 second-line authorization (fail-closed). Only gate
+            // AKP-0007 §8 second-line authorization (fail-closed). Only gate
             // *new* activations (none/left → active); re-asserting an already
             // active membership is idempotent and carries no privilege change.
             if !target_already_active {
@@ -440,7 +440,7 @@ impl ProjectionState {
                 } else if !payload_asserts_circle_manage(payload, &circle_id) {
                     // Pulling *another* actor in is a one-way add that needs no
                     // consent from the target, but the requester MUST hold
-                    // `ck.circle.member.manage` (narrowed by
+                    // `ak.circle.member.manage` (narrowed by
                     // `allowed_circle_ids`) on this Circle. The authoritative
                     // capability decision runs in the HTTP surface
                     // (`SolandAuthzEngine::check`) and is stamped into the payload;
@@ -519,9 +519,9 @@ impl ProjectionState {
         }
     }
 
-    /// CKP-0007 — validate that `scope_circle_id` references an active
+    /// AKP-0007 — validate that `scope_circle_id` references an active
     /// Circle whose `realm_id` matches the writer's surrounding Realm
-    /// scope. Returns the canonical CKP-0007 reason code on failure:
+    /// scope. Returns the canonical AKP-0007 reason code on failure:
     ///
     /// - `circle_realm_mismatch`     — Circle belongs to a different Realm
     /// - `circle_not_active`         — Circle is archived
@@ -561,7 +561,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// CKP-0007 read helper — return the Circle projection for `circle_id`,
+    /// AKP-0007 read helper — return the Circle projection for `circle_id`,
     /// or `None` when the Circle is unknown or already tombstoned. Used by
     /// `/_soland/self/circles/*` route handlers and by `scope_circle_id`
     /// validators that need to confirm the Circle is alive before allowing
@@ -571,7 +571,7 @@ impl ProjectionState {
         (circle.state != CircleLifecycleState::Tombstoned).then_some(circle)
     }
 
-    /// CKP-0007 — list all live Circles bound to `realm_id`. Excludes
+    /// AKP-0007 — list all live Circles bound to `realm_id`. Excludes
     /// tombstoned entries; archived Circles are included so the admin UI
     /// can offer a restore path. Stable iteration order
     /// (BTreeMap key ordering).
@@ -663,7 +663,7 @@ impl ProjectionState {
         );
     }
 
-    /// CKP-0007 — resolve the Circle (`ak:circle:…`) a Strand is scoped to, if
+    /// AKP-0007 — resolve the Circle (`ak:circle:…`) a Strand is scoped to, if
     /// any. A message's effective circle-scope is derived from its Strand via
     /// this lookup — never from the message payload (spec: `scope_circle_id`
     /// is a Strand field). Returns `None` for unknown Strands or Realm-default
@@ -682,8 +682,8 @@ impl ProjectionState {
             .filter(|scope| scope.starts_with("ak:circle:"))
     }
 
-    /// CKP-0007 - resolve the Circle (`ak:circle:...`) a Morph is scoped to, if
-    /// any. Used by admission gates for `ck.morph.update` and lifecycle writes.
+    /// AKP-0007 - resolve the Circle (`ak:circle:...`) a Morph is scoped to, if
+    /// any. Used by admission gates for `ak.morph.update` and lifecycle writes.
     pub fn morph_scope_circle_id(&self, morph_id: &str) -> Option<String> {
         self.morphs
             .get(morph_id)

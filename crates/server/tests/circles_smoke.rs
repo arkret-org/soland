@@ -1,4 +1,4 @@
-//! CKP-0007 (P2A.6) — soland reducer-level smoke test for the Circle
+//! AKP-0007 (P2A.6) — soland reducer-level smoke test for the Circle
 //! primitive lifecycle and membership invariants.
 //!
 //! The full HTTP integration round-trip
@@ -7,14 +7,14 @@
 //! seals the reducer's invariants in soland-local CI so a regression
 //! on the projection-side state machine surfaces immediately:
 //!
-//! 1. `ck.circle.create` writes a live Circle into the projection;
-//! 2. `ck.circle.member.state -> membership: join` for a non-Realm member is rejected with the
-//!    canonical CKP-0007 reason `circle_member_must_be_realm_member`;
+//! 1. `ak.circle.create` writes a live Circle into the projection;
+//! 2. `ak.circle.member.state -> membership: join` for a non-Realm member is rejected with the
+//!    canonical AKP-0007 reason `circle_member_must_be_realm_member`;
 //! 3. After the actor joins the parent Realm, the same membership write is accepted and the Circle
 //!    members set is updated;
 //! 4. A Strand create with `scope_circle_id` pointing at a Circle in a different Realm is rejected
 //!    with `circle_realm_mismatch`;
-//! 5. `ck.circle.tombstone` flips the projection to the terminal state and the read helper hides
+//! 5. `ak.circle.tombstone` flips the projection to the terminal state and the read helper hides
 //!    the row.
 
 use arkret_sdk::{Did, Operation, OperationId, RealmId};
@@ -83,10 +83,10 @@ fn seed_encrypted_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: 
     );
 }
 
-/// CKP-0007 smoke helper — write a `(realm_id, actor)` membership entry
+/// AKP-0007 smoke helper — write a `(realm_id, actor)` membership entry
 /// directly into the projection's `members` cache so the test can focus
 /// on the Circle strict-subset invariant without booting the full
-/// `ck.member.state` join pipeline (delivery_binding_policy
+/// `ak.member.state` join pipeline (delivery_binding_policy
 /// pre-conditions, FSM cell synthesis, etc.). The Circle handler reads
 /// the same cache via `ProjectionState::member`.
 fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &str, actor: &str) {
@@ -306,7 +306,7 @@ fn circle_member_must_be_realm_member() {
 
     // Adding Bob to the parent Realm unblocks the Circle write.
     add_realm_member(&mut state, &hlc, REALM_A, BOB);
-    // CKP-0007 §8: the owner Alice pulls Bob into a non-`open` Circle, which is
+    // AKP-0007 §8: the owner Alice pulls Bob into a non-`open` Circle, which is
     // an authorised cross-actor add — the payload carries the `sender` + manage
     // stamp the HTTP authz gate would attach. This isolates the strict-subset
     // invariant under test without weakening the §8 authorization door.
@@ -518,7 +518,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     );
     // Seed the Circle's joined membership via authorised cross-actor adds: each
     // payload carries a `sender` distinct from the target plus the manage stamp
-    // the HTTP authz gate would attach, so the CKP-0007 §8 door passes on a
+    // the HTTP authz gate would attach, so the AKP-0007 §8 door passes on a
     // non-`open` Circle and we reach the scope/visibility invariant under test.
     // (`payload_asserts_circle_manage` validates the stamp; the chosen `sender`
     // only needs to differ from the target to route through the manage path.)
@@ -539,7 +539,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
         );
     }
 
-    // CKP-0007: a Message's Circle scope is derived from its Strand, never from
+    // AKP-0007: a Message's Circle scope is derived from its Strand, never from
     // the message payload (spec: scope_circle_id is a Strand field). Bind a Strand
     // to the Circle, then post a message to that Strand WITHOUT any scope field.
     let strand_created = state.apply(
@@ -683,7 +683,7 @@ fn strand_scope_circle_id_rejects_cross_realm() {
     );
 
     // Strand in Realm A pointing at a Circle in Realm B MUST be rejected
-    // with the canonical CKP-0007 schema-violation reason
+    // with the canonical AKP-0007 schema-violation reason
     // `circle_realm_mismatch`.
     let rejected = state.apply(
         &op(

@@ -70,9 +70,9 @@ with the projection rewrite worker):
    carries the historical rows so chain-of-custody is preserved.
    Downstream consumers honour this marker when rendering the actor's
    audit trail.
-9. Mint a `ck.schema.erasure_receipt.v1` proof, sign it with the
-   notary signing key, and append `ck.audit.erasure_receipt`.
-10. Mint a per-realm `ck.schema.erasure_receipt.realm.v1` proof for
+9. Mint a `ak.schema.erasure_receipt.v1` proof, sign it with the
+   notary signing key, and append `ak.audit.erasure_receipt`.
+10. Mint a per-realm `ak.schema.erasure_receipt.realm.v1` proof for
     every realm the actor was active in (`affected_erasure_realms_for_actor`)
     and emit each as a realm-scoped operation (best-effort fanout —
     failures are audited under `org.arkret.soland.audit.erasure_receipt.fanout_failed`).
@@ -137,7 +137,7 @@ per-actor extracts:
 - `contacts` — placeholder (`[]`); will carry the principal's
   directory contact set once Contacts ships.
 - `key_backup_state` — placeholder (`null`); will carry the principal's
-  `ck.schema.key_backup.v1` descriptor + recovery commitments once the
+  `ak.schema.key_backup.v1` descriptor + recovery commitments once the
   key-backup endpoint is wired into the export pipeline.
 
 Until then, treat absence as "unsupported in v1" rather than "no data".

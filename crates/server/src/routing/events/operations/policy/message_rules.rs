@@ -50,7 +50,7 @@ pub(super) fn validate_reaction_scope_policy(
 /// tombstones a Circle-scoped object, else `None` (Realm-default scope).
 /// Object-carrying creates declare scope inline (`payload.object` /
 /// `payload.relation` / top-level `scope_circle_id`); updates and lifecycle
-/// writes derive scope from the projected target. `ck.message.create` derives
+/// writes derive scope from the projected target. `ak.message.create` derives
 /// scope from the projected Strand — a Message never self-declares its scope.
 pub(super) fn operation_target_scope_circle_id(
     projection: &crate::reducer::ProjectionState,
@@ -156,8 +156,8 @@ pub(super) fn operation_target_scope_circle_id(
 /// admission too.
 ///
 /// Coverage: object-carrying creates (Strand / Morph / Space / Relation),
-/// relation update/tombstone, `ck.message.create`, Strand update / lifecycle,
-/// Morph update / lifecycle, and `ck.reaction.add` / `ck.reaction.remove`
+/// relation update/tombstone, `ak.message.create`, Strand update / lifecycle,
+/// Morph update / lifecycle, and `ak.reaction.add` / `ak.reaction.remove`
 /// (scope derived from the target Message's Strand).
 ///
 /// Membership is evaluated against the current Circle projection (soland's
@@ -186,14 +186,14 @@ pub(super) fn validate_circle_scope_membership(
 }
 
 /// applet-integration.md §4 / §4b — installing an Applet into a Realm is gated
-/// by the machine-readable `ck.realm.admin` capability: the actor submitting a
-/// `ck.applet.registration` MUST own the target Realm or hold an active
-/// `ck.realm.admin` grant covering it, else reject `applet_registration_unauthorized`.
+/// by the machine-readable `ak.realm.admin` capability: the actor submitting a
+/// `ak.applet.registration` MUST own the target Realm or hold an active
+/// `ak.realm.admin` grant covering it, else reject `applet_registration_unauthorized`.
 ///
 /// The dedicated install aggregate (`POST /_arkret/self/applets/install`) checks
 /// this in its own handler and persists the registration projection directly —
 /// it does NOT flow through this admission path. This gate closes the *bypass*:
-/// a raw `ck.applet.registration` submitted via `/_arkret/self/events` otherwise
+/// a raw `ak.applet.registration` submitted via `/_arkret/self/events` otherwise
 /// reaches `apply_applet_registration` with no authorization of its own.
 /// Registration staying `service_attested` (carrier authenticity) is orthogonal
 /// to "who may install" (§4) — both must hold. Mirrors the ban gate
@@ -282,7 +282,7 @@ pub(crate) fn realm_ids_match(a: &str, b: &str) -> bool {
 /// - The window only bites when a grant authorizing the relevant `.own` action carries a `temporal`
 ///   window field. With no such grant the action is unbounded (default member / owner behaviour is
 ///   unchanged).
-/// - Holding the broader `ck.message.revise` / `ck.message.redact` capability (or `*`), or being
+/// - Holding the broader `ak.message.revise` / `ak.message.redact` capability (or `*`), or being
 ///   the Realm owner, lifts the window entirely (admin override).
 /// - `message_redact_window` is authoritative for redact; otherwise redact shares the edit window
 ///   unless `allow_redact_after_window` is set.

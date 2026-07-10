@@ -62,7 +62,7 @@ impl FederationProfileIntersection {
         // `required_event_kinds` is the set the profile *requires support for*
         // (a floor), NOT an allowlist of acceptable kinds — gating per-event
         // acceptance on it wrongly rejected standard federatable DataEvents
-        // (e.g. `ck.message.create`) whenever the peer described
+        // (e.g. `ak.message.create`) whenever the peer described
         // `federation_minimal` or its ServiceDescribe was momentarily
         // unfetchable. Event-kind admissibility is settled by the matched
         // reducer profile (which carries the required/rejected kind sets),

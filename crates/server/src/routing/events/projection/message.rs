@@ -21,7 +21,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     if matches!(store.get(&event_id).await, Ok(Some(_))) {
         return;
     }
-    // CKP-0007: derive the message's circle scope from its Strand, never from
+    // AKP-0007: derive the message's circle scope from its Strand, never from
     // the message payload (spec: scope_circle_id is a Strand field).
     let strand_scope = operation
         .payload

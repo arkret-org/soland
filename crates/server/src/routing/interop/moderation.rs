@@ -1,9 +1,9 @@
 //! Moderation user-facing endpoints.
 //!
-//! - `POST /_arkret/self/moderation/report` (`ck.self.moderation.command.report`) — file a report.
+//! - `POST /_arkret/self/moderation/report` (`ak.self.moderation.command.report`) — file a report.
 //!   Persists both the report record and a derived queue item (`ModerationQueueItem`) per the
 //!   spec's triage architecture.
-//! - moderation appeals are durable `ck.moderation.appeal.*` events submitted through `POST
+//! - moderation appeals are durable `ak.moderation.appeal.*` events submitted through `POST
 //!   /_arkret/self/events`. The four-state appeal FSM and separation-of-duties enforcement are
 //!   authoritative in the reducer (`crate::reducer::apply_moderation`), surfaced at ingest by the
 //!   moderation projection preflight.
@@ -1161,15 +1161,15 @@ fn sealed_plaintext_release_authorized(emitted: &Value) -> bool {
 
 /// Resolve the effective `audit_disclosure_policy` for a Realm.
 ///
-/// The create-time policy (`ck.realm.create`) is the baseline. Subsequent
-/// `ck.realm.update` events MAY carry an `audit_disclosure_policy` in their
+/// The create-time policy (`ak.realm.create`) is the baseline. Subsequent
+/// `ak.realm.update` events MAY carry an `audit_disclosure_policy` in their
 /// object patch; the latest such patch wins (cas-register semantics), so an
 /// admin can revoke or narrow the policy after the fact (audited-e2ee.md §3.1
 /// — admins MAY suspend / revoke a binding). A revoke is expressed by an
 /// update whose patch sets `audit_disclosure_policy.enabled = false`; once the
 /// resolved policy reports `enabled == false`, `notify_audit_agent_for_report`
 /// refuses to invite the audit agent for any later report, while historical
-/// `ck.audit.accessed` records stay in the durable audit log.
+/// `ak.audit.accessed` records stay in the durable audit log.
 async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
     let mut records = state.persistence.events().snapshot_all().await.ok()?;
     // Fold in chronological order so the latest create/update wins regardless
@@ -1212,7 +1212,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
     policy
 }
 
-/// A `ck.realm.update` patch entry MAY be either a direct value
+/// A `ak.realm.update` patch entry MAY be either a direct value
 /// (`audit_disclosure_policy: { ... }`) or a `$op` register form
 /// (`audit_disclosure_policy: { "$op": "set", "value": { ... } }`), matching
 /// the realm-lifecycle reducer's patch handling. Unwrap the latter to the
@@ -1229,7 +1229,7 @@ fn unwrap_realm_update_patch_value(value: &Value) -> Value {
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct ModerationAppealSubmitRequestBody {
-    /// The `ck.moderation.decision` event being appealed.
+    /// The `ak.moderation.decision` event being appealed.
     pub decision_ref: String,
     /// The original moderation target (message / strand / blob / etc.).
     pub target_ref: String,

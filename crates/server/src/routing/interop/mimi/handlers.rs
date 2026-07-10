@@ -83,7 +83,7 @@ pub(super) async fn mimi_room_update(
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
     // If the update carries a `room_binding` block, persist it as a
-    // `ck.mimi.room_binding` projection event so the Arkret
+    // `ak.mimi.room_binding` projection event so the Arkret
     // timeline observes the binding. Updates without a binding block
     // fall through to the receipt-only response. A binding block that
     // omits both `binding_scope.realm_id` and a top-level `realm_id`
@@ -134,7 +134,7 @@ pub(super) async fn mimi_room_update(
 #[endpoint(
     operation_id = "ak.open.mimi.command.notify",
     tags("mimi"),
-    summary = "Fan out a MIMI notify (broadcasts a `ck.open.mimi.command.notify` ephemeral)"
+    summary = "Fan out a MIMI notify (broadcasts a `ak.open.mimi.command.notify` ephemeral)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.notify"))]
 pub(super) async fn mimi_notify(
@@ -154,7 +154,7 @@ pub(super) async fn mimi_notify(
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
-    // Fan out a synthetic `ck.open.mimi.command.notify` projection event so live
+    // Fan out a synthetic `ak.open.mimi.command.notify` projection event so live
     // subscribers observe the MIMI provider-to-provider
     // notification. The notify event is an ephemeral signal in the
     // spec's wire_scope taxonomy - we broadcast but don't persist
@@ -258,7 +258,7 @@ pub(super) async fn mimi_room_message(
         .unwrap_or_else(|| arkret_sdk::canonical::sha256_digest(body.to_string().as_bytes()));
 
     // Map the MIMI message into the canonical Arkret timeline.
-    // Append a MessageRecord + a `ck.message.create` projection event so
+    // Append a MessageRecord + a `ak.message.create` projection event so
     // the message shows up in `GET /_arkret/self/events?realm_id=...`. The
     // MIMI provenance metadata is preserved verbatim under
     // `payload.mimi_provenance` so audit consumers can verify the
@@ -753,7 +753,7 @@ pub(super) async fn mimi_report_abuse(
         tracing::error!(%error, "failed to persist mimi abuse report");
     }
 
-    // Also emit a `ck.self.moderation.report` projection event so the
+    // Also emit a `ak.self.moderation.report` projection event so the
     // audit timeline observes the report in the same shape native
     // Arkret reports use. The MIMI provenance is preserved under
     // `payload.mimi_provenance`.

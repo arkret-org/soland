@@ -1,5 +1,5 @@
 //! Account-aggregate describe + subscribe long-poll stream
-//! (`ck.self.account.stream.subscribe`): the timeline / presence / typing /
+//! (`ak.self.account.stream.subscribe`): the timeline / presence / typing /
 //! to_device NDJSON delta machinery and its auth-material gate.
 
 use super::*;

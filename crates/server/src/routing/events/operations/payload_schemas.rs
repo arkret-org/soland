@@ -119,7 +119,7 @@ pub(crate) const RELATION_ID_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequ
     RELATION_ID_FIELDS,
     "relation operation requires relation_id",
 )];
-// G3.S5 — `ck.realm.link` Move payload. The wire schema also permits
+// G3.S5 — `ak.realm.link` Move payload. The wire schema also permits
 // `status` / `label` / `commitment`, but those are optional and the
 // reducer assigns defaults. Required fields only.
 pub(crate) const REALM_LINK_TARGET_FIELDS: &[&str] = &["target_realm_id"];
@@ -370,7 +370,7 @@ pub(crate) const CONFLICT_REPAIR_REQUIREMENTS: &[PayloadRequirement] = &[
         "conflict repair requires state_witness_ref",
     ),
 ];
-// `ck.space.archive` / `ck.space.restore` / `ck.space.tombstone` share the
+// `ak.space.archive` / `ak.space.restore` / `ak.space.tombstone` share the
 // spec-canonical `space_id` target field.
 pub(crate) const SPACE_CONTAINER_LIFECYCLE_ID_FIELDS: &[&str] = &["space_id"];
 pub(crate) const SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] =
@@ -378,13 +378,13 @@ pub(crate) const SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] =
         SPACE_CONTAINER_LIFECYCLE_ID_FIELDS,
         "space lifecycle operation requires space_id",
     )];
-// `ck.space.create` carries a full Space object under `object`.
+// `ak.space.create` carries a full Space object under `object`.
 pub(crate) const SPACE_CONTAINER_CREATE_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::Required(
         "object",
         "space create operation requires object",
     )];
-// `ck.space.update` carries the canonical Space target field plus patch.
+// `ak.space.update` carries the canonical Space target field plus patch.
 pub(crate) const SPACE_CONTAINER_UPDATE_ID_FIELDS: &[&str] = &["space_id"];
 pub(crate) const SPACE_CONTAINER_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
@@ -393,7 +393,7 @@ pub(crate) const SPACE_CONTAINER_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
     PayloadRequirement::Required("patch", "space update operation requires patch"),
 ];
-// `ck.space.parent` carries `space_id` + `expected_parent_space_id`, with
+// `ak.space.parent` carries `space_id` + `expected_parent_space_id`, with
 // optional `parent_space_id`.
 pub(crate) const SPACE_CONTAINER_PARENT_ID_FIELDS: &[&str] = &["space_id"];
 pub(crate) const SPACE_CONTAINER_PARENT_EXPECTED_FIELDS: &[&str] = &["expected_parent_space_id"];
@@ -427,7 +427,7 @@ pub(crate) const STRAND_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
     PayloadRequirement::Required("patch", "strand update operation requires patch"),
 ];
-// `ck.morph.archive` / `ck.morph.restore` use the generic object lifecycle
+// `ak.morph.archive` / `ak.morph.restore` use the generic object lifecycle
 // payload shape: target_ref names the Morph.
 pub(crate) const MORPH_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::Required(
@@ -464,7 +464,7 @@ pub(crate) const MORPH_SCHEMA_MIGRATE_REQUIREMENTS: &[PayloadRequirement] = &[
         "morph schema_migrate operation requires compatibility_class",
     ),
 ];
-// Strand position events (ck.strand.move / ak.strand.reorder).
+// Strand position events (ak.strand.move / ak.strand.reorder).
 pub(crate) const STRAND_POSITION_BOARD_FIELDS: &[&str] = &["board_space_id"];
 pub(crate) const STRAND_MOVE_TARGET_FIELDS: &[&str] = &["target_space_id"];
 pub(crate) const STRAND_REORDER_SPACE_FIELDS: &[&str] = &["space_id", "list_space_id"];
@@ -492,7 +492,7 @@ pub(crate) const STRAND_REORDER_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
     PayloadRequirement::Required("rank", "strand reorder operation requires rank"),
 ];
-// Strand watch event (ck.strand.watch.set).
+// Strand watch event (ak.strand.watch.set).
 // Spec event-kind-registry sets `cell_subject` = (strand_id, watcher_actor_id);
 // both fields are MUST-present in the payload. `level` is also required
 // (null = clear); enum + level_public validation lives at the
@@ -509,7 +509,7 @@ pub(crate) const STRAND_WATCH_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
 ];
 // Strand tracks update event. Required fields per SDK schema:
-//   `ck.strand.tracks.update` -> strand_id + (patch | tracks)
+//   `ak.strand.tracks.update` -> strand_id + (patch | tracks)
 pub(crate) const STRAND_TRACKS_UPDATE_FIELDS: &[&str] = &["patch", "tracks"];
 pub(crate) const STRAND_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("strand_id", "strand tracks update requires strand_id"),
@@ -521,11 +521,11 @@ pub(crate) const STRAND_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
 // Applet protocol family.
 //
 // Spec `extensions/applet-integration.md` + event-kind-registry rows:
-//   `ck.applet.registration` → service_did + namespace + capabilities
-//   `ck.applet.discovery`    → service_did + manifest
-//   `ck.applet.interop_session.start`  → applet_id + session_id + params
-//   `ck.applet.interop_session.status` → session_id + status + detail
-//   `ck.applet.bridge_error`            → session_id + errcode + message
+//   `ak.applet.registration` → service_did + namespace + capabilities
+//   `ak.applet.discovery`    → service_did + manifest
+//   `ak.applet.interop_session.start`  → applet_id + session_id + params
+//   `ak.applet.interop_session.status` → session_id + status + detail
+//   `ak.applet.bridge_error`            → session_id + errcode + message
 //
 // We require the structurally-identifying fields; richer policy
 // (capability gating, manifest schema, signed bundles) is enforced by

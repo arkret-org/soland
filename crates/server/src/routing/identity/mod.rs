@@ -44,7 +44,7 @@ pub fn protocol_router() -> Router {
             Router::with_path("gate")
                 .push(auth::protocol_account_router())
                 // Spec `account_auth` surface group: account registration on
-                // the gate trust segment (`ck.gate.account.command.register`).
+                // the gate trust segment (`ak.gate.account.command.register`).
                 .push(account::protocol_gate_router())
                 .push(Router::with_path("account").push(agents::agent_key_pair_router())),
         )
@@ -68,9 +68,9 @@ pub fn protocol_router() -> Router {
         .push(
             Router::with_path("self")
                 .push(account::protocol_router())
-                // Spec `account_data` group (`ck.self.account_data.*`).
+                // Spec `account_data` group (`ak.self.account_data.*`).
                 .push(account_data::router())
-                // Spec `consent` group (`ck.self.consent.*`).
+                // Spec `consent` group (`ak.self.consent.*`).
                 .push(consent::router())
                 .push(keys::router())
                 .push(key_backup::protocol_router())
@@ -95,7 +95,7 @@ pub fn local_router() -> Router {
         // `/_soland/gate/account/device-signing-keys/query`. The Auth Server
         // (coauth) calls this while verifying a device holder proof
         // (session-grant refresh / soft-logout restore): the holder key is the
-        // `ck.device.authorize`-authorized device signing key projected into
+        // `ak.device.authorize`-authorized device signing key projected into
         // this Principal Server's directory, NOT a DID-document
         // verificationMethod. Bearer-gated (see `keys::product_router`).
         .push(keys::product_router())

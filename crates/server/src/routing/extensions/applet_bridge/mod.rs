@@ -2,7 +2,7 @@
 //!
 //! This closes the runnable surface for the `extensions/applet-bridge`
 //! contract: a verified Applet Package installs an applet, soland issues a
-//! stable bot DID and `ck.applet.registration` projection, ghost DIDs can be
+//! stable bot DID and `ak.applet.registration` projection, ghost DIDs can be
 //! minted for external users, and portal messages are mirrored into the
 //! canonical space timeline.
 

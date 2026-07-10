@@ -2,7 +2,7 @@
 //!
 //! When `AppConfig::sovereign_enclave_enabled` is true (env
 //! `SOLAND_SOVEREIGN_ENCLAVE=1`), soland claims
-//! `ck.profile.sovereign_enclave.v1` on `/server/describe` and refuses
+//! `ak.profile.sovereign_enclave.v1` on `/server/describe` and refuses
 //! every outbound HTTP call that isn't first whitelisted.
 //!
 //! The enclave profile MUST disable:

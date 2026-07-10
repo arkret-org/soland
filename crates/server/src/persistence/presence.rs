@@ -21,7 +21,7 @@ pub trait TypingStore: Send + Sync {
     async fn prune_expired(&self) -> PersistenceResult<usize>;
 }
 
-/// Realm-broadcast relay for `ck.call.signal` ephemeral envelopes
+/// Realm-broadcast relay for `ak.call.signal` ephemeral envelopes
 /// (`webrtc-signaling.md` §5). Stores the verbatim signed envelope per Realm
 /// with a TTL; receivers pick it up off the subscribe `ephemeral.call_signals`
 /// segment and verify the carried `proof`. Auto-prunes expired entries and
@@ -338,7 +338,7 @@ impl PresenceStore for PgPresenceStore {
     }
 }
 
-/// PostgreSQL-backed `ck.call.signal` realm-broadcast relay
+/// PostgreSQL-backed `ak.call.signal` realm-broadcast relay
 /// (`webrtc-signaling.md` §5). Durable so a restart / replica failover keeps
 /// pending invites and the per-subscriber-device deliver-once watermark
 /// (`call_signal_relay` + `call_signal_relay_position` +

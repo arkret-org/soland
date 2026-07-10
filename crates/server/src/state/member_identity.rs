@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value;
 
 /// R3.1/R3.2 (arkret-spec @ b56cab1) — Realm-scoped MemberIdentity event
-/// registry. Stores every accepted `ck.member.identity.update` event by
+/// registry. Stores every accepted `ak.member.identity.update` event by
 /// `(realm_id, actor_id, segment)`, computes the current effective set
 /// per the SDK helper `effective_identity_events`, and materializes both
 /// R3.2 digests: the `expected_state_digest` guard
@@ -46,7 +46,7 @@ pub struct MemberIdentitySubjectKey {
     pub segment: String,
 }
 
-/// One stored `ck.member.identity.update` event.
+/// One stored `ak.member.identity.update` event.
 #[derive(Clone, Debug)]
 pub struct MemberIdentityEventRecord {
     pub event_id: String,

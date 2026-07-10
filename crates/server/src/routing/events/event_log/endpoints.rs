@@ -419,7 +419,7 @@ async fn resolve_events(
 /// Internal durable-Event-store reader, kept for actor-scoped audit reads
 /// that bypass the projection layer. Not wired to a public route in the
 /// current API shape —
-/// the canonical `ck.self.events.query.scan` path at `GET /_arkret/self/events` goes to the
+/// the canonical `ak.self.events.query.scan` path at `GET /_arkret/self/events` goes to the
 /// projection-aware handler in `routing/sync.rs::events_query` so message
 /// timeline reads work through `POST /_arkret/self/events` → `events_query`
 /// round-trips.

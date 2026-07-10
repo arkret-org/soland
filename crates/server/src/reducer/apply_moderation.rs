@@ -4,15 +4,15 @@
 //! events. Projects the six active moderation kinds into the canonical cells
 //! declared by `event-kind-registry.json`:
 //!
-//! - `ck.moderation.decision` -> `ck.component.moderation_state.v1` (or_set, one cell per
+//! - `ak.moderation.decision` -> `ak.component.moderation_state.v1` (or_set, one cell per
 //!   `payload.target_ref`). The add value is the decision snapshot (`decision_id` / `issuer` /
 //!   `target_ref` / `decision` / `realm_id`), so the appeal separation-of-duties check can
 //!   reverse-resolve the original decision issuer from the cell.
-//! - `ck.moderation.decision.lift` -> observed-remove / supersede on the same target cell. It marks
+//! - `ak.moderation.decision.lift` -> observed-remove / supersede on the same target cell. It marks
 //!   entries whose `decision_id` matches `payload.decision_ref` as lifted. Terminal per
 //!   content-moderation.md §2.6 (same §12.1 rule as capabilities): once a decision_id is lifted, a
 //!   later re-add stays lifted.
-//! - `ck.moderation.appeal.{submit,review,decision,close}` → `ck.component.moderation.appeal.v1`
+//! - `ak.moderation.appeal.{submit,review,decision,close}` → `ak.component.moderation.appeal.v1`
 //!   (fsm, one cell per `payload.appeal_id`). Deterministic state machine (none) → submitted →
 //!   under_review → decided → closed, with `close` also reachable from submitted / under_review
 //!   (appellant withdrawal or an authorized close service). content-moderation.md §5.5.
@@ -25,7 +25,7 @@
 //!   Violations reject with `appeal_self_review_forbidden`.
 //! - **overturn ↔ lift atomic** — a `verdict=overturn` decision requires the moderation_state cell
 //!   for `decision_ref` to already show the decision lifted. With ordered-submit-batch semantics
-//!   the paired `ck.moderation.decision.lift` is projected before the appeal decision, so the cell
+//!   the paired `ak.moderation.decision.lift` is projected before the appeal decision, so the cell
 //!   already reflects it; otherwise `appeal_overturn_missing_lift`.
 //! - **modify ↔ new decision atomic** — a `verdict=modify` decision requires `modify_decision_ref`
 //!   to name a decision already present (and not lifted) in the moderation_state cell; otherwise
@@ -37,7 +37,7 @@
 
 use super::*;
 
-/// Canonical closed verdict enum for `ck.moderation.appeal.decision`
+/// Canonical closed verdict enum for `ak.moderation.appeal.decision`
 /// (content-moderation.md §5.5.1.1 / moderation-appeal.schema.json).
 const APPEAL_VERDICTS: [&str; 3] = ["uphold", "overturn", "modify"];
 
@@ -98,14 +98,14 @@ fn moderation_add_tag(decision_kind: &str, issuer: &str, request_digest: &str) -
 impl ProjectionState {
     fn moderation_state_cell_ref(target_ref: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "ak:cell:ck.component.moderation_state.v1:{target_ref}"
+            "ak:cell:ak.component.moderation_state.v1:{target_ref}"
         ))
         .ok()
     }
 
     fn moderation_appeal_cell_ref(appeal_id: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "ak:cell:ck.component.moderation.appeal.v1:{appeal_id}"
+            "ak:cell:ak.component.moderation.appeal.v1:{appeal_id}"
         ))
         .ok()
     }
@@ -125,7 +125,7 @@ impl ProjectionState {
             .filter(|(cell_ref, _)| {
                 cell_ref
                     .as_str()
-                    .starts_with("ak:cell:ck.component.moderation_state.v1:")
+                    .starts_with("ak:cell:ak.component.moderation_state.v1:")
             })
             .flat_map(|(_, state)| match state {
                 CellState::Value(Value::Array(items)) => items.clone(),
@@ -212,7 +212,7 @@ impl ProjectionState {
         }
     }
 
-    /// P2 — project `ck.moderation.decision` as an or_set add on the
+    /// P2 — project `ak.moderation.decision` as an or_set add on the
     /// moderation_state cell keyed by `payload.target_ref`.
     pub(crate) fn apply_moderation_decision(
         &mut self,
@@ -298,7 +298,7 @@ impl ProjectionState {
         }
     }
 
-    /// P2 — project `ck.moderation.decision.lift` as an or_set observed-remove
+    /// P2 — project `ak.moderation.decision.lift` as an or_set observed-remove
     /// / supersede on the moderation_state cell keyed by `payload.target_ref`.
     /// Idempotent: lifting an already-lifted decision converges.
     pub(crate) fn apply_moderation_decision_lift(
@@ -384,7 +384,7 @@ impl ProjectionState {
         }
     }
 
-    /// P2 — project the four `ck.moderation.appeal.*` kinds onto the appeal
+    /// P2 — project the four `ak.moderation.appeal.*` kinds onto the appeal
     /// fsm cell. `target_state` is the post-transition state; the reducer
     /// validates the transition is legal from the current cell state and the
     /// §5.5.2 reducer constraints.

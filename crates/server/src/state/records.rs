@@ -55,7 +55,7 @@ pub struct AccountRecord {
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
     /// `POST /_arkret/self/account/profile` (operationId
-    /// `ck.self.account.command.update_profile`); rendered by `demo_actors` in directory
+    /// `ak.self.account.command.update_profile`); rendered by `demo_actors` in directory
     /// search results.
     pub bio: Option<String>,
     /// HTTPS URL pointing at the actor's avatar image. Server holds the
@@ -144,7 +144,7 @@ pub struct RecoveryReceiptRecord {
 /// policy snapshot + a server challenge, and transitions
 /// `pending -> verified -> completed` (or `rejected` / `expired`). Proof
 /// verification (C-P3) is what advances `pending -> verified`; completion
-/// (C-P4) emits a `ck.device.authorize` + receipt.
+/// (C-P4) emits a `ak.device.authorize` + receipt.
 #[derive(Clone, Debug)]
 pub struct RecoverySessionRecord {
     pub recovery_session_id: String,
@@ -262,7 +262,7 @@ pub(crate) fn clamp_key_backup_daily_download_limit(configured: Option<u32>) -> 
         .unwrap_or(KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT)
 }
 
-/// A revoked cursor authority recorded by `ck.self.account.command.revoke_cursor`.
+/// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor`.
 ///
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by
 /// `cursor_digest`; `same_device` / `same_session` match any cursor that
@@ -431,14 +431,14 @@ pub struct ContactRecord {
     pub request_event_ref: Option<String>,
     pub response_event_ref: Option<String>,
     pub tombstone_event_ref: Option<String>,
-    /// Optional free-text greeting carried on `ck.contact.requested`
+    /// Optional free-text greeting carried on `ak.contact.requested`
     /// (spec 0015 §3.4). NFC-normalized, 1..2000 chars. `None` when the
     /// request carried no message or the row originated from a consent
     /// grant rather than an explicit request.
     pub message: Option<String>,
     /// Service DID of the Principal Server hosting the contact's *peer* end,
     /// when learned from a cross-Principal-Server contact delivery
-    /// (`ck.peer.contacts.command.submit`, `source-service-did` header). `None` for
+    /// (`ak.peer.contacts.command.submit`, `source-service-did` header). `None` for
     /// same-Principal-Server contacts. In-memory projection only — surfaced on
     /// `contact_list_row.peer_service_did` so the holder can address
     /// responses/invites back to the peer's home server.
@@ -485,16 +485,16 @@ pub struct DirectConversationBindingRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Actor-private account data row (`ck.account_data.set` storage).
+/// Actor-private account data row (`ak.account_data.set` storage).
 ///
 /// One row per `(actor, data_type)`. `data_type` is the canonical wire key
-/// (e.g. `ck.read_receipt.preferences`, `ck.contacts.actor.did:web:alice.example`,
-/// `ck.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000`). Soland
+/// (e.g. `ak.read_receipt.preferences`, `ak.contacts.actor.did:web:alice.example`,
+/// `ak.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000`). Soland
 /// treats the `payload` as an opaque encrypted blob — no schema validation
 /// happens server-side; clients are responsible for canonical encoding.
 ///
 /// Spec: `discovery/client-preferences.md` §2 (storage model) and §3.7
-/// (Realm remarks, `ck.contacts.realm.<realm_id>`).
+/// (Realm remarks, `ak.contacts.realm.<realm_id>`).
 #[derive(Clone, Debug)]
 pub struct AccountDataRecord {
     pub actor: String,
@@ -530,16 +530,16 @@ pub struct RealmMetaRecord {
     /// `restricted`. `restricted` is fail-closed unless
     /// `history_sharing_policy` has an explicit matching rule.
     pub history_visibility: String,
-    /// Effective `ck.realm.history_sharing_policy.value` plus its canonical
+    /// Effective `ak.realm.history_sharing_policy.value` plus its canonical
     /// digest. The policy gates E2EE history key shares and restricted history
     /// reads; history visibility alone never grants old epoch keys.
     pub history_sharing_policy: Option<Value>,
     pub history_sharing_policy_digest: Option<String>,
-    /// Effective `ck.realm.preview_policy.value` plus its canonical digest.
+    /// Effective `ak.realm.preview_policy.value` plus its canonical digest.
     /// Directory/object preview must fail closed when this is missing.
     pub preview_policy: Option<Value>,
     pub preview_policy_digest: Option<String>,
-    /// Effective `ck.realm.asset_privacy_policy.value` plus its canonical
+    /// Effective `ak.realm.asset_privacy_policy.value` plus its canonical
     /// digest. Blob presign/download re-checks this at response time.
     pub asset_privacy_policy: Option<Value>,
     pub asset_privacy_policy_digest: Option<String>,
@@ -549,14 +549,14 @@ pub struct RealmMetaRecord {
     pub encryption_profile: Option<String>,
     pub plaintext_visible_services: BTreeSet<String>,
     pub plaintext_visible_service_classes: BTreeMap<String, BTreeSet<PlaintextDataClassKind>>,
-    /// SEC-08 — the Realm declared `ck.profile.mls.minimal_metadata_realm.v1`
+    /// SEC-08 — the Realm declared `ak.profile.mls.minimal_metadata_realm.v1`
     /// (`crypto-media/encryption-and-audit.md` §2.9). Projected from the
-    /// `profiles[]` / `active_profiles[]` declaration on a `ck.realm.create` /
-    /// `ck.realm.policy_components` operation. Once observed it latches true:
+    /// `profiles[]` / `active_profiles[]` declaration on a `ak.realm.create` /
+    /// `ak.realm.policy_components` operation. Once observed it latches true:
     /// soland is not the committer and never relaxes a minimal-metadata Realm
     /// back to a wider profile on its own. Drives the server-side
     /// defence-in-depth reject of non-`hidden` `aad_visibility_event_id` on
-    /// encrypted `ck.message.create` / reaction envelopes.
+    /// encrypted `ak.message.create` / reaction envelopes.
     pub minimal_metadata_realm: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -610,7 +610,7 @@ pub struct CanonicalEventRecord {
 pub struct ProjectionEventRecord {
     pub event_id: String,
     pub realm_id: String,
-    /// Canonical Arkret event kind (e.g. `ck.message.create`).
+    /// Canonical Arkret event kind (e.g. `ak.message.create`).
     pub event_kind: String,
     pub operation_type: String,
     pub operation_id: Option<String>,
@@ -772,7 +772,7 @@ pub struct TypingRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Relayed `ck.call.signal` envelope for realm-broadcast ephemeral delivery
+/// Relayed `ak.call.signal` envelope for realm-broadcast ephemeral delivery
 /// (`webrtc-signaling.md` §5). The full signed envelope is stored verbatim so
 /// the receiver can verify `proof` over the canonical bytes.
 #[derive(Clone, Debug, Default)]
@@ -791,7 +791,7 @@ pub struct CallSignalRelayRecord {
     pub position: u64,
 }
 
-/// Relayed `ck.receipt.read` payload for short-TTL read receipt delivery.
+/// Relayed `ak.receipt.read` payload for short-TTL read receipt delivery.
 /// The normalized `receipt` value is the wire object emitted to subscribers;
 /// relay metadata drives visibility and deliver-once behavior.
 #[derive(Clone, Debug, Default)]
@@ -930,7 +930,7 @@ pub struct RealmModerationPolicyRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// SOL-ORG-04 — durable row for one verified `ck.realm.organization`
+/// SOL-ORG-04 — durable row for one verified `ak.realm.organization`
 /// relationship statement. Primary key `(realm_id, organization_id,
 /// relationship)`. Field order mirrors the spec `realm_organization_payload`.
 /// `control_scopes` is a JSON string array; the proof / delegation references

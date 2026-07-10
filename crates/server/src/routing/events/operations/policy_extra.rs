@@ -408,7 +408,7 @@ pub(crate) async fn validate_realm_key_share_policy(
         projection_context_stripped_payload(&operation.payload),
     )
     .map_err(|_| "policy_denied")?;
-    // encryption-and-audit.md §2.10.8 — a `ck.realm_key.share` with
+    // encryption-and-audit.md §2.10.8 — a `ak.realm_key.share` with
     // `share_class=realm_recovery_key` is the Realm Recovery Key (RRK) eager-
     // sealing path: provider-initiated, the recipient is an OFFLINE recovery org
     // (NOT an MLS member, not in the ratchet tree). It MUST NOT be forced through
@@ -535,7 +535,7 @@ pub(crate) async fn validate_realm_key_share_policy(
 /// The spec `realm_key_share_payload` schema is `additionalProperties:false` and
 /// carries no recovery-recipient discriminator. Rather than widen the wire (the
 /// spec is authoritative and frozen), soland recognises an RRK-targeted share
-/// structurally: a `ck.realm_key.share` whose `recipient_principal_id` equals a
+/// structurally: a `ak.realm_key.share` whose `recipient_principal_id` equals a
 /// `principal_id` listed in the Realm's current
 /// `durability_policy.recovery_recipients[]` is treated as the provider-initiated
 /// RRK seal for that recipient. This is unambiguous because recovery recipients
@@ -982,7 +982,7 @@ pub(crate) fn validate_morph_schema_migrate_capability(
         .or_else(|| operation.payload.get("action"))
         .and_then(serde_json::Value::as_str);
     // `capability-action-registry.json` is canonical: the action id is the
-    // same-name `ck.morph.schema_migrate`. The dotted `ck.morph.schema.migrate`
+    // same-name `ak.morph.schema_migrate`. The dotted `ak.morph.schema.migrate`
     // spelling used in some prose is accepted as an alias so existing callers
     // are not broken.
     if !matches!(

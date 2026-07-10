@@ -1,4 +1,4 @@
-//! CKP-0008 — development-mode server-authored fan-out for the personal
+//! AKP-0008 — development-mode server-authored fan-out for the personal
 //! agent provisioning / lifecycle surface (architecture option B).
 //!
 //! Soland materialises the durable sub-events required by the personal-agent
@@ -96,7 +96,7 @@ pub(super) async fn submit_agent_fanout_event(
 }
 
 /// Idempotently ensure the controller's self realm exists in the realm
-/// index. When absent, submit the controller-authored `ck.realm.create`
+/// index. When absent, submit the controller-authored `ak.realm.create`
 /// genesis event (the `realm_create` bootstrap path admits the creator as
 /// the first member). Returns the self realm id.
 pub(super) async fn ensure_self_realm(
@@ -113,7 +113,7 @@ pub(super) async fn ensure_self_realm(
 }
 
 /// Minimal `realm_create_payload` for a controller self realm. Mirrors the
-/// `ck.schema.realm.v1` object the conformance harness submits; the realm
+/// `ak.schema.realm.v1` object the conformance harness submits; the realm
 /// is private (invite join) since it only ever hosts the controller and
 /// the agent identity sub-events.
 fn self_realm_create_payload(controller_did: &str, service_did: &str, realm_id: &str) -> Value {
@@ -149,7 +149,7 @@ fn self_realm_create_payload(controller_did: &str, service_did: &str, realm_id: 
     })
 }
 
-/// CKP-0008 §4.3 — fan-out the three durable provisioning sub-events for a
+/// AKP-0008 §4.3 — fan-out the three durable provisioning sub-events for a
 /// freshly provisioned agent (option B). Returns the submitted event ids
 /// `(profile_event, accountability_event, capability_grant_id)`. The
 /// initial capability grant carries `effective_after_first_authorized_key`
@@ -163,7 +163,7 @@ pub(super) async fn fanout_provision_subevents(
     requested_scope: &Value,
 ) -> Result<(String, String, Vec<String>), AppError> {
     let controller = session.actor.clone();
-    // 1. Agent actor profile (`ck.profile.create`), authored by the controller with the agent
+    // 1. Agent actor profile (`ak.profile.create`), authored by the controller with the agent
     //    principal as the profile subject. The `profile_create_payload` def resolves to
     //    `state_payload`, so the profile object rides in `value` (the soland actor-profile reducer
     //    is not wired; list/get read the agent_principals table).
@@ -186,7 +186,7 @@ pub(super) async fn fanout_provision_subevents(
     )
     .await?;
 
-    // 2. Accountability grant (`ck.identity.accountability_grant`), issuer = controller, subject =
+    // 2. Accountability grant (`ak.identity.accountability_grant`), issuer = controller, subject =
     //    agent. Resolves to `state_payload`.
     let now_utc = Utc::now();
     let accountability_payload = json!({
@@ -209,7 +209,7 @@ pub(super) async fn fanout_provision_subevents(
     )
     .await?;
 
-    // 3. Initial capability grant (`ck.capability.grant`), issuer = controller, subject = agent,
+    // 3. Initial capability grant (`ak.capability.grant`), issuer = controller, subject = agent,
     //    flagged inactive until pairing.
     let actions = initial_grant_actions(requested_scope);
     let mut grant_ids = Vec::new();
@@ -232,8 +232,8 @@ pub(super) async fn fanout_provision_subevents(
 /// Expand `requested_scope` (the provision request DSL) into a minimal
 /// content capability action set. Service-surface actions may be present in
 /// `agent_key_scope.actions`, but they are never materialized as
-/// `ck.capability.grant.actions`. With no explicit actions we grant the
-/// least-privilege read baseline (CKP-0008 §4.7 `read`).
+/// `ak.capability.grant.actions`. With no explicit actions we grant the
+/// least-privilege read baseline (AKP-0008 §4.7 `read`).
 fn initial_grant_actions(requested_scope: &Value) -> Vec<String> {
     let explicit_actions: Vec<String> = requested_scope
         .get("actions")
@@ -325,12 +325,12 @@ async fn materialize_grant(
     .await
 }
 
-/// CKP-0008 §4.11 (dev option B) — attach a controller-supplied capability
+/// AKP-0008 §4.11 (dev option B) — attach a controller-supplied capability
 /// grant (`POST /_arkret/self/agents/{id}/grants`). The supplied body is
 /// normalised into a schema-valid embedded `grant` (filling required id /
 /// schema / issuer / subject / resources / proofs when the caller omitted
 /// them) under the canonical `{grant_id, grant}` wrapper, then submitted as
-/// `ck.capability.grant` authored by the controller.
+/// `ak.capability.grant` authored by the controller.
 pub(super) async fn attach_agent_grant_event(
     state: &AppState,
     session: &SessionRecord,
@@ -372,7 +372,7 @@ pub(super) async fn attach_agent_grant_event(
     materialize_grant(state, session, realm_id, payload).await
 }
 
-/// CKP-0008 §4.5 / D3 — submit the durable `ck.agent.key.authorize` event
+/// AKP-0008 §4.5 / D3 — submit the durable `ak.agent.key.authorize` event
 /// authored by the controller. The payload satisfies
 /// `agent_key_authorize_payload` (all required fields). The soland reducer
 /// projects it into the agent-key state cell and clears
@@ -415,7 +415,7 @@ pub(super) async fn submit_durable_key_authorize(
     submit_agent_fanout_event(state, session, realm_id, "ak.agent.key.authorize", payload).await
 }
 
-/// CKP-0016 — materialise a participation `effective=true` decision into a
+/// AKP-0016 — materialise a participation `effective=true` decision into a
 /// durable reply/reaction capability grant for the agent over the scope
 /// resource. Idempotent on the deterministic `grant_id` derived from the
 /// (agent, scope_key) pair.
@@ -450,8 +450,8 @@ pub(super) async fn materialize_capability_grant(
     materialize_grant(state, session, realm_id, payload).await
 }
 
-/// CKP-0016 — revoke a previously materialised participation grant
-/// (idempotent; `ck.capability.revoke` is a no-op when the grant_id was
+/// AKP-0016 — revoke a previously materialised participation grant
+/// (idempotent; `ak.capability.revoke` is a no-op when the grant_id was
 /// never granted).
 pub(super) async fn revoke_capability_grant(
     state: &AppState,
@@ -470,8 +470,8 @@ pub(super) async fn revoke_capability_grant(
     Ok(event_id)
 }
 
-/// CKP-0008 §4.11 — submit a durable lifecycle transition event
-/// (`ck.self.agent.{pause,resume,deactivate}`) driving the FSM reducer.
+/// AKP-0008 §4.11 — submit a durable lifecycle transition event
+/// (`ak.self.agent.{pause,resume,deactivate}`) driving the FSM reducer.
 pub(super) async fn submit_durable_agent_lifecycle(
     state: &AppState,
     session: &SessionRecord,
@@ -519,7 +519,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
     submit_agent_fanout_event(state, session, realm_id, event_kind, payload).await
 }
 
-/// CKP-0008 §4.11 — on deactivate, fan-out `ck.agent.key.revoke` for the
+/// AKP-0008 §4.11 — on deactivate, fan-out `ak.agent.key.revoke` for the
 /// agent's authorized key(s). Best-effort over the keys the reducer
 /// projected; revoking with no known key still emits a tombstone-safe
 /// revoke for the canonical `key_id`.
@@ -548,7 +548,7 @@ pub(super) async fn submit_revoke_agent_keys(
     Ok(())
 }
 
-/// CKP-0008 §4.11 — on deactivate, fan-out `ck.capability.revoke` for every
+/// AKP-0008 §4.11 — on deactivate, fan-out `ak.capability.revoke` for every
 /// grant id held by the agent.
 pub(super) async fn submit_revoke_agent_grants(
     state: &AppState,

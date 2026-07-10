@@ -5,7 +5,7 @@ mod access;
 mod account_data_encryption;
 mod admin;
 pub(crate) mod agent_participation;
-// CKP-0007 (P2A.3) — `/_arkret/self/circles/*` admin surface.
+// AKP-0007 (P2A.3) — `/_arkret/self/circles/*` admin surface.
 pub(crate) mod circles;
 pub(crate) mod conformance;
 pub(crate) mod events;

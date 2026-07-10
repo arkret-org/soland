@@ -12,7 +12,7 @@
 //! here because those helpers are private to the SDK test modules.
 //!
 //! Cells: the tests transition
-//! `ak:cell:ck.component.member.state.v1:did.web.alice.example` from
+//! `ak:cell:ak.component.member.state.v1:did.web.alice.example` from
 //! `invite` to `join`. That cell family is pre-registered in
 //! `MemoryCellRegistry::default()` as an FSM with `invite -> join`
 //! transition, so the Move passes verify and the post-state is
@@ -62,7 +62,7 @@ pub(crate) fn realm_id() -> RealmId {
 }
 
 pub(crate) fn member_cell() -> CellRef {
-    CellRef::new("ak:cell:ck.component.member.state.v1:did.web.alice.example".to_owned()).unwrap()
+    CellRef::new("ak:cell:ak.component.member.state.v1:did.web.alice.example".to_owned()).unwrap()
 }
 
 pub(crate) fn zero_seal_id_value() -> String {
@@ -223,13 +223,13 @@ pub(crate) async fn dev_token(state: AppState) -> String {
 /// via soland's `build_sdk_cell_registry()` (not in the SDK's built-in
 /// defaults) to prove the registry wiring is live.
 ///
-/// `ck.component.consent.grant.v1` is registered as `OrSet` in
+/// `ak.component.consent.grant.v1` is registered as `OrSet` in
 /// `lattice_kinds.rs`; the SDK's `MemoryCellRegistry::default()` does NOT
 /// include it. Submitting a Move with an `add` op on this cell would fail
 /// with `unknown cell family` if soland hadn't replaced the SDK default
 /// with `build_sdk_cell_registry()`.
 pub(crate) fn build_consent_grant_add_move() -> Move {
-    let consent_cell = "ak:cell:ck.component.consent.grant.v1:cnt.01js0c000000000000000000aa";
+    let consent_cell = "ak:cell:ak.component.consent.grant.v1:cnt.01js0c000000000000000000aa";
     let body = json!({
         "issuer": "did:web:admin.example",
         "realm_id": realm_id().as_str(),

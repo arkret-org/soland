@@ -148,7 +148,7 @@ async fn verify_franking_proof(
 }
 
 /// Spec `realm-and-space.md` §2.5.2 — exposes the
-/// `ck.audit.erasure_receipt` projection so verifiers / auditors can
+/// `ak.audit.erasure_receipt` projection so verifiers / auditors can
 /// query the local receipt list (including `fanout_status` per-peer
 /// state and the timeout-triggered `incomplete` flip). Advertised via
 /// `/_arkret/describe.erasure_receipts_endpoint`.

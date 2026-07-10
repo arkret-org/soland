@@ -390,12 +390,12 @@ pub(super) async fn hydrate_realms_from_canonical_events(
     }
 }
 
-/// Replay one persisted `ck.member.state` event into the rebuilt realm
+/// Replay one persisted `ak.member.state` event into the rebuilt realm
 /// directory on boot. `join` adds the member to `realm_entry.members`;
 /// `leave`/`ban` removes them. Other transitions (`invite`/`knock`) do not
 /// affect the directory member set (they live in the structured membership
 /// projection, consistent with the live `apply_membership` path). Events are
-/// replayed in persisted (chronological) order, so the `ck.realm.create` that
+/// replayed in persisted (chronological) order, so the `ak.realm.create` that
 /// seeds the directory entry is always applied before any membership delta.
 pub(super) fn hydrate_realm_member_state_event(
     realms: &mut RealmDirectoryIndex,

@@ -7,7 +7,7 @@ use crate::reducer::*;
 fn cell_value_returns_none_for_unwritten_cell() {
     let state = ProjectionState::new();
     let cell_id = arkret_sdk::CellRef::new(
-        "ak:cell:ck.component.realm.read_receipt_policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+        "ak:cell:ak.component.realm.read_receipt_policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
     )
     .unwrap();
     assert!(state.cell(&cell_id).is_none());
@@ -19,7 +19,7 @@ fn cell_value_returns_none_for_bottom_state() {
     use arkret_sdk::lattice::CellState;
     let mut state = ProjectionState::new();
     let cell_id = arkret_sdk::CellRef::new(
-        "ak:cell:ck.component.realm.policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036"
+        "ak:cell:ak.component.realm.policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036"
             .to_owned(),
     )
     .unwrap();
@@ -231,7 +231,7 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
         state
             .cell_value(
                 &arkret_sdk::CellRef::new(
-                    "ak:cell:ck.component.realm.organization.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+                    "ak:cell:ak.component.realm.organization.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
                 )
                 .unwrap(),
             )
@@ -394,7 +394,7 @@ fn realm_tombstone_writes_tombstone_cell_and_successor() {
     );
 
     let tombstone_cell = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.realm.tombstone.v1:{realm_id}"
+        "ak:cell:ak.component.realm.tombstone.v1:{realm_id}"
     ))
     .unwrap();
     assert!(matches!(
@@ -437,7 +437,7 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
     );
 
     let cell_id =
-        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.freeze.v1:{realm_id}"))
+        arkret_sdk::CellRef::new(format!("ak:cell:ak.component.realm.freeze.v1:{realm_id}"))
             .unwrap();
     assert!(matches!(
         state.cells.get(&cell_id),
@@ -461,7 +461,7 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
     );
 }
 
-/// Stream-F (Wave 2C) — `ck.audit.erasure_receipt` reducer pass
+/// Stream-F (Wave 2C) — `ak.audit.erasure_receipt` reducer pass
 /// extracts `scope.realm_id`, seeds an empty `peer_status` map,
 /// and stamps `fanout_status = "pending"`. The federation outbox
 /// enqueue + per-peer seeding is exercised by
@@ -600,7 +600,7 @@ fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
     use arkret_sdk::lattice::CellState;
     let mut state = ProjectionState::new();
     let cell_id = arkret_sdk::CellRef::new(
-        "ak:cell:ck.component.realm.read_receipt_policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+        "ak:cell:ak.component.realm.read_receipt_policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
     )
     .unwrap();
     state.cells.insert(

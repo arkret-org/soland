@@ -362,8 +362,8 @@ async fn peer_events_frontier(
     })
 }
 
-/// Spec resolution (2026-06-11): `ck.peer.snapshot.query.manifest_head` returns the full
-/// signed `ck.schema.snapshot.v1` manifest. soland cannot produce a real
+/// Spec resolution (2026-06-11): `ak.peer.snapshot.query.manifest_head` returns the full
+/// signed `ak.schema.snapshot.v1` manifest. soland cannot produce a real
 /// Snapshot detached proof yet, and the spec forbids serving a dev-signed
 /// stand-in (`signature` / `authority_binding` / `event_set_commitment`
 /// MUST NOT be fabricated — service-http-binding.md §6.1, service-surface.md

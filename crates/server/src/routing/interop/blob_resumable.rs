@@ -1,7 +1,7 @@
 //! Resumable (tus 1.0.0) blob upload binding.
 //!
 //! Spec: crypto-media/media-and-blob.md §2.1 — a per-operation HTTP
-//! companion binding of `ck.self.blob.upload.create`. tus carries the bytes
+//! companion binding of `ak.self.blob.upload.create`. tus carries the bytes
 //! (create / PATCH / HEAD / DELETE with offset resume); a completed upload is
 //! finalized into a canonical blob with the same `blob_ref` /
 //! `content_digest` / `upload_receipt` the multipart path produces.

@@ -48,7 +48,7 @@ pub(crate) async fn contact_request(
     // Spec contact-and-direct-conversation.md §4.1 — cross-PS addressing.
     // When `recipient_service_did` names a different Principal Server, the
     // target holder is remote: skip the local-account precondition and
-    // federate the signed `ck.contact.requested` fact to the target's home PS.
+    // federate the signed `ak.contact.requested` fact to the target's home PS.
     let recipient_service_did = body
         .recipient_service_did
         .as_ref()
@@ -77,8 +77,8 @@ pub(crate) async fn contact_request(
         .clone()
         .unwrap_or(ContactIntroductionEvidence::ExplicitAddress);
     // Spec contact-and-direct-conversation.md §3 — the requester-side
-    // contact-managed grant is a real `ck.consent.grant`; its event ref is
-    // referenced from the `ck.contact.requested` fact's
+    // contact-managed grant is a real `ak.consent.grant`; its event ref is
+    // referenced from the `ak.contact.requested` fact's
     // `requester_consent_refs[]`.
     let requester_previous = consent_cell_snapshot(state, &session.actor, &target, &scope);
     let (requester_consent_ref, requester_consent_cell) =
@@ -220,7 +220,7 @@ pub(crate) async fn contact_request(
         )
         .await;
     }
-    // Spec §4.1 — federate the signed `ck.contact.requested` fact to the
+    // Spec §4.1 — federate the signed `ak.contact.requested` fact to the
     // target holder's home Principal Server when the target is remote.
     if let Some(recipient_service_did) = recipient_service_did.as_deref()
         && is_remote_target
@@ -472,8 +472,8 @@ pub(crate) async fn contact_respond(
         let scopes = contact_respond_scopes(&body, &contact.scope)?;
         for scope in scopes {
             // Spec contact-and-direct-conversation.md §3 — each granted scope
-            // writes a target-controlled `ck.consent.grant`; its event ref is
-            // referenced from the `ck.contact.accepted` `consent_grant_refs[]`.
+            // writes a target-controlled `ak.consent.grant`; its event ref is
+            // referenced from the `ak.contact.accepted` `consent_grant_refs[]`.
             let previous = consent_cell_snapshot(state, &session.actor, &contact.requester, &scope);
             let (grant_ref, grant_cell) = grant_contact_managed_consent(
                 state,
@@ -572,7 +572,7 @@ pub(crate) async fn contact_tombstone(
     body: JsonBody<ContactTombstoneRequestBody>,
 ) -> JsonResult<ContactTombstone> {
     // Spec contact-and-direct-conversation.md §3/§4 — the holder writes a
-    // `ck.contact.tombstoned` fact, enumerates and revokes its
+    // `ak.contact.tombstoned` fact, enumerates and revokes its
     // contact-managed active consent dots toward `peer` (default =
     // every scope, or the explicit `revoke_scopes[]`), and — when
     // `block_peer` — adds the peer DID to the holder's private
@@ -724,7 +724,7 @@ pub(crate) async fn contact_tombstone(
     .await;
 
     // Spec contact-and-direct-conversation.md §2/§4.1 — federate the
-    // `ck.contact.tombstoned` fact to the peer's home Principal Server when the
+    // `ak.contact.tombstoned` fact to the peer's home Principal Server when the
     // peer is remote. The addressing service DID comes from the request body
     // first, then falls back to the `peer_service_did` recorded on the stored
     // holder↔peer contact row. The receiver
@@ -801,7 +801,7 @@ pub(crate) async fn get_invite_receive_policy(
 ) -> JsonResult<InviteReceivePolicy> {
     // Spec invite-addressing.md §5 — return the subject's private override
     // from the shared in-memory store (the same store
-    // `ck.self.contact.command.tombstone(block_peer)` writes `blocked_subjects` to),
+    // `ak.self.contact.command.tombstone(block_peer)` writes `blocked_subjects` to),
     // falling back to the recommended default when none is set.
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;

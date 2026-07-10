@@ -275,7 +275,7 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
     })
 }
 
-/// Seed an accepted `ck.cross_signing.publish` (generation 1) into the server's
+/// Seed an accepted `ak.cross_signing.publish` (generation 1) into the server's
 /// DeviceManager so `/complete` can verify the device binding against the SSK.
 pub(crate) fn seed_cross_signing(
     state: &AppState,

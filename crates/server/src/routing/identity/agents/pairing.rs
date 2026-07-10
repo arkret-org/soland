@@ -164,7 +164,7 @@ pub(super) async fn submit_agent_runtime_key_request(
     })
 }
 
-/// CKP-0008 (dev option B) — synthesize a controller-authored
+/// AKP-0008 (dev option B) — synthesize a controller-authored
 /// `SessionRecord` so the server-side fan-out can author durable sub-events
 /// as the controller (`actor_id == session.actor`). Only used under
 /// `development_mode`; the resulting session is never persisted or returned.
@@ -217,8 +217,8 @@ pub(super) async fn agent_key_pair(
         )));
     }
     let authorized_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    // CKP-0008 §4.5 / D3: the runtime key may become active only after a
-    // reducer-visible `ck.agent.key.authorize` event exists. Development mode
+    // AKP-0008 §4.5 / D3: the runtime key may become active only after a
+    // reducer-visible `ak.agent.key.authorize` event exists. Development mode
     // still materializes the event with the local dev-proof path; production
     // requires inkson/coauth to provide a controller-signed durable event and
     // soland submits + rechecks it here.

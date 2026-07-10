@@ -1,8 +1,8 @@
 use super::*;
 
 impl ProjectionState {
-    /// R1.2 — project a `ck.realm.delivery_binding_policy` event into the
-    /// `ck.component.realm.delivery_binding_policy.v1` cas-register cell.
+    /// R1.2 — project a `ak.realm.delivery_binding_policy` event into the
+    /// `ak.component.realm.delivery_binding_policy.v1` cas-register cell.
     /// The payload is taken whole as the cell value so downstream readers
     /// (`realm_delivery_binding_policy_cell_value` + the `apply_membership`
     /// validation path) can inspect each policy field directly.
@@ -13,14 +13,14 @@ impl ProjectionState {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
         if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.delivery_binding_policy.v1:{realm_id}"
+            "ak:cell:ak.component.realm.delivery_binding_policy.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
         ProjectionEffect::DeliveryBindingPolicyProjected { realm_id }
     }
 
-    /// Project `ck.realm.policy_components` into the canonical Realm policy
+    /// Project `ak.realm.policy_components` into the canonical Realm policy
     /// components cell. The Event Envelope wire shape is a generic state
     /// payload (`{"value": ...}`), while reducer tests and Move-era callers may
     /// pass the value directly; both forms are accepted and normalized here.
@@ -94,7 +94,7 @@ impl ProjectionState {
             }
         }
         // realm-and-space.md §2.3.1 — `durability_policy` (Realm Recovery Key)
-        // is reducer-derived from `ck.realm.policy_components`. Validate its
+        // is reducer-derived from `ak.realm.policy_components`. Validate its
         // structural invariants and that `mode != none` is only declared on a
         // `content_scheme=mls-exporter-aead-v1` Realm (else
         // `durability_scheme_incompatible`). The effective scheme is the
@@ -107,16 +107,16 @@ impl ProjectionState {
             }
         }
         if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.policy_components.v1:{realm_id}"
+            "ak:cell:ak.component.realm.policy_components.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
         ProjectionEffect::RealmPolicyComponentsProjected { realm_id }
     }
 
-    /// R3.1 — project a `ck.realm.link` event.
+    /// R3.1 — project a `ak.realm.link` event.
     ///
-    /// Writes to the canonical `ck.component.realm.link.v1` cell (or_set
+    /// Writes to the canonical `ak.component.realm.link.v1` cell (or_set
     /// lattice, cell_subject = `(realm_id, target_realm_id, link_kind)`)
     /// AND mirrors into the structured `realm_links` /
     /// `realm_links_inbound` caches consumed by the
@@ -134,7 +134,7 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.disappearing_policy.v1:{realm_id}"
+            "ak:cell:ak.component.realm.disappearing_policy.v1:{realm_id}"
         )) {
             self.cells
                 .insert(cell_id, CellState::Value(operation.payload.clone()));
@@ -151,16 +151,16 @@ impl ProjectionState {
             };
         }
         if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.search_policy.v1:{realm_id}"
+            "ak:cell:ak.component.realm.search_policy.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
         ProjectionEffect::RealmSearchPolicyProjected { realm_id }
     }
 
-    /// Project `ck.realm.media_service` into the canonical
-    /// `ck.component.realm.media_service.v1` cas-register cell consumed by
-    /// the CKP-0010 media token exchange (`routing::interop::webrtc`). The
+    /// Project `ak.realm.media_service` into the canonical
+    /// `ak.component.realm.media_service.v1` cas-register cell consumed by
+    /// the AKP-0010 media token exchange (`routing::interop::webrtc`). The
     /// payload is normalized like `apply_realm_policy_components` (accepting
     /// both the Event-Envelope `{"value": ...}` wrapper and a direct value),
     /// then the `foci[]` array is required to be non-empty so a realm cannot
@@ -181,14 +181,14 @@ impl ProjectionState {
             };
         }
         if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.media_service.v1:{realm_id}"
+            "ak:cell:ak.component.realm.media_service.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
         ProjectionEffect::RealmMediaServiceProjected { realm_id }
     }
 
-    /// Project `ck.call.state` into the canonical `ck.component.call.state.v1`
+    /// Project `ak.call.state` into the canonical `ak.component.call.state.v1`
     /// cell (`cell_subject = payload.call_id`). Beyond the wire-shape checks
     /// in `routing::events::operations`, this reducer enforces the durable
     /// invariants in `call-state.md`:
@@ -209,7 +209,7 @@ impl ProjectionState {
         };
         let call_id = call_id.to_owned();
         let call_state_cell_id =
-            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).ok();
+            arkret_sdk::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).ok();
         if call_state_cell_id
             .as_ref()
             .is_some_and(|cell_id| matches!(self.cells.get(cell_id), Some(CellState::Bottom(_))))
@@ -220,7 +220,7 @@ impl ProjectionState {
         }
 
         // §4.2 — `state` lifecycle FSM. The controlled `state` enum is written
-        // into `ck.component.call.state.v1` (`cell_subject = call_id`). Read the
+        // into `ak.component.call.state.v1` (`cell_subject = call_id`). Read the
         // current head's `state` and enforce the legal-transition table before
         // the cell is overwritten. Absence of `state` on the payload (e.g. a
         // pure `session_focus` / `recording_state` write) leaves the FSM
@@ -231,7 +231,7 @@ impl ProjectionState {
             .filter(|state| !state.is_empty())
         {
             let from_state =
-                arkret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}"))
+                arkret_sdk::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
                     .ok()
                     .and_then(|cell_id| self.cell_value(&cell_id).cloned())
                     .and_then(|state| {
@@ -337,7 +337,7 @@ impl ProjectionState {
 
         let incoming_fsm_updates = call_state_fsm_updates(&value);
         if let Ok(cell_id) =
-            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
         {
             if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
                 return ProjectionEffect::Rejected {
@@ -355,7 +355,7 @@ impl ProjectionState {
                 return effect;
             }
             // Monotonic ban/removal set (`webrtc-signaling.md` §3a). The cell is
-            // overwritten wholesale on every `ck.call.state` event and
+            // overwritten wholesale on every `ak.call.state` event and
             // `removed_participants[]` gates media-token re-issue for banned
             // actors (see the `/rtc/token` issuer). A later event that omits or
             // shrinks the field MUST NOT silently clear bans, so union the new
@@ -401,12 +401,12 @@ impl ProjectionState {
         ProjectionEffect::CallStateProjected { call_id }
     }
 
-    /// Project `ck.call.summary` into the write-once
-    /// `ck.component.call.summary.v1` cas_register cell
+    /// Project `ak.call.summary` into the write-once
+    /// `ak.component.call.summary.v1` cas_register cell
     /// (`cell_subject = payload.call_id`). `call-state.md` §7:
     ///
     /// - `final_state` MUST be a terminal call state (`ended` / `missed` / `failed` / `cancelled`).
-    /// - the `call_id` MUST already have a terminal `ck.call.state` head (the projected call-state
+    /// - the `call_id` MUST already have a terminal `ak.call.state` head (the projected call-state
     ///   cell is in a terminal `state`).
     /// - the summary cell is write-once: a divergent rewrite MUST `call_summary_invalid`; an
     ///   identical replay is an idempotent no-op.
@@ -432,9 +432,9 @@ impl ProjectionState {
             };
         }
 
-        // §7 — the call MUST already have a terminal `ck.call.state` head.
+        // §7 — the call MUST already have a terminal `ak.call.state` head.
         let call_state_terminal =
-            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
                 .ok()
                 .and_then(|cell_id| self.cell_value(&cell_id).cloned())
                 .and_then(|state| {
@@ -453,7 +453,7 @@ impl ProjectionState {
         // §7 — write-once cas_register. A divergent rewrite is rejected; an
         // identical replay is a no-op.
         if let Ok(cell_id) =
-            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.call.summary.v1:{call_id}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ak.component.call.summary.v1:{call_id}"))
         {
             if let Some(existing) = self.cell_value(&cell_id) {
                 if existing != &value {
@@ -631,7 +631,7 @@ impl ProjectionState {
         // as `(realm, target, link_kind)` joined by `|` (cells store
         // strings; reducer-side decoders re-split).
         if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
+            "ak:cell:ak.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
         )) {
             let value = serde_json::json!({
                 "realm_id": realm_id,
@@ -673,9 +673,9 @@ impl ProjectionState {
         }
     }
 
-    /// R3.2 — project a `ck.realm.inheritance_policy` event.
+    /// R3.2 — project a `ak.realm.inheritance_policy` event.
     ///
-    /// Cell family: `ck.component.realm.inheritance_policy.v1` (cas-register).
+    /// Cell family: `ak.component.realm.inheritance_policy.v1` (cas-register).
     /// Rejects payloads with `max_depth > 1` (current wire cap), rejects
     /// inheritance through an already-active non-capability-bearing Realm
     /// link, and verifies requested policies / bundles against projected
@@ -748,7 +748,7 @@ impl ProjectionState {
         }
 
         if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.inheritance_policy.v1:{realm_id}"
+            "ak:cell:ak.component.realm.inheritance_policy.v1:{realm_id}"
         )) {
             let value = serde_json::json!({
                 "operation_id": operation.operation_id.as_str(),
@@ -787,9 +787,9 @@ impl ProjectionState {
         }
     }
 
-    /// R3.2 — project a `ck.capability.derived` event.
+    /// R3.2 — project a `ak.capability.derived` event.
     ///
-    /// Cell family: `ck.component.capability.derived.v1` (cas-register,
+    /// Cell family: `ak.component.capability.derived.v1` (cas-register,
     /// keyed by `capability_id`). Schema-level required fields:
     /// `capability_id`, `source_grant_ref`, `source_realm_inheritance_policy_ref`,
     /// `causal_frontier`. The reducer verifies the current inheritance
@@ -890,7 +890,7 @@ impl ProjectionState {
         };
 
         if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.capability.derived.v1:{capability_id}"
+            "ak:cell:ak.component.capability.derived.v1:{capability_id}"
         )) {
             let mut value = serde_json::Map::new();
             value.insert(
@@ -1004,8 +1004,8 @@ fn is_legal_call_state_transition(from: &str, to: &str) -> bool {
     )
 }
 
-/// `call-state.md` §4.2 — validate one `ck.call.state` `state` transition given
-/// the projected head `from` (None = this is the first `ck.call.state` for the
+/// `call-state.md` §4.2 — validate one `ak.call.state` `state` transition given
+/// the projected head `from` (None = this is the first `ak.call.state` for the
 /// call). Returns `Some(reason)` to reject, `None` to accept:
 ///
 /// - first event (`from = None`): `to` MUST ∈ `{scheduled, ringing, connecting}`, else
@@ -1038,7 +1038,7 @@ fn validate_call_state_transition(from: Option<&str>, to: &str) -> Option<&'stat
     }
 }
 
-/// Return the sibling-conflict basis for one `ck.call.state` write.
+/// Return the sibling-conflict basis for one `ak.call.state` write.
 fn call_state_conflict_basis(operation: &Operation) -> String {
     operation
         .payload
@@ -1105,7 +1105,7 @@ struct CaptureKind {
 }
 
 /// `call-state.md` §4.2 / §5.1 / §5.2 — validate one capture-state dimension on
-/// a `ck.call.state` payload. Returns `Some(reason)` to reject:
+/// a `ak.call.state` payload. Returns `Some(reason)` to reject:
 ///
 /// - an unknown `state` value (outside the controlled enum) → `schema_violation`-class wire reason;
 /// - entry into the capture state (`recording` / `transcribing`) without `result.retention.

@@ -45,7 +45,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
     // COT-06-002 / service-http-binding.md §2.1.2: decide whether to expose the
     // test-only `/_arkret/_conformance/*` namespace before `state` is moved into
     // the affix hoop. The namespace is mounted only when the
-    // `ck.profile.conformance_harness.v1` profile is active; otherwise the
+    // `ak.profile.conformance_harness.v1` profile is active; otherwise the
     // segment stays unknown and falls through to `api_not_found` (404
     // `unrecognized_endpoint`), exactly as §2.1.2 requires.
     let conformance_harness_enabled = conformance::harness_profile_enabled(&state.config);
@@ -137,14 +137,14 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
                 // document CRUD lives on the product surface at
                 // `/_soland/self/policies*`, see `soland_local_router`.)
                 .push(access::router())
-                // self/circles/* (ck.self.circle.*).
+                // self/circles/* (ak.self.circle.*).
                 .push(circles::router())
                 // self/realms/{realm_id}/links* + effective-policy
-                // (ck.self.realm_link.*).
+                // (ak.self.realm_link.*).
                 .push(realms::router())
-                // self/realms/{realm_id}/policy-server (ck.self.realm_policy_server.*).
+                // self/realms/{realm_id}/policy-server (ak.self.realm_policy_server.*).
                 .push(realm_policy::router())
-                // self/realms/{realm_id}/organizations (ck.self.realm_organization.query.list).
+                // self/realms/{realm_id}/organizations (ak.self.realm_organization.query.list).
                 .push(realm_organization::router())
                 // G3.S1: MLS / keys lifecycle — spec-canonical path is
                 // `/_arkret/self/keys/keypackages/*` (see `mls::router`).
@@ -173,7 +173,7 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
     router = router.push(extensions::protocol_router());
     // COT-06-002 / service-http-binding.md §2.1.2: the test-only
     // `/_arkret/_conformance/*` namespace is mounted ONLY when the
-    // `ck.profile.conformance_harness.v1` profile is active. In production it is
+    // `ak.profile.conformance_harness.v1` profile is active. In production it is
     // never pushed, so the segment stays unknown and the catch-all below returns
     // `404 unrecognized_endpoint` — no business logic, not advertised in
     // describe / OpenAPI production binding.
@@ -224,7 +224,7 @@ fn soland_local_router() -> Router {
                 .push(admin::audit_ingest_router())
                 // Owner-scoped policy document storage CRUD
                 // (`/_soland/self/policies*`). Deployment-local management
-                // capability backing `ck.self.policy.query.check`; kept off
+                // capability backing `ak.self.policy.query.check`; kept off
                 // the `/_arkret/...` protocol root per
                 // `service-http-binding.md` §1007.
                 .push(access::product_router())
@@ -235,14 +235,14 @@ fn soland_local_router() -> Router {
                 // (`/_soland/self/realms/{realm_id}/applications`). `member.application`
                 // is a spec candidate concept that must stay off the protocol root;
                 // the handler is fail-closed (404) unless the
-                // `ck.profile.candidate.join_policy.v1` profile is declared.
+                // `ak.profile.candidate.join_policy.v1` profile is declared.
                 .push(realms::local_router())
                 // The old soland-internal WebRTC session stack
                 // (`/_soland/self/webrtc/*`, `/_soland/self/calls/*`) is retired:
                 // media token / ICE config are served only from the spec
                 // `/_arkret/self/rtc/*` surface, and call lifecycle / signaling
-                // live on durable `ck.call.state` + the `/_arkret/self/ephemeral`
-                // `ck.call.signal` channel.
+                // live on durable `ak.call.state` + the `/_arkret/self/ephemeral`
+                // `ak.call.signal` channel.
                 .push(mls::local_router()),
         )
         // `/_soland/find/directory/*` mirror retired — directory

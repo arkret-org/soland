@@ -1,6 +1,6 @@
 use super::*;
 
-/// Short-TTL relay for `ck.receipt.read` ephemeral payloads.
+/// Short-TTL relay for `ak.receipt.read` ephemeral payloads.
 ///
 /// Records are retained only until `expires_at` and are delivered through the
 /// account sync `ephemeral` segment. `position` is a monotonic per-Realm
@@ -147,7 +147,7 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
     }
 }
 
-/// PostgreSQL-backed `ck.receipt.read` relay.
+/// PostgreSQL-backed `ak.receipt.read` relay.
 pub(crate) struct PgReadReceiptRelayStore {
     pub(crate) pool: PgPool,
 }

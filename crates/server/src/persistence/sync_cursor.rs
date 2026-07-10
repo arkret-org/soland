@@ -51,7 +51,7 @@ pub trait SyncCursorStore: Send + Sync {
     ) -> PersistenceResult<usize>;
     /// TTL sweep: drop every row whose `expires_at_ms` is at or before `now_ms`.
     async fn prune_expired(&self, now_ms: i64) -> PersistenceResult<usize>;
-    /// Append a cursor-authority revocation (`ck.self.account.command.revoke_cursor`)
+    /// Append a cursor-authority revocation (`ak.self.account.command.revoke_cursor`)
     /// to the durable ledger. Expired ledger rows are swept opportunistically
     /// on every write so the table stays bounded by `CURSOR_MAX_TTL_SECONDS`.
     ///

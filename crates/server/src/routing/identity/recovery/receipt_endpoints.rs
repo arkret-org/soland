@@ -138,7 +138,7 @@ pub(super) async fn recovery_receipt_put(
     }
 
     // §15 step 7 — the receipt MUST be signed by the new device's ACCEPTED
-    // device key (proving a `ck.device.authorize` for `new_device_id` landed
+    // device key (proving a `ak.device.authorize` for `new_device_id` landed
     // before the receipt was signed). Server keys / unauthorized fresh-device
     // keys MUST NOT sign. We verify against the device key recorded at
     // authorization, not the principal DID.

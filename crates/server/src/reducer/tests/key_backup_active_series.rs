@@ -70,7 +70,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
     assert_eq!(projected.ssk_generation, 2);
 
     let cell = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.key_backup.active_series.v1:{ACTOR}::secret_storage"
+        "ak:cell:ak.component.key_backup.active_series.v1:{ACTOR}::secret_storage"
     ))
     .expect("active series cell ref");
     assert!(state.cell_value(&cell).is_some());

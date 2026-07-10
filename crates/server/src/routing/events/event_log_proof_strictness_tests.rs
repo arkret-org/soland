@@ -683,12 +683,12 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
 
 #[tokio::test]
 async fn applet_registration_requires_realm_admin() {
-    // applet-integration.md §4 — `ck.applet.registration` is gated by the
-    // machine-readable `ck.realm.admin` capability. The dedicated install
+    // applet-integration.md §4 — `ak.applet.registration` is gated by the
+    // machine-readable `ak.realm.admin` capability. The dedicated install
     // aggregate checks this in its handler, but a raw submit via
     // `/_arkret/self/events` reaches `apply_applet_registration` with no authz of
     // its own — this gate closes that bypass. The Realm owner may register; an
-    // outsider without `ck.realm.admin` may not.
+    // outsider without `ak.realm.admin` may not.
     let state = make_state(true);
     let realm_id = "ak:realm:01904100-0000-7000-8000-a99e70000001";
     let owner = "did:web:alice.example";
@@ -741,7 +741,7 @@ async fn applet_registration_requires_realm_admin() {
         .await
         .unwrap();
 
-    // An outsider without `ck.realm.admin` is rejected fail-closed — closing the
+    // An outsider without `ak.realm.admin` is rejected fail-closed — closing the
     // `/_arkret/self/events` bypass of the install-handler gate.
     let err = validate_operation_policy(&state, std::slice::from_ref(&registration(outsider)))
         .await
@@ -826,7 +826,7 @@ fn policy_components_mls_governance_reads_projection_cell() {
         let mut projection = state.projection.lock();
         projection.cells.insert(
             arkret_sdk::CellRef::new(
-                "ak:cell:ck.component.mls.epoch.v1:ak:mls_group:unit-test".to_owned(),
+                "ak:cell:ak.component.mls.epoch.v1:ak:mls_group:unit-test".to_owned(),
             )
             .unwrap(),
             arkret_sdk::lattice::CellState::Value(json!({
@@ -1550,7 +1550,7 @@ fn insert_historical_data_event_grant(
     let seal_id = data_event_seal_id();
     let move_id = data_event_move_id(0xab);
     let cell = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.capability.grant.v1:{grant_id}"
+        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
     let value = historical_data_event_grant_value(
@@ -1594,11 +1594,11 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
     let parent_move_id = data_event_move_id(0xac);
     let child_move_id = data_event_move_id(0xad);
     let parent_cell = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.capability.grant.v1:{parent_grant_id}"
+        "ak:cell:ak.component.capability.grant.v1:{parent_grant_id}"
     ))
     .unwrap();
     let child_cell = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.capability.grant.v1:{child_grant_id}"
+        "ak:cell:ak.component.capability.grant.v1:{child_grant_id}"
     ))
     .unwrap();
     let parent_value = historical_data_event_grant_value(
@@ -1667,7 +1667,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
 
     let grant_move_id = data_event_move_id(0xb0);
     let grant_cell = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.capability.grant.v1:{grant_id}"
+        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
     let grant_op = arkret_sdk::LatticeOp {
@@ -1714,7 +1714,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
     if include_relaxed_policy {
         let policy_move_id = data_event_move_id(0xb2);
         let policy_cell = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.policy_components.v1:{DATA_EVENT_REALM}"
+            "ak:cell:ak.component.realm.policy_components.v1:{DATA_EVENT_REALM}"
         ))
         .unwrap();
         let policy_op = arkret_sdk::LatticeOp {
@@ -1763,7 +1763,7 @@ fn data_event_object_with_refs(
             "capability_refs": refs
         },
         "effects": [{
-            "cell": format!("ak:cell:ck.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"),
+            "cell": format!("ak:cell:ak.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"),
             "op": {"kind": "append"}
         }]
     })

@@ -3,9 +3,9 @@
 //! Spec-canonical binding under `/_arkret/self/keys/keypackages/*` (see
 //! `arkret-service-api.openapi.yaml §/keys/keypackages/*`):
 //!
-//! - `POST /_arkret/self/keys/keypackages/upload` — op `ck.self.keys.keypackages.upload.create`
+//! - `POST /_arkret/self/keys/keypackages/upload` — op `ak.self.keys.keypackages.upload.create`
 //!   (publishes a fresh KeyPackage).
-//! - `POST /_arkret/self/keys/keypackages/claim`  — op `ck.self.keys.keypackages.command.claim`
+//! - `POST /_arkret/self/keys/keypackages/claim`  — op `ak.self.keys.keypackages.command.claim`
 //!   (atomically claim a published KeyPackage; second claim of the same id returns `409
 //!   cas_conflict`).
 //! - `GET  /_soland/self/keys/keypackages/welcomes/pending` — extension op
@@ -15,8 +15,8 @@
 //!   served from the `/_soland/` product surface only.
 //!
 //! MLS *commits* are no longer served by a dedicated REST surface — clients
-//! submit `ck.mls.commit` events via the normal `POST /_arkret/self/events`
-//! pipeline (`ck.self.events.command.submit` of the registered durable `ck.mls.commit`
+//! submit `ak.mls.commit` events via the normal `POST /_arkret/self/events`
+//! pipeline (`ak.self.events.command.submit` of the registered durable `ak.mls.commit`
 //! kind). The reducer's epoch-bump path is unchanged; only the HTTP
 //! entrypoint moved.
 //!
@@ -30,8 +30,8 @@
 //! Deferred (mapped to TODO(G3.S1-followup) markers in `reducer/mls.rs`):
 //!   - decryption_pending   — deferred-decryption queue + retry.
 //!
-//! `ck.mls.commit` reducer validation now requires governance-binding
-//! quorum plus an attested covered frontier. `ck.mls.welcome` reducer
+//! `ak.mls.commit` reducer validation now requires governance-binding
+//! quorum plus an attested covered frontier. `ak.mls.welcome` reducer
 //! validation queues only minimal routing metadata and rejects plaintext
 //! sender/profile/relationship side-band fields.
 
@@ -661,10 +661,10 @@ pub(crate) async fn claim_keypackages_for_request(
         .unwrap_or_else(|| body.intended_realm_id.to_string());
 
     // Build the canonical op so the reducer sees the same shape as a
-    // federated `ck.mls.keypackage` envelope would. Canonical event
-    // kind is `ck.mls.keypackage`; publish-vs-claim is conveyed via
+    // federated `ak.mls.keypackage` envelope would. Canonical event
+    // kind is `ak.mls.keypackage`; publish-vs-claim is conveyed via
     // `payload.action`. The HTTP operation_id
-    // (`ck.self.keys.keypackages.command.claim`) lives at the wire layer only.
+    // (`ak.self.keys.keypackages.command.claim`) lives at the wire layer only.
     let mut payload = json!({
         "action": "claim",
         "keypackage_id": keypackage_id,
@@ -1040,8 +1040,8 @@ async fn pending_welcomes(
 // ── commits ───────────────────────────────────────────────────────────
 //
 // Deleted as part of the spec-canonical refactor. MLS commits are now
-// submitted via the regular events pipeline as `ck.mls.commit` durable
-// events through `POST /_arkret/self/events` (op `ck.self.events.command.submit`). The
+// submitted via the regular events pipeline as `ak.mls.commit` durable
+// events through `POST /_arkret/self/events` (op `ak.self.events.command.submit`). The
 // reducer's epoch-bump path (`reducer::mls::apply_commit_epoch`) is
 // invoked from the events submission strand; no dedicated REST surface.
 

@@ -1,4 +1,4 @@
-//! Integration tests for `ck.receipt.read` relay and read-side visibility.
+//! Integration tests for `ak.receipt.read` relay and read-side visibility.
 
 #![allow(unused_imports)]
 use super::common::*;

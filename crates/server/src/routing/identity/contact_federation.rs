@@ -1,11 +1,11 @@
 //! Cross-Principal-Server contact fact delivery (spec
 //! `contact-and-direct-conversation.md` §2 / §4.1).
 //!
-//! Contact facts (`ck.contact.requested` / `accepted` / `rejected` /
+//! Contact facts (`ak.contact.requested` / `accepted` / `rejected` /
 //! `tombstoned`) are principal-scoped and cross-Realm. When the issuer and the
 //! target holder live on different Principal Servers, the issuer-side server
 //! federates the signed fact to the target holder's server via
-//! `ck.peer.contacts.command.submit` (`POST /_arkret/peer/contacts`); the recipient
+//! `ak.peer.contacts.command.submit` (`POST /_arkret/peer/contacts`); the recipient
 //! projects the original signed envelope into the target holder's contact
 //! projection without re-signing it.
 //!
@@ -873,7 +873,7 @@ mod tests {
         }
     }
 
-    /// Cross-PS `ck.contact.requested` delivery: the projected pending_incoming
+    /// Cross-PS `ak.contact.requested` delivery: the projected pending_incoming
     /// row on the recipient (target holder) MUST record the *originating*
     /// requester's home Principal Server as `peer_service_did` — the
     /// `source-service-did` of the delivery, NOT the recipient's own service

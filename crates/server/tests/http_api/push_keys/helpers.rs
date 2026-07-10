@@ -70,7 +70,7 @@ pub(crate) fn signed_keys_upload_body(
 
 /// Persist a verified device for `actor` carrying an authoritative
 /// `device_public_key` (the shape the session-grant exchange and the
-/// `ck.device.authorize` projection both write), so the `keys/query`
+/// `ak.device.authorize` projection both write), so the `keys/query`
 /// signing-key directory can resolve it.
 pub(crate) async fn seed_verified_device_with_public_key(
     state: &AppState,

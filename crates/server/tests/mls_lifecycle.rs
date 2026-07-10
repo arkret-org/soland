@@ -3,12 +3,12 @@
 //!
 //!   1. upload a KeyPackage,
 //!   2. claim it atomically (and assert a second claim returns 409),
-//!   3. submit canonical `ck.mls.genesis` and `ck.mls.welcome` events and assert they mirror into
+//!   3. submit canonical `ak.mls.genesis` and `ak.mls.welcome` events and assert they mirror into
 //!      the MLS epoch / Welcome stores,
 //!   4. drain the calling device's queue via `GET /_soland/self/keys/keypackages/welcomes/pending`.
 //!
 //! MLS commits no longer have a dedicated REST surface — clients submit
-//! `ck.mls.commit` events via the canonical `POST /_arkret/self/events` pipeline
+//! `ak.mls.commit` events via the canonical `POST /_arkret/self/events` pipeline
 //! (W1C). The commit-bump path is covered by reducer-level unit tests in
 //! `reducer::mls`; we don't re-test it here.
 //!
@@ -648,9 +648,9 @@ async fn mls_lifecycle_end_to_end() {
 
     // ── 5. MLS commits no longer have a dedicated REST surface ──
     // The dedicated `POST /_arkret/self/mls/commits` endpoint was removed in
-    // W1C; clients now submit `ck.mls.commit` events via the canonical
-    // `POST /_arkret/self/events` pipeline (ck.self.events.command.submit of the registered
-    // durable `ck.mls.commit` kind). The reducer-level epoch-bump path is
+    // W1C; clients now submit `ak.mls.commit` events via the canonical
+    // `POST /_arkret/self/events` pipeline (ak.self.events.command.submit of the registered
+    // durable `ak.mls.commit` kind). The reducer-level epoch-bump path is
     // covered by unit tests in `reducer::mls`. We deliberately do not
     // re-exercise it here from the HTTP layer.
 }

@@ -6,7 +6,7 @@
 //!   paused}`).
 //! - `POST /_soland/admin/realms/{realm_id}/notary/reconfigure` — submit a reconfig Control Move
 //!   that writes the new notary cell value (cas-register on
-//!   `ak:cell:ck.component.notary.v1:<realm_id>`). Server-side signs with admin's session-grant
+//!   `ak:cell:ak.component.notary.v1:<realm_id>`). Server-side signs with admin's session-grant
 //!   key.
 //! - `GET  /_soland/admin/realms/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
@@ -173,7 +173,7 @@ pub(super) fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
 
 /// Build the canonical notary cell ref for a Space.
 pub(super) fn notary_cell_for(realm_id: &str) -> Result<arkret_sdk::CellRef, AppError> {
-    arkret_sdk::CellRef::new(format!("ak:cell:ck.component.notary.v1:{realm_id}")).map_err(|e| {
+    arkret_sdk::CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}")).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id `{realm_id}`: {e}")
             .with_status(StatusCode::BAD_REQUEST)
     })

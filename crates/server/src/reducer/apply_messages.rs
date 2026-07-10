@@ -25,7 +25,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or(operation.realm_id.as_str())
             .to_owned();
-        // CKP-0007: derive the message's circle scope from its Strand, never
+        // AKP-0007: derive the message's circle scope from its Strand, never
         // from the message payload (spec: scope_circle_id is a Strand field).
         let strand_scope = operation
             .payload
@@ -242,7 +242,7 @@ impl ProjectionState {
     /// additionally flips the corresponding projection's state to
     /// `ObjectLifecycleState::Redacted` per spec common-fields.md section 5.1.
     /// Space containers are intentionally excluded: they have no Redacted
-    /// terminal, and removal routes through `ck.space.tombstone` only.
+    /// terminal, and removal routes through `ak.space.tombstone` only.
     pub(crate) fn apply_redaction(&mut self, operation: &Operation) -> ProjectionEffect {
         let target_ref = message_redaction_target_ref(&operation.payload).unwrap_or_default();
         let target = self.redaction_key_for_message_target(&target_ref);
@@ -731,7 +731,7 @@ impl ProjectionState {
             .filter(|(cell_ref, _)| {
                 cell_ref
                     .as_str()
-                    .starts_with("ak:cell:ck.component.moderation_state.v1:")
+                    .starts_with("ak:cell:ak.component.moderation_state.v1:")
             })
             .any(|(_, state)| {
                 let CellState::Value(Value::Array(items)) = state else {

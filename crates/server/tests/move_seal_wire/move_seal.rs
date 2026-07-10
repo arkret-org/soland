@@ -250,7 +250,7 @@ async fn move_on_soland_registered_cell_family_passes_verify() {
         .await
         .unwrap();
 
-    // If `ck.component.consent.grant.v1` weren't in soland's CellRegistry,
+    // If `ak.component.consent.grant.v1` weren't in soland's CellRegistry,
     // verify_move would reject with "unknown cell family". A `pending`
     // state confirms the registry resolved the family to OrSet and the
     // `add` op passed shape-validation.

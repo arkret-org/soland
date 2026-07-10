@@ -94,11 +94,11 @@ pub(super) async fn provision_agent(
         .with_wire_code("agent_provision_fanout_unavailable"));
     }
     // Persist the agent_principal row so list/get/lifecycle + grant/session
-    // paths have a real principal to operate on (CKP-0008). Per the spec
+    // paths have a real principal to operate on (AKP-0008). Per the spec
     // agent lifecycle the agent starts `pending_runtime_key`; the gate
-    // `ck.gate.account.command.pair_agent_key` flips it to `active` once the
+    // `ak.gate.account.command.pair_agent_key` flips it to `active` once the
     // runtime key is authorized.
-    // CKP-0008 D1: development can materialize the agent's identity sub-events
+    // AKP-0008 D1: development can materialize the agent's identity sub-events
     // with dev proofs. Production fails closed above until the delegated
     // fan-out has a protocol-valid authorization_ref + detached-JWS path.
     let realm = ensure_self_realm(state, &session).await?;
@@ -186,7 +186,7 @@ pub(super) async fn list_agents(
         .list_for_controller(&session.actor)
         .await
         .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
-    // CKP-0008 §4.3.2 — lazily expire any agent past its pairing window
+    // AKP-0008 §4.3.2 — lazily expire any agent past its pairing window
     // before projecting, so list reflects `pairing_expired` and the pending
     // grants are revoked on first observation.
     let mut agents = Vec::with_capacity(records.len());
@@ -225,7 +225,7 @@ pub(super) async fn discover_agent_endpoint(
     let state = depot.get_typed::<AppState>().expect("state injected");
     // Any authenticated principal may probe the public agent endpoint
     // registry; the discover surface returns only the projection of an
-    // accepted `ck.agent.endpoint` event (no controller-private fields).
+    // accepted `ak.agent.endpoint` event (no controller-private fields).
     let _session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let agent_id = body.agent_id.as_str().to_owned();
@@ -234,7 +234,7 @@ pub(super) async fn discover_agent_endpoint(
         proj.agents.get(&agent_id).cloned()
     };
     let Some(projection) = snapshot else {
-        // Fail closed: an agent with no accepted `ck.agent.endpoint`
+        // Fail closed: an agent with no accepted `ak.agent.endpoint`
         // cannot be discovered (spec §12 `discovery_failed`).
         return Err(
             AppError::not_found("agent endpoint not registered").with_wire_code("discovery_failed")
@@ -289,7 +289,7 @@ pub(super) async fn get_agent(
     json_ok(agent_view_from_record(&record))
 }
 
-/// CKP-0008 §4.3.2 — lazily expire a `pending_runtime_key` agent whose
+/// AKP-0008 §4.3.2 — lazily expire a `pending_runtime_key` agent whose
 /// pairing window has elapsed. On first observation past `pairing_expires_at`
 /// the agent flips to `pairing_expired` and (dev option B) the pending
 /// `effective_after_first_authorized_key` grants are auto-revoked. Returns
@@ -366,10 +366,10 @@ pub(super) async fn lifecycle_transition(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| "active".to_owned());
-    // CKP-0008 §4.11 (dev option B): drive the FSM reducer with the durable
-    // `ck.self.agent.{pause,resume,deactivate}` event authored by the
+    // AKP-0008 §4.11 (dev option B): drive the FSM reducer with the durable
+    // `ak.self.agent.{pause,resume,deactivate}` event authored by the
     // controller, and on deactivate fan-out the revocation chain
-    // (`ck.agent.key.revoke` + `ck.capability.revoke` for every grant the
+    // (`ak.agent.key.revoke` + `ak.capability.revoke` for every grant the
     // agent holds). Production submits the lifecycle event from inkson.
     if state.config.development_mode {
         let realm = ensure_self_realm(state, &session).await?;
@@ -622,7 +622,7 @@ pub(super) async fn attach_agent_grant(
     let grant_id_str = ids::generate_grant_id();
     let grant_id = GrantId::new(grant_id_str.clone())
         .map_err(|err| AppError::internal(format!("generated grant id invalid: {err}")))?;
-    // CKP-0008 §4.11 (dev option B): write the real `ck.capability.grant`
+    // AKP-0008 §4.11 (dev option B): write the real `ak.capability.grant`
     // authored by the controller. Production submits this from inkson.
     if state.config.development_mode {
         let realm = ensure_self_realm(state, &session).await?;
@@ -690,7 +690,7 @@ pub(super) async fn detach_agent_grant(
         "accepted",
     )
     .await;
-    // CKP-0008 §4.11 (dev option B): detach of a capability grant MUST emit
+    // AKP-0008 §4.11 (dev option B): detach of a capability grant MUST emit
     // the real revoke event so the authz projection and cache converge. An
     // accountability-grant detach is a separate governance object, so it stays
     // audit-only here until that cell family is introduced.

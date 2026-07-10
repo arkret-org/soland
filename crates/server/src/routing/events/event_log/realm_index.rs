@@ -9,7 +9,7 @@ pub(super) fn event_string_field(
         .map(ToOwned::to_owned)
 }
 
-/// True iff a `ck.realm.create` event's `payload.object.created_by`
+/// True iff a `ak.realm.create` event's `payload.object.created_by`
 /// matches the session actor. Spec realm-and-space.md §2.6 — this is the
 /// genesis-member condition that lets the create event bypass the regular
 /// `realm_has_member` check.
@@ -25,7 +25,7 @@ pub(super) fn realm_create_actor_is_creator(
         .is_some_and(|creator| creator == actor)
 }
 
-/// True when a `ck.invite.create` event is signed by its own inviter. The
+/// True when a `ak.invite.create` event is signed by its own inviter. The
 /// inviter is the payload `inviter`/`sender`/`issuer` when present; otherwise
 /// the top-level `actor_id` (the signer) is authoritative. Used to admit a
 /// cross-PS invite delivery on a recipient PS that does not host the realm.
@@ -46,7 +46,7 @@ pub(super) fn invite_create_actor_is_inviter(
     inviter.is_some_and(|inviter| inviter == actor)
 }
 
-/// True when a `ck.member.state` event is a self-authored join-policy entry by
+/// True when a `ak.member.state` event is a self-authored join-policy entry by
 /// a not-yet-member applicant:
 ///   - `membership=knock` — stage 1 of the application-review path (join-policy.md §7.1); and
 ///   - `membership=join` carrying `gate_proofs[]` — the auto-resolve path (join-policy.md §5),
@@ -90,12 +90,12 @@ pub(super) async fn member_join_accepts_pending_invite(
     let kind = object.get("kind").and_then(Value::as_str);
     // Two canonical invite-acceptance shapes are admitted for a
     // not-yet-member invitee (spec invite-addressing.md / event-kind-registry):
-    //   1. `ck.member.state{membership:join, invite_ref}` — the join-cascade form;
-    //   2. `ck.invite.accept{invite_ref|invite_id}` — the dedicated accept event.
+    //   1. `ak.member.state{membership:join, invite_ref}` — the join-cascade form;
+    //   2. `ak.invite.accept{invite_ref|invite_id}` — the dedicated accept event.
     // Both resolve a *pending* invite whose `invitee == actor`, so a fresh
     // invitee can close their own invite through either path without first
     // being a realm member. Previously only (1) was exempt, so a spec-correct
-    // `ck.invite.accept` from the invitee was rejected with `capability_denied`.
+    // `ak.invite.accept` from the invitee was rejected with `capability_denied`.
     let is_member_state_join = kind == Some(arkret_sdk::events::kinds::MEMBER_STATE);
     let is_invite_accept = kind == Some("ak.invite.accept");
     if !is_member_state_join && !is_invite_accept {
@@ -223,7 +223,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
 
 /// Quick existence probe against the in-memory `state.realms` index used
 /// by the regular `realm_has_member` check. The envelope validator uses it
-/// to fail duplicate `ck.realm.create` with `realm_already_exists` before
+/// to fail duplicate `ak.realm.create` with `realm_already_exists` before
 /// applying the genesis-member bootstrap exception.
 pub(super) fn realm_exists_in_index(state: &AppState, realm_id: &str) -> bool {
     let Ok(realm_id_typed) = arkret_sdk::RealmId::new(realm_id.to_owned()) else {
@@ -232,22 +232,22 @@ pub(super) fn realm_exists_in_index(state: &AppState, realm_id: &str) -> bool {
     state.realms.lock().get(&realm_id_typed).is_some()
 }
 
-/// CKP-0008 — public read of the realm index used by the dev provisioning
+/// AKP-0008 — public read of the realm index used by the dev provisioning
 /// fan-out (`ensure_self_realm`) to decide whether the controller self realm
 /// genesis event still needs to be submitted.
 pub(in crate::routing) fn realm_is_indexed(state: &AppState, realm_id: &str) -> bool {
     realm_exists_in_index(state, realm_id)
 }
 
-/// Spec realm-and-space.md §2.6 step 2 — when a `ck.realm.create` event
+/// Spec realm-and-space.md §2.6 step 2 — when a `ak.realm.create` event
 /// commits, materialise the in-memory Realm index entry with the
 /// creator as the first member so subsequent facet events (join_rule /
 /// history_visibility / discovery / policy_components / ...) from the
 /// same actor pass the regular `realm_has_member` check without a
-/// separate `ck.member.state(join)` event.
+/// separate `ak.member.state(join)` event.
 ///
 /// Extracted out of `submit_event` (called once after `store.put`
-/// succeeds for a `ck.realm.create` event) so the canonical Event
+/// succeeds for a `ak.realm.create` event) so the canonical Event
 /// Envelope path owns Realm bootstrap state.
 pub(super) async fn bootstrap_realm_member_index(
     state: &AppState,
@@ -333,7 +333,7 @@ pub(super) async fn bootstrap_realm_member_index(
         }
     }
     // Maintain the `plaintext_visible_services ⊇ keys(plaintext_visible_service_classes)`
-    // invariant the dedicated `ck.realm.plaintext_visible_services` projection
+    // invariant the dedicated `ak.realm.plaintext_visible_services` projection
     // upholds: spec-canonical declarations carry structured `{service_did,
     // data_classes, …}` entries (event-payload.schema.json
     // `plaintext_visible_services_payload`) with no bare-string form, so the

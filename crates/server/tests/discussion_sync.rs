@@ -136,7 +136,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
 }
 
 /// Have the owner admit a new member by submitting a
-/// `ck.member.state{membership:"join", actor_id: new_member}` event. The
+/// `ak.member.state{membership:"join", actor_id: new_member}` event. The
 /// projection layer records `member.joined_at` (used by sync's
 /// history_visibility gate) and updates `state.realms.members` via
 /// `project_member_state`. The owner is already a member (seeded by
@@ -381,7 +381,7 @@ fn install_projected_circle_scope(
     }
 }
 
-/// CKP-0007 — bind a Strand to a Circle scope in the projection. A message
+/// AKP-0007 — bind a Strand to a Circle scope in the projection. A message
 /// posted to this Strand inherits the Circle scope server-side (spec:
 /// `scope_circle_id` is a Strand field, never carried on the message).
 fn install_projected_strand_scope(

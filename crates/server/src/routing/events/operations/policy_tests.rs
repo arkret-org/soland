@@ -203,7 +203,7 @@ fn seed_read_receipt_inheritance(
     let now = chrono::Utc::now();
     let mut projection = state.projection.lock();
     let cell_id = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.realm.read_receipt_policy.v1:{parent_realm_id}"
+        "ak:cell:ak.component.realm.read_receipt_policy.v1:{parent_realm_id}"
     ))
     .expect("valid read receipt policy cell ref");
     projection
@@ -2098,7 +2098,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
     {
         let mut projection = state.projection.lock();
         let cell_id = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.policy_components.v1:{}",
+            "ak:cell:ak.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
         .expect("valid policy_components cell ref");
@@ -2126,7 +2126,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
     );
 }
 
-// encryption-and-audit.md §2.10.8 — an RRK-targeted `ck.realm_key.share` (to a
+// encryption-and-audit.md §2.10.8 — an RRK-targeted `ak.realm_key.share` (to a
 // declared recovery recipient) is accepted by the share-policy gate even though
 // the recipient is NOT a member and the realm carries no history-sharing policy.
 // The discriminator is structural: `recipient_principal_id` is a current
@@ -2146,7 +2146,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
     {
         let mut projection = state.projection.lock();
         let cell_id = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.policy_components.v1:{}",
+            "ak:cell:ak.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
         .expect("valid policy_components cell ref");
@@ -2323,7 +2323,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
     {
         let mut projection = state.projection.lock();
         let cell_id = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.policy_components.v1:{}",
+            "ak:cell:ak.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
         .expect("valid policy_components cell ref");

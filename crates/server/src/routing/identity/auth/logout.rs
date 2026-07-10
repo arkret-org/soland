@@ -7,7 +7,7 @@ use ed25519_dalek::{Signature, Verifier as _};
 
 use super::*;
 
-/// `POST /_arkret/gate/account/logout` — spec `ck.gate.account.command.logout`,
+/// `POST /_arkret/gate/account/logout` — spec `ak.gate.account.command.logout`,
 /// the single client-visible hard logout (account-lifecycle §4.1).
 ///
 /// Request identity differs from every other protected endpoint: per §4.1 the
@@ -23,8 +23,8 @@ use super::*;
 ///    grant rotation chain + browser session are terminated (§4.1 step 2).
 ///  - **Principal-side (after Auth-side success):** revoke the principal's local bearer sessions
 ///    for the grant's device, mark the device session record revoked, remove push registrations,
-///    and drop queued to-device messages. It does NOT write `ck.account.status`, does NOT emit
-///    `ck.device.revoke`, and does NOT erase durable device authorization.
+///    and drop queued to-device messages. It does NOT write `ak.account.status`, does NOT emit
+///    `ak.device.revoke`, and does NOT erase durable device authorization.
 #[endpoint(
     operation_id = "ak.gate.account.command.logout",
     tags("auth"),
@@ -346,14 +346,14 @@ async fn revoke_sessions_for_actor_device(
 }
 
 /// `POST /_arkret/gate/account/session-grants/revoke` — spec
-/// `ck.gate.account.command.revoke_session` (surface group `account_auth`).
+/// `ak.gate.account.command.revoke_session` (surface group `account_auth`).
 ///
 /// Spec: sync/service-http-binding.md — the body MAY be omitted (revoke the
 /// calling session); `target_grant_id` / `target_device_id` /
 /// `all_sessions=true` are mutually exclusive selectors and the target MUST
 /// belong to the calling principal. Revokes session grants / bearer
 /// sessions only — device authorization is NOT touched and no
-/// `ck.account.status` write happens implicitly. Cross-session selectors
+/// `ak.account.status` write happens implicitly. Cross-session selectors
 /// require a fresh lifecycle proof whose request digest and Ed25519 signature
 /// verify against the caller DID.
 #[endpoint(

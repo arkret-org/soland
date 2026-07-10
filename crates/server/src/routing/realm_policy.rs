@@ -2,9 +2,9 @@
 //!
 //! Surfaces:
 //! - `GET /_soland/self/realms/{realm_id}/policy-server` — fetch the currently-projected
-//!   `ck.realm.policy_server` config. Returns 404 if neither the realm nor its `governed_by`
+//!   `ak.realm.policy_server` config. Returns 404 if neither the realm nor its `governed_by`
 //!   ancestor chain has declared one.
-//! - `PUT /_soland/self/realms/{realm_id}/policy-server` — submit a `ck.realm.policy_server` Move.
+//! - `PUT /_soland/self/realms/{realm_id}/policy-server` — submit a `ak.realm.policy_server` Move.
 //!   Routes through the standard `accept_local_operations` pipeline so the reducer's validators
 //!   (URL scheme, on_timeout enum) run.
 //! - `DELETE /_soland/self/realms/{realm_id}/policy-server` — write a tombstoning Move so admins
@@ -197,7 +197,7 @@ async fn delete_realm_policy_server(
         ));
     }
     if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.realm.policy_server.v1:{realm_id}"
+        "ak:cell:ak.component.realm.policy_server.v1:{realm_id}"
     )) {
         projection.cells.remove(&cell_id);
     }

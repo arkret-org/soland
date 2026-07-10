@@ -211,7 +211,7 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("account")
                 .push(Router::with_path("viewer").get(account_viewer))
                 // spec `events_sync` surface group (core tier) binds
-                // `ck.self.account.command.update_profile` to POST /_arkret/self/account/profile;
+                // `ak.self.account.command.update_profile` to POST /_arkret/self/account/profile;
                 // describe advertises it, so it MUST resolve on the protocol surface.
                 .push(Router::with_path("profile").post(update_profile)),
         )
@@ -1097,7 +1097,7 @@ async fn account_viewer(
 }
 
 /// `POST /_arkret/gate/account/register` — spec-canonical registration
-/// binding (`ck.gate.account.command.register`, surface group `account_auth`).
+/// binding (`ak.gate.account.command.register`, surface group `account_auth`).
 ///
 /// Spec: sync/service-http-binding.md — request is
 /// `AccountRegisterRequestBody {principal_id, handle?, display_name?,
@@ -1200,12 +1200,12 @@ async fn gate_account_register(
     if let Some(device_id) = body.device_id.as_ref() {
         let registered_at = now();
         // Device-identity B-model (decision 0002 / device-lifecycle.md §5.4): a
-        // device becomes `verified` ONLY through a projected `ck.device.authorize`
+        // device becomes `verified` ONLY through a projected `ak.device.authorize`
         // (`project_device_authorize` writes `device_public_key` +
         // `verification_state="verified"`). The founding device is NOT
         // self-authorized: under the delegated account-authority model it is
         // enrolled by the principal's designated enrollment authority (coauth),
-        // which mints a `service_attested` `ck.device.authorize` the client then
+        // which mints a `service_attested` `ak.device.authorize` the client then
         // submits. Minting a `verified`-without-key row here would carry no
         // `device_public_key`, so recovery genesis
         // (`resolve_session_device_key_for_genesis_policy`) and every
@@ -1506,7 +1506,7 @@ async fn put_account_device_placeholder(
 ) -> Result<(), AppError> {
     let registered_at = now();
     // Device-identity B-model: account registration only creates an
-    // unverified placeholder. `ck.device.authorize` is still the only path
+    // unverified placeholder. `ak.device.authorize` is still the only path
     // that can attach a device public key and mark the device verified.
     let device = DeviceInventoryRecord {
         actor: actor.to_owned(),

@@ -47,12 +47,12 @@ pub struct StrandWatchProjection {
 }
 
 /// Stream-F (Wave 2C) — per-peer fanout status for a single
-/// `ck.audit.erasure_receipt`. One row per federation peer that has
+/// `ak.audit.erasure_receipt`. One row per federation peer that has
 /// received content from the affected Realm.
 ///
 /// `sent_at` is stamped when the receipt is enqueued into the
 /// federation outbox. `acked_at` is stamped when the peer's own
-/// follow-up `ck.audit.erasure_receipt` lands back referencing the
+/// follow-up `ak.audit.erasure_receipt` lands back referencing the
 /// same `receipt_id`. `outcome` mirrors the peer's reported wire
 /// outcome (`completed` / `partially_completed` /
 /// `blocked_by_legal_hold` / `scheduled` / `failed`). Spec
@@ -64,8 +64,8 @@ pub struct FanoutPeerStatus {
     pub outcome: Option<String>,
 }
 
-/// Stream-F (Wave 1B) — `ck.audit.erasure_receipt` projection record.
-/// Mirrors a subset of the canonical `ck.schema.erasure_receipt.v1`
+/// Stream-F (Wave 1B) — `ak.audit.erasure_receipt` projection record.
+/// Mirrors a subset of the canonical `ak.schema.erasure_receipt.v1`
 /// payload (see
 /// `arkret-spec/spec/v1/artifacts/schemas/erasure-receipt.schema.json`).
 /// We only keep the fields the local audit / federation fanout layer
@@ -144,7 +144,7 @@ pub struct SolandKeyBackupActiveSeries {
 }
 
 /// R3.1 — structured cache row for a single directed Realm link.
-/// Mirrors the `ck.component.realm.link.v1` cell value plus envelope-
+/// Mirrors the `ak.component.realm.link.v1` cell value plus envelope-
 /// derived timestamps so the query API can render `created_at` /
 /// `updated_at` without re-reading the durable Event store.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,8 +162,8 @@ pub struct RealmLinkState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// G3.S2 — structured cache row for `ck.realm.policy_server`. Mirrors
-/// the canonical `ck.component.realm.policy_server.v1` cas-register
+/// G3.S2 — structured cache row for `ak.realm.policy_server`. Mirrors
+/// the canonical `ak.component.realm.policy_server.v1` cas-register
 /// payload. Per spec `authz/policy-server.md` §2 the wire payload also
 /// carries `applies_to[]` / `policy_sources[]` / `abuse_profile_ref` /
 /// `public_keys[]`; the runtime fields needed by the outbound
@@ -194,7 +194,7 @@ pub struct RealmPolicyServerConfig {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// R3.2 — structured cache row for `ck.realm.inheritance_policy`.
+/// R3.2 — structured cache row for `ak.realm.inheritance_policy`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RealmInheritancePolicyState {
     pub realm_id: String,
@@ -206,9 +206,9 @@ pub struct RealmInheritancePolicyState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// SOL-ORG-02 — structured cache row for one `ck.realm.organization`
+/// SOL-ORG-02 — structured cache row for one `ak.realm.organization`
 /// relationship statement projection. Mirrors the canonical
-/// `ck.component.realm.organization.v1` cas-register cell keyed by the
+/// `ak.component.realm.organization.v1` cas-register cell keyed by the
 /// composite subject `(organization_id, relationship)`. The reducer keeps
 /// the latest statement per `(realm_id, organization_id, relationship)`; an
 /// `active` statement marks the relationship live, a `revoked` statement
@@ -272,7 +272,7 @@ impl RealmOrganizationStatementState {
     }
 }
 
-/// R3.2 — structured cache row for `ck.capability.derived`.
+/// R3.2 — structured cache row for `ak.capability.derived`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapabilityDerivedState {
     pub capability_id: String,
@@ -381,11 +381,11 @@ impl MlsWelcomeQueueKey {
     }
 }
 
-/// Reducer-side index for `ck.mls.proposal{proposal_type="remove"}`.
+/// Reducer-side index for `ak.mls.proposal{proposal_type="remove"}`.
 ///
 /// The opaque MLS proposal bytes stay client-owned; the reducer only keeps the
 /// canonical event ref and the target tuple needed to verify that a later
-/// `ck.mls.commit` consuming a pending remove obligation really references a
+/// `ak.mls.commit` consuming a pending remove obligation really references a
 /// Remove proposal for the revoked / removed leaf.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsRemoveProposal {
@@ -493,10 +493,10 @@ pub struct SpaceContainerProjection {
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Stream-F (Wave 1B) — `realm_destroyed_orphan` flag set by the
-    /// `ck.realm.destroy` cascade when this container's home Realm is
+    /// `ak.realm.destroy` cascade when this container's home Realm is
     /// destroyed. Spec `realm-and-space.md` §2.5.1 ¶6: orphaned
     /// containers become read-only locked projections; no
-    /// `ck.strand.move` / `ck.space.parent` / `ck.space.update` may
+    /// `ak.strand.move` / `ak.space.parent` / `ak.space.update` may
     /// revive them. Defaults to `false`.
     pub orphaned: bool,
     /// Stream-F (Wave 2C) — cross-Realm `parent_ref` lazy-link lock.
@@ -604,7 +604,7 @@ pub struct StrandProjection {
     pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// CKP-0007 — the Circle this Strand is scoped to, if any (`ak:circle:…`).
+    /// AKP-0007 — the Circle this Strand is scoped to, if any (`ak:circle:…`).
     /// A message's effective circle-scope is derived from its Strand's
     /// `scope_circle_id` (spec: `scope_circle_id` is a Strand field, not a
     /// message field); messages never carry their own scope.
@@ -618,12 +618,12 @@ pub(crate) fn default_strand_tracks() -> BTreeMap<String, StrandTrackConfig> {
     )])
 }
 
-/// CKP-0007 — server-side Circle state cache. Mirrors `projection_circles` +
+/// AKP-0007 — server-side Circle state cache. Mirrors `projection_circles` +
 /// `projection_circle_members` (see migration
 /// `20260526010000_add_circles`).
 ///
 /// `members` is the authoritative active-member set; the wire validator and
-/// the `ck.circle.member.state` handler use it to enforce the
+/// the `ak.circle.member.state` handler use it to enforce the
 /// `Circle.members ⊆ Realm.members` invariant
 /// (`circle_member_must_be_realm_member`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -656,7 +656,7 @@ pub struct CircleProjection {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Active Circle members. Maintained by `ck.circle.member.state`
+    /// Active Circle members. Maintained by `ak.circle.member.state`
     /// transitions (`active` -> insert, `removed`/`banned`/`left` ->
     /// remove). Always a strict subset of the parent Realm's active
     /// member set.
@@ -673,11 +673,11 @@ pub struct CircleMembershipState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// CKP-0007 — Circle lifecycle state. Matches spec `circle.schema.json`
+/// AKP-0007 — Circle lifecycle state. Matches spec `circle.schema.json`
 /// `state` enum (active / archived / tombstoned). Distinct from
 /// [`ObjectLifecycleState`] (which carries the redacted/deleted forms used
 /// by Strand / Morph); Circle has no redaction path because the canonical
-/// terminal action is `ck.circle.tombstone`.
+/// terminal action is `ak.circle.tombstone`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CircleLifecycleState {
     #[default]
@@ -701,7 +701,7 @@ impl CircleLifecycleState {
 pub struct MorphProjection {
     pub morph_id: String,
     pub realm_id: String,
-    /// CKP-0007 - the Circle this Morph is scoped to, if any (`ak:circle:...`).
+    /// AKP-0007 - the Circle this Morph is scoped to, if any (`ak:circle:...`).
     /// Morph updates and lifecycle writes must satisfy the same Circle
     /// membership conjunct as creates.
     pub scope_circle_id: Option<String>,
@@ -723,7 +723,7 @@ pub struct MorphProjection {
 /// Materialized version row for document-shaped Morphs.
 ///
 /// This is intentionally projection-side state: the canonical source remains
-/// the ordered `ck.morph.create` / `ck.morph.update` event stream, while the
+/// the ordered `ak.morph.create` / `ak.morph.update` event stream, while the
 /// read API exposes a compact version list for clients that need to hydrate a
 /// document view without replaying the whole history.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -737,7 +737,7 @@ pub struct DocumentVersionProjection {
 }
 
 /// Server-side Applet registry entry. Populated by
-/// `ck.applet.registration` (creates) and `ck.applet.discovery` (refreshes
+/// `ak.applet.registration` (creates) and `ak.applet.discovery` (refreshes
 /// the manifest). Spec `extensions/applet-integration.md` doesn't pin
 /// down a state-machine for applet entries themselves (the bridge state
 /// machine is per-session and lives client-side), so this is a simple
@@ -748,24 +748,24 @@ pub struct AppletProjection {
     pub service_did: String,
     pub namespace: String,
     /// Optional snapshot of the most recent `manifest` (from the latest
-    /// `ck.applet.discovery` event). `None` if only registration has
+    /// `ak.applet.discovery` event). `None` if only registration has
     /// landed.
     pub manifest: Option<Value>,
-    /// Optional capability list from the latest `ck.applet.registration`.
+    /// Optional capability list from the latest `ak.applet.registration`.
     pub capabilities: Option<Value>,
     pub registered_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Server-side Agent registry entry. Populated by
-/// `ck.agent.endpoint`. Spec `extensions/agent-integration.md` mirrors
+/// `ak.agent.endpoint`. Spec `extensions/agent-integration.md` mirrors
 /// the applet family shape; same simple last-write-wins semantics.
 ///
 /// `endpoint_url` is the HTTPS URL the agent runtime listens on. It is
 /// OPTIONAL on the wire (older clients + DID-only agents that resolve
 /// via did:web service entry won't set it), but when present the
 /// reference bridge echoes it back in the
-/// `ck.agent.interop_session.result` envelope's `detail.endpoint_url`
+/// `ak.agent.interop_session.result` envelope's `detail.endpoint_url`
 /// so timeline consumers see which endpoint answered the invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SolandAgentProjection {
@@ -782,9 +782,9 @@ pub struct SolandAgentProjection {
     /// array (spec §5.1 / §11: `a2a` / `acp` / `mcp_bridge` /
     /// `http_custom`). Surfaced by `POST /_arkret/self/agents/discover`.
     pub supported_protocols: Vec<String>,
-    /// A2A AgentCard URL declared in a `ck.agent.endpoint` entry (§5.1).
+    /// A2A AgentCard URL declared in a `ak.agent.endpoint` entry (§5.1).
     pub agent_card_url: Option<String>,
-    /// ACP metadata URL declared in a `ck.agent.endpoint` entry (§5.1).
+    /// ACP metadata URL declared in a `ak.agent.endpoint` entry (§5.1).
     pub metadata_url: Option<String>,
     pub registered_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -798,7 +798,7 @@ pub enum AgentActionRequestStatus {
     Cancelled,
 }
 
-/// Server-side pending approval queue entry for `ck.agent.action_request`.
+/// Server-side pending approval queue entry for `ak.agent.action_request`.
 ///
 /// Actor-private action events do not advance reducer input clocks, but the
 /// controller still needs a fail-closed projection so lifecycle revocation can
@@ -857,7 +857,7 @@ impl ObjectLifecycleState {
 /// Value of the parallel `redaction` cas-register
 /// cell on the same subject as the target message cell. Mirrors the spec
 /// shape `{redacted_at, by, reason}` and carries the triggering
-/// `ck.message.redact` event id so the read path can surface
+/// `ak.message.redact` event id so the read path can surface
 /// `redaction_ref` on the message tombstone (strand-and-message.md §9).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RedactionCellValue {
@@ -1195,13 +1195,13 @@ pub struct SolandMembershipState {
     pub realm_id: String,
     /// Canonical FSM state value (one of `invite` / `join` / `leave` /
     /// `ban` / `knock`). Authoritative source is the
-    /// `ck.component.member.state.v1` cell in
+    /// `ak.component.member.state.v1` cell in
     /// [`super::ProjectionState::cells`]; this field is the structured-cache
     /// mirror updated on every membership transition.
     pub state: String,
     pub role: String,
     /// Effective member delivery status from the accepted
-    /// `ck.member.state{membership=join}` payload. Only `routable` joins
+    /// `ak.member.state{membership=join}` payload. Only `routable` joins
     /// participate in Realm-scoped service fanout.
     pub delivery_status: Option<String>,
     /// Principal Server service DID materialized from the member
@@ -1234,37 +1234,37 @@ pub struct SolandRealmState {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Round 4 (B1.2) — Realm trust domain. Captured and locked
-    /// immutable on the first `ck.realm.create`; subsequent events that
+    /// immutable on the first `ak.realm.create`; subsequent events that
     /// attempt to set a different trust domain MUST be rejected with
     /// `cross_domain_replay_rejected`. Stored as the canonical
     /// `ak:trust_domain:<scope>` string form.
     pub trust_domain: Option<String>,
     /// Stream-F (Wave 1B) — Realm terminal-state marker. Set by
-    /// `apply_realm_lifecycle` when a `ck.realm.tombstone` or
-    /// `ck.realm.destroy` event is projected. Possible values:
+    /// `apply_realm_lifecycle` when a `ak.realm.tombstone` or
+    /// `ak.realm.destroy` event is projected. Possible values:
     ///   - `None` — Realm is live.
-    ///   - `Some("tombstoned")` — `ck.realm.tombstone` accepted; the `successor_realm_id` field
+    ///   - `Some("tombstoned")` — `ak.realm.tombstone` accepted; the `successor_realm_id` field
     ///     carries the migration target.
-    ///   - `Some("destroyed")` — `ck.realm.destroy` accepted; no successor.
+    ///   - `Some("destroyed")` — `ak.realm.destroy` accepted; no successor.
     ///
     /// Both terminal states block non-audit writes via
     /// `routing::events::event_log::terminal_realm_check`. Spec
     /// `realm-and-space.md` §2.5 / §2.5.1.
     pub terminal_state: Option<String>,
-    /// Stream-F (Wave 1B) — for `ck.realm.tombstone` only: the
+    /// Stream-F (Wave 1B) — for `ak.realm.tombstone` only: the
     /// `ak:realm:<uuid>` of the successor Realm that takes over child
     /// Space/Strand placement. `None` for live or destroyed Realms.
     pub successor_realm_id: Option<String>,
     /// COT-06-004 — the Realm's default Strand pointer (`ak:strand:<UUIDv7>`).
-    /// Set by `ck.realm.set_default_strand` (`apply_realm_set_default_strand`);
+    /// Set by `ak.realm.set_default_strand` (`apply_realm_set_default_strand`);
     /// the Strand it names MUST already be projected in this Realm. A Strand's
     /// derived `is_default` flag is computed at query time as
     /// `strand_id == realm.default_strand_id` — there is no separate stored
     /// per-Strand column.
     pub default_strand_id: Option<String>,
     /// `morph.md` §4.1 S3 — opt-in conformance profile ids the Realm has
-    /// declared (`active_profiles[]` / `profiles[]` on `ck.realm.create` or
-    /// `ck.realm.update`). Projected as a monotonically-growing set: a profile
+    /// declared (`active_profiles[]` / `profiles[]` on `ak.realm.create` or
+    /// `ak.realm.update`). Projected as a monotonically-growing set: a profile
     /// once observed stays declared (soland is not the committer and never
     /// silently relaxes a declared profile). Read by the morph schema-migration
     /// gate to decide whether breaking / transformation migrations are allowed.

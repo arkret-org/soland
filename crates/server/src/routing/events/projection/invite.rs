@@ -12,12 +12,12 @@ use crate::state::{AppState, RealmInviteRecord};
 use crate::{ids, kinds};
 
 /// Spec invite-addressing.md / event-kind-registry — project an accepted
-/// `ck.invite.accept` durable event. The invitee submits it to close the
+/// `ak.invite.accept` durable event. The invitee submits it to close the
 /// group-invite loop:
 ///   1. resolve the referenced invite, validating it is still `pending` and that the accepting
 ///      sender == the invite's `invitee`;
 ///   2. flip the `RealmInviteRecord` to `accepted`;
-///   3. cascade membership — activate the invitee's `ck.member.state(join)` in the target Realm
+///   3. cascade membership — activate the invitee's `ak.member.state(join)` in the target Realm
 ///      (in-memory member index) so the capability grants carried on the invite take effect.
 ///
 /// Replays and mismatched senders are ignored fail-closed.
@@ -171,7 +171,7 @@ fn project_invite_accept_membership(
             updated_at: operation.created_at,
         },
     );
-    if let Ok(cell_id) = CellRef::new(format!("ak:cell:ck.component.member.state.v1:{member}")) {
+    if let Ok(cell_id) = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{member}")) {
         projection
             .cells
             .insert(cell_id, CellState::Value(Value::String("join".to_owned())));

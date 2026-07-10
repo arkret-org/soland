@@ -32,7 +32,7 @@ pub(super) fn validate_realm_lifecycle_write_gate(
 }
 
 /// `morph.md` §4.1 S3 — the actor MUST hold the high-tier
-/// `ck.morph.schema_migrate` capability at the event frontier. Missing
+/// `ak.morph.schema_migrate` capability at the event frontier. Missing
 /// capability yields `capability_denied`. Realm owners are implicitly
 /// authorized (mirrors the other Realm-object capability gates). The opt-in
 /// profile gate and CAS are enforced by the state-aware preflight; this check

@@ -1,7 +1,7 @@
 use super::super::*;
 
 /// Device-identity B-model (device-lifecycle.md §5.4 / key-management.md §5.0.6):
-/// admit a `service_attested` `ck.device.authorize` whose trust root is the
+/// admit a `service_attested` `ak.device.authorize` whose trust root is the
 /// enrollment authority designated by the principal DID document, rather than a
 /// client-held SSK (§5.2) or DID inception key (§5.3).
 ///

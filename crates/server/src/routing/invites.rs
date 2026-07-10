@@ -84,7 +84,7 @@ async fn peer_invites_submit(
 
     validate_invite_delivery_consistency(&body, &delivery, state)?;
 
-    // The inviter is the actor that signed the durable `ck.invite.create`
+    // The inviter is the actor that signed the durable `ak.invite.create`
     // event; it is the `peer` we test `blocked_subjects` and the
     // `consent_grant` evidence against (spec invite-addressing.md §2 / §5).
     let actor = body
@@ -590,7 +590,7 @@ pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolic
 
 /// Read the subject's private `invite_receive_policy`, falling back to the
 /// recommended default. `blocked_subjects` written by
-/// `ck.self.contact.command.tombstone(block_peer)` are merged from the in-memory
+/// `ak.self.contact.command.tombstone(block_peer)` are merged from the in-memory
 /// override store.
 pub(crate) fn resolve_invite_receive_policy(
     state: &AppState,

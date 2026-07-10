@@ -20,9 +20,9 @@ pub fn router() -> Router {
 
 pub fn protocol_router() -> Router {
     Router::new()
-        // Spec `realm_read` group (`ck.self.realm.*`).
+        // Spec `realm_read` group (`ak.self.realm.*`).
         .push(space::protocol_router())
-        // Spec `read_cursor` group (`ck.self.read_cursor.*`), canonical path
+        // Spec `read_cursor` group (`ak.self.read_cursor.*`), canonical path
         // `/_arkret/self/read-cursors`.
         .push(
             Router::with_path("read-cursors")

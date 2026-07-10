@@ -1,10 +1,10 @@
-//! MIU-SOL-1 (R3.2, arkret-spec @ b56cab1) — `ck.member.identity.update`
+//! MIU-SOL-1 (R3.2, arkret-spec @ b56cab1) — `ak.member.identity.update`
 //! payload deny check for the removed handle fields.
 //!
 //! `MemberIdentity` no longer carries handle lifecycle: `primary_handle`
 //! (top-level), `handles[]` (the deleted `VerifiedHandle` array), and the
 //! `verified_handle` `$def` are all gone. Handle lifecycle lives solely on
-//! `ck.schema.handle_claim.v1`. Any envelope still carrying one of these
+//! `ak.schema.handle_claim.v1`. Any envelope still carrying one of these
 //! fields — at the payload top level or inside the plaintext
 //! `identity_payload.member_identity` carrier — MUST be rejected as a
 //! `schema_violation` with reason
@@ -18,7 +18,7 @@ use crate::error::reasons;
 /// Fields that MemberIdentity / its update payload MUST NOT carry post-R3.2.
 const FORBIDDEN_HANDLE_FIELDS: &[&str] = &["primary_handle", "handles", "verified_handle"];
 
-/// Reject a `ck.member.identity.update` payload that still carries any
+/// Reject a `ak.member.identity.update` payload that still carries any
 /// removed handle field. Checks the payload top level and the plaintext
 /// `identity_payload.member_identity` carrier (encrypted carriers are
 /// opaque and skipped).

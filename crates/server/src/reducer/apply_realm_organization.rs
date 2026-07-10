@@ -1,12 +1,12 @@
-//! SOL-ORG-02 / SOL-ORG-03 — `ck.realm.organization` relationship-statement
+//! SOL-ORG-02 / SOL-ORG-03 — `ak.realm.organization` relationship-statement
 //! reducer + projection.
 //!
 //! ## Model
 //!
-//! `ck.realm.organization` carries an **organization-authorized Realm
+//! `ak.realm.organization` carries an **organization-authorized Realm
 //! relationship statement or revocation** (spec event-kind-registry +
 //! `event-payload.schema.json#/$defs/realm_organization_payload`). It is NOT
-//! Realm mutable metadata: the cell family `ck.component.realm.organization.v1`
+//! Realm mutable metadata: the cell family `ak.component.realm.organization.v1`
 //! is a `cas_register` keyed by the composite subject
 //! `(organization_id, relationship)`, so distinct
 //! `(organization_id, relationship)` pairs form independent cells and an
@@ -17,7 +17,7 @@
 //!
 //! Accepting a relationship requires BOTH:
 //!   1. **Realm side** — the event must be admitted into Realm history by a bootstrap path or by an
-//!      actor holding `ck.realm.admin` (enforced at ingest in the routing/authz layer, not here —
+//!      actor holding `ak.realm.admin` (enforced at ingest in the routing/authz layer, not here —
 //!      the reducer runs after admission). A human OIDC session only proves the executor's
 //!      identity; it never by itself creates organization principal control.
 //!   2. **Organization side** — the statement's `authorization` must pass the SDK
@@ -41,9 +41,9 @@ use arkret_sdk::models::{
 use super::{ProjectionEffect, ProjectionState, RealmOrganizationStatementState};
 
 impl ProjectionState {
-    /// Project a `ck.realm.organization` relationship statement.
+    /// Project a `ak.realm.organization` relationship statement.
     ///
-    /// Cell family: `ck.component.realm.organization.v1` (cas-register,
+    /// Cell family: `ak.component.realm.organization.v1` (cas-register,
     /// composite subject `(organization_id, relationship)`).
     ///
     /// On an `active` statement that passes the organization-side verifier the
@@ -173,7 +173,7 @@ impl ProjectionState {
         }
     }
 
-    /// SOL-ORG-02 — the canonical `ck.component.realm.organization.v1` cell id
+    /// SOL-ORG-02 — the canonical `ak.component.realm.organization.v1` cell id
     /// for a `(organization_id, relationship)` pair. The subject form mirrors
     /// the SDK `RealmOrganization::subject_for_effect` (`{org}::{rel}`).
     pub(crate) fn realm_organization_cell_id(
@@ -181,14 +181,14 @@ impl ProjectionState {
         relationship: &str,
     ) -> Option<arkret_sdk::CellRef> {
         arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.organization.v1:{organization_id}::{relationship}"
+            "ak:cell:ak.component.realm.organization.v1:{organization_id}::{relationship}"
         ))
         .ok()
     }
 
     // ── SOL-ORG-05 — verified-relationship + effective-policy reads ──
 
-    /// Every `ck.realm.organization` relationship statement projected for
+    /// Every `ak.realm.organization` relationship statement projected for
     /// `realm_id`, regardless of status / validity. Admin / audit surfaces use
     /// this to render revoked / expired history; the verified-relationship and
     /// policy-inheritance reads use the filtered helpers below.
@@ -218,7 +218,7 @@ impl ProjectionState {
             .collect()
     }
 
-    /// SOL-ORG-05 — `true` iff some active, in-window `ck.realm.organization`
+    /// SOL-ORG-05 — `true` iff some active, in-window `ak.realm.organization`
     /// statement endorses `realm_id` with a `control_scope` covering `scope`.
     /// This is the only basis on which organization policy inheritance for the
     /// matching policy facet may apply; `owning_organizations` no longer
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn sol_org_06_lifecycle_phase_split() {
         // SOL-ORG-06 read contract: the org-relationship projection the
-        // `ck.self.realm_organization.query.list` handler reads must expose
+        // `ak.self.realm_organization.query.list` handler reads must expose
         // BOTH the active and the revoked statement, with exactly the active,
         // in-window one classified `verified_active` (the others
         // `revoked_or_expired`). An org with a currently-verified statement is

@@ -24,12 +24,12 @@ the canonical SDK error code.
 
 ## Trust-domain immutability
 
-A Realm's `trust_domain` is locked at creation (`ck.realm.create`) and
+A Realm's `trust_domain` is locked at creation (`ak.realm.create`) and
 cannot change. Wire events whose `trust_domain` does not match the
 locked value reject with `cross_domain_replay_rejected`. This means:
 
 - An operator who renames `SOLAND_TRUST_DOMAIN` mid-lifetime invalidates
-  every outstanding `ck.cross_signing.reset` proof for that deployment.
+  every outstanding `ak.cross_signing.reset` proof for that deployment.
   Do not rename without a planned key-rotation ceremony.
 - Federation peers see the trust domain on `/_arkret/describe`
   and pin it into the `Destination-Trust-Domain` header on every
@@ -49,7 +49,7 @@ locked value reject with `cross_domain_replay_rejected`. This means:
    list every peer; hub deployments list only the upstream. Restart
    each side (or hot-reload via `routing::admin::federation` once it
    lands).
-3. **Smoke-test a low-impact event.** Send a `ck.directory.refresh`
+3. **Smoke-test a low-impact event.** Send a `ak.directory.refresh`
    (or any other read-side event) and confirm it lands on the peer.
    Watch the peer's `soland_federation_outbox_depth` gauge return to
    zero and the per-peer trace span close cleanly.

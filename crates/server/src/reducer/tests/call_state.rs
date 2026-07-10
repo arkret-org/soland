@@ -1,8 +1,8 @@
 use super::*;
 use crate::reducer::*;
 
-// W2 — `ck.realm.media_service` projects the per-Realm media_service epoch
-// cell consumed by the CKP-0010 token exchange. An empty `foci[]` is
+// W2 — `ak.realm.media_service` projects the per-Realm media_service epoch
+// cell consumed by the AKP-0010 token exchange. An empty `foci[]` is
 // rejected so a Realm cannot advertise a media service with no focus.
 #[test]
 fn media_service_projects_cell_and_rejects_empty_foci() {
@@ -44,7 +44,7 @@ fn media_service_projects_cell_and_rejects_empty_foci() {
         ProjectionEffect::RealmMediaServiceProjected { .. }
     ));
     let cell_id = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.realm.media_service.v1:{realm}"
+        "ak:cell:ak.component.realm.media_service.v1:{realm}"
     ))
     .unwrap();
     let value = state
@@ -60,7 +60,7 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
     let call_id = "ak:call:01904100-0000-7000-8000-c0000000000a";
 
-    // §4.2 — the first `ck.call.state` MUST open in `{scheduled, ringing,
+    // §4.2 — the first `ak.call.state` MUST open in `{scheduled, ringing,
     // connecting}`; `ringing` is the immediate-call entry state.
     assert!(matches!(
         state.apply(
@@ -100,7 +100,7 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
         ProjectionEffect::CallStateProjected { .. }
     ));
     let cell_id =
-        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+        arkret_sdk::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
     let value = state
         .cell_value(&cell_id)
         .expect("call.state cell projected");
@@ -141,7 +141,7 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
 }
 
 /// `webrtc-signaling.md` §3a — `removed_participants[]` (the ban set that gates
-/// media-token re-issue) is monotonic: a later `ck.call.state` event that omits
+/// media-token re-issue) is monotonic: a later `ak.call.state` event that omits
 /// the field MUST NOT clear committed bans, since the cell is overwritten
 /// wholesale on every event.
 #[test]
@@ -151,7 +151,7 @@ fn call_state_removed_participants_ban_set_is_monotonic() {
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
     let call_id = "ak:call:01904100-0000-7000-8000-c0000000000b";
     let cell_id =
-        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+        arkret_sdk::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
 
     assert!(matches!(
         state.apply(
@@ -211,7 +211,7 @@ fn call_state_removed_participants_ban_set_is_monotonic() {
 
 /// `call-state.md` §4 — `participant_mute_overrides[]` is the current
 /// moderator override set, not an append-only audit trail. A later
-/// `ck.call.state` event can remove an override by writing a replacement array.
+/// `ak.call.state` event can remove an override by writing a replacement array.
 #[test]
 fn call_state_participant_mute_overrides_are_current_set() {
     let mut state = ProjectionState::new();
@@ -219,7 +219,7 @@ fn call_state_participant_mute_overrides_are_current_set() {
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
     let call_id = "ak:call:01904100-0000-7000-8000-c0000000000c";
     let cell_id =
-        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+        arkret_sdk::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
 
     assert!(matches!(
         state.apply(
@@ -431,7 +431,7 @@ fn call_state_same_basis_sibling_state_conflict_projects_bottom() {
     ));
 
     let cell_id =
-        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+        arkret_sdk::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
     let bottom = match state.cell(&cell_id) {
         Some(CellState::Bottom(bottom)) => bottom,
         other => panic!("expected call state bottom, got {other:?}"),
@@ -667,7 +667,7 @@ fn call_summary_requires_terminal_state_and_is_write_once() {
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
     let call_id = "ak:call:01904100-0000-7000-8000-c0000000000e";
 
-    // §7 — a summary for a call with no terminal `ck.call.state` head rejects.
+    // §7 — a summary for a call with no terminal `ak.call.state` head rejects.
     assert!(matches!(
         state.apply(
             &make_operation(

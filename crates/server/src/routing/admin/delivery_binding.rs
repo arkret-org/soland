@@ -4,7 +4,7 @@
 //! Endpoints:
 //!
 //! - `GET /_soland/admin/realms/{realm_id}/delivery-binding-policy` — projected
-//!   `ck.component.realm.delivery_binding_policy.v1` cas-register value for a Realm (security
+//!   `ak.component.realm.delivery_binding_policy.v1` cas-register value for a Realm (security
 //!   boundary). Mirrors the wire shape sodmin's `RealmDeliveryBindingPolicy` DTO consumes via
 //!   `sodmin/src/api/delivery_binding.rs::get_delivery_binding_policy`.
 //!
@@ -12,7 +12,7 @@
 //! [`crate::reducer::ProjectionState::realm_delivery_binding_policy_cell_value`]
 //! (keyed by the Realm boundary id). Operator mutation (PATCH / PUT) is
 //! intentionally not exposed here yet; policy changes strand through the
-//! regular `ck.realm.delivery_binding_policy` event submit path.
+//! regular `ak.realm.delivery_binding_policy` event submit path.
 
 use arkret_sdk::RealmId;
 use salvo::http::StatusCode;
@@ -46,7 +46,7 @@ pub struct RealmDeliveryBindingPolicyOutcome {
     pub updated_at: Option<String>,
 }
 
-/// Translate the raw `ck.component.realm.delivery_binding_policy.v1`
+/// Translate the raw `ak.component.realm.delivery_binding_policy.v1`
 /// cell value into the typed response DTO. Unknown / missing fields
 /// fall back to defaults so callers can rely on the typed shape even
 /// while projection storage is sparse. Once the projection mirror table

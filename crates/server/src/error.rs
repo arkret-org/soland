@@ -139,7 +139,7 @@ pub mod reasons {
     pub const RANGE_COMPLETENESS_ACTOR_SEQ_GAP: &str =
         core_error::REASON_RANGE_COMPLETENESS_ACTOR_SEQ_GAP;
 
-    // ── CKP-0007 (spec b7d35be / floor 2b0d70d) — Circle reason codes.
+    // ── AKP-0007 (spec b7d35be / floor 2b0d70d) — Circle reason codes.
     //
     // The six new sub-reasons registered against `failed_precondition`
     // / `schema_violation` for the Circle invariants in
@@ -169,7 +169,7 @@ pub mod reasons {
     pub const PEER_UNRESOLVABLE: &str = core_error::REASON_PEER_UNRESOLVABLE;
     pub const KEYPACKAGE_UNKNOWN: &str = core_error::REASON_KEYPACKAGE_UNKNOWN;
 
-    /// CKP-0007 reason codes registered in this round. Test scaffolding
+    /// AKP-0007 reason codes registered in this round. Test scaffolding
     /// uses this slice to assert the full set is surfaced through
     /// `crate::error::reasons`.
     pub const CKP_0007: &[&str] = &[

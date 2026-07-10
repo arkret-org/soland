@@ -235,7 +235,7 @@ pub(super) fn agent_key_state_from_record(record: &Value) -> Value {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// CKP-0010 — agent participation policy (set / get).
+// AKP-0010 — agent participation policy (set / get).
 //
 // Stands up the cross-project HTTP contract at the same fidelity as the
 // sibling agent handlers (audit-log row + typed response), but performs
@@ -243,7 +243,7 @@ pub(super) fn agent_key_state_from_record(record: &Value) -> Value {
 // "inner scope MUST NOT exceed the outer ceiling" invariant is enforced
 // at the edge. Persistence into `agent_participation`, ceiling
 // resolution from the realm/circle/strand policy projection,
-// capability-grant materialization (`ck.capability.grant` / `revoke`),
+// capability-grant materialization (`ak.capability.grant` / `revoke`),
 // and the dispatcher mention gate are P2-impl — matching the rest of
 // this surface.
 // ─────────────────────────────────────────────────────────────────────

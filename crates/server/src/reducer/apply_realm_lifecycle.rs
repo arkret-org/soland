@@ -60,7 +60,7 @@ impl ProjectionState {
                         );
                         return ProjectionEffect::Ignored;
                     };
-                    // R1.2 — `ck.realm.delivery_binding_policy` enforcement.
+                    // R1.2 — `ak.realm.delivery_binding_policy` enforcement.
                     // Without a projected policy cell, fail-closed for
                     // routable joins per spec join-policy.md §5.1.3 —
                     // there is no DID Document fallback path.
@@ -203,11 +203,11 @@ impl ProjectionState {
         }
 
         // Synthesize the FSM cell state. Cell ref shape per spec
-        // `ak:cell:ck.component.member.state.v1:<actor_id>` — note the
+        // `ak:cell:ak.component.member.state.v1:<actor_id>` — note the
         // cell_subject is `actor_id` (per-actor), not (realm_id, actor)
         // composite. The Realm scoping is implicit in the CellStore key.
         if let Ok(cell_id) =
-            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.member.state.v1:{member}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{member}"))
         {
             self.cells.insert(
                 cell_id,
@@ -217,7 +217,7 @@ impl ProjectionState {
 
         // join-policy.md §7 — project the candidate profile-private
         // application / review / cancel sub-payloads carried on this
-        // `ck.member.state` event into the application-review workflow cache.
+        // `ak.member.state` event into the application-review workflow cache.
         self.project_member_application(operation);
 
         ProjectionEffect::MembershipChanged {
@@ -251,7 +251,7 @@ impl ProjectionState {
             },
         );
         if let Ok(cell_id) =
-            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.member.state.v1:{creator}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{creator}"))
         {
             self.cells
                 .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
@@ -316,14 +316,14 @@ impl ProjectionState {
         }
     }
 
-    /// COT-06-004 — apply `ck.realm.set_default_strand`. Points the Realm's
+    /// COT-06-004 — apply `ak.realm.set_default_strand`. Points the Realm's
     /// `default_strand_id` at `payload.strand_id`. The named Strand MUST already be
     /// projected in this Realm (else `failed_precondition` — no dangling
     /// pointer). Optional `expected_default_strand_id` is an optimistic-
     /// concurrency CAS guard: when present it MUST equal the current
     /// `default_strand_id` (or both null), else `cas_mismatch`.
     ///
-    /// Authorization (actor holds `ck.realm.set_default_strand` / `ck.realm.admin`
+    /// Authorization (actor holds `ak.realm.set_default_strand` / `ak.realm.admin`
     /// on the Realm, or owns it) is enforced at ingest in
     /// `routing::events::operations::policy::validate_set_default_strand_policy`,
     /// mirroring the ban / moderation capability gates. The reducer does the
@@ -409,21 +409,21 @@ impl ProjectionState {
         }
     }
 
-    /// SOL-ORG-01 — the soland-local cell family that backs `ck.realm.update`
+    /// SOL-ORG-01 — the soland-local cell family that backs `ak.realm.update`
     /// mutable Realm metadata (owner / title / security_class /
     /// federation_policy) and its CAS-register / bottom / conflict-repair
     /// mechanics. It is keyed by `realm_id` (singleton per Realm).
     ///
-    /// This is deliberately NOT `ck.component.realm.organization.v1`: that
+    /// This is deliberately NOT `ak.component.realm.organization.v1`: that
     /// cell family is the organization-authorized relationship statement
-    /// surface (`ck.realm.organization`, cell subject
+    /// surface (`ak.realm.organization`, cell subject
     /// `(organization_id, relationship)`) and must not be overwritten by
     /// Realm metadata patches. Spec's event-kind-registry declares no
-    /// dedicated cell family for `ck.realm.update`; the source of truth for
+    /// dedicated cell family for `ak.realm.update`; the source of truth for
     /// Realm metadata is the `realm_states` object projection, and this cell
     /// only exists to drive the concurrent-update conflict resolution.
     pub(crate) fn realm_metadata_cell_id(realm_id: &str) -> Option<CellRef> {
-        CellRef::new(format!("ak:cell:ck.component.realm.metadata.v1:{realm_id}")).ok()
+        CellRef::new(format!("ak:cell:ak.component.realm.metadata.v1:{realm_id}")).ok()
     }
 
     pub(crate) fn realm_update_conflict_basis(operation: &Operation) -> Option<String> {
@@ -671,9 +671,9 @@ impl ProjectionState {
     /// Apply a `ck.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
     /// of the former Realm lifecycle reducer: the function is now
     /// restricted to the canonical Realm lifecycle kinds
-    /// (`ck.realm.create`, `ck.realm.update`, `ck.realm.archive`,
-    /// `ck.realm.tombstone`, `ck.realm.destroy`). Space-container lifecycle
-    /// (`ck.space.create` / `update` / `parent` / `archive` / `restore`
+    /// (`ak.realm.create`, `ak.realm.update`, `ak.realm.archive`,
+    /// `ak.realm.tombstone`, `ak.realm.destroy`). Space-container lifecycle
+    /// (`ak.space.create` / `update` / `parent` / `archive` / `restore`
     /// / `tombstone`) is handled by `apply_space_container_*`
     /// in this same impl block — they were already separate methods
     /// before this rename, so no extraction was needed.
@@ -989,7 +989,7 @@ impl ProjectionState {
                 realm.active_profiles.push(profile);
             }
         }
-        // Lock trust_domain on first observation (ck.realm.create). The
+        // Lock trust_domain on first observation (ak.realm.create). The
         // mismatch case is already rejected above; here we only set the
         // value when it has not yet been captured.
         if realm.trust_domain.is_none()
@@ -1043,7 +1043,7 @@ impl ProjectionState {
         match kind {
             k if k == arkret_sdk::events::kinds::REALM_CREATE => {
                 if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-                    "ak:cell:ck.component.realm.create.v1:{realm_id}"
+                    "ak:cell:ak.component.realm.create.v1:{realm_id}"
                 )) {
                     let entry = serde_json::json!({
                         "owner": owner,
@@ -1099,7 +1099,7 @@ impl ProjectionState {
             }
             k if k == arkret_sdk::events::kinds::REALM_ARCHIVE => {
                 if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-                    "ak:cell:ck.component.realm.archive.v1:{realm_id}"
+                    "ak:cell:ak.component.realm.archive.v1:{realm_id}"
                 )) {
                     let mut value = serde_json::Map::new();
                     value.insert(
@@ -1124,7 +1124,7 @@ impl ProjectionState {
             }
             k if k == arkret_sdk::events::kinds::REALM_FREEZE => {
                 if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-                    "ak:cell:ck.component.realm.freeze.v1:{realm_id}"
+                    "ak:cell:ak.component.realm.freeze.v1:{realm_id}"
                 )) {
                     let mut value = serde_json::Map::new();
                     value.insert(
@@ -1157,7 +1157,7 @@ impl ProjectionState {
                 // cell with `successor_realm_id` so peers hydrating from
                 // cells alone can distinguish migration from destroy.
                 if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-                    "ak:cell:ck.component.realm.tombstone.v1:{realm_id}"
+                    "ak:cell:ak.component.realm.tombstone.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "tombstoned",
@@ -1176,7 +1176,7 @@ impl ProjectionState {
             k if k == arkret_sdk::events::kinds::REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-                    "ak:cell:ck.component.realm.destroy.v1:{realm_id}"
+                    "ak:cell:ak.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "destroyed",
@@ -1199,7 +1199,7 @@ impl ProjectionState {
         }
     }
 
-    /// Stream-F (Wave 1B + Wave 2C) — `ck.realm.destroy` child-cascade.
+    /// Stream-F (Wave 1B + Wave 2C) — `ak.realm.destroy` child-cascade.
     /// Spec `realm-and-space.md` §2.5.1:
     ///   ¶6 child Space-container placement (same Realm) → mark
     ///      `realm_destroyed_orphan` (locked read-only projection).
@@ -1210,7 +1210,7 @@ impl ProjectionState {
     ///      parent edge is downgraded so membership / capability /
     ///      history / E2EE / retention stops propagating across the
     ///      destroy frontier.
-    /// CKP-0007: `Strand.discussion_realm_ref` is a removed wire field.
+    /// AKP-0007: `Strand.discussion_realm_ref` is a removed wire field.
     /// Intra-Realm discussion boundaries now live on a Circle
     /// (`scope_circle_id`) and never cross the Realm frontier, so no
     /// cross-Realm discussion cascade is required here.
@@ -1277,8 +1277,8 @@ impl ProjectionState {
             }
         }
 
-        // CKP-0007: no cross-Realm discussion edges to sever — Circles
-        // are intra-Realm and `ck.realm.destroy` already tombstones their
+        // AKP-0007: no cross-Realm discussion edges to sever — Circles
+        // are intra-Realm and `ak.realm.destroy` already tombstones their
         // parent Realm; further Circle writes fall under the terminal
         // admission check in `event_log::validate_event_envelope`.
 
@@ -1291,7 +1291,7 @@ impl ProjectionState {
     }
 
     /// Stream-F (Wave 1B + Wave 2C) — apply a
-    /// `ck.audit.erasure_receipt` event. Stores the receipt in
+    /// `ak.audit.erasure_receipt` event. Stores the receipt in
     /// [`ProjectionState::erasure_receipts`] with validated `outcome` +
     /// `scope.storage_boundary` + `fanout_status` fields. The receipt
     /// is durable; this projection cache backs the

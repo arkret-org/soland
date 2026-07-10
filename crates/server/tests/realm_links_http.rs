@@ -1,6 +1,6 @@
 //! G3.S5 — HTTP integration tests for the realm-links surface:
 //!
-//! - `POST /_arkret/self/realms/{realm_id}/links` — create / status-flip a `ck.realm.link`.
+//! - `POST /_arkret/self/realms/{realm_id}/links` — create / status-flip a `ak.realm.link`.
 //! - `DELETE /_arkret/self/realms/{realm_id}/links/{target_realm_id}` — tombstone an existing link.
 //! - `GET /_arkret/self/realms/{realm_id}/effective-policy` — read the merged effective policy
 //!   (walks the inheritance chain).
@@ -49,7 +49,7 @@ const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbb2";
 const REALM_C: &str = "ak:realm:01904100-0000-7000-8000-ccccccccccc3";
 const REALM_D: &str = "ak:realm:01904100-0000-7000-8000-ddddddddddd4";
 
-/// Submit a `ck.realm.inheritance_policy` event directly through the
+/// Submit a `ak.realm.inheritance_policy` event directly through the
 /// reducer (the dedicated HTTP route is the standard `/_arkret/self/events`
 /// envelope path; for setup we bypass it by injecting an Operation
 /// into the projection).
@@ -75,7 +75,7 @@ fn project_inheritance_policy(
 }
 
 /// G3.S5 — happy path: POST a `governed_by` link from B → A, GET the
-/// effective policy on B (after an explicit `ck.realm.inheritance_policy`
+/// effective policy on B (after an explicit `ak.realm.inheritance_policy`
 /// opt-in) and assert the chain walked back to A.
 #[tokio::test]
 async fn realm_links_post_parent_then_effective_policy_walks_chain() {
@@ -307,7 +307,7 @@ async fn realm_links_post_self_link_rejected() {
 }
 
 /// G3.S5 — effective-policy on a Realm with no
-/// `ck.realm.inheritance_policy` declaration MUST report
+/// `ak.realm.inheritance_policy` declaration MUST report
 /// `inheritance_mode = "none"` with an empty chain (spec §5 — no
 /// implicit cascade).
 #[tokio::test]

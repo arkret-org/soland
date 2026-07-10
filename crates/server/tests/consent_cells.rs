@@ -408,7 +408,7 @@ async fn consent_events_project_cells_and_contact_gate() {
     assert_eq!(granted["state"], "active");
     assert_eq!(
         granted["cell_id"],
-        format!("ak:cell:ck.component.consent.grant.v1:{consent_id}")
+        format!("ak:cell:ak.component.consent.grant.v1:{consent_id}")
     );
     assert!(
         granted["grant_dots"]
@@ -501,7 +501,7 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
 /// (alice) an active `invite` consent grant via the reducer path, the
 /// holder's `GET /_arkret/self/contacts` row for bob MUST surface that
 /// grant's event ref in `invite_consent_grant_ref`. The ref is the event
-/// id of bob's `ck.consent.grant`, so alice can hand it back to bob as
+/// id of bob's `ak.consent.grant`, so alice can hand it back to bob as
 /// `consent_grant` introduction evidence. Direction self-check: the row is
 /// alice's view of a bob→alice grant; when alice later invites bob into a
 /// Realm, bob's server verifies "subject=bob gave inviter=alice an
@@ -646,8 +646,8 @@ async fn invite_receive_policy_get_set_round_trips() {
     assert_eq!(rejected.status_code.unwrap().as_u16(), 403);
 }
 
-/// Spec contact-and-direct-conversation.md §3 — `ck.self.contact.command.respond(accept)`
-/// MUST write a target-controlled `ck.consent.grant` per granted scope. The
+/// Spec contact-and-direct-conversation.md §3 — `ak.self.contact.command.respond(accept)`
+/// MUST write a target-controlled `ak.consent.grant` per granted scope. The
 /// minted grant dot uses the event-bearing `{event_id}:{seq}` form, so the
 /// holder's `GET /_arkret/self/contacts` row for the peer surfaces a canonical
 /// `ak:event:<uuid>` `invite_consent_grant_ref` (no longer `None`). End to end:

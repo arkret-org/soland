@@ -67,8 +67,8 @@ pub(super) async fn validate_member_state_policy(
     if realm_owner_matches(state, operation.realm_id.as_str(), actor).await {
         return Ok(());
     }
-    // P1 — a non-owner MAY ban iff they hold `ck.realm.admin` on this Realm
-    // (capabilities.md §16 — `ck.realm.admin` governs `ck.member.state`
+    // P1 — a non-owner MAY ban iff they hold `ak.realm.admin` on this Realm
+    // (capabilities.md §16 — `ak.realm.admin` governs `ak.member.state`
     // writes). The owner implicitly holds admin and already returned above;
     // this reads the projected capability grant index via
     // SolandAuthzEngine::check. fail-closed: anything other than an explicit
@@ -93,9 +93,9 @@ pub(super) async fn validate_member_state_policy(
     Err("missing_capability")
 }
 
-/// COT-06-004 — capability gate for `ck.realm.set_default_strand`. Mirrors the
+/// COT-06-004 — capability gate for `ak.realm.set_default_strand`. Mirrors the
 /// ban / moderation gates: the actor MUST own the Realm or hold
-/// `ck.realm.set_default_strand` (or the broader `ck.realm.admin`) on it.
+/// `ak.realm.set_default_strand` (or the broader `ak.realm.admin`) on it.
 /// fail-closed `missing_capability` otherwise. Peer/service-originated
 /// federation operations (no `sender`) stay accepted for convergence/backfill.
 pub(super) async fn validate_set_default_strand_policy(
@@ -121,7 +121,7 @@ pub(super) async fn validate_set_default_strand_policy(
     }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     // A grant of either the precise action or the broad realm-admin action
-    // authorizes the write. `ck.realm.admin` aggregates Realm governance, so
+    // authorizes the write. `ak.realm.admin` aggregates Realm governance, so
     // an admin holder need not also hold the narrow set_default_strand action.
     for action in ["ak.realm.set_default_strand", "ak.realm.admin"] {
         if state
@@ -190,10 +190,10 @@ pub(super) async fn verify_realm_organization_proof_signature(
         .map_err(|_| "organization_statement_unverified")
 }
 
-/// SOL-ORG-03 — two-sided authorization gate for `ck.realm.organization`.
+/// SOL-ORG-03 — two-sided authorization gate for `ak.realm.organization`.
 ///
 ///   - **Realm side**: the actor admitting the statement into Realm history MUST own the Realm or
-///     hold `ck.realm.admin` on it. A plain OIDC human session only proves the executor's identity;
+///     hold `ak.realm.admin` on it. A plain OIDC human session only proves the executor's identity;
 ///     it does not by itself create organization principal control, so the executor still needs the
 ///     Realm-admin capability. fail-closed `missing_capability` otherwise.
 ///   - **Organization side**: the statement MUST pass the SDK fail-closed verifier. Delegated
@@ -230,7 +230,7 @@ pub(super) async fn validate_realm_organization_policy(
         verify_realm_organization_proof_signature(state, &payload).await?;
     }
 
-    // Realm side — owner or `ck.realm.admin`. The executor identity comes from
+    // Realm side — owner or `ak.realm.admin`. The executor identity comes from
     // the envelope sender / authorization.executed_by; a bare OIDC session is
     // not sufficient on its own.
     let Some(actor) = operation.actor() else {
@@ -267,13 +267,13 @@ pub(super) async fn validate_realm_organization_policy(
 /// Realm, or own the Realm. fail-closed `missing_capability` otherwise.
 ///
 /// Action mapping (capability-action-registry.json and policy-server.md):
-/// - `ck.moderation.decision`            → governance policy action or narrow decision action
-/// - `ck.moderation.decision.lift`       → governance policy action or narrow lift action
-/// - `ck.moderation.appeal.submit`       → action `ck.moderation.appeal.submit`
-/// - `ck.moderation.appeal.{review,decision,close}` → action `ck.moderation.appeal.review`
+/// - `ak.moderation.decision`            → governance policy action or narrow decision action
+/// - `ak.moderation.decision.lift`       → governance policy action or narrow lift action
+/// - `ak.moderation.appeal.submit`       → action `ak.moderation.appeal.submit`
+/// - `ak.moderation.appeal.{review,decision,close}` → action `ak.moderation.appeal.review`
 ///   (aggregate_admin: one review capability covers review / decision / close — §5.5.1 table note).
 ///
-/// `ck.moderation.appeal.close` additionally admits the appellant-withdrawal
+/// `ak.moderation.appeal.close` additionally admits the appellant-withdrawal
 /// path: an appellant closing their own appeal (closer == cell appellant)
 /// needs no review capability (§5.5.2).
 pub(super) async fn validate_moderation_event_policy(

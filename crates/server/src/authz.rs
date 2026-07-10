@@ -279,7 +279,7 @@ impl SolandAuthzEngine {
 
     /// P1 — projection-driven index maintenance.
     ///
-    /// The capability grant cell (`ck.component.capability.grant.v1`) is the
+    /// The capability grant cell (`ak.component.capability.grant.v1`) is the
     /// source of truth; this engine's in-memory map is a read-side index over
     /// it (`SolandAuthzEngine::check` still reads the map). The reducer
     /// projects grant / revoke / delegate into cells, then the projection
@@ -293,7 +293,7 @@ impl SolandAuthzEngine {
     }
 
     /// P1 — mark a projected grant revoked in the read index (idempotent).
-    /// Mirrors a `ck.capability.revoke` cell observed-remove. No-op if the
+    /// Mirrors a `ak.capability.revoke` cell observed-remove. No-op if the
     /// grant_id is unknown to the index (the cell tombstone is authoritative;
     /// the index simply has nothing to filter yet).
     pub fn mark_projected_grant_revoked(&self, grant_id: &str) {
@@ -595,7 +595,7 @@ fn circle_local_management_action_requires_explicit_grant(action: &str) -> bool 
 
 /// Check if a grant resource pattern matches the requested resource.
 ///
-/// CKP-0007 / SEL-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
+/// AKP-0007 / SEL-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
 /// the spec resource-selector enum admits `realm`, `space`, `strand`,
 /// `morph`, `circle`, `actor`. soland's resource matcher accepts the
 /// `ak:circle:<uuid>` typed-id form alongside the existing space /
@@ -1041,9 +1041,9 @@ fn evaluate_constraint(
             None
         }
         Constraint::AllowedCircleIds { allowed_circle_ids } => {
-            // CKP-0007 (spec b7d35be) — narrow a Circle-management
-            // capability (`ck.circle.manage`, `ck.circle.member.manage`,
-            // `ck.circle.member.add.others`, `ck.circle.audit`) to a
+            // AKP-0007 (spec b7d35be) — narrow a Circle-management
+            // capability (`ak.circle.manage`, `ak.circle.member.manage`,
+            // `ak.circle.member.add.others`, `ak.circle.audit`) to a
             // specific Circle id set. The spec
             // `capability-action-registry.json` declares
             // `required_constraints=["allowed_circle_ids"]` on each
@@ -1193,7 +1193,7 @@ impl MergedAuthzDecision {
 }
 
 /// G3.S2 — integration helper. Runs the local capability check first;
-/// if it allows AND the realm has a `ck.realm.policy_server` config,
+/// if it allows AND the realm has a `ak.realm.policy_server` config,
 /// calls the remote policy server. Merges the two decisions per the
 /// spec rule "deny if either denies; allow only if both allow", then
 /// runs the remote response's obligations through the executor.

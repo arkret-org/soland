@@ -299,7 +299,7 @@ fn morph_lifecycle_preflight_tolerates_unknown_morph() {
 
 // ── Strand position events (move / reorder) ──
 
-/// `ck.strand.move` / `ck.strand.reorder` touch the Strand projection's
+/// `ak.strand.move` / `ak.strand.reorder` touch the Strand projection's
 /// `updated_at` / `updated_by` but do NOT change state. Cell-write
 /// happens on the Move/Seal pipeline (out of scope here).
 #[test]
@@ -635,7 +635,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
 
 // ── Strand tracks update ──
 
-/// `ck.strand.tracks.update` touches Strand.updated_at but never flips
+/// `ak.strand.tracks.update` touches Strand.updated_at but never flips
 /// lifecycle state. Parent Strand must be Active or the touch is
 /// rejected with `strand_not_active` (defence-in-depth in the reducer,
 /// mirroring the admission preflight).

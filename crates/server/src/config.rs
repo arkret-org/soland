@@ -104,7 +104,7 @@ pub struct AppConfig {
     pub jws_replay_window_seconds: u64,
     /// Per-cell-family replay-window overrides.
     /// Some cell families have different freshness requirements than the
-    /// global default — e.g. `ck.component.notary.v1` (Realm-wide
+    /// global default — e.g. `ak.component.notary.v1` (Realm-wide
     /// authority cell) needs a much tighter window than chat messages.
     /// When a Move's `effects[]` touch any cell whose family appears in
     /// this map, the **minimum** override across touched families wins
@@ -112,12 +112,12 @@ pub struct AppConfig {
     /// families without an override.
     ///
     /// Production default (built by [`AppConfig::default_replay_overrides`]):
-    /// - `ck.component.notary.v1` → 60s (very fresh — Realm-wide pause risk)
-    /// - `ck.component.mls.epoch.v1` → 60s (E2EE fork risk)
-    /// - `ck.component.consent.grant.v1` → 120s (capability-equivalent)
-    /// - `ck.component.capability.grant.v1` → 120s
-    /// - `ck.component.capability.delegate.v1` → 120s
-    /// - `ck.component.capability.derived.v1` → 120s
+    /// - `ak.component.notary.v1` → 60s (very fresh — Realm-wide pause risk)
+    /// - `ak.component.mls.epoch.v1` → 60s (E2EE fork risk)
+    /// - `ak.component.consent.grant.v1` → 120s (capability-equivalent)
+    /// - `ak.component.capability.grant.v1` → 120s
+    /// - `ak.component.capability.delegate.v1` → 120s
+    /// - `ak.component.capability.derived.v1` → 120s
     pub jws_replay_window_per_family: std::collections::BTreeMap<&'static str, u64>,
     /// Base64-encoded 32-byte ed25519 seed for the NotaryWorker
     /// signing identity (env `SOLAND_NOTARY_SIGNING_KEY`). When `Some(_)`
@@ -131,7 +131,7 @@ pub struct AppConfig {
     /// fails fast at startup with a clear error.
     pub notary_signing_key_seed: Option<[u8; 32]>,
     /// Per-deployment Ed25519 seed used by the reference agent runtime
-    /// to sign `audit_binding` blocks on `ck.agent.interop_session.result`
+    /// to sign `audit_binding` blocks on `ak.agent.interop_session.result`
     /// events. When `None` (default), the bridge falls back to
     /// `REFERENCE_AGENT_AUDIT_ED25519_SEED` — fine for dev / reference
     /// deployments but provides no real authentication because every
@@ -156,7 +156,7 @@ pub struct AppConfig {
     ///
     /// Behavior when `use_keystore=false`: only the env-loaded seed is honored.
     pub use_keystore: bool,
-    /// Federation fanout topology. The on-the-wire shape is `ck.peer.events.command.submit`
+    /// Federation fanout topology. The on-the-wire shape is `ak.peer.events.command.submit`
     /// under `/_arkret/peer/events`; the topology only changes which peer set
     /// receives accepted Event fanout.
     ///
@@ -267,7 +267,7 @@ pub struct AppConfig {
     /// Env: `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` (default 50).
     pub compaction_prune_walk_per_realm_limit: usize,
     /// Round R2/R3 (T08) — deployment trust domain id, used to bind
-    /// `ck.cross_signing.reset` events to this Principal Server so the
+    /// `ak.cross_signing.reset` events to this Principal Server so the
     /// same proof bytes cannot be replayed cross-domain. Loaded from
     /// `SOLAND_TRUST_DOMAIN` (must match `ak:trust_domain:<scope>`,
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
@@ -285,7 +285,7 @@ pub struct AppConfig {
     /// `test_config()` to keep their fixture IDs stable.
     /// Env: `SOLAND_SEED_DEMO_DATA` (default false).
     pub seed_demo_data: bool,
-    /// G3.S9 — when true, soland claims `ck.profile.sovereign_enclave.v1`
+    /// G3.S9 — when true, soland claims `ak.profile.sovereign_enclave.v1`
     /// on `/server/describe` and enforces the enclave invariants
     /// (`routing::extensions::sovereign::assert_enclave_invariants`):
     /// outbound federation OFF, DID resolver method allow-list
@@ -298,7 +298,7 @@ pub struct AppConfig {
     /// Comma-separated env var
     /// `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS`.
     pub sovereign_enclave_allowed_outbound_hosts: Vec<String>,
-    /// When true, soland claims the `ck.profile.candidate.join_policy.v1`
+    /// When true, soland claims the `ak.profile.candidate.join_policy.v1`
     /// candidate profile and exposes the product-local join-policy
     /// member-application read surface
     /// (`GET /_soland/self/realms/{realm_id}/applications`,
@@ -311,7 +311,7 @@ pub struct AppConfig {
     pub candidate_join_policy_enabled: bool,
     /// Stream-F (Wave 2C) — cross-Principal-Server erasure-receipt
     /// propagation window in milliseconds. After a
-    /// `ck.audit.erasure_receipt` is accepted, the federation fanout
+    /// `ak.audit.erasure_receipt` is accepted, the federation fanout
     /// worker waits up to this many ms for every peer to acknowledge.
     /// Peers that don't respond inside the window flip the receipt's
     /// top-level `fanout_status` to `incomplete`. Spec

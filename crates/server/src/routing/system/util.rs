@@ -160,7 +160,7 @@ fn hex_digit(byte: u8) -> Option<u8> {
 
 /// Pull **every** occurrence of `key` from the query string as repeated args
 /// (e.g. `?realms=A&realms=B&realms=C`) — required for spec C17
-/// `ck.self.events.query.scan` / `ck.self.events.stream.subscribe` selectors which accept
+/// `ak.self.events.query.scan` / `ak.self.events.stream.subscribe` selectors which accept
 /// `realms[]` ∪ `actors[]`. `+` decoded to space; empty values dropped.
 pub fn query_param_all(req: &Request, key: &str) -> Vec<String> {
     let Some(query) = req.uri().query() else {
@@ -320,7 +320,7 @@ pub fn is_valid_discoverability(value: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// CKP-0008 / CKP-0009 (B-D, P2-G) — soland's inbound DID validator
+    /// AKP-0008 / AKP-0009 (B-D, P2-G) — soland's inbound DID validator
     /// MUST route through the SDK `Did::new` parser. Regression guard so
     /// the wire ingress points (event_log envelope, agents.rs handlers,
     /// account.register, etc.) stay aligned with the spec DID format.

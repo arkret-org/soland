@@ -343,7 +343,7 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     OperationId::new(format!("ak:operation:{suffix}")).ok()
 }
 
-/// CKP-0007 — resolve the canonical `effective_scope` for an Event
+/// AKP-0007 — resolve the canonical `effective_scope` for an Event
 /// Envelope on read. Returns `Some(circle_id)` when the envelope (or its
 /// payload) names a Circle scope, `Some("realm:<realm_id>")` when the
 /// scope is the Realm default, or `None` when neither can be derived.
@@ -707,7 +707,7 @@ fn sdk_audience(value: &Value) -> Option<Audience> {
 }
 
 /// SPEC-SOL-003 — pre-acceptance validation for the durable
-/// `ck.device.revoke` Control Move. v1 scaffold scope: only the principal
+/// `ak.device.revoke` Control Move. v1 scaffold scope: only the principal
 /// may revoke its own sibling devices (recovery-service revocation lands
 /// with the recovery strands), and a device MUST NOT revoke itself
 /// (`device-lifecycle.md` §2.2 self-lockout rule). The principal-control
@@ -810,11 +810,11 @@ fn circle_event_visible_to_session(
 }
 
 /// Scan the projected cell or durable Event store for the most recent
-/// `ck.realm.read_receipt_policy` event in `realm_id` and return its typed
+/// `ak.realm.read_receipt_policy` event in `realm_id` and return its typed
 /// SDK policy payload. Returns `None` when no policy event has been written
 /// for this Realm; callers use `ReadReceiptPolicy::default()`.
 ///
-/// Used by ephemeral `ck.receipt.read` admission and future receipt fanout
+/// Used by ephemeral `ak.receipt.read` admission and future receipt fanout
 /// handlers to enforce the Realm policy.
 ///
 /// **Note**: this is a linear scan of the durable event store. For the
@@ -825,15 +825,15 @@ pub async fn effective_read_receipt_policy_for_realm(
     realm_id: &str,
 ) -> Option<arkret_sdk::ReadReceiptPolicy> {
     // Cell-keyed fast path. The Move/Seal pipeline writes the
-    // `ck.component.realm.read_receipt_policy.v1` resolved CasRegister
+    // `ak.component.realm.read_receipt_policy.v1` resolved CasRegister
     // value into `ProjectionState::cells` after every apply_seal; we
     // read directly from there. (R1.2 renamed the cell family from
-    // `ck.component.realm.read_receipt_policy.v1` along with the event
+    // `ak.component.realm.read_receipt_policy.v1` along with the event
     // kind.)
     {
         let proj = state.projection.lock();
         let cell_id = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.read_receipt_policy.v1:{realm_id}"
+            "ak:cell:ak.component.realm.read_receipt_policy.v1:{realm_id}"
         ))
         .ok()?;
         if let Some(value) = proj.cell_value(&cell_id) {

@@ -34,7 +34,7 @@ use crate::state::{AppState, RealmDirectoryEntry, SessionRecord, TypingRecord};
 use crate::wire::now;
 use crate::{JsonResult, ids, json_ok};
 
-/// Spec `realm_read` operation group (`ck.self.realm.*`): Realm lifecycle read,
+/// Spec `realm_read` operation group (`ak.self.realm.*`): Realm lifecycle read,
 /// full export, and Realm moderation-policy effective/set. Canonical path
 /// `/_arkret/self/realms/{realm_id}*`.
 pub(super) fn protocol_router() -> Router {
@@ -895,7 +895,7 @@ pub async fn realm_id_accessible_for_id(
 /// ## Recovery read design decision (non-member organizational recovery)
 ///
 /// §2.10.8 requires that the organization holding the RRK can retrieve the
-/// Realm's RRK-targeted `ck.realm_key.share` ciphertext events "after all member
+/// Realm's RRK-targeted `ak.realm_key.share` ciphertext events "after all member
 /// devices are lost or all members leave" — i.e. while it is NOT a member of the
 /// Realm and may never have been. The spec leaves "how a non-member org is
 /// authorized to read realm events" as an open surface. soland resolves it with
@@ -906,7 +906,7 @@ pub async fn realm_id_accessible_for_id(
 ///   `durability_policy.recovery_recipients[].principal_id` is granted realm *scan admission* (so
 ///   `events.query` does not `not_found` it), but
 /// - the per-event recovery filter ([`realm_recovery_event_visible`]) restricts such a session to
-///   ONLY `ck.realm_key.share` events whose `recipient_principal_id` is that same recovery
+///   ONLY `ak.realm_key.share` events whose `recipient_principal_id` is that same recovery
 ///   recipient. The recovery org never sees the general timeline, message bodies, membership, or
 ///   shares addressed to other recipients.
 ///
@@ -943,7 +943,7 @@ pub async fn realm_recovery_recipient_principal(
 
 /// encryption-and-audit.md §2.10.8 — per-event recovery visibility. For a
 /// recovery-recipient (non-member) session, an event is visible ONLY when it is
-/// a `ck.realm_key.share` addressed to that recipient's `principal_id`. Used by
+/// a `ak.realm_key.share` addressed to that recipient's `principal_id`. Used by
 /// the `events.query` per-event filter to keep the recovery face narrow.
 pub fn realm_recovery_event_visible(
     event_kind: &str,
@@ -1179,7 +1179,7 @@ async fn realm_public_content_for_id(state: &AppState, realm_id: &str) -> bool {
 }
 
 /// Number of Realm members other than `exclude_actor`. Used to report the
-/// realm-broadcast fan-out breadth for relayed `ck.call.signal` envelopes
+/// realm-broadcast fan-out breadth for relayed `ak.call.signal` envelopes
 /// (`webrtc-signaling.md` §5) without resolving the per-device recipient set.
 pub fn realm_member_count_excluding(state: &AppState, realm_id: &str, exclude_actor: &str) -> u64 {
     let Ok(realm_id_value) = RealmId::new(realm_id.to_owned()) else {
@@ -1408,7 +1408,7 @@ pub async fn typing_ephemeral_for_realm(
             })
         })
         .collect();
-    // `webrtc-signaling.md` §5 — fold relayed `ck.call.signal` envelopes into
+    // `webrtc-signaling.md` §5 — fold relayed `ak.call.signal` envelopes into
     // the same per-Realm `ephemeral` segment as a typed item so canonical
     // signals reach subscribers. Each envelope is delivered verbatim (proof
     // intact) so the receiver verifies the signature itself.
@@ -1552,7 +1552,7 @@ fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
         .any(|field| object.get(*field).and_then(Value::as_str) == Some(sender))
 }
 
-/// `webrtc-signaling.md` §5 / §7 — relayed `ck.call.signal` records a given
+/// `webrtc-signaling.md` §5 / §7 — relayed `ak.call.signal` records a given
 /// subscriber should receive for `realm_id`: non-expired, excluding the
 /// subscriber's own device self-echo (a same-actor *other* device is retained
 /// so multi-device fan-out works).
@@ -1599,7 +1599,7 @@ async fn pending_call_signal_records_for_subscriber(
         .collect()
 }
 
-/// Deliver the relayed `ck.call.signal` envelopes for `session` and advance the
+/// Deliver the relayed `ak.call.signal` envelopes for `session` and advance the
 /// per-subscriber-device deliver-once watermark to the highest position
 /// delivered this round (incremental and full sync both advance it, so a full
 /// sync re-aligns a reconnecting device's watermark instead of leaving it
@@ -1623,7 +1623,7 @@ pub async fn deliver_call_signal_envelopes_for_subscriber(
 }
 
 /// `webrtc-signaling.md` §5 — whether `realm_id` has at least one relayed
-/// `ck.call.signal` envelope still pending delivery to `session` (used to keep
+/// `ak.call.signal` envelope still pending delivery to `session` (used to keep
 /// incremental syncs from skipping a Realm whose only change is a live call
 /// signal). Read-only: this peek must NOT advance the watermark, otherwise the
 /// subsequent delivery would skip the very signal it gated on.

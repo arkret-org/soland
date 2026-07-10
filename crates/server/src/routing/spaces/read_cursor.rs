@@ -1,6 +1,6 @@
-//! Read cursor (`ck.self.read_cursor.*`) handlers.
+//! Read cursor (`ak.self.read_cursor.*`) handlers.
 //!
-//! Protocol writes use `ck.read_cursor.advance` actor-private events; the
+//! Protocol writes use `ak.read_cursor.advance` actor-private events; the
 //! resulting account-private state is consumed through projection/account sync.
 //! Mounted on the protocol surface at `/_arkret/self/read-cursors*`.
 

@@ -2,14 +2,14 @@
 
 > 勘察快照,截至 d28714b。本文「现状基线」描述以该 commit 为准,后续实现演进可能使其失真。
 
-支撑 CKP-0016(agent 参与策略)落地所需、当前缺失或 stub 的四个 soland 子系统的完整设计。真源协议见 `arkret-spec/spec/v1/proposals/0016-agent-participation-policy.md` 与 CKP-0008/0009。
+支撑 AKP-0016(agent 参与策略)落地所需、当前缺失或 stub 的四个 soland 子系统的完整设计。真源协议见 `arkret-spec/spec/v1/proposals/0016-agent-participation-policy.md` 与 AKP-0008/0009。
 
 设计原则:复用现有事件管线与 reducer/cell 投影模型,不另起并行栈;字段顺序与 spec 一致;直接改现有 SQL;无兼容层。
 
 现状基线(已勘察):
 - 事件提交:`routing/events/event_log.rs::submit_event_value` → `store.put(CanonicalEventRecord)` → `routing/events/projection.rs::project_accepted_operations_from_device` → `reducer.rs::ProjectionState::apply` 经 `APPLY_REGISTRY`(`kind → apply_*`)分发。
-- reducer 范式:`apply_circle_update`(tighten-only floor + 字段 patch)、`apply_realm_policy_components`(floor ratchet + cell write `ck.component.realm.policy_components.v1`)、`apply_realm_policy_server`(cell + side-band BTreeMap 缓存)。
-- capability grant:存于 cell `ck:cell:ck.component.capability.grant.v1:<capability_id>`,authz 经 `capability_grant_cells` / `grants_for_realm` 读取;`ck.capability.derived` 已注册 reducer(`apply_capability_derived_dispatch`)——capability 事件→cell 的先例。
+- reducer 范式:`apply_circle_update`(tighten-only floor + 字段 patch)、`apply_realm_policy_components`(floor ratchet + cell write `ak.component.realm.policy_components.v1`)、`apply_realm_policy_server`(cell + side-band BTreeMap 缓存)。
+- capability grant:存于 cell `ak:cell:ak.component.capability.grant.v1:<capability_id>`,authz 经 `capability_grant_cells` / `grants_for_realm` 读取;`ak.capability.derived` 已注册 reducer(`apply_capability_derived_dispatch`)——capability 事件→cell 的先例。
 - 消息:`apply_message` 仅写 `MessageState`,无 fanout。
 - 通知:**无** NotificationStore / fanout / mention→notification。mention 仅在 `wire_validators/mention.rs` + `routing/events/operations.rs::validate_mentions` 做语法校验。
 - session:`routing/identity/auth.rs::authenticated_session` 直接验证 session grant + DPoP,成功后返回 SDK `SessionLoginOutcome`;无 `agent_key_proof`、无 `scope_details`。
@@ -18,7 +18,7 @@
 
 ## S0(共享底座)— 服务端内部 durable event 发射器
 
-S1、S2 都需要服务端"主动"写入 durable event(controller 调 `participation.set` 时由服务端编排出 `ck.capability.grant`)。当前 `submit_event_value` 是 client-driven(需 actor proof + actor_seq 单调)。新增一个 server-originated 旁路:
+S1、S2 都需要服务端"主动"写入 durable event(controller 调 `participation.set` 时由服务端编排出 `ak.capability.grant`)。当前 `submit_event_value` 是 client-driven(需 actor proof + actor_seq 单调)。新增一个 server-originated 旁路:
 
 ```rust
 // routing/events/server_emit.rs (新文件)
@@ -43,9 +43,9 @@ pub(crate) async fn emit_server_event(
 
 ---
 
-## S1 — Capability grant 物化(`ck.capability.grant` / `ck.capability.revoke`)
+## S1 — Capability grant 物化(`ak.capability.grant` / `ak.capability.revoke`)
 
-**目标**:`participation.set` 中 `reply`/`act_on_behalf` effective 为真 → 发射 `ck.capability.grant`(agent 为 subject,scope 为 resource);为假 → `ck.capability.revoke`。读侧(authz `grants_for_realm` 读 grant cell)已存在,只补写侧。
+**目标**:`participation.set` 中 `reply`/`act_on_behalf` effective 为真 → 发射 `ak.capability.grant`(agent 为 subject,scope 为 resource);为假 → `ak.capability.revoke`。读侧(authz `grants_for_realm` 读 grant cell)已存在,只补写侧。
 
 ### 事件与 reducer
 - 事件 kind 直接使用 SDK 常量:`arkret_sdk::events::kinds::{CAPABILITY_GRANT, CAPABILITY_REVOKE}`;soland 不再新增或 re-export 旧别名。
@@ -55,7 +55,7 @@ pub(crate) async fn emit_server_event(
 fn apply_capability_grant(&mut self, op: &Operation) -> ProjectionEffect {
     // payload: { capability_id, issuer, subject, actions[], resources[], constraints[], expires_at }
     let cap_id = op.payload.get("capability_id").and_then(Value::as_str)...; // reject if missing
-    let cell = CellRef::new(format!("ak:cell:ck.component.capability.grant.v1:{cap_id}"))?;
+    let cell = CellRef::new(format!("ak:cell:ak.component.capability.grant.v1:{cap_id}"))?;
     // 校验:issuer 有 ak.capability.grant 授权(已有 authz 引擎);subject/resources 格式;
     //       resources 的 realm_id == op.realm_id。
     self.cells.insert(cell, CellState::Value(grant_value));      // 与现有 grant 读侧同 schema
@@ -70,16 +70,16 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 `routing/identity/agents.rs::set_agent_participation` 在落库后:
 1. 由 effective(已算)推导目标 grant:
    - `reply=true` → actions `["ak.message.create","ak.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `arkret_sdk::authz::ResourceSelector`)。
-   - `act_on_behalf=true` → 追加 CKP-0008 §4.10 act-on-behalf grant(constraints:`approval_required`/`controller_approval_required`)。
-2. capability_id 确定性派生:`ck:capability:` + `hash(agent_principal_id, scope_key, "reply"|"aob")` → 同 scope 同 bit 复用一条 grant,幂等。
+   - `act_on_behalf=true` → 追加 AKP-0008 §4.10 act-on-behalf grant(constraints:`approval_required`/`controller_approval_required`)。
+2. capability_id 确定性派生:`ak:capability:` + `hash(agent_principal_id, scope_key, "reply"|"aob")` → 同 scope 同 bit 复用一条 grant,幂等。
 3. effective bit=true 且 grant 不存在/已 revoked → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_GRANT, payload)`;bit=false 且 grant active → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_REVOKE, {capability_id})`。
 4. 与 `put_selection` 同一 handler 内顺序执行;任一步失败返回 `AppError::internal`,不留半物化(grant 发射放在 selection 落库之后,失败时记录 audit 供重试)。
 
 `grant.attach`/`grant.detach`/`agent.deactivate` 的同类 TODO 用同一 `emit_server_event` 收敛。
 
 ### 验收
-- `participation.set reply=true` 后 `grants_for_realm` 能查到该 agent 的 `ck.message.create` grant;`reply=false` 后该 grant `revoked=true`。
-- agent 以自身 actor 提交 `ck.message.create` 到该 scope,authz 通过;无 grant 时 fail closed。
+- `participation.set reply=true` 后 `grants_for_realm` 能查到该 agent 的 `ak.message.create` grant;`reply=false` 后该 grant `revoked=true`。
+- agent 以自身 actor 提交 `ak.message.create` 到该 scope,authz 通过;无 grant 时 fail closed。
 
 ---
 
@@ -87,11 +87,11 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 
 **目标**:把 `agent_participation` ceiling 写进 reducer 与 `agent_participation_ceiling` 表(participation.set 的 `resolve_effective_ceiling` 读侧已就绪)。
 
-### Realm ceiling(`ck.realm.policy_components` 的 `agent_participation` 组件)
+### Realm ceiling(`ak.realm.policy_components` 的 `agent_participation` 组件)
 扩展 `apply_realm_policy_components`(reducer.rs):
 - payload 含 `agent_participation.native_agent.{reply,accept_third_party_mention,act_on_behalf}` 时:
   - tighten-only 校验:与 deployment 默认 ceiling 比较(`AgentParticipation::ALL` 为 dev 默认;部署可经 sovereign profile 收紧),用 `arkret_sdk::models::validate_agent_participation_tightens(parent, child)`;违反 → `ProjectionEffect::Rejected { reason: "agent_participation_ceiling_widen" }`(已注册 error code)。
-  - 写 cell `ck:cell:ck.component.realm.policy_components.v1:<realm_id>`(已存在,合并字段)。
+  - 写 cell `ak:cell:ak.component.realm.policy_components.v1:<realm_id>`(已存在,合并字段)。
   - **投影到 ceiling 表**:`ProjectionEffect` 触发把 `{scope_kind:"realm", scope_key:"realm:<uuid>", realm_id, bits}` UPSERT 进 `agent_participation_ceiling`(经 S2 的 ceiling store 写方法,见下)。
 
 ### Circle / Strand ceiling
@@ -109,13 +109,13 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 
 ## S3 — Notification fanout dispatcher(从零)
 
-**目标**:消息创建时派生 per-recipient notification,应用既有覆盖规则 + **CKP-0016 §9.4.5 第三方 mention gate**,并推送给 floria。这是最大的新子系统;分阶段。
+**目标**:消息创建时派生 per-recipient notification,应用既有覆盖规则 + **AKP-0016 §9.4.5 第三方 mention gate**,并推送给 floria。这是最大的新子系统;分阶段。
 
 ### 数据模型(直接建表)
 新迁移列 / 表(改现有 `migrations` 下相关 up.sql;notification 属新表):
 ```sql
 CREATE TABLE notification (
-    notification_id   TEXT PRIMARY KEY,          -- ck:notification:<uuid>
+    notification_id   TEXT PRIMARY KEY,          -- ak:notification:<uuid>
     recipient_id      TEXT NOT NULL,             -- actor DID(可为 agent principal)
     realm_id          TEXT NOT NULL,
     source_event_id   TEXT NOT NULL,
@@ -141,20 +141,20 @@ pub(crate) async fn dispatch_message_notifications(
 ) -> ();
 ```
 流程:
-1. **解析 target**:从 `msg.content.mentions[]` 提取 `subject_id`(direct)与 `audience_mention`(broadcast);从 Strand watch cell 提取 watcher(`ck.strand.watch.set` 已有投影)。
+1. **解析 target**:从 `msg.content.mentions[]` 提取 `subject_id`(direct)与 `audience_mention`(broadcast);从 Strand watch cell 提取 watcher(`ak.strand.watch.set` 已有投影)。
 2. **逐 recipient gate**(顺序与 spec §9.4 覆盖序一致):
    - 去重:同 `(actor, source_event_id, type=mention)` 最多一条。
    - 发送者自我 mention 默认不通知。
    - `level=muted` / 个人 blocklist / DND / `dont_notify` push rule 覆盖。
-   - **agent 第三方 mention gate(CKP-0016 §9.4.5)**:若 recipient 是 native personal agent(`actor_kind="agent"` 或 `agent_principal` 表命中)且 mention 作者 ≠ 该 agent 的 controller(经 `ck.identity.accountability_grant` 解析)且 effective `accept_third_party_mention=false`(读 `agent_participation` selection ∩ `agent_participation_ceiling`,即复用 `resolve_effective_ceiling` + selection)→ **跳过该 recipient**,不写 notification、不入队。
+   - **agent 第三方 mention gate(AKP-0016 §9.4.5)**:若 recipient 是 native personal agent(`actor_kind="agent"` 或 `agent_principal` 表命中)且 mention 作者 ≠ 该 agent 的 controller(经 `ak.identity.accountability_grant` 解析)且 effective `accept_third_party_mention=false`(读 `agent_participation` selection ∩ `agent_participation_ceiling`,即复用 `resolve_effective_ceiling` + selection)→ **跳过该 recipient**,不写 notification、不入队。
 3. **落库**:`NotificationStore::put`(合并 reason set;reply/assignment/reaction/watch 与 mention 命中同 recipient 时合并为单行)。
 4. **入队 push**:对有 push device 的 recipient,构造 frame 调用既有 `routing/interop/push_outbound`(floria),受 `max_recipients` / rate-limit / review gate(audience mention)约束;不得先推后撤。
 
 ### 接入点
-`routing/events/projection.rs` 处理 `ProjectionEffect::MessageCreated`(及 revise 的新增 mention)处,`spawn` 调 `dispatch_message_notifications`(或推入轻量队列 worker)。同一处也覆盖 `ck.message.revise` 仅对"新增 mention"派生(spec §9.4)。
+`routing/events/projection.rs` 处理 `ProjectionEffect::MessageCreated`(及 revise 的新增 mention)处,`spawn` 调 `dispatch_message_notifications`(或推入轻量队列 worker)。同一处也覆盖 `ak.message.revise` 仅对"新增 mention"派生(spec §9.4)。
 
 ### 读取 API
-`GET /_arkret/self/notifications`(新 operation,后续补)读 `NotificationStore` 返回 recipient 的 inbox;agent runtime 经此 + `ck.self.events.stream.subscribe` 投影获得被允许的 mention。
+`GET /_arkret/self/notifications`(新 operation,后续补)读 `NotificationStore` 返回 recipient 的 inbox;agent runtime 经此 + `ak.self.events.stream.subscribe` 投影获得被允许的 mention。
 
 ### 验收
 - alice @bob(普通)→ bob 收到 notification + push。
@@ -168,8 +168,8 @@ pub(crate) async fn dispatch_message_notifications(
 **目标**:agent runtime 通过 `ak.session.grant` direct presentation 拿到 resolved 参与契约。当前 session-grant introspection outcome 需要覆盖 agent scope_details 与 agent_key_proof 分支。
 
 ### proof_kind 分支
-`SessionGrantIntrospectRequestBody.proof` 携带 `proof_kind` 所需证明；`agent_key_proof` 时走 agent 分支并携带 `agent_scope_request{realm_ids[], strand_ids[], track_names[]}`(`ck.profile.agent_auth.v1` overlay,见 CKP-0008 §4.6)。session-grant introspection:
-- `agent_key_proof`:校验 key 被 active 未撤销 `ck.agent.key.authorize` 授权 + challenge/audience/digest/nonce/expiry binding(CKP-0008 §4.6 校验链),不走 coauth human 分支;TTL ≤ 15min。
+`SessionGrantIntrospectRequestBody.proof` 携带 `proof_kind` 所需证明；`agent_key_proof` 时走 agent 分支并携带 `agent_scope_request{realm_ids[], strand_ids[], track_names[]}`(`ak.profile.agent_auth.v1` overlay,见 AKP-0008 §4.6)。session-grant introspection:
+- `agent_key_proof`:校验 key 被 active 未撤销 `ak.agent.key.authorize` 授权 + challenge/audience/digest/nonce/expiry binding(AKP-0008 §4.6 校验链),不走 coauth human 分支;TTL ≤ 15min。
 - 返回类型扩展:在 session-grant introspection outcome 中返回 `granted_scope[]` 与:
 
 ```jsonc
@@ -205,4 +205,4 @@ S3(notification dispatcher)── 最大,独立子系统;mention gate 依赖 par
 - 每个子系统落地后回填 `_agents_todos.md` 对应项与 commit hash;cotest 真实联调在 S1–S4 就绪后统一跑。
 
 ## 与 spec 的关系
-本设计是 soland 实现侧落点,不改协议语义;CKP-0016 与已 merge 的 normative 文本(capabilities §5.4、strand-and-message §9.4.5、realm-and-space §2、circle 字段表、private-objects §4.1)是真源。若实现中发现 spec 不完善,先改 spec 再改码。
+本设计是 soland 实现侧落点,不改协议语义;AKP-0016 与已 merge 的 normative 文本(capabilities §5.4、strand-and-message §9.4.5、realm-and-space §2、circle 字段表、private-objects §4.1)是真源。若实现中发现 spec 不完善,先改 spec 再改码。

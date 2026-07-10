@@ -22,8 +22,8 @@ fn accepts_cleartext_verification_content() {
     assert!(validate_device_message_target(&payload).is_ok());
 }
 
-/// §10.7 `ck.secret.request` carries only a one-time HPKE public key in
-/// cleartext; `ck.secret.send` is HPKE-sealed under its own shape. Both MUST
+/// §10.7 `ak.secret.request` carries only a one-time HPKE public key in
+/// cleartext; `ak.secret.send` is HPKE-sealed under its own shape. Both MUST
 /// pass the transport-shape validator.
 #[test]
 fn accepts_secret_share_content() {

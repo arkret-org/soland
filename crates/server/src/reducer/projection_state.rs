@@ -52,7 +52,7 @@ pub struct ProjectionState {
     /// Structured side-band cache keyed by
     /// `(realm_id, actor_id)`. Holds the FSM state value plus `role` /
     /// `joined_at` / `updated_at` side-band data that doesn't fit in the
-    /// `ck.component.member.state.v1` FSM cell itself. Reads should go
+    /// `ak.component.member.state.v1` FSM cell itself. Reads should go
     /// through helpers like [`ProjectionState::members_of_realm`] /
     /// [`ProjectionState::members_in_state`] / [`ProjectionState::member`]
     /// rather than touching this directly.
@@ -61,8 +61,8 @@ pub struct ProjectionState {
     /// against the FSM state field, not stored as separate collections.
     pub members: BTreeMap<(String, String), SolandMembershipState>,
     /// Server-side invite projection keyed by `invite_id`.
-    /// `ck.invite.third_party` creates pending third-party invites and
-    /// `ck.invite.claim` converts them into DID-targeted claimed invites.
+    /// `ak.invite.third_party` creates pending third-party invites and
+    /// `ak.invite.claim` converts them into DID-targeted claimed invites.
     pub invites: BTreeMap<String, InviteProjection>,
     /// Signed key-backup active-series records keyed by `(actor_id,
     /// backup_class)`. Recovery MUST use this pointer instead of inferring the
@@ -91,7 +91,7 @@ pub struct ProjectionState {
     /// populated from the Move/Seal pipeline's `apply_seal` write-back.
     ///
     /// Keyed by canonical `CellRef` (e.g.
-    /// `ak:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`).
+    /// `ak:cell:ak.component.realm.read_receipt_policy.v1:<realm_id>`).
     /// Each successful apply_seal (`routing::federation::move_seal::submit_seal` or
     /// `crate::notary::NotaryWorker`) calls
     /// [`ProjectionState::reload_cells_from_store`] to refresh this map for
@@ -106,12 +106,12 @@ pub struct ProjectionState {
     ///     `cell_value`.
     ///   - `memberships` / `banned_members` / `knocking_members` (FSM) — replaced by flat
     ///     `members: BTreeMap<(String, String), SolandMembershipState>` cache + per-actor
-    ///     `ck.component.member.state.v1` FSM cell.
+    ///     `ak.component.member.state.v1` FSM cell.
     ///   - `realm_states` (mixed: ordered-log + cas-register) — kept as structured `realm_states`
     ///     side-band cache (server-side `created_at`/`updated_at`/`deleted` flag) BUT every
-    ///     `apply_realm_lifecycle` now also writes one of: `ck.component.realm.create.v1`
-    ///     (ordered-log, append) / `ck.component.realm.metadata.v1` (cas-register, latest
-    ///     metadata) / `ck.component.realm.destroy.v1` (cas-register, terminal). Helpers:
+    ///     `apply_realm_lifecycle` now also writes one of: `ak.component.realm.create.v1`
+    ///     (ordered-log, append) / `ak.component.realm.metadata.v1` (cas-register, latest
+    ///     metadata) / `ak.component.realm.destroy.v1` (cas-register, terminal). Helpers:
     ///     `realm_create_log` / `realm_metadata_cell_value` / `realm_is_destroyed` query cells
     ///     directly. Durable-event-only fields (`messages` / `reactions` / `read_cursors` /
     ///     `relations` / `redactions`) stay structured per spec (those event kinds have no
@@ -123,16 +123,16 @@ pub struct ProjectionState {
     /// `arkret-spec/v1/zh/models/common-fields.md §5.1` for `ck.space.*`
     /// lifecycle events. Used by `event_log::submit_event` to reject
     /// invalid transitions with HTTP 412 before persisting. Reducer applies
-    /// `ck.space.create` / update / parent / archive / restore / tombstone;
+    /// `ak.space.create` / update / parent / archive / restore / tombstone;
     /// mirror table is the `projection_space_containers` durable table.
     pub space_containers: BTreeMap<String, SpaceContainerProjection>,
     /// Server-side Strand projection. Mirrors the canonical state-machine
     /// for ak.strand.create / update / archive / restore. Unlike Space
-    /// there is no dedicated `ck.strand.tombstone` event; terminal state
+    /// there is no dedicated `ak.strand.tombstone` event; terminal state
     /// is reached via `ck.redaction`. Mirror table is `projection_strands`
     /// (durable).
     pub strands: BTreeMap<String, StrandProjection>,
-    /// CKP-0007 — server-side Circle projection. Mirrors the canonical
+    /// AKP-0007 — server-side Circle projection. Mirrors the canonical
     /// state-machine for `ck.circle.*` lifecycle / membership events
     /// (spec b7d35be `zh/models/circle.md`). Keyed by `circle_id`
     /// (`ak:circle:<uuid>`); membership and parent-Realm binding live in
@@ -149,17 +149,17 @@ pub struct ProjectionState {
     /// Server-side Applet registry projection, keyed by `service_did`
     /// (the canonical applet identity per spec
     /// `extensions/applet-integration.md`). Populated by
-    /// `ck.applet.registration` (initial registration / re-registration)
-    /// and updated by `ck.applet.discovery` (manifest refresh). Used by
+    /// `ak.applet.registration` (initial registration / re-registration)
+    /// and updated by `ak.applet.discovery` (manifest refresh). Used by
     /// `GET /_soland/admin/applets` admin snapshot. Protocol-session
-    /// events (`ck.applet.interop_session.{start,status}`,
-    /// `ck.applet.bridge_error`) are NOT mirrored here — sessions are
+    /// events (`ak.applet.interop_session.{start,status}`,
+    /// `ak.applet.bridge_error`) are NOT mirrored here — sessions are
     /// ephemeral and the applet bridge state machine lives client-side.
     pub applets: BTreeMap<String, AppletProjection>,
     /// Server-side Agent registry projection, keyed by `agent_id`.
-    /// Same shape as `applets`. Populated by `ck.agent.endpoint`.
+    /// Same shape as `applets`. Populated by `ak.agent.endpoint`.
     /// Protocol-session events for agents
-    /// (`ck.agent.interop_session.{start,status,result}`) are also not
+    /// (`ak.agent.interop_session.{start,status,result}`) are also not
     /// mirrored — see `applets` rationale.
     pub agents: BTreeMap<String, SolandAgentProjection>,
     /// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — FSM lifecycle
@@ -169,40 +169,40 @@ pub struct ProjectionState {
     /// (no transition out, no resume after).
     pub agent_lifecycles: BTreeMap<String, AgentLifecycleState>,
     /// Actor-private action approval queue keyed by `request_id`.
-    /// `ck.agent.action_request` creates pending entries; approve/reject
+    /// `ak.agent.action_request` creates pending entries; approve/reject
     /// resolves them, and pause/deactivate cancels every still-pending request
     /// for the target agent before any future endpoint can be registered.
     pub agent_action_requests: BTreeMap<String, AgentActionRequestProjection>,
-    /// CKP-0008 §4.5 / D3 — accepted, non-revoked agent key authorizations
+    /// AKP-0008 §4.5 / D3 — accepted, non-revoked agent key authorizations
     /// keyed by `agent_principal_id`. An entry is the set of authorized
     /// `key_id`s the agent currently holds (cleared on
-    /// `ck.agent.key.revoke`). The capability evaluator reads this to decide
+    /// `ak.agent.key.revoke`). The capability evaluator reads this to decide
     /// whether `effective_after_first_authorized_key` grants have activated:
     /// an agent with at least one entry has completed runtime pairing.
     pub agent_authorized_keys: BTreeMap<String, BTreeSet<String>>,
-    /// R3 spec-sync — `ck.call.state.session_focus` write-once projection
+    /// R3 spec-sync — `ak.call.state.session_focus` write-once projection
     /// keyed by `call_id`. Once a focus is committed for a call, the
     /// reducer rejects any subsequent write with
     /// `session_focus_already_committed` (REDU-3).
     pub call_session_focus: BTreeMap<String, String>,
-    /// Per-field heads for `ck.call.state` fsm dimensions. Keyed by
+    /// Per-field heads for `ak.call.state` fsm dimensions. Keyed by
     /// `(call_id, field_name)` and used only to detect same-basis sibling
     /// writes that target the same fsm dimension with different values.
     pub call_state_field_heads: BTreeMap<(String, String), CallStateFieldHead>,
     /// R3.1 — Realm-link projection. Outer key is the source
-    /// `realm_id` (the envelope `realm_id` of a `ck.realm.link` event);
+    /// `realm_id` (the envelope `realm_id` of a `ak.realm.link` event);
     /// the inner Vec accumulates every directed link the Realm has
     /// declared, including non-`active` status entries (so admin tooling
     /// can render `rejected` / `tombstoned` history). Cell-canonical
     /// values live in `cells` under
-    /// `ck.component.realm.link.v1` keyed by `(realm, target, link_kind)`;
+    /// `ak.component.realm.link.v1` keyed by `(realm, target, link_kind)`;
     /// this is the structured side-band cache used by the query API.
     pub realm_links: BTreeMap<String, Vec<RealmLinkState>>,
     /// R3.1 — inverse index of [`Self::realm_links`] keyed by the
     /// target `realm_id`. Lets the query API answer
     /// `direction=inbound` in O(1) without a full scan.
     pub realm_links_inbound: BTreeMap<String, Vec<RealmLinkState>>,
-    /// R3.2 — `ck.realm.inheritance_policy` projection, keyed by the
+    /// R3.2 — `ak.realm.inheritance_policy` projection, keyed by the
     /// child `realm_id` (the envelope `realm_id`). Cas-register
     /// semantics — last write wins.
     pub realm_inheritance_policies: BTreeMap<String, RealmInheritancePolicyState>,
@@ -216,17 +216,17 @@ pub struct ProjectionState {
     /// `realm_inheritance_policies` map used by the single-source aggregate read.
     pub realm_inheritance_policies_by_source:
         BTreeMap<(String, String), RealmInheritancePolicyState>,
-    /// R3.2 — `ck.capability.derived` projection, keyed by
+    /// R3.2 — `ak.capability.derived` projection, keyed by
     /// `capability_id`. Cas-register semantics — last write wins per
     /// capability.
     pub capability_derived: BTreeMap<String, CapabilityDerivedState>,
-    /// SOL-ORG-02 — `ck.realm.organization` relationship-statement
+    /// SOL-ORG-02 — `ak.realm.organization` relationship-statement
     /// projection, keyed by `(realm_id, organization_id, relationship)`.
     /// Cas-register semantics per `(organization_id, relationship)` cell
     /// subject — the latest statement (active or revoked) wins. Multiple
     /// owner / governance / sponsor / directory_certifier relationships for
     /// the same Realm coexist as independent rows. Cell-canonical values
-    /// live in `cells` under `ck.component.realm.organization.v1` keyed by
+    /// live in `cells` under `ak.component.realm.organization.v1` keyed by
     /// the composite `{organization_id}::{relationship}` subject; this is
     /// the structured side-band cache the verified-relationship and
     /// effective-policy reads consult.
@@ -241,7 +241,7 @@ pub struct ProjectionState {
     /// Entries gain a non-None `delivered_at` when the recipient device
     /// drains them via `GET /_soland/self/keys/keypackages/welcomes/pending`.
     pub mls_welcomes: BTreeMap<MlsWelcomeQueueKey, Vec<MlsWelcome>>,
-    /// G3.S1 — Remove proposals keyed by their canonical `ck.mls.proposal`
+    /// G3.S1 — Remove proposals keyed by their canonical `ak.mls.proposal`
     /// event id. Commit validation uses this to ensure pending remove
     /// obligations are consumed by an explicit MLS Remove proposal reference.
     pub mls_remove_proposals: BTreeMap<String, MlsRemoveProposal>,
@@ -255,16 +255,16 @@ pub struct ProjectionState {
     /// stale epochs.
     pub mls_commit_epochs: BTreeMap<MlsCommitEpochKey, MlsCommitEpoch>,
     /// Reducer-derived MLS remove obligations. A parent Realm
-    /// `ck.member.state -> leave/ban` removes the actor from every Circle in
+    /// `ak.member.state -> leave/ban` removes the actor from every Circle in
     /// that Realm. For MLS-backed Circle scopes, the same transition queues an
     /// obligation for the MLS path to issue a remove proposal/commit.
     pub pending_mls_removals: Vec<MlsRemoveObligation>,
-    /// G3.S2 — per-Realm `ck.realm.policy_server` projection. Cas-
+    /// G3.S2 — per-Realm `ak.realm.policy_server` projection. Cas-
     /// register semantics — last write wins. Org-level fallback (when
     /// a Realm has no row of its own) is resolved at query time by
     /// walking the `governed_by` link chain via [`Self::realm_links`].
     /// Cell-family canonical value lives in
-    /// `ck.component.realm.policy_server.v1`.
+    /// `ak.component.realm.policy_server.v1`.
     pub realm_policy_servers: BTreeMap<String, RealmPolicyServerConfig>,
     /// Device push-route projection keyed by the protocol composite
     /// `(recipient_service_did, principal_id, device_id, push_route)`.
@@ -272,10 +272,10 @@ pub struct ProjectionState {
     /// recipient Principal Server.
     pub push_routes: BTreeMap<PushRouteSubject, PushRouteCellValue>,
     /// Optional local Principal/Sync service DID. When set, incoming
-    /// `ck.device.push_route` writes whose `recipient_service_did` does
+    /// `ak.device.push_route` writes whose `recipient_service_did` does
     /// not match this service are rejected instead of cached.
     pub local_service_did: Option<String>,
-    /// Stream-F (Wave 1B) — `ck.audit.erasure_receipt` projection.
+    /// Stream-F (Wave 1B) — `ak.audit.erasure_receipt` projection.
     /// Append-only list of receipts the reducer has accepted. Spec
     /// `realm-and-space.md` §2.5.2 + erasure-receipt.schema.json.
     /// Receipts are durable events; the projection cache here is used
@@ -286,7 +286,7 @@ pub struct ProjectionState {
     /// `(realm_id, applicant_did)`. Spec
     /// `governance/join-policy.md` §7. The application / review / cancel
     /// records are candidate profile-private payloads carried on the
-    /// active `ck.member.state` event under the `application` /
+    /// active `ak.member.state` event under the `application` /
     /// `application_review` / `application_cancel` sub-objects; this cache
     /// tracks the open application state, its TTL deadline, the reviewer
     /// accept receipt digest (for the `join_authorised_by` ref binding),
@@ -623,7 +623,7 @@ impl ProjectionState {
     /// This evaluates the generic `head_eq` compare-and-swap predicate:
     /// each entry is `{ "cell": "<cell_ref>", "predicate": { "op": "head_eq",
     /// "value": { "<field-path>": <expected> } } }`. For a strand-fields cell
-    /// (`ck.component.strand.fields.v1:<strand_id>`) the `fields.<key>` paths
+    /// (`ak.component.strand.fields.v1:<strand_id>`) the `fields.<key>` paths
     /// resolve against the materialized strand `fields`; for any other cell
     /// family the path resolves against the resolved cell JSON value. A
     /// mismatch — or a referenced cell / strand that is absent or in `Bottom`
@@ -858,7 +858,7 @@ impl ProjectionState {
     /// "cell-state-only event reached the inline cache by mistake"
     /// branch.
     ///
-    /// All cell-state events (ck.realm.policy / ak.realm.read_receipt_policy /
+    /// All cell-state events (ak.realm.policy / ak.realm.read_receipt_policy /
     /// ck.consent.* / ak.member.state / ck.realm.* facets) are routed via
     /// the Move/Seal pipeline through `LatticeKind` impls in
     /// `lattice_kinds.rs`; the structured ProjectionState fields don't
@@ -954,10 +954,10 @@ impl ProjectionState {
             Some(k) => k,
             None => return Ok(()),
         };
-        // `ck.strand.create` is unconditional (no current state to validate).
-        // `ck.strand.update` requires Active source.
-        // `ck.strand.archive` requires Active source.
-        // `ck.strand.restore` requires Archived source.
+        // `ak.strand.create` is unconditional (no current state to validate).
+        // `ak.strand.update` requires Active source.
+        // `ak.strand.archive` requires Active source.
+        // `ak.strand.restore` requires Archived source.
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
             arkret_sdk::events::kinds::STRAND_CREATE => return Ok(()),
             arkret_sdk::events::kinds::STRAND_UPDATE => {
@@ -1057,7 +1057,7 @@ impl ProjectionState {
     /// terminal source MUST `failed_precondition` with
     /// `<kind>_already_terminal`. Unknown object tolerated (causal /
     /// backfill window). Space containers are excluded — spec routes their
-    /// removal through `ck.space.tombstone` only.
+    /// removal through `ak.space.tombstone` only.
     pub fn check_redaction_target_transition(
         &self,
         operation: &Operation,
@@ -1121,7 +1121,7 @@ impl ProjectionState {
     }
 
     /// `morph.md` §4.1 S1/S3 — fail-closed admission gate for
-    /// `ck.morph.schema_migrate`. Enforced before durable apply. Capability
+    /// `ak.morph.schema_migrate`. Enforced before durable apply. Capability
     /// (`capability_denied`) is checked separately in the operation policy
     /// layer where the authz engine is available; this method covers the
     /// state-aware preconditions:
@@ -1129,7 +1129,7 @@ impl ProjectionState {
     /// - S1 version binding: the event `requirements.schema[]` MUST bind the migration schema set
     ///   (union of `from`/`to`); otherwise `morph_schema_version_binding_missing`.
     /// - S3 profile gate: `breaking` / `transformation` require the Realm to have declared
-    ///   `ck.profile.morph.schema_migration_transformations.v1`; absent →
+    ///   `ak.profile.morph.schema_migration_transformations.v1`; absent →
     ///   `morph_schema_refs_transformation_unsupported`.
     /// - S3 dialect: every `transformation_rules[]` entry's `rule` id MUST be in the profile
     ///   dialect; otherwise `unsupported_transformation_rule` (hard reject, no partial apply).
@@ -1233,7 +1233,7 @@ impl ProjectionState {
     }
 
     /// `morph.md` §4.1 S3 — whether the Realm has declared the opt-in
-    /// `ck.profile.morph.schema_migration_transformations.v1` profile that
+    /// `ak.profile.morph.schema_migration_transformations.v1` profile that
     /// permits breaking / transformation schema migrations.
     pub fn realm_declares_morph_migration_profile(&self, realm_id: &str) -> bool {
         self.realm_states.get(realm_id).is_some_and(|realm| {

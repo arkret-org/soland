@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::{ProjectionState, RealmInheritancePolicyState};
 
-pub(crate) const CAPABILITY_GRANT_CELL_PREFIX: &str = "ak:cell:ck.component.capability.grant.v1:";
+pub(crate) const CAPABILITY_GRANT_CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
 
 #[derive(Clone, Debug)]
 pub(crate) struct CapabilityGrantSnapshot {
@@ -81,7 +81,7 @@ pub(crate) fn has_active_realm_link_to_source(
 
 pub(crate) fn inheritance_policy_cell_ref(realm_id: &str) -> Option<CellRef> {
     CellRef::new(format!(
-        "ak:cell:ck.component.realm.inheritance_policy.v1:{realm_id}"
+        "ak:cell:ak.component.realm.inheritance_policy.v1:{realm_id}"
     ))
     .ok()
 }
@@ -91,7 +91,7 @@ pub(crate) fn inheritance_policy_ref_matches(
     realm_id: &str,
     policy_ref: &str,
 ) -> bool {
-    let cell_ref_string = format!("ak:cell:ck.component.realm.inheritance_policy.v1:{realm_id}");
+    let cell_ref_string = format!("ak:cell:ak.component.realm.inheritance_policy.v1:{realm_id}");
     if policy_ref == cell_ref_string {
         return true;
     }
@@ -339,8 +339,8 @@ pub(crate) fn find_capability_grant(
     None
 }
 
-/// CKP-0007 §8 — does the operation payload carry an authoritative
-/// `ck.circle.member.manage` verdict for `circle_id`?
+/// AKP-0007 §8 — does the operation payload carry an authoritative
+/// `ak.circle.member.manage` verdict for `circle_id`?
 ///
 /// The Circle HTTP surface (`/_arkret/self/circles/{id}/members`) runs the
 /// real `SolandAuthzEngine::check(sender, "ak.circle.member.manage",

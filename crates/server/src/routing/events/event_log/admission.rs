@@ -108,7 +108,7 @@ where
 }
 
 /// Reject any event kind that is ephemeral or receipt-object-only at the
-/// `ck.self.events.command.submit` entrypoint. Spec T02 + T23.
+/// `ak.self.events.command.submit` entrypoint. Spec T02 + T23.
 ///
 /// Returns the canonical [`ErrorCode`] + human reason when the kind MUST be
 /// rejected; returns `None` when the kind is fine to forward to the
@@ -119,7 +119,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
             ErrorCode::SchemaViolation,
             "ephemeral kind MUST be carried via ak.schema.ephemeral_envelope.v1 \
              (broadcast forms) or ak.schema.device_message.v1 \
-             (ck.key.verification.* to-device); not durable ak.self.events.command.submit",
+             (ak.key.verification.* to-device); not durable ak.self.events.command.submit",
         ));
     }
     if arkret_sdk::events::is_receipt_object_only(kind) {
@@ -133,7 +133,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
 }
 
 /// Reject any non-audit-class write on a Realm whose lifecycle state is
-/// terminal (`ck.realm.tombstone` or `ck.realm.destroy` applied). Spec T07.
+/// terminal (`ak.realm.tombstone` or `ak.realm.destroy` applied). Spec T07.
 ///
 /// Returns `Some((ErrorCode::FailedPrecondition, reason))` when the write
 /// MUST be rejected; `None` otherwise.
@@ -162,7 +162,7 @@ fn frozen_realm_write_exempt(kind: &str) -> bool {
         )
 }
 
-/// Reject ordinary writes on a Realm with the reversible `ck.realm.freeze`
+/// Reject ordinary writes on a Realm with the reversible `ak.realm.freeze`
 /// facet set. Lifecycle/admin escape hatches remain admissible so an
 /// authorized actor can unfreeze, tombstone, or destroy the Realm.
 pub fn frozen_realm_check(realm_frozen: bool, kind: &str) -> Option<&'static str> {
@@ -176,7 +176,7 @@ pub(super) fn policy_components_value_from_state_payload(payload: &Value) -> &Va
     payload.get("value").unwrap_or(payload)
 }
 
-/// `ck.cross_signing.reset` payload trust-domain & reset_event_id check.
+/// `ak.cross_signing.reset` payload trust-domain & reset_event_id check.
 /// Spec T08.
 ///
 /// Verification order MUST be:
@@ -244,18 +244,18 @@ pub fn cross_signing_reset_replay_check(
     Ok(())
 }
 
-/// Validate a `ck.realm.policy_components` payload. Spec T09 + T12 + SEC-03.
+/// Validate a `ak.realm.policy_components` payload. Spec T09 + T12 + SEC-03.
 ///
 /// Checks (in order):
 /// 1. `relaxed_window_max_ms <= 300_000` (T09 hard ceiling)
-/// 2. `ck.profile.e2ee_relaxed.v1` not active with any audit compliance profile (T09 mutex)
+/// 2. `ak.profile.e2ee_relaxed.v1` not active with any audit compliance profile (T09 mutex)
 /// 3. When `media_service_decrypts=true`, all governance bindings are present (T12).
 /// 4. SEC-03 — when `media_service_decrypts=true`, independently recompute the
 ///    `discussion_metadata_digest` from the §10.5.1 rule 1–3 policy cell value
 ///    (`media_service_decrypts` + the authorised `plaintext_visible_services`) and fail closed with
 ///    `mls_governance_binding_stale` when it disagrees with the digest the projected governance
 ///    binding covers. This is the server-side mirror of `media-service-binding.md` §8.2 rule 5 /
-///    negative vector `ck.vector.webrtc.media_plaintext_downgrade.v1` case (d): the fact that media
+///    negative vector `ak.vector.webrtc.media_plaintext_downgrade.v1` case (d): the fact that media
 ///    is service-decryptable MUST be derivable from member-visible metadata, not asserted out of
 ///    band. `binding_discussion_metadata_digest` is the digest the current epoch governance binding
 ///    covers, as projected from the realm's MLS cell; `None` means the binding carried no digest,
@@ -374,7 +374,7 @@ pub fn realm_policy_components_check(
 }
 
 /// SEC-03 — build a `arkret_sdk::models::MediaDecryptPolicyValue`
-/// from a `ck.realm.policy_components` payload and derive its canonical
+/// from a `ak.realm.policy_components` payload and derive its canonical
 /// `discussion_metadata_digest`. Returns `None` only when the SDK's canonical
 /// digest derivation fails (it never does for well-formed input), so callers
 /// treat that as a fail-closed mismatch.

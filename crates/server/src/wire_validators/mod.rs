@@ -6,7 +6,7 @@
 //! caller can render a `schema_violation`. The reason codes are defined in
 //! [`crate::error::reasons`].
 //!
-//! - [`member_identity`] — reject `ck.member.identity.update` payloads still carrying handle
+//! - [`member_identity`] — reject `ak.member.identity.update` payloads still carrying handle
 //!   lifecycle fields.
 //! - [`handle_claim_subject`] — validate handle-claim discriminator and principal-DID `subject`
 //!   constraints.

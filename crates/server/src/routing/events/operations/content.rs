@@ -10,7 +10,7 @@ pub(crate) async fn realm_requires_content_encryption(state: &AppState, realm_id
 
 /// Whether the Realm's effective `content_encryption_floor` requires E2EE
 /// content, read from the authoritative reducer projection (set by
-/// `ck.realm.policy_components`). This is independent of `encryption_profile`,
+/// `ak.realm.policy_components`). This is independent of `encryption_profile`,
 /// which only declares the encryption mechanism: a `mls_rfc9420` Realm admits
 /// plaintext content until its content floor is raised to `e2ee_required`
 /// (realm-and-space.md §2.3 / §2.5, circle.md §7). The floor is a one-way
@@ -254,14 +254,14 @@ pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &s
 //
 // Per crypto-media/device-lifecycle.md §7, to-device content SHOULD be
 // end-to-end encrypted, but cleartext is explicitly permitted for capability
-// discovery and verification bootstrap (`ck.key.verification.*`), and the
-// secret-share request (`ck.secret.request`) carries only a one-time HPKE
-// public key. The secret response (`ck.secret.send`) is HPKE-sealed but uses
+// discovery and verification bootstrap (`ak.key.verification.*`), and the
+// secret-share request (`ak.secret.request`) carries only a one-time HPKE
+// public key. The secret response (`ak.secret.send`) is HPKE-sealed but uses
 // its own envelope shape (§10.7), not the MLS Realm `encrypted_envelope`. The
 // to-device queue is zero-knowledge and does not validate E2EE content
 // semantics; it only requires a content object so routing and
 // `DeviceMessageEnvelope` materialization succeed. Forcing the MLS
-// `encrypted_envelope` shape here would reject the very `ck.key.verification.*`
+// `encrypted_envelope` shape here would reject the very `ak.key.verification.*`
 // strand advertised by the device_messages describe surface.
 pub fn validate_device_message_target(target: &DeviceMessageTarget) -> Result<(), &'static str> {
     if target.kind.trim().is_empty() {
@@ -412,7 +412,7 @@ fn validate_audience_mention_object(
     })
 }
 
-/// Validate the keys of a `ck.patch.v1` map as patch *paths* per
+/// Validate the keys of a `ak.patch.v1` map as patch *paths* per
 /// `event-and-patch.md` §4.2.1. Unlike canonical JSON field names, a patch path
 /// is a dot-separated sequence of snake_case identifier / quoted-identifier /
 /// selector segments (e.g. `metadata.title`, `metadata.fields.review_status`).
@@ -640,7 +640,7 @@ pub fn validate_canonical_json_value_inner(
                 prev_key = Some(key);
             }
             for (key, value) in object {
-                // A `patch` map is a ak.schema.patch.v1 (`ck.patch.v1`) field
+                // A `patch` map is a ak.schema.patch.v1 (`ak.patch.v1`) field
                 // delta: its keys are patch *paths* (dotted snake_case segments
                 // per event-and-patch.md §4.2.1), not canonical JSON field names,
                 // so they are validated as paths and their op values are recursed

@@ -247,7 +247,7 @@ pub(super) fn mimi_provider_directory_value(state: &AppState) -> Value {
             "type": "dev_service_digest",
             "kid": format!("{}#mimi-provider", state.config.service_did),
             "alg": "sha256-dev",
-            "sig": sha256_hex(format!("{}:ck.profile.mimi_interop.v1", state.config.service_did).as_bytes())
+            "sig": sha256_hex(format!("{}:ak.profile.mimi_interop.v1", state.config.service_did).as_bytes())
         }
     })
 }

@@ -256,7 +256,7 @@ async fn submit_seal(
     // Capture mls.epoch before the reload so we can detect a
     // shift after the reload writes the new value.
     let mls_epoch_cell = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.mls.epoch.v1:{}",
+        "ak:cell:ak.component.mls.epoch.v1:{}",
         seal.realm_id.as_str()
     ))
     .ok();

@@ -1,6 +1,6 @@
 use super::*;
 
-// ── CKP-0016 — agent participation ceiling (admission validate + projection write) ──
+// ── AKP-0016 — agent participation ceiling (admission validate + projection write) ──
 
 pub(super) fn ap_uuid_part(typed_id: &str) -> &str {
     typed_id.rsplit(':').next().unwrap_or(typed_id)
@@ -108,7 +108,7 @@ pub(super) fn agent_participation_ceiling_change(
     }
 }
 
-/// Admission gate (CKP-0016 §3 invariant 1): an inner-scope
+/// Admission gate (AKP-0016 §3 invariant 1): an inner-scope
 /// `agent_participation` ceiling MUST NOT widen its parent ceiling. The
 /// parent ceiling is the deployment default (`ALL` in dev) intersected
 /// with any persisted parent-scope ceiling rows.
@@ -155,7 +155,7 @@ pub(super) fn agent_participation_parent_scope_keys(
     parent_keys
 }
 
-/// Admission gate (CKP-0016): an inner-scope `agent_participation` ceiling
+/// Admission gate (AKP-0016): an inner-scope `agent_participation` ceiling
 /// must not widen its parent ceiling.
 pub async fn validate_agent_participation_ceiling(
     state: &AppState,
@@ -639,7 +639,7 @@ pub(super) fn validate_agent_context(
     Ok(())
 }
 
-/// CKP-0016 §5.2 / CKP-0008 §4.10 + architecture §7 enforcement
+/// AKP-0016 §5.2 / AKP-0008 §4.10 + architecture §7 enforcement
 /// (soland-native): every agent-originated Event carries auditable
 /// `agent_context`. Reply-as-agent uses the `reply` bit; act-on-behalf uses
 /// envelope-derived `executed_by`, requires a referenced active grant, and

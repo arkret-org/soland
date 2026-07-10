@@ -5,7 +5,7 @@
 //!
 //! Endpoints:
 //! - `GET /_soland/admin/cells/{cell_id}` — return one cell's resolved state.
-//! - `GET /_soland/admin/cells?realm_id=...&prefix=ck.component.consent.` — list matching cells
+//! - `GET /_soland/admin/cells?realm_id=...&prefix=ak.component.consent.` — list matching cells
 //!   (paginated; `limit`/`offset` query params).
 //!
 //! Both endpoints are auth-gated via the existing `AuthArgs` bearer-session
@@ -215,7 +215,7 @@ async fn admin_get_cell(
 ///   CellStore; we walk `cell_store.list_cells(realm_id)` for the canonical set then read each
 ///   cell's effective state from `ProjectionState::cells`.
 /// - `prefix` (optional) — filter to cells whose `<family>` (component) starts with this prefix
-///   (e.g. `ck.component.consent.`).
+///   (e.g. `ak.component.consent.`).
 /// - `limit` / `offset` — pagination. Default and max page sizes come from
 ///   `AppConfig::admin_default_page_limit` (env `SOLAND_ADMIN_PAGE_LIMIT`, default `100`) and
 ///   `admin_max_page_limit` (env `SOLAND_ADMIN_MAX_PAGE_LIMIT`, default `1000`). `offset` defaults
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn state_response_value_serializes_with_value_field() {
         let cell =
-            CellRef::new("ak:cell:ck.component.member.state.v1:did.web.alice.example".to_owned())
+            CellRef::new("ak:cell:ak.component.member.state.v1:did.web.alice.example".to_owned())
                 .unwrap();
         let st = CellState::Value(json!("join"));
         let resp = state_response_from(&cell, Some(&st), "fsm", "reject");
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn state_response_absent_state_omits_value_and_bottom() {
         let cell =
-            CellRef::new("ak:cell:ck.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
+            CellRef::new("ak:cell:ak.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
         let resp = state_response_from(&cell, None, "or_set", "expose");
         let v = serde_json::to_value(&resp).unwrap();
         assert_eq!(v["state"], "absent");

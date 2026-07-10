@@ -1,8 +1,8 @@
 //! SOL-ORG-06 — Realm organization-relationship read surface.
 //!
 //! `GET /_arkret/self/realms/{realm_id}/organizations`
-//! (`ck.self.realm_organization.query.list`) projects the accepted
-//! `ck.realm.organization` relationship statements (active / revoked / expired,
+//! (`ak.self.realm_organization.query.list`) projects the accepted
+//! `ak.realm.organization` relationship statements (active / revoked / expired,
 //! latest-per-`(organization_id, relationship)`) plus the declared
 //! `owning_organizations` hints (SOL-ORG-05) that carry no verified statement.
 //!

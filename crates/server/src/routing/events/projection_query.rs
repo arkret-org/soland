@@ -3,7 +3,7 @@
 //!
 //! These endpoints let inkson (and other clients) re-hydrate the
 //! optimistic Archive / Restore state after a page refresh, so a
-//! `ck.space.archive` accepted by the server doesn't appear "unarchived"
+//! `ak.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
 //! - `GET /_arkret/self/realms/{realm_id}/spaces` — canonical projection endpoint listing Space
@@ -262,7 +262,7 @@ fn member_state_at_history_basis(
     if seals.is_empty() {
         return None;
     }
-    let cell = CellRef::new(format!("ak:cell:ck.component.member.state.v1:{actor}")).ok()?;
+    let cell = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor}")).ok()?;
     let state_at_basis = arkret_sdk::state_res::effective_state_at(
         &seals,
         &realm,

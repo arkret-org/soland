@@ -22,7 +22,7 @@
 //! MUST live under the single reserved `/_arkret/_conformance/*` namespace
 //! (leading `_` marks it as NOT a production trust-surface classifier) and
 //! MUST be exposed *only* when the implementation declares the
-//! `ck.profile.conformance_harness.v1` build profile. A production profile —
+//! `ak.profile.conformance_harness.v1` build profile. A production profile —
 //! any deployment whose `claimed_profiles` / `verified_profiles` do not carry
 //! that profile — MUST NOT route the namespace: the route layer MUST return
 //! the same `404 unrecognized_endpoint` as any unknown path and MUST NOT enter
@@ -35,7 +35,7 @@
 //! (`404 unrecognized_endpoint`). [`ensure_enabled`] is retained as a
 //! defense-in-depth handler guard keyed off the same boot-time flag.
 //!
-//! `ck.profile.conformance_harness.v1` is a test build profile that is active
+//! `ak.profile.conformance_harness.v1` is a test build profile that is active
 //! iff the service runs in `development_mode=true` (which by the dev-mode
 //! invariant forces `verified_profiles=[]`, see `service-surface.md` §3.0),
 //! so it never coexists with an advertised production profile.
@@ -84,7 +84,7 @@ pub fn router() -> Router {
         .push(Router::with_path("chaos/operation").get(handlers::chaos_operation))
 }
 
-/// `ck.profile.conformance_harness.v1` is active iff the service runs in
+/// `ak.profile.conformance_harness.v1` is active iff the service runs in
 /// `development_mode=true`. The dev-mode invariant
 /// (`service-surface.md` §3.0) forces `verified_profiles=[]` in that mode, so a
 /// harness deployment never advertises a production profile. Records the

@@ -193,11 +193,11 @@ pub trait PersistenceStore: Send + Sync {
     fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore;
     fn mls_welcomes(&self) -> &dyn MlsWelcomeStore;
     fn mls_commits(&self) -> &dyn MlsCommitStore;
-    // CKP-0010 — agent participation policy.
+    // AKP-0010 — agent participation policy.
     fn agent_participation(&self) -> &dyn AgentParticipationStore;
-    // CKP-0008 — native personal agent principals.
+    // AKP-0008 — native personal agent principals.
     fn agents(&self) -> &dyn AgentStore;
-    // CKP-0016 — per-recipient notification projection.
+    // AKP-0016 — per-recipient notification projection.
     fn notifications(&self) -> &dyn NotificationStore;
     fn sync_cursors(&self) -> &dyn SyncCursorStore;
     fn idempotency_keys(&self) -> &dyn IdempotencyStore;

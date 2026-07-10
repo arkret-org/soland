@@ -4,7 +4,7 @@
 //! soland (the principal-server) is the producer of these shapes:
 //!
 //! - `GET  /_soland/admin/realms/{id}/mls/covered-seals` projects the covered-seals state for the
-//!   `ak:cell:ck.component.covered_seals.v1:<realm_id>` cell alongside the current governance Seal
+//!   `ak:cell:ak.component.covered_seals.v1:<realm_id>` cell alongside the current governance Seal
 //!   frontier so the operator can compute lag.
 //! - `POST /_soland/admin/realms/{id}/mls/covered-seals/advance` folds the governance Seal set into
 //!   the group's covered_seals accumulator and returns the new lag count.

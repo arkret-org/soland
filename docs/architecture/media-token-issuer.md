@@ -1,6 +1,6 @@
 # Media Token Issuer
 
-> Spec: `arkret-spec @ b47ff6ec`, `ck.self.call.media.exchange.issue_token` operation.
+> Spec: `arkret-spec @ b47ff6ec`, `ak.self.call.media.exchange.issue_token` operation.
 > Companion runbook: [`../runbook.md` → Media token issuer](../runbook.md#media-token-issuer-rotating-service_signaturekid-focus-binding-troubleshooting).
 > SDK type reference:
 > [`arkret-rust-sdk docs/architecture.md`](../../../arkret-rust-sdk/docs/architecture.md#call-media-cxcallmediatoken_exchange).
@@ -34,24 +34,24 @@ forges, re-signs, or augments the token. Specifically:
   layer — its request log redacts the binding bytes.
 
 The decision to proxy is made by the realm operator (via
-`ck.profile.media_service_binding.v1` and floria deployment posture), not
+`ak.profile.media_service_binding.v1` and floria deployment posture), not
 by the client. Clients always request `/rtc/token` against the realm's
 canonical endpoint; whether that endpoint is fronted by floria is a
 deployment detail.
 
 ## `focus_id` derivation
 
-Each focus in a realm's `ck.realm.media_service.foci[]` advertises a
+Each focus in a realm's `ak.realm.media_service.foci[]` advertises a
 canonical `focus_id` of the form:
 
 ```text
-ck:focus:<backend>:<region>:<instance-disambiguator>
+ak:focus:<backend>:<region>:<instance-disambiguator>
 ```
 
 Examples:
 
-- `ck:focus:livekit:eu-west-1` — a LiveKit pool in eu-west-1.
-- `ck:focus:mediasoup:us-east-2:b` — a second Mediasoup pool in us-east-2.
+- `ak:focus:livekit:eu-west-1` — a LiveKit pool in eu-west-1.
+- `ak:focus:mediasoup:us-east-2:b` — a second Mediasoup pool in us-east-2.
 
 Derivation rules:
 
@@ -67,7 +67,7 @@ Derivation rules:
    ASCII bytes (no UTF-8 multibyte).
 
 soland refuses to issue a token for a `focus_id` that is not currently in
-the realm's `ck.realm.media_service.foci[]` set, returning `focus_mismatch`.
+the realm's `ak.realm.media_service.foci[]` set, returning `focus_mismatch`.
 
 ## `participant_binding` canonical bytes
 
@@ -80,7 +80,7 @@ the realm's `ck.realm.media_service.foci[]` set, returning `focus_mismatch`.
   "realm_id": "ak:realm:...",
   "call_id": "ak:call:...",
   "focus_id": "ak:focus:livekit:eu-west-1",
-  "actor_id": "did:ck:...",
+  "actor_id": "did:webvh:...",
   "device_id": "ak:device:...",
   "participant_identity": "ak:participant:<realm>:<actor>:<device>:<call>",
   "expires_at": "2026-05-27T12:34:56.789Z",
@@ -106,7 +106,7 @@ soland.
 `participant_identity` is its own canonical string:
 
 ```text
-ck:participant:<realm_short>:<actor_short>:<device_short>:<call_short>
+ak:participant:<realm_short>:<actor_short>:<device_short>:<call_short>
 ```
 
 where `_short` is the trailing-8-hex of each id's UUID portion. The full
@@ -171,7 +171,7 @@ tokens validate correctly across the kid boundary.
 
 | Error | Owner | First check |
 |---|---|---|
-| `focus_mismatch` | Realm config | `ck.realm.media_service.foci[]` shape |
+| `focus_mismatch` | Realm config | `ak.realm.media_service.foci[]` shape |
 | `unknown_focus_type` | Realm config / client profile | client's profile set; realm's advertised backend |
 | `token_issuer_unauthorised` | Deployment | `issuer_kid` ↔ realm binding |
 | `participant_binding_invalid` | Issuer or transport | round-trip canonical bytes against issuer log |

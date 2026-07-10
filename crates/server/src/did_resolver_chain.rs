@@ -171,7 +171,7 @@ fn method_allowed(config: &AppConfig, method: &str) -> bool {
 
 /// STA-07-002 — the canonical generic server-describe path. The resolver
 /// freshness probe targets this endpoint (operation_id
-/// `ck.server.query.describe`, schema `service-describe.schema.json`).
+/// `ak.server.query.describe`, schema `service-describe.schema.json`).
 pub const CANONICAL_DESCRIBE_PATH: &str = "/_arkret/describe";
 
 /// Probe an external webvh provider's canonical describe endpoint

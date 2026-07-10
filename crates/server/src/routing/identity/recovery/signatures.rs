@@ -1,7 +1,7 @@
 use super::*;
 
 /// §15 step 7 — verify a recovery receipt is signed by the new device's
-/// ACCEPTED device key (recorded at `ck.device.authorize`), not the principal
+/// ACCEPTED device key (recorded at `ak.device.authorize`), not the principal
 /// signing key or a server key.
 pub(super) async fn verify_recovery_receipt_device_signature(
     state: &AppState,
@@ -49,7 +49,7 @@ pub(super) async fn verify_recovery_receipt_device_signature(
 /// Resolve the Ed25519 public key recorded when `device_id` was authorized for
 /// `principal_id` (the device inventory `payload.device_public_key`). Rejects
 /// when the device is absent / revoked / unverified / keyless — i.e. no accepted
-/// `ck.device.authorize` is on record.
+/// `ak.device.authorize` is on record.
 pub(super) async fn resolve_authorized_device_key(
     state: &AppState,
     principal_id: &str,

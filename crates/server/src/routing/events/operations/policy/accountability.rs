@@ -200,11 +200,11 @@ pub(super) fn accountability_grant_time(
         .map(|parsed| parsed.with_timezone(&chrono::Utc))
 }
 
-/// SEC-08 — server-side defence-in-depth for `ck.profile.mls.minimal_metadata_realm.v1`
+/// SEC-08 — server-side defence-in-depth for `ak.profile.mls.minimal_metadata_realm.v1`
 /// Realms (`crypto-media/encryption-and-audit.md` §2.9).
 ///
 /// For a Realm that has declared the minimal-metadata profile, an encrypted
-/// `ck.message.create` / reaction envelope MUST set
+/// `ak.message.create` / reaction envelope MUST set
 /// `aad_visibility_event_id="hidden"`; any other value (or an absent
 /// discriminator on an encrypted envelope) is rejected so message-id exposure
 /// cannot widen reaction-frequency correlation from per-`target_ref` to

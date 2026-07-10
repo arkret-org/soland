@@ -290,7 +290,7 @@ fn build_server_description(state: &AppState) -> ServerDescription {
     );
     // T6.1 — claim-level partition of the describe response.
     // See arkret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
-    // `ck.schema.service_describe.v1`. `supported_operations` is
+    // `ak.schema.service_describe.v1`. `supported_operations` is
     // wire-callable only; this helper separates implementation state,
     // self-claims, cotest-verified claims, and compat surfaces while the
     // response is still the SDK's typed `ServerDescription`.

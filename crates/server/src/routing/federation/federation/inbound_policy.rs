@@ -11,7 +11,7 @@ pub(super) const MAX_INBOUND_FEDERATION_OPERATIONS: usize = 500;
 
 /// SPEC-CR-008 (federation.md §4.0) — the cross-deployment federation Event
 /// receive rail is converged onto a single track: `POST /_arkret/peer/events`
-/// (`ck.peer.events.command.submit`). The `/_soland/peer/*` inbound
+/// (`ak.peer.events.command.submit`). The `/_soland/peer/*` inbound
 /// *write* surface (transactions, operations push/backfill, seals push) is a
 /// deployment-local test/ops rail only and MUST NOT serve as a cross-vendor
 /// interop entry point: it MUST NOT accept Move/Anchor/Operation pushes from a
@@ -29,7 +29,7 @@ pub(crate) fn ensure_private_inbound_write_rail_local(state: &AppState) -> Resul
     Err(AppError::unsupported_feature(
         "the /_soland/peer/* inbound write rail is a deployment-local test/ops affordance and is \
          not a cross-deployment federation interop entry point; submit sealed Event Envelopes to \
-         the protocol track POST /_arkret/peer/events (ck.peer.events.command.submit) instead",
+         the protocol track POST /_arkret/peer/events (ak.peer.events.command.submit) instead",
     )
     .with_wire_code("federation_interop_track_only"))
 }

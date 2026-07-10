@@ -1,4 +1,4 @@
-//! CKP-0007 — Circle administration HTTP surface.
+//! AKP-0007 — Circle administration HTTP surface.
 //!
 //! Hosts the `/_arkret/self/circles/*` admin/CRUD layer (mounted under the
 //! protocol self surface; see `routing/mod.rs`). The Circle *data model*
@@ -450,7 +450,7 @@ async fn get_circle(
 #[endpoint(
     operation_id = "ak.self.circle.command.create",
     tags("circles"),
-    summary = "Create a Circle (ck.circle.create)"
+    summary = "Create a Circle (ak.circle.create)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.create"))]
 async fn post_circle(
@@ -495,7 +495,7 @@ async fn post_circle(
 #[endpoint(
     operation_id = "ak.self.circle.member.command.add",
     tags("circles"),
-    summary = "Add or change a Circle member (ck.circle.member.state)"
+    summary = "Add or change a Circle member (ak.circle.member.state)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.member.command.add"))]
 async fn post_circle_member(
@@ -512,7 +512,7 @@ async fn post_circle_member(
     let realm_scope = circle_realm_scope(state, &circle_id)?;
     let membership = body.membership.unwrap_or(CircleMembership::Join);
     let target_state = circle_membership_to_reducer_state(membership);
-    // CKP-0007 strict-subset invariant (`Circle.members ⊆ Realm.members`) —
+    // AKP-0007 strict-subset invariant (`Circle.members ⊆ Realm.members`) —
     // surfaced HERE, pre-projection, because `accept_local_operations` projects
     // fire-and-forget and does not propagate the reducer's `Rejected` effect
     // back to the HTTP caller. Without this gate, activating a non-member would
@@ -537,9 +537,9 @@ async fn post_circle_member(
             .with_wire_code(CIRCLE_MEMBER_MUST_BE_REALM_MEMBER));
         }
     }
-    // CKP-0007 §8 — authoritative capability decision for "pull another actor
+    // AKP-0007 §8 — authoritative capability decision for "pull another actor
     // into the Circle". When the requester is activating *someone else*, they
-    // MUST hold `ck.circle.member.manage` (narrowed by `allowed_circle_ids`)
+    // MUST hold `ak.circle.member.manage` (narrowed by `allowed_circle_ids`)
     // on this Circle. The engine evaluates the selector against the
     // `ak:circle:<uuid>` resource; we stamp the verdict into the operation so
     // the reducer's fail-closed second-line check can rely on it. A
@@ -606,7 +606,7 @@ async fn post_circle_member(
 #[endpoint(
     operation_id = "ak.self.circle.member.resource.delete",
     tags("circles"),
-    summary = "Remove a Circle member (ck.circle.member.state → removed)"
+    summary = "Remove a Circle member (ak.circle.member.state → removed)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.member.resource.delete"))]
 async fn delete_circle_member(
@@ -662,7 +662,7 @@ async fn delete_circle_member(
 #[endpoint(
     operation_id = "ak.self.circle.command.rotate_scope",
     tags("circles"),
-    summary = "Rotate the Circle's bound MLS group (CKP-0007)"
+    summary = "Rotate the Circle's bound MLS group (AKP-0007)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.rotate_scope"))]
 async fn post_scope_rotate(
@@ -760,7 +760,7 @@ async fn post_scope_rotate(
 #[endpoint(
     operation_id = "ak.self.circle.command.archive",
     tags("circles"),
-    summary = "Archive a Circle (ck.circle.archive)"
+    summary = "Archive a Circle (ak.circle.archive)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.archive"))]
 async fn post_circle_archive(
@@ -782,7 +782,7 @@ async fn post_circle_archive(
 #[endpoint(
     operation_id = "ak.self.circle.command.restore",
     tags("circles"),
-    summary = "Restore a Circle (ck.circle.restore)"
+    summary = "Restore a Circle (ak.circle.restore)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.restore"))]
 async fn post_circle_restore(
@@ -804,7 +804,7 @@ async fn post_circle_restore(
 #[endpoint(
     operation_id = "ak.self.circle.command.tombstone",
     tags("circles"),
-    summary = "Tombstone a Circle (ck.circle.tombstone)"
+    summary = "Tombstone a Circle (ak.circle.tombstone)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.tombstone"))]
 async fn post_circle_tombstone(
@@ -946,15 +946,15 @@ async fn ensure_circle_capability(
     }
 }
 
-/// CKP-0007 §8 — canonical reducer reason code when the requester lacks
-/// `ck.circle.member.manage` for a cross-actor add. Kept in sync with the
+/// AKP-0007 §8 — canonical reducer reason code when the requester lacks
+/// `ak.circle.member.manage` for a cross-actor add. Kept in sync with the
 /// reducer constant of the same name so the HTTP 403 and the reducer 422
 /// surface the same wire code.
 const CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED: &str = "circle_member_manage_capability_required";
 
 const CIRCLE_MANAGE_CAPABILITY_REQUIRED: &str = "circle_manage_capability_required";
 
-/// CKP-0007 strict-subset invariant reason code (`Circle.members ⊆
+/// AKP-0007 strict-subset invariant reason code (`Circle.members ⊆
 /// Realm.members`). Kept in sync with the reducer constant of the same name so
 /// the HTTP 422 and the reducer 422 surface the same wire code.
 const CIRCLE_MEMBER_MUST_BE_REALM_MEMBER: &str = "circle_member_must_be_realm_member";
@@ -1002,7 +1002,7 @@ fn circle_realm_scope(state: &AppState, circle_id: &str) -> Result<RealmId, AppE
 }
 
 /// Map a reducer rejection reason string to an `AppError` whose wire
-/// `code` is the canonical CKP-0007 reason (e.g. `circle_realm_mismatch`,
+/// `code` is the canonical AKP-0007 reason (e.g. `circle_realm_mismatch`,
 /// `circle_member_must_be_realm_member`). Returned as 422
 /// `failed_precondition` so clients can branch on the reason directly.
 fn reducer_reject_to_app_error(reason: &'static str) -> AppError {

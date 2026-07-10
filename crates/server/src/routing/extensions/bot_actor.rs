@@ -2,7 +2,7 @@
 //!
 //! Bot and ghost actors are second-class identities tied to a primary actor's
 //! authority (the applet controller). Canonical provisioning happens through
-//! `ck.self.applet.command.install` / `ck.applet.registration`; the durable
+//! `ak.self.applet.command.install` / `ak.applet.registration`; the durable
 //! source of truth is the `applet_registrations` table (`persistence::applets`,
 //! materialised as [`AppletRecord`]). Per
 //! `extensions/applet-integration.md` §3–§5:
@@ -26,7 +26,7 @@
 //! replicas with a single source of truth.
 //!
 //! TODO(G3.S9-followup): bind bot/ghost provisioning to the verified manifest's
-//! `applet_id`; emit `ck.identity.accountability_grant` events so the
+//! `applet_id`; emit `ak.identity.accountability_grant` events so the
 //! accountability chain is queryable via the standard DID Document fetch (the
 //! ghost provisioning path already builds these via
 //! `applet_bridge::build_ghost_accountability_grant_event`; bot-actor inception

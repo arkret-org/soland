@@ -65,7 +65,7 @@ pub enum ProjectionEffect {
         realm_id: String,
         action: String,
     },
-    /// COT-06-004 — `ck.realm.set_default_strand` projected. The Realm's
+    /// COT-06-004 — `ak.realm.set_default_strand` projected. The Realm's
     /// `default_strand_id` now points at `strand_id`.
     RealmDefaultStrandSet {
         realm_id: String,
@@ -88,8 +88,8 @@ pub enum ProjectionEffect {
         morph_id: String,
         new_state: ObjectLifecycleState,
     },
-    /// CKP-0007 — Circle lifecycle transition accepted. Reflects
-    /// `ck.circle.create` / `update` / `archive` / `restore` / `tombstone`
+    /// AKP-0007 — Circle lifecycle transition accepted. Reflects
+    /// `ak.circle.create` / `update` / `archive` / `restore` / `tombstone`
     /// projection writes; new state is reflected in
     /// `ProjectionState::circles` (and the durable `projection_circles`
     /// mirror once persistence is wired).
@@ -97,8 +97,8 @@ pub enum ProjectionEffect {
         circle_id: String,
         new_state: CircleLifecycleState,
     },
-    /// CKP-0007 — Circle membership transition. `target_state` is the
-    /// `ck.circle.member.state` payload's `state` value (active / removed /
+    /// AKP-0007 — Circle membership transition. `target_state` is the
+    /// `ak.circle.member.state` payload's `state` value (active / removed /
     /// banned / left / invited). The reducer applies the membership write
     /// only after the strict-subset invariant
     /// (`Circle.members ⊆ Realm.members`) has been satisfied.
@@ -124,14 +124,14 @@ pub enum ProjectionEffect {
     AppletProjectionUpdated {
         service_did: String,
     },
-    /// R1.2 — `ck.realm.delivery_binding_policy` event was projected
-    /// into the canonical `ck.component.realm.delivery_binding_policy.v1`
+    /// R1.2 — `ak.realm.delivery_binding_policy` event was projected
+    /// into the canonical `ak.component.realm.delivery_binding_policy.v1`
     /// cas-register cell.
     DeliveryBindingPolicyProjected {
         realm_id: String,
     },
-    /// `ck.realm.policy_components` projected into the canonical
-    /// `ck.component.realm.policy_components.v1` cas-register cell.
+    /// `ak.realm.policy_components` projected into the canonical
+    /// `ak.component.realm.policy_components.v1` cas-register cell.
     RealmPolicyComponentsProjected {
         realm_id: String,
     },
@@ -141,26 +141,26 @@ pub enum ProjectionEffect {
     RealmSearchPolicyProjected {
         realm_id: String,
     },
-    /// `ck.realm.media_service` projected into the canonical
-    /// `ck.component.realm.media_service.v1` cas-register cell consumed by
-    /// the CKP-0010 media token exchange.
+    /// `ak.realm.media_service` projected into the canonical
+    /// `ak.component.realm.media_service.v1` cas-register cell consumed by
+    /// the AKP-0010 media token exchange.
     RealmMediaServiceProjected {
         realm_id: String,
     },
-    /// `ck.call.state` projected into the canonical
-    /// `ck.component.call.state.v1` cell. Carries the committed
+    /// `ak.call.state` projected into the canonical
+    /// `ak.component.call.state.v1` cell. Carries the committed
     /// `session_focus` plus the orthogonal recording / transcribe /
     /// moderation projection (`call-state.md` §4.2 / §5).
     CallStateProjected {
         call_id: String,
     },
-    /// `call-state.md` §7 — `ck.call.summary` projected into the write-once
-    /// `ck.component.call.summary.v1` cas_register cell.
+    /// `call-state.md` §7 — `ak.call.summary` projected into the write-once
+    /// `ak.component.call.summary.v1` cas_register cell.
     CallSummaryProjected {
         call_id: String,
     },
-    /// R3.1 — `ck.realm.link` event was projected into the
-    /// `ck.component.realm.link.v1` or_set cell + the `realm_links`
+    /// R3.1 — `ak.realm.link` event was projected into the
+    /// `ak.component.realm.link.v1` or_set cell + the `realm_links`
     /// structured cache.
     RealmLinkProjected {
         realm_id: String,
@@ -168,20 +168,20 @@ pub enum ProjectionEffect {
         link_kind: String,
         status: String,
     },
-    /// R3.2 — `ck.realm.inheritance_policy` event was projected into the
-    /// `ck.component.realm.inheritance_policy.v1` cas-register cell.
+    /// R3.2 — `ak.realm.inheritance_policy` event was projected into the
+    /// `ak.component.realm.inheritance_policy.v1` cas-register cell.
     RealmInheritancePolicyProjected {
         realm_id: String,
         source_realm_id: String,
     },
-    /// R3.2 — `ck.capability.derived` event was projected into the
-    /// `ck.component.capability.derived.v1` cas-register cell.
+    /// R3.2 — `ak.capability.derived` event was projected into the
+    /// `ak.component.capability.derived.v1` cas-register cell.
     CapabilityDerivedProjected {
         capability_id: String,
         realm_id: String,
     },
-    /// SOL-ORG-02 — `ck.realm.organization` relationship statement projected
-    /// into the `ck.component.realm.organization.v1` cas-register cell keyed by
+    /// SOL-ORG-02 — `ak.realm.organization` relationship statement projected
+    /// into the `ak.component.realm.organization.v1` cas-register cell keyed by
     /// `(organization_id, relationship)` + the `realm_organization_statements`
     /// structured cache. `status` is `active` (relationship live) or `revoked`
     /// (inactive, retained for audit).
@@ -191,8 +191,8 @@ pub enum ProjectionEffect {
         relationship: String,
         status: String,
     },
-    /// P1 — `ck.capability.grant` event was projected into the
-    /// `ck.component.capability.grant.v1` or_set cell (one cell per
+    /// P1 — `ak.capability.grant` event was projected into the
+    /// `ak.component.capability.grant.v1` or_set cell (one cell per
     /// `grant_id`). `revived_terminal=false` always; a re-grant of a
     /// `grant_id` whose add was already observed-removed stays revoked
     /// (capabilities.md §12.1 terminal rule).
@@ -200,15 +200,15 @@ pub enum ProjectionEffect {
         grant_id: String,
         realm_id: String,
     },
-    /// P1 — `ck.capability.revoke` event was projected as an or_set
+    /// P1 — `ak.capability.revoke` event was projected as an or_set
     /// observed-remove on the target grant cell (capabilities.md §12 /
     /// §12.1). Terminal: the add dot stays removed under re-add.
     CapabilityRevokeProjected {
         grant_id: String,
         realm_id: String,
     },
-    /// P1 — `ck.capability.delegate` event was projected into the
-    /// `ck.component.capability.delegate.v1` or_set cell plus the parent
+    /// P1 — `ak.capability.delegate` event was projected into the
+    /// `ak.component.capability.delegate.v1` or_set cell plus the parent
     /// grant chain reference (capabilities.md §10 / §12.1).
     CapabilityDelegateProjected {
         grant_id: String,
@@ -229,7 +229,7 @@ pub enum ProjectionEffect {
         agent_principal_id: String,
         new_state: AgentLifecycleState,
     },
-    /// CKP-0008 §4.5 / D3 — `ck.agent.key.authorize` projected: the key is
+    /// AKP-0008 §4.5 / D3 — `ak.agent.key.authorize` projected: the key is
     /// recorded in `agent_authorized_keys` and every
     /// `effective_after_first_authorized_key` grant for this agent has had
     /// the flag cleared (the grants are now in their normal effective
@@ -239,7 +239,7 @@ pub enum ProjectionEffect {
         key_id: String,
         cleared_grant_ids: Vec<String>,
     },
-    /// CKP-0008 §4.11 — `ck.agent.key.revoke` projected: the key was removed
+    /// AKP-0008 §4.11 — `ak.agent.key.revoke` projected: the key was removed
     /// from `agent_authorized_keys`.
     AgentKeyRevokeProjected {
         agent_principal_id: String,
@@ -253,8 +253,8 @@ pub enum ProjectionEffect {
         event_id: String,
     },
     /// MID-1..6 (R3.1/R3.2, arkret-spec @ b56cab1) —
-    /// `ck.member.identity.update` accepted into the ordered-log
-    /// `ck.component.member.identity.v1` cell. The actual replacement-edge
+    /// `ak.member.identity.update` accepted into the ordered-log
+    /// `ak.component.member.identity.v1` cell. The actual replacement-edge
     /// filter + per-actor effective-set / `member_display_state_digest`
     /// materialization live on the `MemberIdentityRegistry`
     /// (`AppState::member_identity`) because they span cells; this effect
@@ -270,7 +270,7 @@ pub enum ProjectionEffect {
     /// so the routing layer can dispatch on `MlsEffect` without
     /// growing four near-identical `ProjectionEffect` arms.
     Mls(MlsEffect),
-    /// `ck.realm_key.share` accepted by the reducer. Routing projection uses
+    /// `ak.realm_key.share` accepted by the reducer. Routing projection uses
     /// this effect to enqueue the share onto the recipient device's to-device
     /// queue after the share payload and key scope have passed fail-closed
     /// checks.
@@ -280,14 +280,14 @@ pub enum ProjectionEffect {
         /// Absent for `share_class=realm_recovery_key` (offline RRK recipient).
         recipient_device_id: Option<String>,
     },
-    /// G3.S2 — `ck.realm.policy_server` projected into the
-    /// `ck.component.realm.policy_server.v1` cas-register cell + the
+    /// G3.S2 — `ak.realm.policy_server` projected into the
+    /// `ak.component.realm.policy_server.v1` cas-register cell + the
     /// `realm_policy_servers` structured cache.
     RealmPolicyServerProjected {
         realm_id: String,
         policy_server_did: String,
     },
-    /// `ck.device.push_route` actor-private state projected into the
+    /// `ak.device.push_route` actor-private state projected into the
     /// per-recipient Principal Server push-route cell cache.
     PushRouteUpdated {
         subject: PushRouteSubject,
@@ -302,8 +302,8 @@ pub enum ProjectionEffect {
         operation_id: String,
         reason: String,
     },
-    /// P2 — `ck.moderation.decision` projected as an or_set add into the
-    /// `ck.component.moderation_state.v1` cell keyed by `payload.target_ref`
+    /// P2 — `ak.moderation.decision` projected as an or_set add into the
+    /// `ak.component.moderation_state.v1` cell keyed by `payload.target_ref`
     /// (content-moderation.md §2.6). Carries an issuer/target_ref/decision
     /// snapshot so the appeal separation-of-duties check can reverse-resolve
     /// the original decision issuer from the cell.
@@ -311,7 +311,7 @@ pub enum ProjectionEffect {
         decision_id: String,
         realm_id: String,
     },
-    /// P2 — `ck.moderation.decision.lift` projected as an or_set
+    /// P2 — `ak.moderation.decision.lift` projected as an or_set
     /// observed-remove / supersede on the moderation_state target cell.
     /// Terminal: a re-add of a lifted decision_id
     /// stays lifted (mirrors capabilities.md §12.1).
@@ -319,8 +319,8 @@ pub enum ProjectionEffect {
         decision_id: String,
         realm_id: String,
     },
-    /// P2 — `ck.moderation.appeal.{submit,review,decision,close}` projected
-    /// onto the `ck.component.moderation.appeal.v1` fsm cell keyed by
+    /// P2 — `ak.moderation.appeal.{submit,review,decision,close}` projected
+    /// onto the `ak.component.moderation.appeal.v1` fsm cell keyed by
     /// `payload.appeal_id`. `new_state` is the post-transition FSM value
     /// (submitted / under_review / decided / closed); content-moderation.md
     /// §5.5.
@@ -366,7 +366,7 @@ pub enum MlsEffect {
         recipient_device_id: String,
         group_id: String,
     },
-    /// `apply_remove_proposal` — a `ck.mls.proposal{proposal_type="remove"}`
+    /// `apply_remove_proposal` — a `ak.mls.proposal{proposal_type="remove"}`
     /// was recorded so a later commit can consume a pending remove obligation.
     RemoveProposalRecorded {
         proposal_ref: String,

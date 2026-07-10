@@ -19,7 +19,7 @@ pub(crate) const MORPH_SCHEMA_MIGRATION_TRANSFORMATIONS_PROFILE: &str =
     "ak.profile.morph.schema_migration_transformations.v1";
 
 /// `morph.md` §4.1 — the canonical transformation rule ids understood by the
-/// `ck.profile.morph.schema_migration_transformations.v1`
+/// `ak.profile.morph.schema_migration_transformations.v1`
 /// `transformation_rules_v1_grammar` dialect. Covers the four cases the profile
 /// `deterministic_transformation_must` requires (identity, rename, type
 /// widening, default backfill). Rules outside this set are rejected fail-closed
@@ -150,14 +150,14 @@ pub(crate) fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
     arkret_sdk::canonical::format_timestamp_canonical(now)
 }
 
-/// SOL-ORG-01 — parse the `realm_id` out of a `ck.component.realm.metadata.v1`
+/// SOL-ORG-01 — parse the `realm_id` out of a `ak.component.realm.metadata.v1`
 /// cell id. This is the soland-local mutable-Realm-metadata cell family that
-/// backs `ck.realm.update` (NOT the organization relationship cell family
-/// `ck.component.realm.organization.v1`, whose subject is the composite
-/// `(organization_id, relationship)` and is owned by `ck.realm.organization`).
+/// backs `ak.realm.update` (NOT the organization relationship cell family
+/// `ak.component.realm.organization.v1`, whose subject is the composite
+/// `(organization_id, relationship)` and is owned by `ak.realm.organization`).
 pub(crate) fn realm_metadata_realm_id_from_cell(cell_id: &str) -> Option<String> {
     cell_id
-        .strip_prefix("ak:cell:ck.component.realm.metadata.v1:")
+        .strip_prefix("ak:cell:ak.component.realm.metadata.v1:")
         .filter(|realm_id| realm_id.starts_with("ak:realm:"))
         .map(ToOwned::to_owned)
 }
@@ -182,7 +182,7 @@ pub(crate) fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef>
     ])
     .ok()?;
     CellRef::new(format!(
-        "ak:cell:ck.component.device.push_route.v1:{cell_subject}"
+        "ak:cell:ak.component.device.push_route.v1:{cell_subject}"
     ))
     .ok()
 }
@@ -532,7 +532,7 @@ pub(crate) fn apply_strand_fields_patch(
     }
 }
 
-/// Apply a `ck.strand.update`-style patch to a Morph's `fields` map. Unlike Strand
+/// Apply a `ak.strand.update`-style patch to a Morph's `fields` map. Unlike Strand
 /// (whose profile fields moved under `metadata.fields` in spec 9dabf26), the
 /// Morph object keeps `fields` at the object root (morph.schema.json), so its
 /// patch paths are root-level `fields` / `fields.<name>`.
@@ -656,7 +656,7 @@ pub(crate) fn document_version_from_operation(
 }
 
 /// Spec T07 — federation fanout window for erasure receipts emitted by
-/// `ck.realm.destroy`. Spec: 30 days.
+/// `ak.realm.destroy`. Spec: 30 days.
 pub const REALM_DESTROY_FANOUT_WINDOW_DAYS: i64 = 30;
 
 /// Extract the operator-supplied human reason from a redaction payload,

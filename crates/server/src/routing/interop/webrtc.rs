@@ -2,11 +2,11 @@
 //!
 //! Surfaces:
 //! - `POST /_arkret/self/rtc/ice-config` (TURN / STUN list)
-//! - `POST /_arkret/self/rtc/token` (media token exchange, CKP-0010)
+//! - `POST /_arkret/self/rtc/token` (media token exchange, AKP-0010)
 //!
 //! These are the only spec-registered media surfaces. Both are stateless with
 //! respect to any ephemeral signaling session: the media token issuer reads the
-//! durable `ck.call.state` cell (`ck.component.call.state.v1`) for the committed
+//! durable `ak.call.state` cell (`ak.component.call.state.v1`) for the committed
 //! `session_focus`, the `removed_participants[]` ban set, and the current
 //! `participant_mute_overrides[]` set, and ICE config is a transport-layer
 //! discovery surface bound to the authenticated `(actor, device)`. STUN/TURN
@@ -45,16 +45,16 @@ use crate::wire::{
 /// `interop::router()` so the only spec-registered media paths resolve at
 /// `/_arkret/self/rtc/ice-config` and `/_arkret/self/rtc/token` (see
 /// `contract-catalog.json` / the OpenAPI binding). Ephemeral call signaling is
-/// the spec-registered `/_arkret/self/ephemeral` `ck.call.signal` relay (see
+/// the spec-registered `/_arkret/self/ephemeral` `ak.call.signal` relay (see
 /// `routing::events::sync::ephemeral`); the durable call model is the
-/// `ck.call.state` reducer. The legacy soland-internal `/_soland/self/webrtc/*`
+/// `ak.call.state` reducer. The legacy soland-internal `/_soland/self/webrtc/*`
 /// session stack has been removed — token/ICE authz and focus/ban now read the
-/// durable `ck.call.state` cell directly.
+/// durable `ak.call.state` cell directly.
 pub(super) fn protocol_router() -> Router {
     Router::new()
         // Spec-canonical signed ICE config (`/_arkret/self/rtc/ice-config`).
         .push(Router::with_path("rtc/ice-config").post(arkret_ice_config))
-        // CKP-0010 — media token exchange (`/_arkret/self/rtc/token`).
+        // AKP-0010 — media token exchange (`/_arkret/self/rtc/token`).
         .push(Router::with_path("rtc/token").post(arkret_rtc_token))
 }
 
@@ -211,7 +211,7 @@ async fn issue_ice_config(
     }
     // `webrtc-signaling.md` §4 — ICE config is a transport-layer discovery
     // surface bound to the authenticated `(actor, device)`. It precedes the
-    // `ck.call.state` roster (a caller fetches TURN/STUN before it has
+    // `ak.call.state` roster (a caller fetches TURN/STUN before it has
     // committed its participant row, and the callee fetches it while the call
     // is still ringing), so call existence MUST NOT be enforced here. The only
     // authorization gate is realm membership; the per-call ban gate lives on
@@ -405,8 +405,8 @@ fn turn_rest_credential(state: &AppState, username: &str) -> String {
 
 /// `media-service-binding.md` §3.1 / `webrtc-signaling.md` §4.1 — the ICE config
 /// response signature domain-separation label. MUST be byte-for-byte
-/// `ck.media.ice_config.v1` and MUST differ from
-/// `ck.media.participant_binding.v1` so an issuer key's ICE-config signature can
+/// `ak.media.ice_config.v1` and MUST differ from
+/// `ak.media.participant_binding.v1` so an issuer key's ICE-config signature can
 /// never be re-interpreted under the participant_binding verify path (or vice
 /// versa).
 const ICE_CONFIG_SIGNING_LABEL: &str = "ak.media.ice_config.v1";
@@ -436,9 +436,9 @@ fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> (String,
     (URL_SAFE_NO_PAD.encode(signature.to_bytes()), payload_digest)
 }
 
-// ── CKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
+// ── AKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
 // token exchange. Issues a backend_token + ParticipantBinding for a
-// caller that already has a committed `ck.call.state.session_focus`.
+// caller that already has a committed `ak.call.state.session_focus`.
 //
 // Wire-level checks implemented here:
 //   - `focus_id` must equal the call's committed session_focus → `focus_mismatch` (MEDIA-2,
@@ -449,7 +449,7 @@ fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> (String,
 //   - Token TTL ≤ `MEDIA_TOKEN_TTL_MAX_SECS` (600s); default `MEDIA_TOKEN_TTL_SHOULD_SECS` (300s)
 //     (MEDIA-1).
 //   - `service_signature.kid` / `participant_binding.issuer_kid` resolves to the current
-//     `ck.realm.media_service.service_id` epoch → `token_issuer_unauthorised` (MEDIA-1).
+//     `ak.realm.media_service.service_id` epoch → `token_issuer_unauthorised` (MEDIA-1).
 const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "ak.component.realm.media_service.v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -532,7 +532,7 @@ struct MediaTokenIssueRequestBody<'a> {
     /// Publish intent derived from the request `desired_media` (LiveKit
     /// `video.canPublishSources`). `(audio, video, screen)`.
     desired_media: (bool, bool, bool),
-    /// Whether the caller carries `ck.call.screen_share` (gates the
+    /// Whether the caller carries `ak.call.screen_share` (gates the
     /// `screen_share` publish source per `bindings/livekit.md` §5).
     allow_screen_share: bool,
     issued_at: DateTime<Utc>,
@@ -638,11 +638,11 @@ async fn handle_rtc_token(
     // Authz (`media-service-binding.md` §6 commit ordering) — the token issuer does NOT
     // depend on any ephemeral signaling session. Per `media-service-binding.md`
     // the client redeems the media token BEFORE it writes its own row into
-    // `ck.call.state.participants[]` (the initiator may exchange a token when
-    // the `ck.call.state` cell does not exist yet), so a `participants.contains`
+    // `ak.call.state.participants[]` (the initiator may exchange a token when
+    // the `ak.call.state` cell does not exist yet), so a `participants.contains`
     // / session-not-found gate would be wrong. Authorization is the conjunction
-    // of: (1) realm membership, (2) the `ck.call.join` capability, (3) not under
-    // an actor-wide `ban` in the durable `ck.call.state.removed_participants[]`.
+    // of: (1) realm membership, (2) the `ak.call.join` capability, (3) not under
+    // an actor-wide `ban` in the durable `ak.call.state.removed_participants[]`.
     //
     // (1) realm member.
     if !realm_has_member(state, body.realm_id.as_str(), body.actor_id.as_str()).await {
@@ -651,7 +651,7 @@ async fn handle_rtc_token(
         ));
     }
     // (2) `media-service-binding.md` §6 — token exchange is gated on the
-    // `ck.call.join` capability, not merely realm membership. §6 defines no
+    // `ak.call.join` capability, not merely realm membership. §6 defines no
     // dedicated error code, so we surface the generic `capability_denied` (403).
     if !actor_has_call_capability(
         state,
@@ -666,14 +666,14 @@ async fn handle_rtc_token(
         ));
     }
 
-    // Read the durable `ck.call.state` cell once. It MAY be absent (a brand-new
+    // Read the durable `ak.call.state` cell once. It MAY be absent (a brand-new
     // call whose initiator is redeeming a token before writing the first
-    // `ck.call.state` event). Absent cell ⇒ no committed focus and no bans.
+    // `ak.call.state` event). Absent cell ⇒ no committed focus and no bans.
     let call_state = CallStateCell::load(state, body.call_id.as_str()).await?;
 
     // (3) `webrtc-signaling.md` §3a — a banned actor MUST NOT re-issue a join
     // token for this call's lifetime. The ban set is the durable
-    // `ck.call.state.removed_participants[]` projection; an absent cell carries
+    // `ak.call.state.removed_participants[]` projection; an absent cell carries
     // no bans (everyone passes).
     if call_state.actor_is_banned(body.actor_id.as_str()) {
         return Err(AppError::new(
@@ -685,7 +685,7 @@ async fn handle_rtc_token(
     }
     let media_epoch = media_service_epoch_for_realm(state, body.realm_id.as_str())?;
 
-    // MEDIA-2 — focus selection. A committed `ck.call.state.session_focus`
+    // MEDIA-2 — focus selection. A committed `ak.call.state.session_focus`
     // (read from the durable cell) wins when present and the request `focus_id`
     // MUST match it (`focus_mismatch`). Absent a committed focus, the issuer
     // admits the requested `focus_id` as long as it is a legal focus within the
@@ -746,7 +746,7 @@ async fn handle_rtc_token(
     // `bindings/livekit.md` §2/§5 — publish grants are derived from the
     // caller's `desired_media`. Absent the field we default to audio+video
     // (no screen): screen capture is an opt-in source gated by
-    // `ck.call.screen_share`. Durable moderator mute overrides are applied
+    // `ak.call.screen_share`. Durable moderator mute overrides are applied
     // here so every backend token is minted with the narrowed send permission.
     let mut desired_media = body
         .desired_media
@@ -768,7 +768,7 @@ async fn handle_rtc_token(
         desired_media.1 = false;
     }
     // `bindings/livekit.md` §5 — the `screen_share` publish source is gated by
-    // a real `ck.call.screen_share` capability, not merely the presence of any
+    // a real `ak.call.screen_share` capability, not merely the presence of any
     // `capability_refs`. Resolve it against the projected grants so an actor
     // without the capability never receives a screen-share publish grant.
     let allow_screen_share = actor_has_call_capability(
@@ -866,13 +866,13 @@ async fn handle_rtc_token(
     })
 }
 
-/// MEDIA-2 focus selection against the durable `ck.call.state` cell.
+/// MEDIA-2 focus selection against the durable `ak.call.state` cell.
 ///
-/// - A committed `ck.call.state.session_focus` (read from the cell) is the binding decision: it is
+/// - A committed `ak.call.state.session_focus` (read from the cell) is the binding decision: it is
 ///   returned verbatim provided it is still a legal focus within the current realm media_service
 ///   epoch (the caller compares it against the request `focus_id` and surfaces `focus_mismatch` on
 ///   a disagreement).
-/// - Absent a committed focus (a brand-new call, or a `ck.call.state` head that has not yet
+/// - Absent a committed focus (a brand-new call, or a `ak.call.state` head that has not yet
 ///   committed `session_focus`), the issuer admits the `requested_focus_id` as long as it names a
 ///   legal focus in the epoch. This replaces the old ephemeral oldest-membership-wins derivation
 ///   that read `foci_preferred[]` off a signaling session: the durable committed focus is the
@@ -909,18 +909,18 @@ fn session_focus_for_call(
     ))
 }
 
-/// Read-only view of the durable `ck.call.state` cell
-/// (`ck.component.call.state.v1:{call_id}`) consumed by the media token issuer.
+/// Read-only view of the durable `ak.call.state` cell
+/// (`ak.component.call.state.v1:{call_id}`) consumed by the media token issuer.
 /// An absent cell (a brand-new call whose initiator redeems a token before
-/// writing the first `ck.call.state` event) is represented by `value: None`:
+/// writing the first `ak.call.state` event) is represented by `value: None`:
 /// no committed `session_focus` and an empty ban set.
 struct CallStateCell {
     value: Option<Value>,
 }
 
 impl CallStateCell {
-    /// Load the `ck.component.call.state.v1` cell for `call_id`. The cell id is
-    /// `ak:cell:ck.component.call.state.v1:{call_id}` — the same form the
+    /// Load the `ak.component.call.state.v1` cell for `call_id`. The cell id is
+    /// `ak:cell:ak.component.call.state.v1:{call_id}` — the same form the
     /// `apply_call_state` reducer writes (see `apply_realm_policy.rs`).
     async fn load(state: &AppState, call_id: &str) -> Result<Self, AppError> {
         let cell_id = call_state_cell_ref(call_id)?;
@@ -942,7 +942,7 @@ impl CallStateCell {
         Ok(Self { value })
     }
 
-    /// The committed `ck.call.state.session_focus` (§4.1 write-once), if any.
+    /// The committed `ak.call.state.session_focus` (§4.1 write-once), if any.
     fn session_focus(&self) -> Option<&str> {
         self.value
             .as_ref()?
@@ -1006,7 +1006,7 @@ impl CallStateCell {
 }
 
 fn call_state_cell_ref(call_id: &str) -> Result<CellRef, AppError> {
-    CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}"))
+    CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
         .map_err(|error| AppError::internal(format!("invalid call.state cell id: {error}")))
 }
 
@@ -1441,7 +1441,7 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
 #[endpoint(
     operation_id = "ak.self.call.media.exchange.issue_token",
     tags("media", "calls"),
-    summary = "Exchange a session-focus for a backend media token + participant_binding (CKP-0010)",
+    summary = "Exchange a session-focus for a backend media token + participant_binding (AKP-0010)",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.call.media.exchange.issue_token"))]
@@ -1565,7 +1565,7 @@ async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<Stri
 }
 
 /// Whether `actor` holds `action` in `realm_id` per the projected capability
-/// grants (`ck.component.capability.grant.v1`) and the engine default rules.
+/// grants (`ak.component.capability.grant.v1`) and the engine default rules.
 /// The realm itself is the capability resource scope (call capabilities are
 /// realm-scoped in §3; a call is not a separate grant resource in v1).
 pub(crate) async fn actor_has_call_capability(

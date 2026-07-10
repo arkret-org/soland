@@ -54,14 +54,14 @@ proptest! {
     ) {
         let mut forward = BTreeMap::new();
         for (subject, value) in &entries {
-            let cell = CellRef::new(format!("ak:cell:ck.component.test.prop.v1:{subject}"))
+            let cell = CellRef::new(format!("ak:cell:ak.component.test.prop.v1:{subject}"))
                 .expect("generated cell ref is valid");
             forward.insert(cell, CellState::Value(json!({"value": value})));
         }
 
         let mut reverse = BTreeMap::new();
         for (subject, value) in entries.iter().rev() {
-            let cell = CellRef::new(format!("ak:cell:ck.component.test.prop.v1:{subject}"))
+            let cell = CellRef::new(format!("ak:cell:ak.component.test.prop.v1:{subject}"))
                 .expect("generated cell ref is valid");
             reverse.insert(cell, CellState::Value(json!({"value": value})));
         }

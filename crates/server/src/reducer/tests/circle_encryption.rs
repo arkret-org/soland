@@ -1,7 +1,7 @@
 use super::*;
 use crate::reducer::*;
 
-// ── CKP-0007 §8 — Circle member one-way add authorization ───────────
+// ── AKP-0007 §8 — Circle member one-way add authorization ───────────
 //
 // Seed a Realm with `alice` (manage holder) + `bob` joined, plus a
 // non-member `mallory`, and an `invite`-rule Circle. Exercise the reducer's
@@ -61,7 +61,7 @@ fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
 
 #[test]
 fn circle_manage_pull_realm_member_succeeds() {
-    // alice holds `ck.circle.member.manage` (verdict stamped by the HTTP
+    // alice holds `ak.circle.member.manage` (verdict stamped by the HTTP
     // surface). She pulls the already-joined Realm member bob into the
     // Circle; bob performs no action and lands in `members` immediately.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
@@ -198,7 +198,7 @@ fn circle_self_join_requires_open_rule() {
     assert!(state.circles[&circle].members.contains("did:web:bob"));
 }
 
-// CKP — encryption-floor one-way ratchet (realm-and-space.md §2.5,
+// AKP — encryption-floor one-way ratchet (realm-and-space.md §2.5,
 // circle.md §7). Vectors: ak.vector.e2ee.content_floor_downgrade_rejected,
 // ak.vector.e2ee.metadata_floor_downgrade_rejected, ak.vector.e2ee.in_place_enable.
 #[test]
@@ -346,7 +346,7 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
     let hlc = ServerHlc::new("history-scheme");
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c001";
     let create_cell =
-        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
+        arkret_sdk::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,
@@ -391,7 +391,7 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
     let hlc = ServerHlc::new("history-scheme-ok");
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c002";
     let create_cell =
-        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
+        arkret_sdk::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,
@@ -423,7 +423,7 @@ fn content_scheme_falls_back_to_realm_create_log() {
     let hlc = ServerHlc::new("history-scheme-create");
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c012";
     let create_cell =
-        arkret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm}"))
+        arkret_sdk::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,

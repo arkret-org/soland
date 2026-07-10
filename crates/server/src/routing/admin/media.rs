@@ -62,7 +62,7 @@ pub(super) fn router() -> Router {
         )
 }
 
-/// Effective `ck.component.realm.media_service.v1` cell, surfaced read-only
+/// Effective `ak.component.realm.media_service.v1` cell, surfaced read-only
 /// for sodmin. Mirrors the projected media_service epoch shape: the service
 /// DID plus the declared multi-focus set (`bindings/livekit.md` §2 /
 /// `media-service-binding.md` §2).
@@ -145,7 +145,7 @@ async fn admin_get_realm_media_service(
         .with_status(StatusCode::BAD_REQUEST));
     }
     let cell_id = CellRef::new(format!(
-        "ak:cell:ck.component.realm.media_service.v1:{realm_id}"
+        "ak:cell:ak.component.realm.media_service.v1:{realm_id}"
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
     let value = {

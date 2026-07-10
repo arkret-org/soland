@@ -1,7 +1,7 @@
 //! Actor-private account data protocol handlers.
 //!
-//! Protocol writes use `ck.account_data.set` actor-private events and
-//! `ck.self.account.stream.subscribe` for sync/read. This module is mounted under
+//! Protocol writes use `ak.account_data.set` actor-private events and
+//! `ak.self.account.stream.subscribe` for sync/read. This module is mounted under
 //! `/_arkret/self/account_data*`.
 //!
 //! Spec: `discovery/client-preferences.md` §2 (storage model) plus the per-key
@@ -30,7 +30,7 @@ use crate::{JsonResult, json_ok};
 const MAX_DATA_TYPE_LEN: usize = 256;
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 
-/// CKP-0008 / CKP-0009 (spec head 37ce729) — controller-private account-data
+/// AKP-0008 / AKP-0009 (spec head 37ce729) — controller-private account-data
 /// types. Writers MUST be the controller principal (not their own agent
 /// runtime, not an applet-bound ghost).
 struct AccountDataTypeSpec {
@@ -139,7 +139,7 @@ fn validate_data_type(data_type: &str) -> Result<(), AppError> {
     if data_type.len() > MAX_DATA_TYPE_LEN {
         return Err(AppError::invalid_param("data_type too long"));
     }
-    // Keys are dot-delimited namespaces (`ck.contacts.realm.<realm_id>` etc.).
+    // Keys are dot-delimited namespaces (`ak.contacts.realm.<realm_id>` etc.).
     // Reject control chars / whitespace / path separators to keep them URL- and
     // log-safe; everything else (including the `:` in `ak:space:<uuid>`) is
     // permitted so the canonical wire keys round-trip.
@@ -201,7 +201,7 @@ async fn put_account_data(
     validate_data_type(&data_type)?;
     validate_registered_account_data_key(&data_type)?;
 
-    // CKP-0008 / CKP-0009: registered personal-agent account-data types are
+    // AKP-0008 / AKP-0009: registered personal-agent account-data types are
     // controller-private; native agent principals cannot write them directly.
     if let Some(spec) = registered_account_data_type(&data_type)
         && spec.controller_private

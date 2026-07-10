@@ -1222,7 +1222,7 @@ fn validate_encrypted_attachment_metadata(
     }
 
     // `scheme` is optional; per spec a missing scheme is treated as
-    // `ck.blob.whole_file_aead.v1`. Validate the per-scheme shape only for the
+    // `ak.blob.whole_file_aead.v1`. Validate the per-scheme shape only for the
     // two known schemes. Unknown schemes are accepted as opaque JSON (the
     // server does not interpret the envelope) and are NOT subjected to the
     // whole-file `nonce` requirement, so an unknown value is never

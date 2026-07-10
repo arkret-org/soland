@@ -664,7 +664,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     );
 }
 
-/// Device-identity Phase 1 (Task C) — an accepted `ck.device.authorize` carrying
+/// Device-identity Phase 1 (Task C) — an accepted `ak.device.authorize` carrying
 /// `device_public_key` projects that key into the devices table, so a device that
 /// was authorized but never opened a session is still directory-resolvable.
 #[tokio::test]
@@ -775,7 +775,7 @@ async fn keys_query_exposes_service_attested_device_anchor() {
     );
 }
 
-/// Build a real, fully-signed `(ck.cross_signing.publish payload,
+/// Build a real, fully-signed `(ak.cross_signing.publish payload,
 /// ak.device.authorize cross_signing_binding)` pair for `principal` / `device`
 /// using the supplied PSK / SSK keypairs and the SDK canonical-input
 /// constructors (the same ones the server's `check_device_cross_signing_binding`

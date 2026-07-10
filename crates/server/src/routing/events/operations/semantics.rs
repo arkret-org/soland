@@ -207,13 +207,13 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // REDU-3 / REDU-4 — `ck.call.state` shape checks.
+        // REDU-3 / REDU-4 — `ak.call.state` shape checks.
         //   - `session_focus` is write-once: clients MUST NOT mutate an already-committed value.
         //     The wire-level check ensures the payload doesn't carry a `session_focus_revision`
         //     marker other than the genesis `1`. The full `session_focus_already_committed`
         //     deduplication runs in the reducer once the per-call cell projection lands.
         //   - `participants[].participant_binding.scheme` MUST be the canonical
-        //     `ck.media.participant_binding.v1`; otherwise reject with
+        //     `ak.media.participant_binding.v1`; otherwise reject with
         //     `participant_binding_invalid`.
         "ak.call.state" => {
             // REDU-3 — write-once `session_focus`. Wire-shape check: a
@@ -255,7 +255,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                     // are present, (d) signature ("sig") present.
                     //
                     // Full cryptographic verification (issuer anchoring
-                    // against the current epoch `ck.realm.media_service`
+                    // against the current epoch `ak.realm.media_service`
                     // service_id + Ed25519 signature over the canonical
                     // binding bytes) runs in the state-aware
                     // `participant_binding::verify_call_state_participant_bindings`
@@ -432,7 +432,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 requirements: RELATION_ID_REQUIREMENTS,
                 validate: Some(validate_relation_operation_payload),
             },
-            // G3.S5 — `ck.realm.link`. Permissive schema (target_realm_id +
+            // G3.S5 — `ak.realm.link`. Permissive schema (target_realm_id +
             // link_kind required; the reducer's `apply_realm_link`
             // enforces the rest including cycle detection). We register
             // here so `accept_local_operations` doesn't fall through to
@@ -472,7 +472,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             arkret_sdk::events::kinds::VIEW_CREATE
             | arkret_sdk::events::kinds::VIEW_UPDATE
             | arkret_sdk::events::kinds::VIEW_RECONCILE => {
-                // `ck.view.*` events route through the `ck.component.view.*.v1`
+                // `ck.view.*` events route through the `ak.component.view.*.v1`
                 // cell families in the lattice registry (see
                 // `reducer::lattice_kinds::ViewCreate / ViewUpdate / ViewReconcile`).
                 // The validator just enforces a `view_id` payload key — the
@@ -545,7 +545,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 validate: None,
             },
             arkret_sdk::events::kinds::REALM_CREATE => OperationPayloadSchema {
-                // `ck.realm.create` is technically lifecycle but carries the
+                // `ak.realm.create` is technically lifecycle but carries the
                 // full Realm `object` rather than a facet payload.
                 requirements: REALM_CREATE_REQUIREMENTS,
                 validate: None,
@@ -563,7 +563,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 validate: None,
             },
             // Circle lifecycle. Structure is owned by the registered
-            // `ck.schema.circle.v1` payload schema (applied via validate_payload);
+            // `ak.schema.circle.v1` payload schema (applied via validate_payload);
             // registering here only builds the projection Operation so the
             // submit-time invariant gate runs — notably the encryption_profile
             // create-lock and circle-below-realm-floor checks in
@@ -655,9 +655,9 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 requirements: &[],
                 validate: None,
             },
-            // R1.2 — `ck.realm.delivery_binding_policy` (member-delivery-binding.md
+            // R1.2 — `ak.realm.delivery_binding_policy` (member-delivery-binding.md
             // §4). The reducer dispatch (`apply_delivery_binding_policy`) projects
-            // the whole payload into the `ck.component.realm.delivery_binding_policy.v1`
+            // the whole payload into the `ak.component.realm.delivery_binding_policy.v1`
             // cell; without a projection-operation schema entry the event is never
             // turned into an Operation, the policy cell is never set, and every
             // routable member join fails closed with `delivery_binding_policy_unset`.
@@ -748,7 +748,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 requirements: MORPH_SCHEMA_MIGRATE_REQUIREMENTS,
                 validate: Some(validate_morph_schema_migrate_payload),
             },
-            // `ck.field.position.move` / `ck.field.position.reorder` were removed
+            // `ak.field.position.move` / `ak.field.position.reorder` were removed
             // in revision 0a5ab85 (see arkret-spec
             // `artifacts/registry/removed-event-kinds.json`). The generic
             // unknown-event-kind path in `event_log::submit_event` already
@@ -834,8 +834,8 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
                 validate: Some(validate_cross_signing_reset_payload),
             },
-            // Device-identity — `ck.device.authorize` maps to the
-            // `ck.component.device.authorization.v1` lattice cell. Registering an
+            // Device-identity — `ak.device.authorize` maps to the
+            // `ak.component.device.authorization.v1` lattice cell. Registering an
             // Operation here is what lets `project_accepted_operations` run
             // `project_device_authorize`, which persists the authoritative
             // `device_public_key` + verified state into the devices inventory
@@ -897,7 +897,7 @@ pub fn payload_key_present(payload: &serde_json::Value, field: &str) -> bool {
         .is_some_and(|object| object.contains_key(field))
 }
 
-/// Spec B1.14 — validate a `ck.consent.revoke` payload. Empty or missing
+/// Spec B1.14 — validate a `ak.consent.revoke` payload. Empty or missing
 /// `observed_dots[]` is `schema_violation` — implicit cascade revoke is
 /// forbidden.
 pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static str, String)> {

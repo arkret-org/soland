@@ -5,7 +5,7 @@
 use super::*;
 
 impl ProjectionState {
-    /// Apply `ck.morph.create`. Mirror of `apply_strand_create`.
+    /// Apply `ak.morph.create`. Mirror of `apply_strand_create`.
     pub(crate) fn apply_morph_create(
         &mut self,
         operation: &Operation,
@@ -25,7 +25,7 @@ impl ProjectionState {
                 reason: "morph_create_missing_id".to_owned(),
             };
         };
-        // CKP-0007 — when the Morph carries a `scope_circle_id`, the
+        // AKP-0007 — when the Morph carries a `scope_circle_id`, the
         // Circle MUST belong to this Realm and be active. Mirrors the
         // Strand.scope_circle_id validation.
         if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
@@ -98,7 +98,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ck.morph.update`. Mirror of `apply_strand_update`.
+    /// Apply `ak.morph.update`. Mirror of `apply_strand_update`.
     pub(crate) fn apply_morph_update(
         &mut self,
         operation: &Operation,
@@ -133,7 +133,7 @@ impl ProjectionState {
                 morph.title = title;
             }
             // `morph.md` §4 (line 149): `morph_type` is immutable after
-            // `ck.morph.create`. Admission rejects an update patch that names it
+            // `ak.morph.create`. Admission rejects an update patch that names it
             // (`morph_type_immutable`); the reducer never mutates the field so the
             // invariant also holds for any event that bypasses admission.
             apply_morph_fields_patch(&mut morph.fields, patch);
@@ -160,7 +160,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ck.morph.schema_migrate` (`morph.md` §4.1 S3). Projects an
+    /// Apply `ak.morph.schema_migrate` (`morph.md` §4.1 S3). Projects an
     /// accepted schema-refs evolution onto the Morph: `schema_refs[]` becomes
     /// `to_schema_refs[]` and, for `transformation` class, the deterministic
     /// `transformation_rules[]` are applied to `fields`.
@@ -244,7 +244,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ck.morph.archive` / `ck.morph.restore`. Mirror of
+    /// Apply `ak.morph.archive` / `ak.morph.restore`. Mirror of
     /// `apply_strand_lifecycle`.
     pub(crate) fn apply_morph_lifecycle(
         &mut self,

@@ -46,9 +46,9 @@ pub fn generate_relation_id() -> String {
     generate("relation")
 }
 
-/// CKP-0007 (spec b7d35be) — generate a new `ak:circle:<uuid7>` identifier
+/// AKP-0007 (spec b7d35be) — generate a new `ak:circle:<uuid7>` identifier
 /// for the Circle primitive. Used by `POST /_arkret/self/circles` to mint the new
-/// Circle's typed wire id before submitting `ck.circle.create`.
+/// Circle's typed wire id before submitting `ak.circle.create`.
 pub fn generate_circle_id() -> String {
     generate("circle")
 }

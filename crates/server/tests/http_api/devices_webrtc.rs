@@ -466,13 +466,13 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
-    // Brand-new call: no `ck.call.state` cell yet (the initiator redeems a
-    // media token before writing its first `ck.call.state` event). With no
+    // Brand-new call: no `ak.call.state` cell yet (the initiator redeems a
+    // media token before writing its first `ak.call.state` event). With no
     // committed `session_focus`, the issuer admits the requested focus as long
     // as it is a legal focus within the realm media_service epoch.
     let session_id = new_prefixed_uuid7("ak:call:");
 
-    // `media-service-binding.md` §6 — token exchange requires `ck.call.join`;
+    // `media-service-binding.md` §6 — token exchange requires `ak.call.join`;
     // realm membership alone is insufficient.
     grant_call_capability(
         &state,
@@ -624,17 +624,17 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
 }
 
 /// Keystone acceptance for T4': the inkson flow obtains a media token WITHOUT
-/// ever touching any ephemeral signaling session. There is no `ck.call.state`
+/// ever touching any ephemeral signaling session. There is no `ak.call.state`
 /// cell yet (the initiator redeems the token before writing its first
-/// `ck.call.state` event); authorization is purely realm membership +
-/// `ck.call.join`. This is the case the old `participants.contains` /
+/// `ak.call.state` event); authorization is purely realm membership +
+/// `ak.call.join`. This is the case the old `participants.contains` /
 /// session-not-found gate broke (it 404'd every real inkson call).
 #[tokio::test]
 async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
-    // A fresh call id with NO `ck.call.state` cell and NO ephemeral session.
+    // A fresh call id with NO `ak.call.state` cell and NO ephemeral session.
     let call_id = new_prefixed_uuid7("ak:call:");
 
     // Without ak.call.join, even a realm member is denied (§6).
@@ -656,7 +656,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     );
 
     // Grant ak.call.join → the token is issued against the brand-new call even
-    // though no signaling session and no `ck.call.state` cell exist.
+    // though no signaling session and no `ak.call.state` cell exist.
     grant_call_capability(
         &state,
         DEMO_REALM_ID,
@@ -710,7 +710,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         "ak.call.join",
     );
 
-    // Commit `session_focus = mediasoup:blue` into the durable `ck.call.state`
+    // Commit `session_focus = mediasoup:blue` into the durable `ak.call.state`
     // cell (§4.1 write-once). A token request naming a different focus MUST be
     // rejected with `focus_mismatch`.
     seed_call_state(&state, &session_id, Some("ak:focus:mediasoup:blue"), vec![]);
@@ -805,7 +805,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     let bob = "did:web:bob.example";
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
-    // bob is a realm member; no `ck.call.state` cell exists yet (the new model
+    // bob is a realm member; no `ak.call.state` cell exists yet (the new model
     // does not require an ephemeral session to exist before token exchange).
     let session_id = add_member_and_fresh_call(&state, bob);
     let exchange_body = serde_json::json!({
@@ -1050,10 +1050,10 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         .unwrap();
     assert_eq!(pre_ban["focus_id"], "ak:focus:livekit:green");
 
-    // A moderator actor-wide-bans bob: the durable `ck.call.state.removed_participants[]`
+    // A moderator actor-wide-bans bob: the durable `ak.call.state.removed_participants[]`
     // projection (`webrtc-signaling.md` §3a) carries a `ban` row with no
     // `device_id`. Seed that cell directly (the reducer writes the same shape
-    // from a committed `ck.call.state` event).
+    // from a committed `ak.call.state` event).
     seed_call_state(
         &state,
         &session_id,
@@ -1100,20 +1100,20 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
 /// The media token issuer is decoupled from any ephemeral signaling session
 /// (`media-service-binding.md` §3 durable-roster ordering — after token
 /// exchange the client MUST land its `participant_binding` in a durable
-/// `ck.call.state.participants[]` event, accepted by the server, before
+/// `ak.call.state.participants[]` event, accepted by the server, before
 /// the identity counts as a roster member or media is exposed): a
 /// brand-new call has no
-/// `ck.call.state` cell yet, and the issuer authorizes on realm membership +
-/// `ck.call.join` + the durable ban set. This mirrors the inkson flow, which
-/// redeems a media token before writing its first `ck.call.state` event.
+/// `ak.call.state` cell yet, and the issuer authorizes on realm membership +
+/// `ak.call.join` + the durable ban set. This mirrors the inkson flow, which
+/// redeems a media token before writing its first `ak.call.state` event.
 fn add_member_and_fresh_call(state: &AppState, member: &str) -> String {
     add_test_realm_member(state, DEMO_REALM_ID, member);
     new_prefixed_uuid7("ak:call:")
 }
 
-/// Seed the durable `ck.call.state` cell (`ck.component.call.state.v1:{call_id}`)
+/// Seed the durable `ak.call.state` cell (`ak.component.call.state.v1:{call_id}`)
 /// the media token issuer reads, mirroring what the `apply_call_state` reducer
-/// writes from a committed `ck.call.state` event. `session_focus` pins the
+/// writes from a committed `ak.call.state` event. `session_focus` pins the
 /// committed focus (write-once §4.1); `removed_participants` carries the §3a ban
 /// / kick rows (`{ actor_id, device_id?, action, removed_at }`).
 fn seed_call_state(
@@ -1130,7 +1130,7 @@ fn seed_call_state(
     if let Some(focus) = session_focus {
         value["session_focus"] = Value::String(focus.to_owned());
     }
-    let cell_id = CellRef::new(format!("ak:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+    let cell_id = CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
     state
         .projection
         .lock()
@@ -1140,7 +1140,7 @@ fn seed_call_state(
 
 fn install_media_service_epoch(state: &AppState, media_service: Value) {
     let cell_id = CellRef::new(format!(
-        "ak:cell:ck.component.realm.media_service.v1:{DEMO_REALM_ID}"
+        "ak:cell:ak.component.realm.media_service.v1:{DEMO_REALM_ID}"
     ))
     .unwrap();
     state.projection.lock().cells.insert(
@@ -1176,8 +1176,8 @@ fn good_media_service_epoch() -> Value {
     })
 }
 
-/// Build a signed `ck.call.signal` ephemeral envelope (verbatim wire shape
-/// per `ck.schema.ephemeral_envelope.v1` + `webrtc-signaling.md` §5). `proof`
+/// Build a signed `ak.call.signal` ephemeral envelope (verbatim wire shape
+/// per `ak.schema.ephemeral_envelope.v1` + `webrtc-signaling.md` §5). `proof`
 /// is a development detached-signature stub — the relay stores it verbatim and
 /// the receiver (not the relay) verifies it.
 fn call_signal_envelope(
@@ -1224,8 +1224,8 @@ async fn post_ephemeral(state: AppState, token: &str, envelope: &Value) -> salvo
         .await
 }
 
-/// Extract the verbatim relayed `ck.call.signal` envelopes from a subscribe
-/// frame's per-Realm `ephemeral` segment (the typed `ck.call.signal` item).
+/// Extract the verbatim relayed `ak.call.signal` envelopes from a subscribe
+/// frame's per-Realm `ephemeral` segment (the typed `ak.call.signal` item).
 fn call_signals_in_subscribe(frame: &Value, realm_id: &str) -> Vec<Value> {
     let Some(realm) = frame["realms"].get(realm_id) else {
         return Vec::new();
@@ -1250,7 +1250,7 @@ async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_dev
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
-    // §162 — the sender MUST hold `ck.call.signal.send` for the Realm.
+    // §162 — the sender MUST hold `ak.call.signal.send` for the Realm.
     grant_call_capability(
         &state,
         DEMO_REALM_ID,
@@ -1402,7 +1402,7 @@ async fn ephemeral_call_signal_without_send_capability_is_denied() {
     let alice = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone()).await;
-    // No `ck.call.signal.send` grant.
+    // No `ak.call.signal.send` grant.
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca14";
     let envelope = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
     let denied = post_ephemeral(state.clone(), &alice_token, &envelope).await;
@@ -1419,7 +1419,7 @@ async fn ephemeral_call_signal_without_send_capability_is_denied() {
 }
 
 /// Incremental subscribe (with an `after` cursor) for `token`, returning the
-/// relayed `ck.call.signal` envelopes and the next cursor. `is_incremental` on
+/// relayed `ak.call.signal` envelopes and the next cursor. `is_incremental` on
 /// the server is `body.after.is_some()`, so passing `after=` exercises the
 /// deliver-once watermark path rather than a full sync.
 async fn incremental_call_signals(
@@ -1437,7 +1437,7 @@ async fn incremental_call_signals(
 #[tokio::test]
 async fn ephemeral_call_signal_incremental_resubscribe_does_not_redeliver() {
     // Deliver-once: a subscriber-device that already received a relayed
-    // `ck.call.signal` on one sync MUST NOT receive it again on a later
+    // `ak.call.signal` on one sync MUST NOT receive it again on a later
     // incremental sync inside the TTL window; a *new* signal still arrives;
     // and a full sync (catchup, no `after`) still re-delivers pending signals.
     let state = AppState::new(test_config(), Db { pool: None });

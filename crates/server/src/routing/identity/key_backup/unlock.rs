@@ -14,7 +14,7 @@ fn key_backup_untrusted_signature() -> AppError {
 /// envelope signed by a revoked old device key. Before a receiver trusts/uses an
 /// envelope (recovery or read), it MUST anchor `auth_data.signature` to exactly
 /// one actor device trust root: either the current cross-signing generation or
-/// the accepted service-attested `ck.device.authorize` event for the device.
+/// the accepted service-attested `ak.device.authorize` event for the device.
 pub(super) async fn anchor_key_backup_auth_data_trust_root(
     state: &AppState,
     actor_id: &str,
@@ -482,7 +482,7 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
 /// the unlock proof travels as the `proof` field of the JSON request body of
 /// `POST /_arkret/self/keys/backups/{backup_id}/unlock`; header / query
 /// carriers are forbidden. The proof MUST validate as
-/// `ck.schema.key_backup_unlock_proof.v1` and is verified against the
+/// `ak.schema.key_backup_unlock_proof.v1` and is verified against the
 /// recovery session, caller, requesting device key, and target envelope
 /// before the full ciphertext is returned (key-management.md §7.7.1 / §7.8).
 pub(super) async fn verify_key_backup_unlock_proof(

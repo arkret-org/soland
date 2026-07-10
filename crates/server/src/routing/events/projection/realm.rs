@@ -195,7 +195,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 }
             }
             // SEC-08 — latch the minimal-metadata declaration. A subsequent
-            // `ck.realm.policy_components` that declares the profile flips the
+            // `ak.realm.policy_components` that declares the profile flips the
             // realm into minimal-metadata mode; soland never relaxes it back.
             if !record.minimal_metadata_realm
                 && kinds::payload_declares_minimal_metadata_realm(&operation.payload)
@@ -246,7 +246,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     // Project an `invite` membership transition into a RealmInviteRecord so
     // `GET /_arkret/self/authz/invites` can surface seed invites carried on the
     // canonical event path (e.g. when the Realm bootstrap strand emits
-    // `ck.member.state{membership=invite}` for each seed member, per
+    // `ak.member.state{membership=invite}` for each seed member, per
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6).
     tracing::debug!(
         membership = ?membership,
@@ -340,7 +340,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                 // HDLREN-3/4 (arkret-spec @ 7157ee8) — `handle` is no longer
                 // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
                 // roster; clients resolve identity by following the
-                // `ck.member.identity.update` events surfaced via
+                // `ak.member.identity.update` events surfaced via
                 // `MemberRosterEntry.identity_event_ids[]`. The earlier
                 // `member_handle_uris` cache populated from
                 // `payload.handle_uri` is gone with this rename.
@@ -374,7 +374,7 @@ async fn project_invite_acceptance(state: &AppState, member: &str, operation: &O
 }
 
 /// MID-2..6 (R3.1, arkret-spec @ 7157ee8) — projection write for
-/// `ck.member.identity.update`. Validates payload shape (segment
+/// `ak.member.identity.update`. Validates payload shape (segment
 /// whitelist, cell-subject coherence), computes the canonical
 /// payload digest, and inserts a [`crate::state::MemberIdentityEventRecord`]
 /// into `AppState::member_identity`. Replacement-edge consistency is

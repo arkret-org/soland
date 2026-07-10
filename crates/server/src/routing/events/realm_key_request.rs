@@ -1,5 +1,5 @@
-//! Ephemeral `ck.realm_key.request` relay (realm-and-space.md history-sharing,
-//! `ck.feature.realm_key.peer_relay.v1`).
+//! Ephemeral `ak.realm_key.request` relay (realm-and-space.md history-sharing,
+//! `ak.feature.realm_key.peer_relay.v1`).
 //!
 //! A member device that joined a Realm late asks a *provider* device (a verified
 //! member that retained the history secret) to seal `history_secret[from..to]`
@@ -7,7 +7,7 @@
 //! (`event-payload.schema.json#/$defs/realm_key_request_payload`,
 //! `reducer_input=false`): it is NOT a durable Event and never enters the
 //! reducer. It rides the provider device's to-device queue; the provider answers
-//! out-of-band with a durable `ck.realm_key.share` carrying the sealed material.
+//! out-of-band with a durable `ak.realm_key.share` carrying the sealed material.
 //!
 //! This module mirrors `read_receipts::relay_ephemeral_read_receipt` (ephemeral
 //! envelope handling) and `operations::policy_extra::validate_realm_key_share_policy`
@@ -35,7 +35,7 @@ struct ResolvedTarget {
     device_id: String,
 }
 
-/// Admit and relay one ephemeral `ck.realm_key.request` envelope. The sender's
+/// Admit and relay one ephemeral `ak.realm_key.request` envelope. The sender's
 /// bearer session is already authenticated and confirmed to match
 /// `envelope.actor_id` by the caller; here we enforce the history-sharing policy
 /// gate and enqueue the request onto the provider device's to-device queue.
@@ -311,10 +311,10 @@ mod tests {
         }
     }
 
-    // BS3/BS4 — the ephemeral `ck.realm_key.request` relay enqueues the request
+    // BS3/BS4 — the ephemeral `ak.realm_key.request` relay enqueues the request
     // onto the *target provider device's* to-device queue with a
     // `realm_key_request:` idempotency-key prefix, carrying the request payload
-    // verbatim so the provider can answer with a `ck.realm_key.share`.
+    // verbatim so the provider can answer with a `ak.realm_key.share`.
     #[tokio::test]
     async fn realm_key_request_is_relayed_to_target_device_queue() {
         let state = AppState::new(test_config(), Db { pool: None });

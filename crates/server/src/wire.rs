@@ -412,7 +412,7 @@ pub struct IndexSpaceHierarchyOutcome {
     pub frontier: Value,
 }
 
-// Snapshot head operations return the full signed `ck.schema.snapshot.v1`
+// Snapshot head operations return the full signed `ak.schema.snapshot.v1`
 // manifest. soland answers both operations with `not_implemented` until it can
 // produce a real Snapshot detached proof.
 
@@ -531,7 +531,7 @@ pub struct SendMessageRequestBody {
 
 // Identity log / receipts outcomes are the SDK DTOs (`model/api.rs` is the
 // authoritative carrier for identity operation shapes); no soland mirrors.
-// CKP-0008 / CKP-0009 — Personal Agent operations. Every request/response
+// AKP-0008 / AKP-0009 — Personal Agent operations. Every request/response
 // DTO is the SDK-authoritative `arkret_sdk::models::Agent*` shape (spec
 // `agent-operations.schema.json`): `agent_view`/`agent_list` carry the spec
 // `agent_projection`; `agent_key_pair`/`rotate_key` outcomes are
@@ -542,7 +542,7 @@ pub struct SendMessageRequestBody {
 // `{ok: true, status}`) has no struct mirror in the SDK and is emitted as a
 // spec-exact JSON object by the agents handler. `AgentProvisionRequestBody` /
 // `AgentProvisionOutcome` were already SDK-backed.
-// ── CKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
+// ── AKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
 // token exchange wire shapes. Both the request body and the response types
 // come straight from the SDK (`CallMediaTokenExchangeRequestBody` carries
 // typed ids `realm_id`/`call_id`/`actor_id`/`device_id` plus the optional
@@ -737,13 +737,13 @@ fn profile_limitations() -> Vec<Value> {
                 "/_soland/peer/moves",
                 "/_soland/peer/seals"
             ],
-            "reason": "SPEC-CR-008 / federation.md §4.0 — the converged cross-deployment federation Event receive rail is the single protocol track POST /_arkret/peer/events (ck.peer.events.command.submit), which carries DataEvents and Control Moves (incl. Move/Anchor/Seal-bearing control events) as sealed Event Envelopes and is RFC 9421 service-signature gated. The /_soland/peer/* inbound *write* surface (transactions, operations push/backfill, moves/seals direct ingest) is fail-closed outside development_mode and is a deployment-local test/ops affordance only: it is not discoverable through describe/OpenAPI for remote peers and MUST NOT be relied on for cross-vendor interop. The read-only debug tracks (operations pull/frontier, realm-members, actor-events, seals pull) expose no interop write surface"
+            "reason": "SPEC-CR-008 / federation.md §4.0 — the converged cross-deployment federation Event receive rail is the single protocol track POST /_arkret/peer/events (ak.peer.events.command.submit), which carries DataEvents and Control Moves (incl. Move/Anchor/Seal-bearing control events) as sealed Event Envelopes and is RFC 9421 service-signature gated. The /_soland/peer/* inbound *write* surface (transactions, operations push/backfill, moves/seals direct ingest) is fail-closed outside development_mode and is a deployment-local test/ops affordance only: it is not discoverable through describe/OpenAPI for remote peers and MUST NOT be relied on for cross-vendor interop. The read-only debug tracks (operations pull/frontier, realm-members, actor-events, seals pull) expose no interop write surface"
         }),
         json!({
             "area": "consent.scope_any_cross_service_cascade",
             "status": "partial_local_only",
             "spec": "T17",
-            "implemented": "a holder `ck.consent.revoke` with scope=any is honored on read: every child-scope grant resolution folds the `any` cell (see has_active_consent / has_active_consent_grant_evidence), so an any-revoke withdraws all child scopes for local consent decisions",
+            "implemented": "a holder `ak.consent.revoke` with scope=any is honored on read: every child-scope grant resolution folds the `any` cell (see has_active_consent / has_active_consent_grant_evidence), so an any-revoke withdraws all child scopes for local consent decisions",
             "unsupported": "the cross-service cache-invalidation broadcast to downstream consumers (directory_reachability / mimi_consent / push_contact_psi / invite_gate / in_flight_invite on teabay / floria / coauth) and the per-child-scope `superseded_by_any_revoke` durable marker are not emitted; this deployment has no production cross-service consent-invalidation fanout path",
             "reason": "the local any-revoke effect is complete; the cross-service invalidation channels require a fanout transport soland does not implement"
         }),
@@ -960,12 +960,12 @@ pub fn describe(
                 "ak.profile.webrtc_media.v1".to_owned(),
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
-            // advertise `ck.profile.media_service_binding.v1` whenever the
-            // server exposes the `ck.self.call.media.exchange.issue_token`
+            // advertise `ak.profile.media_service_binding.v1` whenever the
+            // server exposes the `ak.self.call.media.exchange.issue_token`
             // handler. soland mounts the handler unconditionally, and also
-            // claims the required `ck.profile.webrtc_media.v1` dependency above.
+            // claims the required `ak.profile.webrtc_media.v1` dependency above.
             profiles.push("ak.profile.media_service_binding.v1".to_owned());
-            // PROF-1 — `ck.profile.accountable_principals.strict_reject.v1` is
+            // PROF-1 — `ak.profile.accountable_principals.strict_reject.v1` is
             // gated by `SOLAND_ACCOUNTABLE_TO_STRICT_REJECT=true`.
             if matches!(
                 std::env::var("SOLAND_ACCOUNTABLE_TO_STRICT_REJECT").as_deref(),
@@ -1061,9 +1061,9 @@ pub fn describe(
             "org.arkret.soland.feature.registry.artifacts".to_owned(),
             "org.arkret.soland.feature.plaintext_visible_services".to_owned(),
             // realm-and-space.md history-sharing — advertise the three
-            // `ck.realm_key.request` / `ck.realm_key.share` retrieval modes the
+            // `ak.realm_key.request` / `ak.realm_key.share` retrieval modes the
             // server relays history keys through: backup-derived retrieval,
-            // device-to-device peer relay (the ephemeral `ck.realm_key.request`
+            // device-to-device peer relay (the ephemeral `ak.realm_key.request`
             // relay implemented in `routing::events::realm_key_request`), and
             // archive retrieval.
             "ak.feature.realm_key.backup_retrieval.v1".to_owned(),

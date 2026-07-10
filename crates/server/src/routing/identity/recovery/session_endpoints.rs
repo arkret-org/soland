@@ -27,11 +27,11 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 // Other policy-permitted proof kinds return 501 `recovery_proof_kind_unimplemented`
 // rather than silently leaving the session pending.
 //
-// C-P4 — `/complete` requires the client-signed `ck.device.authorize` material
+// C-P4 — `/complete` requires the client-signed `ak.device.authorize` material
 // (recovery-session.schema.json complete_request), validates every session
 // binding (device_id / principal_id / recovery_session_id / ssk_generation +
 // cross_signing_binding + device_signature shape), then EMITS the authorize plus
-// a `ck.device.list_update` onto the principal's control realm (a deterministic
+// a `ak.device.list_update` onto the principal's control realm (a deterministic
 // per-principal `ak:realm:` auto-materialized by the projector) via
 // `accept_local_operations` — real schema validation + reducer apply. The
 // session transitions to `completed` and the response is the schema's
@@ -1008,8 +1008,8 @@ pub(super) async fn recovery_session_complete(
 
     // C-P4 / Phase 3 (durable model) — the recovering client has already
     // submitted, via POST /events on the principal control stream, both a
-    // `ck.device.authorize` (SSK-signed; its cross_signing_binding was verified
-    // at ingest, §3a) and a `ck.device.list_update`, each a signed Event
+    // `ak.device.authorize` (SSK-signed; its cross_signing_binding was verified
+    // at ingest, §3a) and a `ak.device.list_update`, each a signed Event
     // Envelope carrying the next actor_seq. Completion REFERENCES those durable
     // event ids and verifies they are the right events bound to this session —
     // the server never authors/signs control events on the principal's behalf.

@@ -1,12 +1,12 @@
 //! Reference agent invocation runtime.
 //!
-//! When a client emits `ck.agent.interop_session.start` against an
-//! agent registered via `ck.agent.endpoint`, this module fans out the
+//! When a client emits `ak.agent.interop_session.start` against an
+//! agent registered via `ak.agent.endpoint`, this module fans out the
 //! lifecycle as projection events:
 //!
-//! 1. `ck.agent.interop_session.status` with `status="working"` once the runtime acknowledges the
+//! 1. `ak.agent.interop_session.status` with `status="working"` once the runtime acknowledges the
 //!    invocation.
-//! 2. `ck.agent.interop_session.result` carrying the terminal payload plus an Ed25519-signed
+//! 2. `ak.agent.interop_session.result` carrying the terminal payload plus an Ed25519-signed
 //!    `audit_binding` block (signature is computed by
 //!    `arkret_sdk::agent_binding::sign_ed25519_audit_binding` over the canonical subject
 //!    `{session_id, agent_principal_id, result.echo, actor}`).
@@ -15,7 +15,7 @@
 //!
 //! - The runtime first looks up `counterparty_agent` in `state.projection.lock().agents`. When no
 //!   SolandAgentProjection is present the bridge fails closed with a single
-//!   `ck.agent.interop_session.result` (`status="failed"` + `error.code="unknown_agent"`) and emits
+//!   `ak.agent.interop_session.result` (`status="failed"` + `error.code="unknown_agent"`) and emits
 //!   no status(working).
 //! - When the registered agent carries an `endpoint_url`, the runtime POSTs the invocation to it
 //!   via reqwest on a tokio task and emits the result event when the upstream replies. Failures
@@ -41,7 +41,7 @@ use crate::{ids, kinds};
 
 /// Upper bound on in-flight outbound agent-bridge HTTP tasks. Agent
 /// endpoint URLs come from agent-registration data (lower trust); without
-/// a cap, a high rate of `ck.agent.interop_session.start` operations could
+/// a cap, a high rate of `ak.agent.interop_session.start` operations could
 /// spawn unbounded background tasks and outbound connections (task / FD /
 /// memory exhaustion). When saturated, the bridge fails closed with a
 /// `capacity_exhausted` result envelope instead of piling up work.
@@ -107,8 +107,8 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] = [
 pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str = "soland.reference.agent_echo.ed25519_v1";
 
 /// Inspect `operation` and, when it carries a
-/// `ck.agent.interop_session.start` payload, emit synthetic
-/// `ck.agent.interop_session.status` + `ck.agent.interop_session.result`
+/// `ak.agent.interop_session.start` payload, emit synthetic
+/// `ak.agent.interop_session.status` + `ak.agent.interop_session.result`
 /// projection events. Idempotent (no-ops for any other kind).
 ///
 /// Called from `project_accepted_operations` AFTER the `start` event
@@ -350,7 +350,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
 }
 
 /// Outcome of an agent invocation as surfaced into the
-/// `ck.agent.interop_session.result` envelope.
+/// `ak.agent.interop_session.result` envelope.
 enum AgentInvocationOutcome {
     /// In-process reference echo — `result.echo` mirrors the
     /// caller's `params`.
@@ -603,7 +603,7 @@ mod tests {
     }
 
     /// Helper: insert a registered agent so B4c's dispatch lookup
-    /// succeeds. Mirrors what `ck.agent.endpoint` would do via the
+    /// succeeds. Mirrors what `ak.agent.endpoint` would do via the
     /// reducer; the tests need it because they hand-build operations
     /// and bypass the full reducer pipeline.
     fn register_agent(state: &AppState, agent_principal_id: &str) {
@@ -707,9 +707,9 @@ mod tests {
         );
     }
 
-    /// When the counterparty_agent is not registered (no `ck.agent.endpoint`
+    /// When the counterparty_agent is not registered (no `ak.agent.endpoint`
     /// accepted), the bridge MUST emit a single
-    /// `ck.agent.interop_session.result` with `status=failed` +
+    /// `ak.agent.interop_session.result` with `status=failed` +
     /// `error.code=unknown_agent` instead of the status/result
     /// success pair.
     #[tokio::test]

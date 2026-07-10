@@ -329,7 +329,7 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
         || operation.payload.get("encrypted_content").is_some();
     if encrypted {
         // The encrypted content envelope SHAPE is owned by the registered spec schema
-        // `ck.schema.encrypted_envelope.v1` (referenced from
+        // `ak.schema.encrypted_envelope.v1` (referenced from
         // `message_create_payload` and enforced via
         // `event_payload_validator_catalog()?.validate_payload`). The spec
         // schema is the single source of truth — we only assert presence here
@@ -697,15 +697,15 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
     }
     Ok(())
 }
-/// `relation.md` admission guard for `ck.relation.create` / `.update` /
+/// `relation.md` admission guard for `ak.relation.create` / `.update` /
 /// `.tombstone`, covering two reducer-managed invariants:
 ///
 /// 1. **`effective_scope` is reducer-stamped** (§2 table): the actor MUST NOT submit it; the
 ///    reducer materialises it from `scope_circle_id`. Any actor-supplied `effective_scope` is
 ///    `schema_violation` (`effective_scope_reducer_managed`).
 /// 2. **derived-edge single-source** (§3.2): `watches` (truth source
-///    `ck.component.strand.watch.v1`, write path `ck.strand.watch.set`) and Board/List `contains`
-///    (truth source `ck.space.parent` / `ck.strand.move`) are derived projections; a direct
+///    `ak.component.strand.watch.v1`, write path `ak.strand.watch.set`) and Board/List `contains`
+///    (truth source `ak.space.parent` / `ak.strand.move`) are derived projections; a direct
 ///    `ck.relation.*` on them MUST `schema_violation`. The container `contains` shape is identified
 ///    by a Space `from_ref` (`ak:space:…`); a `Strand -> Strand` `contains` stays a
 ///    directly-writable weak relation (§3.2 line 85) and is not blocked.
@@ -750,9 +750,9 @@ pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(),
     Ok(())
 }
 
-/// `morph.md` §2 / §4 forbidden-wire guard for `ck.morph.update`:
-/// - `morph_type` is immutable after `ck.morph.create` (`morph_type_immutable`).
-/// - the stage axis (`stage` / `stage_changed_at`) changes only via `ck.morph.stage.set`; writing
+/// `morph.md` §2 / §4 forbidden-wire guard for `ak.morph.update`:
+/// - `morph_type` is immutable after `ak.morph.create` (`morph_type_immutable`).
+/// - the stage axis (`stage` / `stage_changed_at`) changes only via `ak.morph.stage.set`; writing
 ///   it through an update patch is `schema_violation`.
 /// - the reserved business-field set (`fields.stage` / `fields.lifecycle` / `fields.progress_state`
 ///   / `fields.stage_reason`) is forbidden-wire in any representation (dotted `fields.<name>` path
@@ -874,7 +874,7 @@ pub(crate) fn validate_morph_schema_migrate_payload(
         }
         // `morph.md` §4.1 S3 — breaking / transformation are NOT statically
         // rejected here: whether they are admissible depends on the Realm
-        // declaring `ck.profile.morph.schema_migration_transformations.v1`,
+        // declaring `ak.profile.morph.schema_migration_transformations.v1`,
         // which is only visible to the state-aware preflight
         // (`ProjectionState::check_morph_schema_migrate`). The static layer
         // only checks shape: a transformation migration MUST carry a

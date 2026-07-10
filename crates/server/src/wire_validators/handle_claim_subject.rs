@@ -16,7 +16,7 @@ use crate::error::reasons;
 
 const REMOVED_SERVICE_HANDLE: &str = "service_handle";
 
-/// Validate an ingested `ck.schema.handle_claim.v1` object's `claim_kind`
+/// Validate an ingested `ak.schema.handle_claim.v1` object's `claim_kind`
 /// and `subject`.
 pub fn validate_handle_claim_ingest(claim: &Value) -> Result<(), WireRejection> {
     validate_claim_kind(claim)?;

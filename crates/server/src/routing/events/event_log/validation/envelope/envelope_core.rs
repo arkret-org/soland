@@ -45,7 +45,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     // Round R2/R3 (T02/T23) — reject ephemeral kinds & receipt-object-only
     // kinds at the submit entrypoint. Aggressive mode: no compat path —
     // pre-Round-R2/R3 senders MUST switch to ak.schema.ephemeral_envelope.v1
-    // (broadcast forms) or ak.schema.device_message.v1 (ck.key.verification.*).
+    // (broadcast forms) or ak.schema.device_message.v1 (ak.key.verification.*).
     if let Some((code, reason)) = events_submit_pre_admit_check(&kind) {
         return Err(event_validation_error(
             error_http_status(code),
@@ -87,7 +87,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         ));
     }
 
-    // REDU-7 / CKP-0008 / CKP-0009 (R3 spec-sync 2026-05-27,
+    // REDU-7 / AKP-0008 / AKP-0009 (R3 spec-sync 2026-05-27,
     // arkret-spec b47ff6ec) — Envelope `actor_kind` is reducer-managed:
     // reject any client-supplied value with the spec-canonical
     // `actor_kind_reducer_managed` reason code. The reducer derives the
@@ -110,7 +110,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         ));
     }
 
-    // CKP-0008 / CKP-0009 — when `executed_by` is present the reducer MUST
+    // AKP-0008 / AKP-0009 — when `executed_by` is present the reducer MUST
     // verify the DID resolved from `proof.verification_method` matches
     // `executed_by` (signs-as-X-on-behalf-of-Y attribution proof). This
     // check uses the FIRST proof's verification_method as the proxy for
@@ -167,7 +167,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     validate_applet_delegated_authorization_chain(state, object, &kind, &actor_id, &realm_id)
         .await?;
     // Round R2/R3 (T07) + Stream-F (Wave 1B) — Realm in terminal state
-    // (`ck.realm.tombstone` OR `ck.realm.destroy` applied) refuses every
+    // (`ak.realm.tombstone` OR `ak.realm.destroy` applied) refuses every
     // non-audit-class write. Spec `realm-and-space.md` §2.5 / §2.5.1.
     // The projection lock is poison-free (`parking_lot::Mutex`), so this check is
     // always evaluated — a terminal Realm can never be written to because a
@@ -194,7 +194,7 @@ pub(crate) async fn validate_event_envelope_with_context(
             reason,
         ));
     }
-    // Spec realm-and-space.md §2.5 — `ck.realm.create` is the genesis
+    // Spec realm-and-space.md §2.5 — `ak.realm.create` is the genesis
     // event for both the Realm metadata cell AND the creator's first
     // member-state cell. The reducer MUST treat `created_by`
     // as already-a-member when admitting this event; otherwise spec-
@@ -226,10 +226,10 @@ pub(crate) async fn validate_event_envelope_with_context(
     )
     .await;
     // A private cross-PS invite delivery (`POST /_arkret/peer/invites`) submits
-    // the inviter-signed `ck.invite.create` on the *recipient* PS so the local
+    // the inviter-signed `ak.invite.create` on the *recipient* PS so the local
     // subject can list + accept it. That realm lives on the inviter's PS, so the
     // recipient PS has no member record for it — yet it MUST still record the
-    // pending invite for its subject. Admit `ck.invite.create` from its own
+    // pending invite for its subject. Admit `ak.invite.create` from its own
     // inviter into a realm this PS does not host (spec invite-addressing.md §5).
     let is_foreign_invite_delivery = kind == "ak.invite.create"
         && invite_create_actor_is_inviter(object, &session.actor)
@@ -239,7 +239,7 @@ pub(crate) async fn validate_event_envelope_with_context(
             .iter()
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id);
     // join-policy.md §7.1 — a not-yet-member applicant MUST be able to submit
-    // their own `ck.member.state{membership=knock}` (and the profile-private
+    // their own `ak.member.state{membership=knock}` (and the profile-private
     // application sub-payload it carries). Gate / review enforcement happens at
     // the later `join` transition, not on the knock itself.
     let is_member_self_knock = member_self_knock(object, &session.actor);
@@ -343,7 +343,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     }
     // Round R2/R3 (T04) — Seal frontier entries MUST be sha256:<hex>.
     // We tighten the validator on the events ingest side for the
-    // `ck.realm.seal.submit` payload shape used by federation push;
+    // `ak.realm.seal.submit` payload shape used by federation push;
     // the deeper canonical-bytes path uses SDK `seal_canonical_bytes`
     // which already excludes id + notary_sig (notary.rs:217).
     if let Some(frontier) = object

@@ -1,7 +1,7 @@
-//! Shared `ck.media.participant_binding.v1` canonical-bytes + verification.
+//! Shared `ak.media.participant_binding.v1` canonical-bytes + verification.
 //!
 //! `media-service-binding.md` §3 / §7 and `call-state.md` §4.1 require the
-//! token issuer to sign, and the `ck.call.state` reducer / receiver to verify,
+//! token issuer to sign, and the `ak.call.state` reducer / receiver to verify,
 //! the **same** authoritative tuple over the **same** canonical bytes. To keep
 //! the issue and verify sides byte-for-byte symmetric this module is the single
 //! definition of:
@@ -10,7 +10,7 @@
 //!   authoritative fields), and
 //! - the label-prefixed Ed25519 signing input (`binding_signing_input`).
 //!
-//! The CKP-0010 token issuer ([`super::webrtc`]) builds the signing input here
+//! The AKP-0010 token issuer ([`super::webrtc`]) builds the signing input here
 //! and signs it with the notary key; the operation-admission path
 //! ([`crate::routing::events::operations`]) rebuilds the identical bytes from
 //! the wire binding and verifies the detached signature with the same notary
@@ -92,7 +92,7 @@ pub(crate) fn binding_signing_input(canonical_bytes: &[u8]) -> Vec<u8> {
 }
 
 /// Build the wire `sig` string for a binding given the notary signing key.
-/// Used by the CKP-0010 issuer so the issued `sig` and the verifier share one
+/// Used by the AKP-0010 issuer so the issued `sig` and the verifier share one
 /// construction.
 pub(crate) fn sign_binding(binding: &Value, signing_key: &ed25519_dalek::SigningKey) -> String {
     use ed25519_dalek::Signer as _;
@@ -215,11 +215,11 @@ fn binding_str<'a>(binding: &'a Value, field: &str) -> Option<&'a str> {
 }
 
 /// `call-state.md` §4.1 / `media-service-binding.md` §3 / §7 — full
-/// cryptographic verification of every `ck.call.state.participants[]`
+/// cryptographic verification of every `ak.call.state.participants[]`
 /// `participant_binding`.
 ///
 /// For each binding the receiver MUST:
-/// 1. anchor `issuer_kid` to the **current epoch** `ck.realm.media_service` service DID / focus
+/// 1. anchor `issuer_kid` to the **current epoch** `ak.realm.media_service` service DID / focus
 ///    issuer_kids set → else `token_issuer_unauthorised`;
 /// 2. confirm the binding's authoritative tuple (`realm_id`, `call_id`, `focus_id`, `actor_id`,
 ///    `device_id`, `participant_identity`) matches the participant entry and the event envelope;
@@ -250,7 +250,7 @@ pub(crate) fn verify_call_state_participant_bindings(
     let event_created_at = operation.created_at;
 
     // The anchor set is required the moment any binding is present: a
-    // `ck.call.state` carrying a `participant_binding` for a realm with no
+    // `ak.call.state` carrying a `participant_binding` for a realm with no
     // projected media_service epoch has no authority to anchor the issuer.
     let anchors = media_service_anchors(state, event_realm_id).ok_or(
         "token_issuer_unauthorised: realm has no current-epoch ak.realm.media_service to anchor \
@@ -403,7 +403,7 @@ mod cross_impl_tests {
     //! verify side. Each side has its own self-consistent unit tests, but until
     //! this lock there was no test asserting the two produce **identical bytes**
     //! for the same logical seven-tuple — so a drift on either side could go
-    //! unnoticed (unlike the `ck.call.signal` envelope proof, which has a real
+    //! unnoticed (unlike the `ak.call.signal` envelope proof, which has a real
     //! inkson round-trip). This test fails the moment either construction drifts.
 
     use chrono::{DateTime, Utc};

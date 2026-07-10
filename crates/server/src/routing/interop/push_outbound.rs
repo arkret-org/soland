@@ -19,7 +19,7 @@
 //! Trust + freshness:
 //! - **TTL freshness**: cache_hit reads check `freshness_at + push_bridge_cache_ttl_seconds`
 //!   (default 900s). Stale entries are downgraded to `trust_level=stale` and surface
-//!   `fetch_state=cache_hit_stale`, so downstream `ck.edge.push.command.notify` never delivers off
+//!   `fetch_state=cache_hit_stale`, so downstream `ak.edge.push.command.notify` never delivers off
 //!   a stale snapshot without an explicit operator action (force_refresh on /fetch, or import).
 //! - **Signed-service-DID trust**: snapshot imports / live fetches only promote
 //!   `trust_level=trusted` when the upstream contract's `service_did` matches
@@ -27,7 +27,7 @@
 //!   lands at `trust_level=pending` and outbound delivery treats it as unsigned-only.
 //! - **Auth modes / privacy descriptors**: `OutboundPushResolvedContract` surfaces the upstream
 //!   `auth_modes[]` and `privacy.*` fields so the delivery layer can bind outbound signing to
-//!   whatever the gateway advertised (instead of the fixed `ck.edge.push.command.notify` defaults).
+//!   whatever the gateway advertised (instead of the fixed `ak.edge.push.command.notify` defaults).
 //!   Stays read-only here — the actual binding lives in the delivery loop.
 
 use std::time::Duration;

@@ -260,7 +260,7 @@ impl NotaryWorker {
         //
         // Capture mls.epoch before reload so we can detect rotation.
         let mls_epoch_cell = CellRef::new(format!(
-            "ak:cell:ck.component.mls.epoch.v1:{}",
+            "ak:cell:ak.component.mls.epoch.v1:{}",
             realm_id.as_str()
         ))
         .ok();
@@ -334,7 +334,7 @@ impl NotaryWorker {
     ///   60_000ms), the recovery set takes over with the same lex-smallest leader election.
     fn is_authorized_for(&self, state: &AppState, realm_id: &RealmId) -> Result<bool, NotaryError> {
         let notary_cell = match CellRef::new(format!(
-            "ak:cell:ck.component.notary.v1:{}",
+            "ak:cell:ak.component.notary.v1:{}",
             realm_id.as_str()
         )) {
             Ok(c) => c,
@@ -744,7 +744,7 @@ fn materialize_genesis_if_empty(
 }
 
 /// Current accepted Seal head for a Realm — the server side of the
-/// registered account-client seal-view sourcing (`ck.self.events.query.frontier`
+/// registered account-client seal-view sourcing (`ak.self.events.query.frontier`
 /// realm shape `{realm_id, seal_id, control_event_set_root, state_root,
 /// hlc?}`, see arkret-spec service-http-binding). Clients mint single-leaf
 /// Control Move `seal_basis` (`leaves=[seal_id]`) and DataEvent `seal_ref`

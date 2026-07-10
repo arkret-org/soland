@@ -238,7 +238,7 @@ async fn install_endpoint(
     }
 
     // Governance gate: the canonical install write projects a
-    // `ck.realm.admin`-scoped registration onto the effective_scope realm.
+    // `ak.realm.admin`-scoped registration onto the effective_scope realm.
     // Authentication alone is insufficient — the actor MUST hold realm admin
     // over that realm. P1 projected capability grants into the authz index, so
     // `state.authz.check` is authoritative here. fail-closed.
@@ -284,7 +284,7 @@ async fn revoke_install_endpoint(
         );
     }
     // Governance gate: revoking a canonical install mutates the
-    // realm-scoped registration; require `ck.realm.admin` over the install's
+    // realm-scoped registration; require `ak.realm.admin` over the install's
     // realm. fail-closed.
     require_realm_admin(state, &session.actor, &revoke.effective_scope).await?;
     let service_did = record

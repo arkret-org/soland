@@ -1,11 +1,11 @@
 //! P1 — capability control-plane projection.
 //!
-//! Projects `ck.capability.grant` / `ck.capability.revoke` /
-//! `ck.capability.delegate` into the canonical cells declared by
+//! Projects `ak.capability.grant` / `ak.capability.revoke` /
+//! `ak.capability.delegate` into the canonical cells declared by
 //! `event-kind-registry.json`:
 //!
-//! - grant / revoke → `ck.component.capability.grant.v1` (or_set, one cell per `payload.grant_id`).
-//! - delegate → `ck.component.capability.delegate.v1` (or_set, one cell per `payload.grant_id`)
+//! - grant / revoke → `ak.component.capability.grant.v1` (or_set, one cell per `payload.grant_id`).
+//! - delegate → `ak.component.capability.delegate.v1` (or_set, one cell per `payload.grant_id`)
 //!   plus a `parent_grant_id` chain reference.
 //!
 //! Convergence rules (capabilities.md §12.1):
@@ -323,8 +323,8 @@ fn capability_add_dot(operation: &Operation) -> String {
     operation.operation_id.to_string()
 }
 
-/// Pull the canonical grant body out of a `ck.capability.grant` /
-/// `ck.capability.delegate` payload. Accepts both the canonical wrapper
+/// Pull the canonical grant body out of a `ak.capability.grant` /
+/// `ak.capability.delegate` payload. Accepts both the canonical wrapper
 /// `{grant_id, grant: {…}}` (SDK `CapabilityGrantBuilder`) and a flat
 /// payload that already *is* the grant body.
 fn grant_body(payload: &Value) -> &Value {
@@ -444,14 +444,14 @@ fn grant_item_value(
 impl ProjectionState {
     fn capability_grant_cell_ref(grant_id: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "ak:cell:ck.component.capability.grant.v1:{grant_id}"
+            "ak:cell:ak.component.capability.grant.v1:{grant_id}"
         ))
         .ok()
     }
 
     fn capability_delegate_cell_ref(grant_id: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "ak:cell:ck.component.capability.delegate.v1:{grant_id}"
+            "ak:cell:ak.component.capability.delegate.v1:{grant_id}"
         ))
         .ok()
     }
@@ -480,7 +480,7 @@ impl ProjectionState {
         {
             return true;
         }
-        const CELL_PREFIX: &str = "ak:cell:ck.component.capability.grant.v1:";
+        const CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.cells.iter().any(|(cell_ref, cell_state)| {
             let Some(grant_id) = cell_ref.as_str().strip_prefix(CELL_PREFIX) else {
@@ -608,11 +608,11 @@ impl ProjectionState {
         // describe the same grant; the last one wins on attributes.
         let last = items.last()?;
         let body = last.get("value").unwrap_or(last);
-        // CKP-0008 §4.3.2 / §4.9 — fail closed: a grant still carrying
+        // AKP-0008 §4.3.2 / §4.9 — fail closed: a grant still carrying
         // `effective_after_first_authorized_key == true` is durable but
         // inactive (the agent has not completed runtime pairing). The reducer
         // clears this flag in `apply_agent_key_authorize` once an accepted
-        // `ck.agent.key.authorize` lands, after which the grant enters the
+        // `ak.agent.key.authorize` lands, after which the grant enters the
         // engine read index. Until then it MUST NOT authorize anything.
         if body
             .get("effective_after_first_authorized_key")
@@ -624,7 +624,7 @@ impl ProjectionState {
         engine_grant_from_cell_body(grant_id, body, revoked)
     }
 
-    /// P1 — project `ck.capability.grant` as an or_set add on the grant cell.
+    /// P1 — project `ak.capability.grant` as an or_set add on the grant cell.
     pub(crate) fn apply_capability_grant(
         &mut self,
         operation: &Operation,
@@ -680,7 +680,7 @@ impl ProjectionState {
         ProjectionEffect::CapabilityGrantProjected { grant_id, realm_id }
     }
 
-    /// P1 — project `ck.capability.revoke` as an or_set observed-remove on the
+    /// P1 — project `ak.capability.revoke` as an or_set observed-remove on the
     /// target grant cell. The revoke locates the cell by the top-level
     /// `grant_id` (capabilities.md §12 — payload carries the grant_id, no
     /// frontier). Idempotent: revoking an already-revoked grant is a no-op
@@ -745,7 +745,7 @@ impl ProjectionState {
         ProjectionEffect::CapabilityRevokeProjected { grant_id, realm_id }
     }
 
-    /// P1 — project `ck.capability.delegate` into the delegate or_set cell.
+    /// P1 — project `ak.capability.delegate` into the delegate or_set cell.
     /// Same convergence as grant (add-dot keyed by operation_id), plus a
     /// `parent_grant_id` chain reference (capabilities.md §10). A delegate
     /// MUST name its parent grant; missing parent ⇒ fail closed.
@@ -838,7 +838,7 @@ impl ProjectionState {
     }
 
     /// capabilities.md §10.2 — DFS the parent chain of an incoming
-    /// `ck.capability.delegate(child_grant_id, parent_grant_id)`; reject the
+    /// `ak.capability.delegate(child_grant_id, parent_grant_id)`; reject the
     /// whole delegation with `delegation_cycle` if the new child closes a cycle
     /// (appears as one of its own ancestors) or the chain already contains one.
     /// A `delegation_cycle` MUST NOT project even if each grant looks valid
@@ -878,7 +878,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// CKP-0008 §4.5 / D3 — project `ck.agent.key.authorize`: record the
+    /// AKP-0008 §4.5 / D3 — project `ak.agent.key.authorize`: record the
     /// authorized key for the agent and clear
     /// `effective_after_first_authorized_key` on every pending capability
     /// grant the agent holds (§4.3.2 — pairing completion activates the
@@ -917,7 +917,7 @@ impl ProjectionState {
         }
     }
 
-    /// CKP-0008 §4.11 — project `ck.agent.key.revoke`: remove the key from
+    /// AKP-0008 §4.11 — project `ak.agent.key.revoke`: remove the key from
     /// the agent's authorized-key set (idempotent).
     pub(crate) fn apply_agent_key_revoke(&mut self, operation: &Operation) -> ProjectionEffect {
         let Some(agent_principal_id) = operation
@@ -952,12 +952,12 @@ impl ProjectionState {
         }
     }
 
-    /// CKP-0008 §4.11 — every grant id whose subject is `subject_did`
+    /// AKP-0008 §4.11 — every grant id whose subject is `subject_did`
     /// (across all capability grant cells, including revoked ones so the
     /// deactivate fan-out can idempotently re-revoke). Used by the lifecycle
-    /// deactivate path to fan-out `ck.capability.revoke`.
+    /// deactivate path to fan-out `ak.capability.revoke`.
     pub fn grant_ids_for_subject(&self, subject_did: &str) -> Vec<String> {
-        let cell_prefix = "ak:cell:ck.component.capability.grant.v1:";
+        let cell_prefix = "ak:cell:ak.component.capability.grant.v1:";
         let mut ids = Vec::new();
         for (cell_ref, cell_state) in &self.cells {
             if !cell_ref.as_str().starts_with(cell_prefix) {
@@ -999,7 +999,7 @@ impl ProjectionState {
         &self,
         realm_id: &str,
     ) -> std::collections::BTreeSet<String> {
-        let cell_prefix = "ak:cell:ck.component.capability.grant.v1:";
+        let cell_prefix = "ak:cell:ak.component.capability.grant.v1:";
         let mut revoked: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for (cell_ref, cell_state) in &self.cells {
             if !cell_ref.as_str().starts_with(cell_prefix) {
@@ -1040,8 +1040,8 @@ impl ProjectionState {
         revoked
     }
 
-    /// CKP-0008 §4.11 — the authorized key ids the agent currently holds
-    /// (for the deactivate `ck.agent.key.revoke` fan-out).
+    /// AKP-0008 §4.11 — the authorized key ids the agent currently holds
+    /// (for the deactivate `ak.agent.key.revoke` fan-out).
     pub fn authorized_key_ids_for(&self, agent_principal_id: &str) -> Vec<String> {
         self.agent_authorized_keys
             .get(agent_principal_id)
@@ -1064,7 +1064,7 @@ impl ProjectionState {
     /// were flipped from inactive to active.
     fn clear_pending_grant_flags_for(&mut self, agent_principal_id: &str) -> Vec<String> {
         let mut cleared = Vec::new();
-        let cell_prefix = "ak:cell:ck.component.capability.grant.v1:";
+        let cell_prefix = "ak:cell:ak.component.capability.grant.v1:";
         let target_refs: Vec<CellRef> = self
             .cells
             .keys()
@@ -1666,9 +1666,9 @@ mod federation_revoke_fanout_tests {
                 "issuer": OWNER,
                 "subject": PEER_SERVICE_DID,
                 // The realm-level admin capability governs the delivery-binding
-                // policy. `ck.realm.delivery_binding_policy` is an event kind,
+                // policy. `ak.realm.delivery_binding_policy` is an event kind,
                 // not a registered capability action, so the grant carries the
-                // registered `ck.realm.admin` action that authorizes it.
+                // registered `ak.realm.admin` action that authorizes it.
                 "actions": ["ak.realm.admin"],
                 "resources": [{ "kind": "realm", "realm_id": REALM }],
             }

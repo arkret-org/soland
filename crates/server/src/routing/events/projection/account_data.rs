@@ -8,11 +8,11 @@ use crate::routing::identity::device_messages::{
 };
 use crate::state::{AccountDataRecord, AppState};
 
-/// Project a `ck.realm.read_receipt_policy` (post-R1.2; was
-/// `ck.space.read_receipt_policy`) durable-event into
+/// Project a `ak.realm.read_receipt_policy` (post-R1.2; was
+/// `ak.space.read_receipt_policy`) durable-event into
 /// `ProjectionState::cells` as a synthesized CasRegister value at the
 /// canonical cell
-/// `ak:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`.
+/// `ak:cell:ak.component.realm.read_receipt_policy.v1:<realm_id>`.
 /// This unifies the read path with the Move/Seal pipeline: both durable-
 /// event ingestion AND Move/Seal `apply_seal` write to the same cells
 /// map, so `routing::events::effective_read_receipt_policy_for_realm`
@@ -63,7 +63,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     // the cells-map fast-path serve reads without scanning the durable
     // Event store on every fanout.
     let cell_id = match arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.realm.read_receipt_policy.v1:{}",
+        "ak:cell:ak.component.realm.read_receipt_policy.v1:{}",
         realm_id.as_str()
     )) {
         Ok(c) => c,

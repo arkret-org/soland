@@ -65,12 +65,12 @@ pub(super) async fn search_users(
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     let query = body.query;
     let session = authenticated_session(state, req).await.ok();
-    // DIR-1 (R3.1, arkret-spec @ 7157ee8) — `ck.find.directory.query.search_users`
+    // DIR-1 (R3.1, arkret-spec @ 7157ee8) — `ak.find.directory.query.search_users`
     // response rows MUST NOT carry `handle_uri`. Only `handle` (canonical
     // `<localpart>:<domain>`) + optional `display_name`/`verified`/`subject`
     // survive the rename. Other actor metadata (presence, organization,
-    // avatar) goes through `ck.find.directory.query.search_actors` or
-    // `ck.directory.resolve-handle`.
+    // avatar) goes through `ak.find.directory.query.search_actors` or
+    // `ak.directory.resolve-handle`.
     let mut results: Vec<UserSearchOutcome> = Vec::new();
     for actor in demo_actors(state).await {
         if results.len() > limit {
@@ -94,7 +94,7 @@ pub(super) async fn search_users(
 }
 
 /// DIR-1 — project a [`demo_actors`] row into the spec-shape
-/// `ck.find.directory.query.search_users` response entry. Only `handle` (canonical
+/// `ak.find.directory.query.search_users` response entry. Only `handle` (canonical
 /// `<localpart>:<domain>` per handle-claim.schema.json, arkret-spec @
 /// 7157ee8) + optional `display_name`/`verified`/`subject` survive.
 pub(super) fn project_search_users_row(

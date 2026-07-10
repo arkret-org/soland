@@ -408,7 +408,7 @@ fn apply_morph_schema_migrate_dispatch(
     s.apply_morph_schema_migrate(op, op.created_at)
 }
 
-// CKP-0007 — Circle dispatch wrappers.
+// AKP-0007 — Circle dispatch wrappers.
 fn apply_circle_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -499,7 +499,7 @@ fn apply_agent_deactivate_dispatch(
     s.apply_agent_lifecycle(op, AgentLifecycleState::Deactivated)
 }
 
-/// CKP-0008 §4.5 / D3 — dispatch for `ck.agent.key.authorize`. Records the
+/// AKP-0008 §4.5 / D3 — dispatch for `ak.agent.key.authorize`. Records the
 /// authorized key and clears `effective_after_first_authorized_key` on the
 /// agent's pending capability grants.
 fn apply_agent_key_authorize_dispatch(
@@ -510,7 +510,7 @@ fn apply_agent_key_authorize_dispatch(
     s.apply_agent_key_authorize(op)
 }
 
-/// CKP-0008 §4.11 — dispatch for `ck.agent.key.revoke`.
+/// AKP-0008 §4.11 — dispatch for `ak.agent.key.revoke`.
 fn apply_agent_key_revoke_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -556,7 +556,7 @@ fn apply_agent_action_reject_dispatch(
     s.apply_agent_action_resolution(op, AgentActionRequestStatus::Rejected)
 }
 /// MID-1..6 (R3.1/R3.2, arkret-spec @ b56cab1) — reducer-side dispatch for
-/// `ck.member.identity.update`. The full ordered-log projection +
+/// `ak.member.identity.update`. The full ordered-log projection +
 /// per-actor effective-set / `member_display_state_digest` materialization
 /// happens on `AppState::member_identity` (see
 /// `routing::events::projection::project_member_identity_update`);
@@ -603,8 +603,8 @@ fn apply_member_identity_update_dispatch(
     }
 }
 
-/// Dispatch for `ck.realm.delivery_binding_policy`; cell family is
-/// `ck.component.realm.delivery_binding_policy.v1`.
+/// Dispatch for `ak.realm.delivery_binding_policy`; cell family is
+/// `ak.component.realm.delivery_binding_policy.v1`.
 fn apply_delivery_binding_policy_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -613,8 +613,8 @@ fn apply_delivery_binding_policy_dispatch(
     s.apply_delivery_binding_policy(op)
 }
 
-/// Dispatch for `ck.realm.policy_components`; cell family is
-/// `ck.component.realm.policy_components.v1`.
+/// Dispatch for `ak.realm.policy_components`; cell family is
+/// `ak.component.realm.policy_components.v1`.
 fn apply_realm_policy_components_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -639,8 +639,8 @@ fn apply_realm_search_policy_dispatch(
     s.apply_realm_search_policy(op)
 }
 
-/// Dispatch for `ck.realm.media_service`; cell family is
-/// `ck.component.realm.media_service.v1`.
+/// Dispatch for `ak.realm.media_service`; cell family is
+/// `ak.component.realm.media_service.v1`.
 fn apply_realm_media_service_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -649,8 +649,8 @@ fn apply_realm_media_service_dispatch(
     s.apply_realm_media_service(op)
 }
 
-/// Dispatch for `ck.call.state`; cell family is
-/// `ck.component.call.state.v1` (`cell_subject = payload.call_id`).
+/// Dispatch for `ak.call.state`; cell family is
+/// `ak.component.call.state.v1` (`cell_subject = payload.call_id`).
 fn apply_call_state_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -659,8 +659,8 @@ fn apply_call_state_dispatch(
     s.apply_call_state(op)
 }
 
-/// Dispatch for `ck.call.summary`; cell family is
-/// `ck.component.call.summary.v1` (`cell_subject = payload.call_id`,
+/// Dispatch for `ak.call.summary`; cell family is
+/// `ak.component.call.summary.v1` (`cell_subject = payload.call_id`,
 /// cas_register, write-once).
 fn apply_call_summary_dispatch(
     s: &mut ProjectionState,
@@ -670,8 +670,8 @@ fn apply_call_summary_dispatch(
     s.apply_call_summary(op)
 }
 
-/// R3.1 — dispatch for `ck.realm.link`. Projects the typed link payload
-/// into the `ck.component.realm.link.v1` or_set cell + structured
+/// R3.1 — dispatch for `ak.realm.link`. Projects the typed link payload
+/// into the `ak.component.realm.link.v1` or_set cell + structured
 /// `realm_links` / `realm_links_inbound` caches.
 fn apply_realm_link_dispatch(
     s: &mut ProjectionState,
@@ -681,7 +681,7 @@ fn apply_realm_link_dispatch(
     s.apply_realm_link(op, op.created_at)
 }
 
-/// SOL-ORG-02 — dispatch for `ck.realm.organization`. Projects the
+/// SOL-ORG-02 — dispatch for `ak.realm.organization`. Projects the
 /// organization-authorized Realm relationship statement (cas-register cell
 /// keyed by `(organization_id, relationship)` + structured cache) after the
 /// SDK organization-side verifier passes.
@@ -693,7 +693,7 @@ fn apply_realm_organization_dispatch(
     s.apply_realm_organization(op, op.created_at)
 }
 
-/// R3.2 — dispatch for `ck.realm.inheritance_policy`. Projects the
+/// R3.2 — dispatch for `ak.realm.inheritance_policy`. Projects the
 /// cas-register cell + structured cache; validates parent grant bounds
 /// when the relevant parent grant cells are available.
 fn apply_realm_inheritance_policy_dispatch(
@@ -704,7 +704,7 @@ fn apply_realm_inheritance_policy_dispatch(
     s.apply_realm_inheritance_policy(op, op.created_at)
 }
 
-/// R3.2 — dispatch for `ck.capability.derived`. Projects the cas-
+/// R3.2 — dispatch for `ak.capability.derived`. Projects the cas-
 /// register cell + structured cache after reducer-side derive evaluation.
 fn apply_capability_derived_dispatch(
     s: &mut ProjectionState,
@@ -714,8 +714,8 @@ fn apply_capability_derived_dispatch(
     s.apply_capability_derived(op, op.created_at)
 }
 
-/// P1 — dispatch for `ck.capability.grant`. Projects the grant snapshot as
-/// an or_set add into the `ck.component.capability.grant.v1` cell keyed by
+/// P1 — dispatch for `ak.capability.grant`. Projects the grant snapshot as
+/// an or_set add into the `ak.component.capability.grant.v1` cell keyed by
 /// `payload.grant_id`.
 fn apply_capability_grant_dispatch(
     s: &mut ProjectionState,
@@ -725,7 +725,7 @@ fn apply_capability_grant_dispatch(
     s.apply_capability_grant(op, op.created_at)
 }
 
-/// P1 — dispatch for `ck.capability.revoke`. Projects an observed-remove on
+/// P1 — dispatch for `ak.capability.revoke`. Projects an observed-remove on
 /// the target grant cell (capabilities.md §12 / §12.1).
 fn apply_capability_revoke_dispatch(
     s: &mut ProjectionState,
@@ -735,7 +735,7 @@ fn apply_capability_revoke_dispatch(
     s.apply_capability_revoke(op, op.created_at)
 }
 
-/// P1 — dispatch for `ck.capability.delegate`. Projects into the delegate
+/// P1 — dispatch for `ak.capability.delegate`. Projects into the delegate
 /// cell + parent grant chain.
 fn apply_capability_delegate_dispatch(
     s: &mut ProjectionState,
@@ -745,8 +745,8 @@ fn apply_capability_delegate_dispatch(
     s.apply_capability_delegate(op, op.created_at)
 }
 
-/// P2 — dispatch for `ck.moderation.decision`. Projects the decision snapshot
-/// as an or_set add into the `ck.component.moderation_state.v1` cell keyed by
+/// P2 — dispatch for `ak.moderation.decision`. Projects the decision snapshot
+/// as an or_set add into the `ak.component.moderation_state.v1` cell keyed by
 /// `payload.target_ref`.
 fn apply_moderation_decision_dispatch(
     s: &mut ProjectionState,
@@ -756,7 +756,7 @@ fn apply_moderation_decision_dispatch(
     s.apply_moderation_decision(op, op.created_at)
 }
 
-/// P2 — dispatch for `ck.moderation.decision.lift`. Projects an observed-
+/// P2 — dispatch for `ak.moderation.decision.lift`. Projects an observed-
 /// remove / supersede on the moderation_state target cell, marking the
 /// `payload.decision_ref` decision lifted.
 fn apply_moderation_decision_lift_dispatch(
@@ -767,7 +767,7 @@ fn apply_moderation_decision_lift_dispatch(
     s.apply_moderation_decision_lift(op, op.created_at)
 }
 
-/// P2 — dispatch for `ck.moderation.appeal.{submit,review,decision,close}`.
+/// P2 — dispatch for `ak.moderation.appeal.{submit,review,decision,close}`.
 /// Resolves the target FSM state from the canonical kind and projects the
 /// transition (with §5.5.2 reducer constraints) onto the appeal cell.
 fn apply_moderation_appeal_dispatch(
@@ -794,10 +794,10 @@ fn apply_moderation_appeal_dispatch(
 //
 // Canonical event kinds per
 // `arkret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json`: a single
-// `ck.mls.keypackage` kind covers both publish and claim. The reducer
+// `ak.mls.keypackage` kind covers both publish and claim. The reducer
 // dispatches on `payload.action == "publish" | "claim"` (the publish-
 // vs-claim split lives at the HTTP operation_id layer:
-// `ck.self.keys.keypackages.upload.create` vs `ck.self.keys.keypackages.command.claim`).
+// `ak.self.keys.keypackages.upload.create` vs `ak.self.keys.keypackages.command.claim`).
 
 fn apply_mls_keypackage_dispatch(
     s: &mut ProjectionState,
@@ -856,7 +856,7 @@ fn apply_realm_key_share_dispatch(
     s.apply_realm_key_share(op)
 }
 
-// G3.S2: dispatch adapter for `ck.realm.policy_server`. The reducer
+// G3.S2: dispatch adapter for `ak.realm.policy_server`. The reducer
 // helper lives in the dedicated `reducer::realm_policy_server` module;
 // this adapter normalises its `(state, op) -> effect` signature to the
 // registry's `(state, op, hlc) -> effect` shape.
@@ -956,8 +956,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_key_backup_active_series_dispatch,
     );
     // MID-1..6 (R3.1/R3.2 spec-sync, arkret-spec @ b56cab1) —
-    // `ck.member.identity.update`. Cell family
-    // `ck.component.member.identity.v1`, lattice `ordered_log`, bottom
+    // `ak.member.identity.update`. Cell family
+    // `ak.component.member.identity.v1`, lattice `ordered_log`, bottom
     // `expose`. The ordered-log projection (effective-set filter,
     // member_display_state_digest materialization) lives on
     // `AppState::member_identity`
@@ -1082,8 +1082,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
         apply_morph_schema_migrate_dispatch,
     );
-    // CKP-0007 — Circle lifecycle / membership dispatch. The seventh
-    // active kind, `ck.circle.seal_commit`, is reducer-derived (sub-
+    // AKP-0007 — Circle lifecycle / membership dispatch. The seventh
+    // active kind, `ak.circle.seal_commit`, is reducer-derived (sub-
     // seal on the Circle's profile cadence) and listed in the SDK's
     // `NON_REDUCER_EVENT_KINDS` set, so no dispatch entry is added for
     // it here.
@@ -1157,7 +1157,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_agent_action_reject_dispatch,
     );
     // delivery_binding_policy is Realm-scoped with cell_family
-    // `ck.component.realm.delivery_binding_policy.v1`.
+    // `ak.component.realm.delivery_binding_policy.v1`.
     m.insert(
         arkret_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY,
         apply_delivery_binding_policy_dispatch,
@@ -1175,21 +1175,21 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_realm_search_policy_dispatch,
     );
     // media_service is Realm-scoped with cell_family
-    // `ck.component.realm.media_service.v1`; consumed by the CKP-0010
+    // `ak.component.realm.media_service.v1`; consumed by the AKP-0010
     // media token exchange in `routing::interop::webrtc`.
     m.insert(
         arkret_sdk::events::kinds::REALM_MEDIA_SERVICE,
         apply_realm_media_service_dispatch,
     );
-    // `ck.call.state` — durable call lifecycle + recording/transcribe/
-    // moderation projection. Cell family `ck.component.call.state.v1`,
+    // `ak.call.state` — durable call lifecycle + recording/transcribe/
+    // moderation projection. Cell family `ak.component.call.state.v1`,
     // `cell_subject = payload.call_id` (`call-state.md` §4.2 / §5).
     m.insert(
         arkret_sdk::events::kinds::CALL_STATE,
         apply_call_state_dispatch,
     );
-    // `ck.call.summary` — durable terminal summary projection. Cell family
-    // `ck.component.call.summary.v1`, write-once cas_register (`call-state.md`
+    // `ak.call.summary` — durable terminal summary projection. Cell family
+    // `ak.component.call.summary.v1`, write-once cas_register (`call-state.md`
     // §7).
     m.insert(
         arkret_sdk::events::kinds::CALL_SUMMARY,
@@ -1220,8 +1220,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_capability_derived_dispatch,
     );
     // P1 — capability control-plane projection (grant / revoke / delegate).
-    // grant + revoke share the `ck.component.capability.grant.v1` or_set
-    // cell; delegate writes `ck.component.capability.delegate.v1` + parent
+    // grant + revoke share the `ak.component.capability.grant.v1` or_set
+    // cell; delegate writes `ak.component.capability.delegate.v1` + parent
     // chain. Acceptance fail-closed lives in `apply_capability.rs`.
     m.insert(
         arkret_sdk::events::kinds::CAPABILITY_GRANT,
@@ -1235,7 +1235,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         arkret_sdk::events::kinds::CAPABILITY_DELEGATE,
         apply_capability_delegate_dispatch,
     );
-    // CKP-0008 §4.5 / §4.11 / D3 — agent runtime key authorization +
+    // AKP-0008 §4.5 / §4.11 / D3 — agent runtime key authorization +
     // revocation. authorize records the key and clears the agent's pending
     // `effective_after_first_authorized_key` grants; revoke removes the key.
     m.insert(
@@ -1247,8 +1247,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_agent_key_revoke_dispatch,
     );
     // P2 — moderation control-plane projection (decision / lift / appeal.*).
-    // decision + lift share the `ck.component.moderation_state.v1` or_set
-    // cell; the four appeal kinds drive the `ck.component.moderation.appeal.v1`
+    // decision + lift share the `ak.component.moderation_state.v1` or_set
+    // cell; the four appeal kinds drive the `ak.component.moderation.appeal.v1`
     // fsm cell. §5.5.2 reducer constraints + acceptance fail-closed live in
     // `apply_moderation.rs`.
     m.insert(
@@ -1281,7 +1281,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // Canonical event kinds — the publish/claim distinction lives at the
     // HTTP operation_id layer and is conveyed inside the kind's payload
     // via `action ∈ {"publish","claim"}`; the event log itself stores
-    // only the canonical `ck.mls.keypackage` kind.
+    // only the canonical `ak.mls.keypackage` kind.
     // Deferred (TODO(G3.S1-followup)): decryption_pending. See
     // `reducer/mls.rs`.
     m.insert(

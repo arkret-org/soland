@@ -210,7 +210,7 @@ impl ProjectionState {
             .collect()
     }
 
-    /// CKP-0007 — list the Strands that point AT `strand_id` via a
+    /// AKP-0007 — list the Strands that point AT `strand_id` via a
     /// `confidential_discussion_of` Relation. Useful for the discovery
     /// surface that resolves the "narrow discussion" companion of a
     /// "wide synthesis" Strand. Returns the `from_ref` side of each live
@@ -251,10 +251,10 @@ impl ProjectionState {
     /// Read the FSM state of a member directly from the cells map.
     /// Returns `None` if the cell hasn't been written or is in `Bottom`
     /// state. The cell_subject is the actor_id per spec
-    /// `ck.component.member.state.v1` cell_family declaration.
+    /// `ak.component.member.state.v1` cell_family declaration.
     pub fn member_fsm_state(&self, actor_id: &str) -> Option<String> {
         let cell_id =
-            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.member.state.v1:{actor_id}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor_id}"))
                 .ok()?;
         self.cell_value(&cell_id)
             .and_then(Value::as_str)
@@ -263,13 +263,13 @@ impl ProjectionState {
 
     // ── Cell-keyed query helpers ──
 
-    /// Read the effective `ck.realm.read_receipt_policy` value out of the
+    /// Read the effective `ak.realm.read_receipt_policy` value out of the
     /// cells map. Returns `None` when:
     ///   - the cell has never been written, OR
     ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
     pub fn read_receipt_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.read_receipt_policy.v1:{realm_id}"
+            "ak:cell:ak.component.realm.read_receipt_policy.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -277,28 +277,28 @@ impl ProjectionState {
 
     // ── Realm lifecycle cell helpers ──
 
-    /// SOL-ORG-01 — read the effective `ck.component.realm.metadata.v1`
+    /// SOL-ORG-01 — read the effective `ak.component.realm.metadata.v1`
     /// cas-register value (mutable Realm metadata: owner, title,
     /// security_class, federation_policy, updated_at). Returns `None` if no
-    /// `ck.realm.update` event has landed for this realm, or if the cell is in
+    /// `ak.realm.update` event has landed for this realm, or if the cell is in
     /// `Bottom` (concurrent admin updates require recovery).
     ///
     /// This is the renamed-from `realm_organization_cell_value`: the
-    /// `ck.component.realm.organization.v1` cell family is now exclusively the
-    /// `ck.realm.organization` relationship-statement surface, keyed by
+    /// `ak.component.realm.organization.v1` cell family is now exclusively the
+    /// `ak.realm.organization` relationship-statement surface, keyed by
     /// `(organization_id, relationship)`. Mutable Realm metadata moved to its
-    /// own `ck.component.realm.metadata.v1` cell.
+    /// own `ak.component.realm.metadata.v1` cell.
     pub fn realm_metadata_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = ProjectionState::realm_metadata_cell_id(realm_id)?;
         self.cell_value(&cell_id)
     }
 
-    /// Read the `ck.component.realm.create.v1` ordered-log entries for the
+    /// Read the `ak.component.realm.create.v1` ordered-log entries for the
     /// realm's genesis history. Returns `None` for realms with no create
     /// events (e.g. before first projection) or `Bottom` state.
     pub fn realm_create_log(&self, realm_id: &str) -> Option<&[Value]> {
         let cell_id =
-            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm_id}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm_id}"))
                 .ok()?;
         match self.cells.get(&cell_id)? {
             CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
@@ -306,20 +306,20 @@ impl ProjectionState {
         }
     }
 
-    /// True when the `ck.component.realm.destroy.v1` cell has a Value.
+    /// True when the `ak.component.realm.destroy.v1` cell has a Value.
     pub fn realm_is_destroyed(&self, realm_id: &str) -> bool {
         let Ok(cell_id) =
-            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.destroy.v1:{realm_id}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ak.component.realm.destroy.v1:{realm_id}"))
         else {
             return false;
         };
         matches!(self.cells.get(&cell_id), Some(CellState::Value(_)))
     }
 
-    /// True when the `ck.component.realm.tombstone.v1` cell has a Value.
+    /// True when the `ak.component.realm.tombstone.v1` cell has a Value.
     pub fn realm_is_tombstoned(&self, realm_id: &str) -> bool {
         let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.tombstone.v1:{realm_id}"
+            "ak:cell:ak.component.realm.tombstone.v1:{realm_id}"
         )) else {
             return false;
         };
@@ -356,7 +356,7 @@ impl ProjectionState {
         }
     }
 
-    /// Read the projected `ck.component.realm.delivery_binding_policy.v1`
+    /// Read the projected `ak.component.realm.delivery_binding_policy.v1`
     /// cas-register value, if any. R1.2 introduced a structured cache
     /// for this cell so the wire-validation path in
     /// `apply_membership` can fail-closed on routable joins when policy
@@ -365,7 +365,7 @@ impl ProjectionState {
     /// cells map to the structured cache.
     pub fn realm_delivery_binding_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.delivery_binding_policy.v1:{realm_id}"
+            "ak:cell:ak.component.realm.delivery_binding_policy.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -373,7 +373,7 @@ impl ProjectionState {
 
     pub fn realm_policy_components_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.policy_components.v1:{realm_id}"
+            "ak:cell:ak.component.realm.policy_components.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -558,7 +558,7 @@ impl ProjectionState {
 
     pub fn realm_disappearing_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.disappearing_policy.v1:{realm_id}"
+            "ak:cell:ak.component.realm.disappearing_policy.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -566,14 +566,14 @@ impl ProjectionState {
 
     pub fn realm_search_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ck.component.realm.search_policy.v1:{realm_id}"
+            "ak:cell:ak.component.realm.search_policy.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
     }
 
     /// Read the `policy_frontier` declared on the most recent
-    /// `ck.realm.delivery_binding_policy` event for this realm. Wire
+    /// `ak.realm.delivery_binding_policy` event for this realm. Wire
     /// this up to a structured cache so the
     /// reducer can emit `delivery_binding_stale` rejections.
     pub fn realm_delivery_binding_policy_frontier(&self, realm_id: &str) -> Option<&str> {
@@ -626,7 +626,7 @@ impl ProjectionState {
         out
     }
 
-    /// R3.2 — read the most-recent `ck.realm.inheritance_policy`
+    /// R3.2 — read the most-recent `ak.realm.inheritance_policy`
     /// projection for a child Realm, if any.
     pub fn realm_inheritance_policy(&self, realm_id: &str) -> Option<&RealmInheritancePolicyState> {
         self.realm_inheritance_policies.get(realm_id)
@@ -648,13 +648,13 @@ impl ProjectionState {
             .collect()
     }
 
-    /// R3.2 — read the most-recent `ck.capability.derived` projection
+    /// R3.2 — read the most-recent `ak.capability.derived` projection
     /// for a capability id, if any.
     pub fn capability_derived_state(&self, capability_id: &str) -> Option<&CapabilityDerivedState> {
         self.capability_derived.get(capability_id)
     }
 
-    /// G3.S2 — read the most-recent `ck.realm.policy_server` projection
+    /// G3.S2 — read the most-recent `ak.realm.policy_server` projection
     /// for a Realm, walking up the `governed_by` link chain when the
     /// realm itself has no row of its own (org-level fallback). Returns
     /// `None` if neither the realm nor any ancestor declared a policy
@@ -686,7 +686,7 @@ impl ProjectionState {
     }
 
     /// Read the create-locked Realm encryption profile from the genesis
-    /// create-log. `ck.realm.update` must never mutate this value.
+    /// create-log. `ak.realm.update` must never mutate this value.
     pub fn realm_encryption_profile(&self, realm_id: &str) -> Option<String> {
         self.realm_create_log(realm_id)
             .and_then(|entries| entries.last())
@@ -710,7 +710,7 @@ impl ProjectionState {
     }
 
     /// Effective Realm `content_encryption_floor` projected from the
-    /// `ck.component.realm.policy_components.v1` cell. `None` means the spec
+    /// `ak.component.realm.policy_components.v1` cell. `None` means the spec
     /// default `allow_plaintext`. Independent of `encryption_profile`, which
     /// only declares the encryption mechanism (realm-and-space.md §2.3).
     pub fn realm_content_encryption_floor(&self, realm_id: &str) -> Option<String> {
@@ -719,7 +719,7 @@ impl ProjectionState {
     }
 
     /// Effective Realm `metadata_encryption_floor` projected from the
-    /// `ck.component.realm.policy_components.v1` cell. `None` means the
+    /// `ak.component.realm.policy_components.v1` cell. `None` means the
     /// reducer default is inferred elsewhere (`e2ee_required` for MLS /
     /// e2ee_required Realms, else `allow_plaintext`).
     pub fn realm_metadata_encryption_floor(&self, realm_id: &str) -> Option<String> {
@@ -728,7 +728,7 @@ impl ProjectionState {
     }
 
     /// Effective Realm `content_scheme` projected from the
-    /// `ck.component.realm.policy_components.v1` cell, falling back to the
+    /// `ak.component.realm.policy_components.v1` cell, falling back to the
     /// create-log genesis value. `None` means no scheme has been negotiated
     /// yet — callers treat that as the application-message default
     /// (`mls-rfc9420`). Drives the one-way `content_scheme` ratchet in
@@ -761,7 +761,7 @@ impl ProjectionState {
     }
 
     /// Effective Realm `durability_policy` (Realm Recovery Key, realm-and-space.md
-    /// §2.3.1) projected from the `ck.component.realm.policy_components.v1` cell.
+    /// §2.3.1) projected from the `ak.component.realm.policy_components.v1` cell.
     /// `None` means no policy has been declared yet — callers treat that as the
     /// spec default `mode=none` (no organizational recovery path). Deserialized
     /// into the authoritative SDK [`arkret_sdk::models::DurabilityPolicy`] strong
@@ -777,7 +777,7 @@ impl ProjectionState {
     }
 
     /// R3.4 — read the projected Realm `security_class` (from the
-    /// `ck.component.realm.metadata.v1` cas-register cell). Returns
+    /// `ak.component.realm.metadata.v1` cas-register cell). Returns
     /// `None` when no Realm-update has landed yet — caller may infer
     /// `standard` per spec default.
     pub fn realm_security_class(&self, realm_id: &str) -> Option<String> {
@@ -792,7 +792,7 @@ impl ProjectionState {
         }
         // Fallback: check the create-log cell's last entry.
         if let Ok(create_cell) =
-            arkret_sdk::CellRef::new(format!("ak:cell:ck.component.realm.create.v1:{realm_id}"))
+            arkret_sdk::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm_id}"))
             && let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array)
             && let Some(last) = arr.last()
             && let Some(s) = last.get("security_class").and_then(Value::as_str)
@@ -804,7 +804,7 @@ impl ProjectionState {
 
     /// R3.4 — read the effective Realm federation policy. The mutable
     /// metadata cas-register wins; when no update has landed, fall
-    /// back to the latest `ck.realm.create` log entry that carried an
+    /// back to the latest `ak.realm.create` log entry that carried an
     /// initial `federation_policy`.
     pub fn realm_federation_policy(&self, realm_id: &str) -> Option<String> {
         if let Some(v) = self

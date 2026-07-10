@@ -1245,7 +1245,7 @@ pub(super) fn effective_scope_realm_id(scope: &EffectiveScope) -> String {
 /// Governance gate for canonical applet install/revoke.
 ///
 /// An authenticated session is not enough to register or revoke a realm-scoped
-/// applet install: the actor MUST hold `ck.realm.admin` over the install's
+/// applet install: the actor MUST hold `ak.realm.admin` over the install's
 /// effective_scope realm. P1 projected capability grants into the authz index,
 /// so [`SolandAuthzEngine::check`] is authoritative here. Mirrors the ban gate
 /// in `routing/events/operations/policy.rs::validate_member_state_policy`.

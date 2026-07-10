@@ -1,8 +1,8 @@
 //! P1 reducer-level tests for capability control-plane projection
-//! (`ck.capability.grant` / `ck.capability.revoke`).
+//! (`ak.capability.grant` / `ak.capability.revoke`).
 //!
 //! Covers capabilities.md §12.1 grant-cell convergence:
-//!   ① grant → projected into `ck.component.capability.grant.v1` or_set +
+//!   ① grant → projected into `ak.component.capability.grant.v1` or_set +
 //!      the derived engine grant authorizes `check(subject, action)`.
 //!   ② revoke → observed-remove on the same cell + check denies.
 //!   ③ revoke then re-grant of the same grant_id → still denied (terminal,
@@ -113,7 +113,7 @@ fn check_allows_for(state: &ProjectionState, grant_id: &str, action: &str, resou
 
 fn grant_cell_items(state: &ProjectionState, grant_id: &str) -> Vec<Value> {
     let cell_ref = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ck.component.capability.grant.v1:{grant_id}"
+        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
     match state.cell_value(&cell_ref) {

@@ -68,8 +68,8 @@ pub struct AppState {
     pub realms: Arc<Mutex<RealmDirectoryIndex>>,
     /// Cross-signing state machine (PSK→SSK/USK publishes + device trust
     /// chains), per spec crypto-media/device-lifecycle.md §5. Fed by the
-    /// projector when `ck.cross_signing.publish` lands, and read when verifying
-    /// a `ck.device.authorize` `cross_signing_binding`. In-memory like the other
+    /// projector when `ak.cross_signing.publish` lands, and read when verifying
+    /// a `ak.device.authorize` `cross_signing_binding`. In-memory like the other
     /// reducer projections; durable rehydration rides on the durable event
     /// store (control-realm Phase 3).
     pub cross_signing: Arc<Mutex<arkret_sdk::DeviceManager>>,
@@ -139,7 +139,7 @@ pub struct AppState {
     /// Per-epoch keys are derived from this root inside the push routing
     /// module; only public epoch labels are exposed on describe.
     pub push_target_hmac_key: [u8; 32],
-    /// Revoked cursor authorities (`ck.self.account.command.revoke_cursor`). High-assurance
+    /// Revoked cursor authorities (`ak.self.account.command.revoke_cursor`). High-assurance
     /// optional endpoint: a revoked cursor returns `cursor_revoked` and MUST NOT
     /// advance to-device ack, account-subscribe resume position, wait-for barrier
     /// state, or dropped-recovery state. Entries are pruned once the revoked
@@ -165,13 +165,13 @@ pub struct AppState {
     /// is subject/private state and MUST NOT enter the durable Realm event
     /// log; the in-memory map is the bounded fallback until durable holder
     /// state hydration lands. Subjects without an entry fall back to the
-    /// recommended default policy. `ck.self.contact.command.tombstone(block_peer)`
+    /// recommended default policy. `ak.self.contact.command.tombstone(block_peer)`
     /// writes the peer DID into the holder entry's `blocked_subjects`.
     pub invite_receive_policies: Arc<Mutex<BTreeMap<String, arkret_sdk::InviteReceivePolicy>>>,
     /// Direct conversation binding projection keyed by sorted participant DID
     /// pair. This is the bounded server-side fallback for
-    /// `ck.self.direct_conversation.command.resolve` until signed
-    /// `ck.direct_conversation.bound` event projection is fully wired.
+    /// `ak.self.direct_conversation.command.resolve` until signed
+    /// `ak.direct_conversation.bound` event projection is fully wired.
     pub direct_conversation_bindings: Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
     /// Runtime state for sovereign-main / enclave deployment handshakes,
     /// trust-root decisions, boundary audit, and store-and-forward queues.
@@ -193,10 +193,10 @@ pub struct AppState {
     /// Current organization moderation policy per organization.
     pub organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
     /// SOL-ORG-05 — Realm -> `owning_organizations` DECLARED HINTS, sourced
-    /// from `ck.realm.create.owning_organizations` or the local organization
+    /// from `ak.realm.create.owning_organizations` or the local organization
     /// link endpoint. These are NOT verified relationships and MUST NOT drive
     /// governance / durability / delivery / directory policy inheritance — only
-    /// a verified `ck.realm.organization` statement does (see the reducer
+    /// a verified `ak.realm.organization` statement does (see the reducer
     /// `realm_organization_statements` projection). Retained as a discovery /
     /// display hint surface only.
     pub realm_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
@@ -212,7 +212,7 @@ pub struct AppState {
     pub seal_store: Arc<dyn SealStore>,
     pub cell_store: Arc<dyn CellStore>,
     pub cell_registry: Arc<dyn CellRegistry>,
-    /// Live event notification bus for `ck.self.events.stream.subscribe`.
+    /// Live event notification bus for `ak.self.events.stream.subscribe`.
     /// Memory mode uses the local broadcast channel; PostgreSQL mode also
     /// publishes over LISTEN/NOTIFY so subscribers connected to another
     /// replica receive the same live frames.
@@ -261,7 +261,7 @@ pub struct AppState {
     /// invariant in service-surface.md §3.0.
     pub verified_profiles: Arc<Vec<VerifiedProfileDescriptor>>,
     /// MID-1..6 (R3.1 spec-sync 2026-05-27, arkret-spec @ 7157ee8) — in-
-    /// memory registry of `ck.member.identity.update` events. Reducer
+    /// memory registry of `ak.member.identity.update` events. Reducer
     /// dispatch (`apply_member_identity_update`) and the sync roster
     /// projection (`SYNC-MEM-1..3`) both go through this. See
     /// [`MemberIdentityRegistry`] above for storage and effective-set
@@ -309,7 +309,7 @@ impl AppState {
 
     /// Public Ed25519 verifying key for the current notary signing key.
     ///
-    /// Used by the `ck.call.state` participant_binding verifier: in the
+    /// Used by the `ak.call.state` participant_binding verifier: in the
     /// arkret-native self-signed deployment the binding `sig` is minted with
     /// the notary signing key (`routing::interop::webrtc`), so the receiver
     /// verifies against this key after anchoring `issuer_kid` to the current
@@ -659,7 +659,7 @@ impl AppState {
 
     /// Touch the (now async) persistence store to finish boot:
     ///   * seed the demo account + Realm metadata when `seed_demo_data` is on,
-    ///   * hydrate the Realm directory from persisted `ck.realm.create` events,
+    ///   * hydrate the Realm directory from persisted `ak.realm.create` events,
     ///   * hydrate Space-container/Strand/Morph projections from durable rows.
     ///
     /// Extracted out of the synchronous `new` constructor so the DB work runs
@@ -914,7 +914,7 @@ impl AppState {
             }
         }
 
-        // SOL-ORG-04 — rehydrate verified `ck.realm.organization` relationship
+        // SOL-ORG-04 — rehydrate verified `ak.realm.organization` relationship
         // statements into the reducer projection so verified relationships /
         // scope-gated policy inheritance survive a restart.
         let realm_organization_statements = self
@@ -1402,7 +1402,7 @@ mod membership_hydration_tests {
         realms
     }
 
-    // Regression: a joined invitee's `ck.member.state{join}` MUST be replayed
+    // Regression: a joined invitee's `ak.member.state{join}` MUST be replayed
     // into the realm directory on boot. Without it the admin's synced roster
     // shows only the creator, admin-side MLS admission never fires, and the
     // invitee is stuck "waiting for a Welcome" after every restart.

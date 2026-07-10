@@ -41,7 +41,7 @@ async fn peer_events_describe_advertises_formal_surface() {
             .iter()
             .any(|op| op == "ak.peer.events.query.frontier")
     );
-    // `ck.peer.snapshot.query.manifest_head` MUST NOT be declared while soland cannot
+    // `ak.peer.snapshot.query.manifest_head` MUST NOT be declared while soland cannot
     // produce a signed ak.schema.snapshot.v1 manifest; the endpoint
     // answers `not_implemented` instead (service-surface.md §5.2).
     assert!(
@@ -66,7 +66,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     put_event_record(&state, event, created_at).await;
 
     let query_target =
-        format!("http://server/_arkret/peer/events?realms={TEST_REALM_ID}&kind=ck.message.create");
+        format!("http://server/_arkret/peer/events?realms={TEST_REALM_ID}&kind=ak.message.create");
     let mut query = TestClient::get(query_target.clone());
     for (name, value) in peer_get_headers(&query_target) {
         query = query.add_header(name, value, true);
@@ -385,7 +385,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     put_event_record(&state, event, now - ChronoDuration::seconds(10)).await;
 
     let query_target =
-        format!("http://server/_arkret/peer/events?realms={TEST_REALM_ID}&kind=ck.message.create");
+        format!("http://server/_arkret/peer/events?realms={TEST_REALM_ID}&kind=ak.message.create");
     let mut query = TestClient::get(query_target.clone());
     for (name, value) in peer_get_headers(&query_target) {
         query = query.add_header(name, value, true);

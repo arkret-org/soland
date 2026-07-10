@@ -98,7 +98,7 @@ pub(super) fn event_ref_list(
 /// `refs[]` entry with `role="did_inception"` (`critical=true`) pointing at the
 /// `did:webvh` entry-0 versionId. Its presence is what distinguishes an
 /// inception-key-signed control event from the post-bootstrap §5.1 path (step 7
-/// / §5.0.3: subsequent `ck.device.authorize` MUST be `authorized_by` an
+/// / §5.0.3: subsequent `ak.device.authorize` MUST be `authorized_by` an
 /// already-sealed device and therefore carry no `did_inception` ref).
 const DID_INCEPTION_REF_ROLE: &str = "did_inception";
 
@@ -107,7 +107,7 @@ const DID_INCEPTION_REF_ROLE: &str = "did_inception";
 /// receiver-side independent enforcement).
 ///
 /// Only inception-key-signed control events are gated: a
-/// `ck.device.authorize` / `ak.session.grant` whose envelope `refs[]` carries a
+/// `ak.device.authorize` / `ak.session.grant` whose envelope `refs[]` carries a
 /// `role="did_inception"` evidence ref. For those, the receiver seals on the
 /// `did:webvh` entry-0 `versionTime` (the verifiable bootstrap timestamp) and
 /// computes the inception-key age against its own local clock via the SDK
@@ -123,7 +123,7 @@ const DID_INCEPTION_REF_ROLE: &str = "did_inception";
 /// **Honest scope boundary:** the seal is read from this server's *locally
 /// hosted / cached* `did:webvh` log (`persistence.webvh().list_log_events`).
 /// When this soland is the principal's webvh host (the v1-core
-/// inception-bootstrap topology, since the genesis `ck.device.authorize` is
+/// inception-bootstrap topology, since the genesis `ak.device.authorize` is
 /// submitted to the same principal server that wrote entry-0) the seal is
 /// available and the gate runs at submit time. When the principal's webvh log
 /// is hosted elsewhere and not cached here, the gate fails closed (rejects the

@@ -52,7 +52,7 @@ CREATE TABLE public.agent_grants (
     created_at timestamp with time zone NOT NULL,
     detached_at timestamp with time zone,
     expires_at timestamp with time zone,
-    CONSTRAINT agent_grants_id_check CHECK (((id ~~ 'ak.accountability_grant:%'::text) OR (id ~~ 'ck:grant:%'::text))),
+    CONSTRAINT agent_grants_id_check CHECK (((id ~~ 'ak.accountability_grant:%'::text) OR (id ~~ 'ak:grant:%'::text))),
     CONSTRAINT agent_grants_state_check CHECK ((state = ANY (ARRAY['active'::text, 'detached'::text, 'revoked'::text, 'expired'::text])))
 );
 
@@ -211,7 +211,7 @@ CREATE TABLE public.blobs (
     CONSTRAINT blobs_visibility_check CHECK ((visibility = ANY (ARRAY['public'::text, 'realm_bound'::text, 'actor_private'::text, 'device_bound'::text])))
 );
 
--- Realm-broadcast relay for `ck.call.signal` ephemeral envelopes
+-- Realm-broadcast relay for `ak.call.signal` ephemeral envelopes
 -- (`webrtc-signaling.md` §5). One row per relayed signed envelope, retained
 -- until `expires_at`; receivers pick it up off the subscribe
 -- `ephemeral.call_signals` segment and verify the carried `proof`. `position`
@@ -253,8 +253,8 @@ CREATE TABLE public.call_signal_relay_watermark (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
--- Realm-scoped relay for `ck.receipt.read` ephemeral receipt objects. The
--- normalized `receipt` follows `ck.schema.read_receipt.v1`; relay metadata
+-- Realm-scoped relay for `ak.receipt.read` ephemeral receipt objects. The
+-- normalized `receipt` follows `ak.schema.read_receipt.v1`; relay metadata
 -- (`position`, `visibility`, `target_actor`, `expires_at`) gates short-TTL
 -- fanout through account sync and is not durable Event history.
 CREATE TABLE public.read_receipt_relay (
@@ -645,7 +645,7 @@ CREATE TABLE public.organization_policies (
     CONSTRAINT organization_policies_version_check CHECK ((version >= 0))
 );
 
--- SOL-ORG-04 — verified `ck.realm.organization` relationship statements.
+-- SOL-ORG-04 — verified `ak.realm.organization` relationship statements.
 -- Primary key `(realm_id, organization_id, relationship)` so owner /
 -- governance / sponsor / directory_certifier relationships for the same Realm
 -- coexist as independent rows. Column order mirrors the spec
@@ -672,7 +672,7 @@ CREATE TABLE public.realm_organizations (
 
 -- SOL-ORG-05 — `owning_organizations` declared hints. These NO LONGER drive
 -- governance / durability / delivery / directory policy inheritance (only a
--- verified `ck.realm.organization` statement does); the table is retained as a
+-- verified `ak.realm.organization` statement does); the table is retained as a
 -- discovery / display hint surface.
 CREATE TABLE public.realm_owning_organizations (
     realm_id text NOT NULL,

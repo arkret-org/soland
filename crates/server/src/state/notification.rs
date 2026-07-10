@@ -33,7 +33,7 @@ pub use parking_lot::Mutex;
 ///
 /// added control-frame variants alongside the original `Event`
 /// (mid-stream control frames per spec):
-///   - `EpochRotation` — emitted when `ck.component.mls.epoch.v1` cell changes (E2EE epoch shift;
+///   - `EpochRotation` — emitted when `ak.component.mls.epoch.v1` cell changes (E2EE epoch shift;
 ///     clients MUST re-fetch keys)
 ///   - `Frontier` — seal frontier advanced (Snapshot of cursor / state_root after `apply_seal`);
 ///     clients use this as a resync waypoint
@@ -50,7 +50,7 @@ pub struct EventNotification {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EventNotificationKind {
-    /// Ordinary projection event (one `ck.message.create` etc.).
+    /// Ordinary projection event (one `ak.message.create` etc.).
     Event {
         /// Stable cursor for the event — typically the canonical
         /// `event_id`. Clients use as resume position.
@@ -58,7 +58,7 @@ pub enum EventNotificationKind {
         /// Projection-event JSON (same shape as `projection_event_json`).
         event_payload: Value,
     },
-    /// MLS epoch shift detected on `ck.component.mls.epoch.v1` cell.
+    /// MLS epoch shift detected on `ak.component.mls.epoch.v1` cell.
     EpochRotation {
         /// Old epoch value (the previous CellState::Value if known).
         previous_epoch: Option<Value>,
@@ -250,8 +250,8 @@ impl EventNotification {
     }
 }
 
-/// In-process reconnect gate for `ck.self.events.stream.subscribe` and
-/// `ck.self.account.stream.subscribe`. Keys are operation + caller identity + selector
+/// In-process reconnect gate for `ak.self.events.stream.subscribe` and
+/// `ak.self.account.stream.subscribe`. Keys are operation + caller identity + selector
 /// scope, and values are the earliest accepted reconnect time.
 #[derive(Clone, Debug, Default)]
 pub struct SubscribeReconnectGate {

@@ -4,14 +4,14 @@
 //! candidate profile-private payloads (§1, §7.2, §7.3): they are NOT
 //! standalone `ck.*` Event kinds and MUST NOT be written to shared Realm
 //! history under a bare name. soland carries them as profile-private
-//! sub-objects on the active `ck.member.state` event:
+//! sub-objects on the active `ak.member.state` event:
 //!
-//!   - stage 1 knock: `ck.member.state{membership=knock}` with an `application` object → opens an
+//!   - stage 1 knock: `ak.member.state{membership=knock}` with an `application` object → opens an
 //!     application record.
-//!   - stage 2 review: `ck.member.state{membership=knock|leave}` with an `application_review`
+//!   - stage 2 review: `ak.member.state{membership=knock|leave}` with an `application_review`
 //!     object → records reviewer accept / reject / request_changes. `reject` drives the member to
 //!     `leave` and stamps a `cooldown_after_reject` anchor (§3, §12).
-//!   - cancel: `ck.member.state{membership=leave}` with an `application_cancel` object → applicant
+//!   - cancel: `ak.member.state{membership=leave}` with an `application_cancel` object → applicant
 //!     withdraws; no cooldown (§7.4).
 //!
 //! The reducer enforces the §3 / §12 anti-abuse limits
@@ -50,7 +50,7 @@ pub struct MemberApplicationState {
     pub accepted_grant_id: Option<String>,
     /// Digest of the accepted review record, the `join_authorised_by` target.
     pub review_receipt_digest: Option<String>,
-    /// True once a `ck.invite.create` consumed the accept (anti-replay §7.5).
+    /// True once a `ak.invite.create` consumed the accept (anti-replay §7.5).
     pub invite_consumed: bool,
     /// `applicant_visibility` floor copied from the policy at open time.
     pub applicant_visibility: String,
@@ -118,7 +118,7 @@ fn member_from_payload(operation: &Operation) -> Option<&str> {
 
 impl ProjectionState {
     /// Submit-time gate for the application-review workflow. Runs before the
-    /// `ck.member.state` projection commits. Enforces the §3 / §12 limits and
+    /// `ak.member.state` projection commits. Enforces the §3 / §12 limits and
     /// the review-decision preconditions; returns the canonical `reason_code`
     /// on rejection.
     pub fn check_membership_application_admission(
@@ -208,7 +208,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Submit-time gate for `ck.invite.create` carrying
+    /// Submit-time gate for `ak.invite.create` carrying
     /// `refs[role="join_authorised_by"]` (§7.5). The cited review accept MUST
     /// still point at an open, unconsumed, unexpired application whose
     /// reviewer still holds `review_capability` at the current frontier.
@@ -256,14 +256,14 @@ impl ProjectionState {
     }
 
     /// Resolve the policy `review_capability` action token for a Realm
-    /// (defaults to `ck.realm.join.review` when no policy is projected).
+    /// (defaults to `ak.realm.join.review` when no policy is projected).
     pub fn realm_join_policy_review_capability(&self, realm_id: &str) -> Option<String> {
         self.realm_join_policy_cell_value(realm_id)
             .map(join_policy_review_capability)
     }
 
     /// Receipt digests of every projected application for a Realm. Used by the
-    /// read endpoint to emit one `ck.audit.accessed` per reviewer body read.
+    /// read endpoint to emit one `ak.audit.accessed` per reviewer body read.
     pub fn member_application_receipts(&self, realm_id: &str) -> Vec<String> {
         self.member_applications
             .values()
@@ -294,7 +294,7 @@ impl ProjectionState {
     }
 
     /// Reducer-side projection step for the application-review sub-payloads on
-    /// an accepted `ck.member.state` event. Called from `apply_membership`
+    /// an accepted `ak.member.state` event. Called from `apply_membership`
     /// after the FSM transition is committed.
     pub(crate) fn project_member_application(&mut self, operation: &Operation) {
         let realm_id = operation.realm_id.as_str().to_owned();
@@ -439,7 +439,7 @@ impl ProjectionState {
         }
     }
 
-    /// Mark the review accept cited by a `ck.invite.create` as consumed, so a
+    /// Mark the review accept cited by a `ak.invite.create` as consumed, so a
     /// second invite cannot replay the same authorisation (§7.5 #3).
     pub(crate) fn consume_join_authorisation(&mut self, operation: &Operation) {
         if crate::kinds::canonical_kind_for_operation(operation)

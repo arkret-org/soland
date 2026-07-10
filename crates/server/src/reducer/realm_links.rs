@@ -3,7 +3,7 @@
 //!
 //! ## Architecture
 //!
-//! The wire-level `ck.realm.link` projection (`ProjectionState::apply_realm_link`
+//! The wire-level `ak.realm.link` projection (`ProjectionState::apply_realm_link`
 //! in `reducer.rs`) handles the cell write + the structured
 //! `realm_links` / `realm_links_inbound` side-band caches. This module
 //! layers the cross-link semantics on top of that projection:
@@ -32,7 +32,7 @@
 //!    Problems") if the link graph grows past ~10⁴ edges.
 //!
 //! 3. **Explicit inheritance** — `realm-links.md §6` requires the child Realm to opt in via
-//!    `ck.realm.inheritance_policy`. Walking the link graph for policy without that opt-in MUST NOT
+//!    `ak.realm.inheritance_policy`. Walking the link graph for policy without that opt-in MUST NOT
 //!    yield any inherited rules ("no implicit cascading", §5). The [`effective_policy_for_realm`]
 //!    helper enforces this: when no `RealmInheritancePolicyState` is present for the realm,
 //!    `inheritance_mode` is `"none"` and the chain is empty regardless of how many `governed_by` /
@@ -119,7 +119,7 @@ pub fn path_exists(
 /// Inheritance mode emitted on the effective-policy response.
 ///
 /// `Explicit` mirrors `realm-links.md §6` opt-in semantics: the realm
-/// has projected a `ck.realm.inheritance_policy` declaring which parent
+/// has projected a `ak.realm.inheritance_policy` declaring which parent
 /// policies / capability bundles it accepts. `None` means no
 /// declaration; per §5 "no implicit cascading", the effective policy is the
 /// realm's own local policy only.
@@ -142,7 +142,7 @@ impl InheritanceMode {
 /// Computed effective policy for one Realm.
 ///
 /// - `realm_id` echoes the queried Realm.
-/// - `inheritance_mode` is `Explicit` iff the Realm has a `ck.realm.inheritance_policy` projection
+/// - `inheritance_mode` is `Explicit` iff the Realm has a `ak.realm.inheritance_policy` projection
 ///   (opt-in per spec §6).
 /// - `inheritance_chain` lists ancestor realm ids in walk order (`source_realm_id` of the projected
 ///   inheritance policy, then any transitive parents discovered via `governed_by` /
@@ -174,7 +174,7 @@ pub const MAX_INHERITANCE_CHAIN: usize = 8;
 ///
 /// Invariants:
 /// - Returns `inheritance_mode = "none"` and an empty `inheritance_chain` when the Realm has no
-///   `ck.realm.inheritance_policy` projection — per spec §5 inheritance MUST be explicit.
+///   `ak.realm.inheritance_policy` projection — per spec §5 inheritance MUST be explicit.
 /// - Walks `governed_by` / `inherits_policy_from` `active` links only. Rejected / tombstoned links
 ///   contribute nothing (spec §4 + §6.3).
 /// - Stops at [`MAX_INHERITANCE_CHAIN`] depth or upon revisiting a realm already in the chain
@@ -429,7 +429,7 @@ pub fn outbound_links<'a>(state: &'a ProjectionState, realm_id: &str) -> &'a [Re
         .unwrap_or(&[])
 }
 
-/// Preflight admission check for a proposed `ck.realm.link` write.
+/// Preflight admission check for a proposed `ak.realm.link` write.
 /// Mirrors the validation `ProjectionState::apply_realm_link` runs
 /// post-projection, but as a pure read against `state` so HTTP
 /// handlers can reject **before** the projection pipeline (the
@@ -709,7 +709,7 @@ mod tests {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
         // Realm D is governed by C (and C inherits from B). But D
-        // itself never published a `ck.realm.inheritance_policy` —
+        // itself never published a `ak.realm.inheritance_policy` —
         // §5 forbids implicit inheritance, so the effective policy
         // MUST be empty / `inheritance_mode = "none"`.
         state.apply(&link_op(REALM_D, REALM_C, "governed_by", "active"), &hlc);

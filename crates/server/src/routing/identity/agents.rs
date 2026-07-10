@@ -1,4 +1,4 @@
-//! CKP-0008 / CKP-0009 — Personal Agent provisioning + lifecycle surface.
+//! AKP-0008 / AKP-0009 — Personal Agent provisioning + lifecycle surface.
 //!
 //! Implements the 11 personal-agent HTTP operations gap-reported as missing
 //! in soland. The handlers below stand up the cross-project HTTP contract
@@ -7,20 +7,20 @@
 //!
 //! Surfaces:
 //! - `POST   /_arkret/gate/account/agent-key-pair`               —
-//!   `ck.gate.account.command.pair_agent_key`
-//! - `POST   /_arkret/self/agents`                             — `ck.self.agent.command.provision`
-//! - `GET    /_arkret/self/agents`                             — `ck.self.agent.query.list`
-//! - `GET    /_arkret/self/agents/{id}`                        — `ck.self.agent.resource.get`
-//! - `POST   /_arkret/self/agents/{id}/pause`                  — `ck.self.agent.command.pause`
-//! - `POST   /_arkret/self/agents/{id}/resume`                 — `ck.self.agent.command.resume`
-//! - `POST   /_arkret/self/agents/{id}/deactivate`             — `ck.self.agent.command.deactivate`
-//! - `POST   /_arkret/self/agents/{id}/rotate-key`             — `ck.self.agent.command.rotate_key`
+//!   `ak.gate.account.command.pair_agent_key`
+//! - `POST   /_arkret/self/agents`                             — `ak.self.agent.command.provision`
+//! - `GET    /_arkret/self/agents`                             — `ak.self.agent.query.list`
+//! - `GET    /_arkret/self/agents/{id}`                        — `ak.self.agent.resource.get`
+//! - `POST   /_arkret/self/agents/{id}/pause`                  — `ak.self.agent.command.pause`
+//! - `POST   /_arkret/self/agents/{id}/resume`                 — `ak.self.agent.command.resume`
+//! - `POST   /_arkret/self/agents/{id}/deactivate`             — `ak.self.agent.command.deactivate`
+//! - `POST   /_arkret/self/agents/{id}/rotate-key`             — `ak.self.agent.command.rotate_key`
 //! - `POST   /_arkret/self/agents/{id}/grants`                 —
-//!   `ck.self.agent.grant.command.attach`
+//!   `ak.self.agent.grant.command.attach`
 //! - `DELETE /_arkret/self/agents/{id}/grants/{grant_id}`      —
-//!   `ck.self.agent.grant.resource.delete`
+//!   `ak.self.agent.grant.resource.delete`
 //! - `POST   /_arkret/self/agent-sidecar-threads:ensure`       —
-//!   `ck.self.agent.sidecar_thread.command.ensure`
+//!   `ak.self.agent.sidecar_thread.command.ensure`
 //!
 //! Controller operations enforce the persisted `agent_principals.controller_did`
 //! binding before they mutate state or emit fan-out. Each handler appends an

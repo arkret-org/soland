@@ -44,8 +44,8 @@ pub trait AccountLifecycleStore: Send + Sync {
 
 /// Trait for actor-private account data storage.
 ///
-/// `data_type` is the canonical wire key (e.g. `ck.contacts.actor.<did>`,
-/// `ck.contacts.realm.<realm_id>`, `ck.read_receipt.preferences`). The
+/// `data_type` is the canonical wire key (e.g. `ak.contacts.actor.<did>`,
+/// `ak.contacts.realm.<realm_id>`, `ak.read_receipt.preferences`). The
 /// payload is opaque to the server — no schema validation runs here; the
 /// client owns canonical encoding and (where applicable) encryption.
 ///

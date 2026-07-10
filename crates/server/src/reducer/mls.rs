@@ -32,11 +32,11 @@ use super::{
     MlsRemoveObligation, MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, ProjectionState,
 };
 
-/// Reason code emitted when a `ck.mls.keypackage` event with
+/// Reason code emitted when a `ak.mls.keypackage` event with
 /// `payload.action == "claim"` targets a KeyPackage that has already
 /// been claimed. Routing layer maps to HTTP 409 `cas_conflict`.
 pub const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str = "mls_keypackage_already_claimed";
-/// Reason code emitted when a `ck.mls.keypackage` event with
+/// Reason code emitted when a `ak.mls.keypackage` event with
 /// `payload.action == "claim"` targets an unknown KeyPackage id.
 pub const REASON_KEYPACKAGE_NOT_FOUND: &str = "mls_keypackage_not_found";
 /// Reason code emitted when a published KeyPackage's lifetime window
@@ -76,10 +76,10 @@ pub const REASON_DECRYPTION_PENDING: &str = arkret_sdk::error::REASON_MLS_DECRYP
 pub const REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER: &str =
     "mls_remove_missing_governance_frontier";
 /// Reject code for a commit that advances while a remove obligation is pending
-/// but does not reference a matching `ck.mls.proposal{proposal_type="remove"}`.
+/// but does not reference a matching `ak.mls.proposal{proposal_type="remove"}`.
 pub const REASON_REMOVE_PROPOSAL_MISSING: &str = "mls_remove_proposal_missing";
 
-/// G3.S1 — project a `ck.mls.keypackage` event with
+/// G3.S1 — project a `ak.mls.keypackage` event with
 /// `payload.action == "publish"`.
 ///
 /// Payload shape (validated below):
@@ -407,7 +407,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
 /// registry. The reducer stores the epoch and covered_seals summary
 /// only; opaque GroupInfo / ratchet tree material remains in the
 /// durable event payload and object store references.
-/// Record a `ck.mls.proposal{proposal_type="remove"}` so a later commit can
+/// Record a `ak.mls.proposal{proposal_type="remove"}` so a later commit can
 /// prove it is consuming a pending remove obligation.
 pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
     let payload = &op.payload;

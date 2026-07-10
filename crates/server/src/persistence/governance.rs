@@ -52,7 +52,7 @@ pub trait RealmOrganizationStore: Send + Sync {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, BTreeSet<String>)>>;
 }
 
-/// SOL-ORG-04 — verified `ck.realm.organization` relationship statements.
+/// SOL-ORG-04 — verified `ak.realm.organization` relationship statements.
 /// Backed by the `realm_organizations` table, keyed by
 /// `(realm_id, organization_id, relationship)`.
 #[async_trait]

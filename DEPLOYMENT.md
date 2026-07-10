@@ -490,7 +490,7 @@ base64-standard-padded). Recommended cadence and ceremony:
   front soland with nginx/Caddy/Traefik `limit_req` or an API gateway that
   shares state across replicas.
 
-### CKP-0007 (Circle primitive) — migration & sizing notes
+### AKP-0007 (Circle primitive) — migration & sizing notes
 
 - **Migrations**: the Circle rollout adds three new diesel migrations that
   run automatically on startup —
@@ -504,9 +504,9 @@ base64-standard-padded). Recommended cadence and ceremony:
   `effective_scope` columns on the Strand / Morph / Space / Events mirrors.
   All three are forward-only in spirit — the down migrations are provided
   for diesel symmetry but reintroducing `discussion_realm_ref` after the
-  CKP-0007 cutover would conflict with the v1 typed scope model.
+  AKP-0007 cutover would conflict with the v1 typed scope model.
 - **Disk sizing**: `effective_scope` adds one nullable `TEXT` column per
-  projected Event. For a typical `ck:circle:<uuid>` value the on-wire form
+  projected Event. For a typical `ak:circle:<uuid>` value the on-wire form
   is 46 bytes; PostgreSQL's `TEXT` overhead pushes the stored cost to ~50
   bytes per row, plus an additional ~20 bytes for the BTREE index entry on
   `projection_events_effective_scope_idx`. A 100M-event projection grows
@@ -516,7 +516,7 @@ base64-standard-padded). Recommended cadence and ceremony:
   on the durable event log, so cross-replica consistency comes for free
   once the underlying Postgres replication is healthy. The
   `circle_member_must_be_realm_member` invariant is checked in-reducer; a
-  replica that hasn't replayed the parent Realm's latest `ck.member.state`
+  replica that hasn't replayed the parent Realm's latest `ak.member.state`
   events will fail-closed on Circle membership writes — the canonical fix
   is to gate writes behind the federation outbox acknowledgement.
 - **Metrics**: Prometheus text metrics are exposed on the separate
@@ -542,7 +542,7 @@ Run order (each migration is idempotent):
 3. `migrations/20260522_recovery_receipts.sql`
 4. `migrations/20260523_agent_fsm_cell_upgrade.sql`
 
-### `ck.realm.media_service.foci[]` shape
+### `ak.realm.media_service.foci[]` shape
 
 R3 uses a `foci[]` array so that a realm can advertise multiple
 media foci (e.g. one LiveKit pool and one Mediasoup pool, or
@@ -592,8 +592,8 @@ Media connectivity is configured in two independent layers:
   existing deployments behave identically until overridden. Point
   `SOLAND_TURN_URLS` at your own coturn/eturnal pool for production.
 - **Per-realm SFU foci (LiveKit / Mediasoup conferencing)** — declared in the
-  realm `ck.component.realm.media_service.v1` cell as the `foci[]` array shown
-  above, consumed by the CKP-0010 token exchange at
+  realm `ak.component.realm.media_service.v1` cell as the `foci[]` array shown
+  above, consumed by the AKP-0010 token exchange at
   `POST /_arkret/self/rtc/token`. This is where a LiveKit pool's
   `connect_url` / `issuer_kid` / `audience` are bound; it is realm-scoped
   config, not a deployment env var.
@@ -644,12 +644,12 @@ table. The reducer materializes new rows as events arrive.
 
 ### Agent FSM cell upgrade
 
-The agent FSM is owned by a cell (`ck.component.agent_state.v1`). Pre-R3
+The agent FSM is owned by a cell (`ak.component.agent_state.v1`). Pre-R3
 deployments don't carry that cell. Migration
 `20260523_agent_fsm_cell_upgrade.sql`:
 
 1. Iterates the existing `agent_principals` projection.
-2. For each row, inserts a synthetic `ck.self.agent.command.provision`-equivalent state
+2. For each row, inserts a synthetic `ak.self.agent.command.provision`-equivalent state
    marker into the cell store with state = `Active` and source =
    `migration:r3`.
 3. Sets `lattice = fsm, bottom = reject` on the cell metadata.

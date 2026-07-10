@@ -206,8 +206,8 @@ Common ops actions:
 
 | Symptom | Probable cause | Action |
 |---|---|---|
-| `agent_paused` storm on one realm | Admin policy change or pairing drift | Inspect last `ck.self.agent.pause` event for the principal; confirm with admin in sodmin |
-| `pairing_request_expired` | Pairing window elapsed; default 10 min | Re-issue `ck.gate.account.command.pair_agent_key`; check NTP drift on client |
+| `agent_paused` storm on one realm | Admin policy change or pairing drift | Inspect last `ak.self.agent.pause` event for the principal; confirm with admin in sodmin |
+| `pairing_request_expired` | Pairing window elapsed; default 10 min | Re-issue `ak.gate.account.command.pair_agent_key`; check NTP drift on client |
 | `proof_invalid` on pairing | Canonical-digest mismatch — usually a client serializer bug | Pull the raw payload from `agent_pairing_attempts` table and diff JCS bytes |
 | `verification_method_principal_mismatch` | DID resolved to a different principal than payload claims | Likely DID-doc misalignment in `coauth`; coordinate with that team |
 
@@ -227,7 +227,7 @@ R3 surfaces recovery as a first-class wire strand. Lifecycle:
    |<------------------------|                     |                 |
    |                         |                     |                 |
    |  start recovery_session |                     |                 |
-   |------------------------>|  ck:recovery_session:<uuid>            |
+   |------------------------>|  ak:recovery_session:<uuid>            |
    |                         |                                       |
    |                         |  collect proofs (per proof_kinds)     |
    |                         |<--------------------------------------|
@@ -272,7 +272,7 @@ Operational behaviors:
 ### Media token issuer (rotating service_signature.kid, focus binding troubleshooting)
 
 soland is the canonical issuer of media tokens. The wire surface is
-`ck.self.call.media.exchange.issue_token` (`POST /rtc/token`).
+`ak.self.call.media.exchange.issue_token` (`POST /rtc/token`).
 
 `service_signature.kid` rotation:
 
@@ -295,17 +295,17 @@ Focus-binding troubleshooting matrix:
 
 | Error | What to check |
 |---|---|
-| `focus_mismatch` | `ck.realm.media_service.foci[]` shape; the focus_id the client picked must be in the realm's current focus set. |
-| `unknown_focus_type` | A backend the realm advertises but the client doesn't profile — confirm `ck.profile.media_service_binding.<backend>.v1` is in the client's declared profile set. |
+| `focus_mismatch` | `ak.realm.media_service.foci[]` shape; the focus_id the client picked must be in the realm's current focus set. |
+| `unknown_focus_type` | A backend the realm advertises but the client doesn't profile — confirm `ak.profile.media_service_binding.<backend>.v1` is in the client's declared profile set. |
 | `token_issuer_unauthorised` | The `issuer_kid` decoded to an issuer not bound to this realm — usually a stale soland instance returning tokens for a realm it no longer hosts. |
 | `participant_binding_invalid` | Canonical bytes / signature mismatch. Capture the raw `participant_binding` and re-verify locally; suspect a serializer bug on the issuer. |
-| `participant_identity_unrecognised` | Identity string failed to parse — usually a client passing through a backend-native identity instead of the canonical `ck:participant:<realm>:<actor>:<device>:<call>`. |
+| `participant_identity_unrecognised` | Identity string failed to parse — usually a client passing through a backend-native identity instead of the canonical `ak:participant:<realm>:<actor>:<device>:<call>`. |
 | `session_focus_already_committed` | Call is bound to a different focus already; the client must resume against that focus or end and re-initiate. |
 | `e2ee_key_source_unauthorised` | Backend tried to source SFrame keys outside MLS-Exporter — this is a hard reject. Escalate to inkson if it persists. |
 | `recording_artifact_pipeline_bypassed` | Recording landed outside the canonical pipeline. Check `floria` recording-export hooks. |
 | `focus_unavailable_for_client` | Client profile set doesn't include the focus's backend profile. Negotiate down or update the client. |
 
-### Strict-reject profile toggle (`ck.profile.accountable_principals.strict_reject.v1`)
+### Strict-reject profile toggle (`ak.profile.accountable_principals.strict_reject.v1`)
 
 The strict-reject profile inverts the default leniency around the
 `accountable_principal_ids` chain: instead of softly tolerating unknown / stale
@@ -343,7 +343,7 @@ Pre-flip checklist:
    fresh.
 2. Decide cutover instant; pre-notify federation peers.
 3. Enable the profile via the admin operation
-   (`ck.realm.profile.update`).
+   (`ak.realm.profile.update`).
 4. Watch `soland_accountable_principals_reject_total{profile="strict"}` for 30
    minutes; alert if it exceeds the staleness baseline by >20%.
 5. If above threshold, rollback (toggle off), file a bug against the

@@ -24,7 +24,7 @@ fn parsed(kind: &str) -> ValidatedEventEnvelope {
     }
 }
 
-/// Inception-bootstrap self-authorization: a `ck.device.authorize` whose
+/// Inception-bootstrap self-authorization: a `ak.device.authorize` whose
 /// envelope `refs[]` carries the `role="did_inception"` evidence ref.
 fn inception_bootstrap_envelope() -> Value {
     json!({
