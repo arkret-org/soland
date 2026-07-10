@@ -524,4 +524,18 @@ mod tests {
         assert!(validate_destructive_reason("password=hunter2").is_err());
         assert!(validate_destructive_reason(&"x".repeat(513)).is_err());
     }
+
+    #[test]
+    fn destructive_reason_policy_trims_and_blocks_all_credential_markers() {
+        assert_eq!(
+            validate_destructive_reason("  incident INC-42  ").unwrap(),
+            "incident INC-42"
+        );
+        assert!(validate_destructive_reason("authorization: Bearer abc").is_err());
+        assert!(validate_destructive_reason("BEARER eyJhbGciOi").is_err());
+        assert!(validate_destructive_reason("secret=rotation-key").is_err());
+        assert!(validate_destructive_reason("token=opaque-value").is_err());
+        assert!(validate_destructive_reason("-----BEGIN PRIVATE KEY-----").is_err());
+        assert!(validate_destructive_reason("\t").is_err());
+    }
 }

@@ -130,10 +130,7 @@ mod tests {
         for hardened in HARDENED_MENTION_ROUTING_PROFILES {
             let mut sidecar = CountingSidecar::default();
             let effective = drive_mention_routing_sidecar(
-                &[
-                    PROFILE_E2EE_CLIENT.to_owned(),
-                    (*hardened).to_owned(),
-                ],
+                &[PROFILE_E2EE_CLIENT.to_owned(), (*hardened).to_owned()],
                 Some("recipient_registered_token"),
                 &[SIDECAR_TAG.to_owned()],
                 &mut sidecar,
@@ -160,7 +157,11 @@ mod tests {
             );
             assert_eq!(effective, MentionRoutingHint::Disabled);
             assert_eq!(
-                (sidecar.register_calls, sidecar.compare_calls, sidecar.persist_calls),
+                (
+                    sidecar.register_calls,
+                    sidecar.compare_calls,
+                    sidecar.persist_calls
+                ),
                 (0, 0, 0)
             );
             assert_eq!(sidecar.fallback_calls, 1);

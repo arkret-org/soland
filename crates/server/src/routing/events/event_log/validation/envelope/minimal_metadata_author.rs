@@ -1,8 +1,8 @@
-use arkret_sdk::signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_sdk::mls::{
     AuthorGroupStateView, MinimalMetadataAuthorClaim, author_leaf_from_key_package_bytes,
     verify_minimal_metadata_author,
 };
+use arkret_sdk::signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 
 use super::*;
 

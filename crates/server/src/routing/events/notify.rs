@@ -292,10 +292,9 @@ pub(crate) async fn dispatch_message_notifications(
         .map(Vec::len)
         .unwrap_or(0);
     if sidecar_tag_count > 0 {
-        let effective_hint = super::mention_routing::effective_realm_mention_routing_hint(
-            state, &realm_id, None,
-        )
-        .await;
+        let effective_hint =
+            super::mention_routing::effective_realm_mention_routing_hint(state, &realm_id, None)
+                .await;
         tracing::debug!(
             %realm_id,
             sidecar_tag_count,
