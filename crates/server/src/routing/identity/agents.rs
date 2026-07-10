@@ -244,7 +244,7 @@ mod tests {
         });
         let agent_id = Did::new(agent.to_owned()).expect("agent did");
         let pairing_request_id = "agent_pairing_request:01999999-0000-7000-8000-00000000feed";
-        let request_digest = arkret_sdk::agent::agent_key_pair_proof_request_binding_digest(
+        let request_digest = arkret_sdk::agent_key_pair_proof_request_binding_digest(
             pairing_request_id,
             &agent_id,
             verification_method,

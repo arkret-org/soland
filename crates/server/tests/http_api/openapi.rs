@@ -8,7 +8,7 @@ async fn soland_admin_openapi_uses_product_namespace() {
         .take_json()
         .await
         .unwrap();
-    let removed_admin_operation_prefix = format!("{}.{}.", "ak., "admin");
+    let removed_admin_operation_prefix = format!("{}.{}.", "ak", "admin");
     let rendered = serde_json::to_string(&spec).unwrap();
     assert!(!rendered.contains(&removed_admin_operation_prefix));
 

@@ -542,7 +542,7 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
             "proof_of_possession has expired",
         ));
     }
-    let expected_digest = arkret_sdk::agent::agent_key_pair_proof_request_binding_digest(
+    let expected_digest = arkret_sdk::agent_key_pair_proof_request_binding_digest(
         &body.pairing_request_id,
         &agent_id,
         &body.verification_method,
@@ -617,7 +617,7 @@ pub(super) fn runtime_public_key_digest(
     verification_method: &str,
 ) -> Result<String, AppError> {
     runtime_ed25519_public_key(public_key, verification_method)?;
-    arkret_sdk::agent::agent_runtime_public_key_digest(public_key)
+    arkret_sdk::agent_runtime_public_key_digest(public_key)
         .map(|digest| digest.as_str().to_owned())
         .map_err(|error| AppError::invalid_param(format!("public_key is invalid: {error}")))
 }
@@ -673,7 +673,7 @@ pub(super) fn pairing_request_binding_digest(
         .map_err(|error| AppError::invalid_param(format!("agent DID invalid: {error}")))?;
     let runtime_public_key_digest = Hash::new(runtime_public_key_digest.to_owned())
         .map_err(|_| AppError::invalid_param("runtime_public_key_digest is invalid"))?;
-    arkret_sdk::agent::agent_key_pairing_request_binding_digest(
+    arkret_sdk::agent_key_pairing_request_binding_digest(
         &controller,
         &agent_principal_id,
         verification_method,

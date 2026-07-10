@@ -33,6 +33,8 @@ use serde_json::{Value, json};
 use super::{AuthArgs, append_audit_log, require_admin_principal};
 use crate::error::AppError;
 use crate::state::{AppState, HandleClaimEvidenceRecord};
+
+const DESTRUCTIVE_REASON_MAX_CHARS: usize = 512;
 use crate::{JsonResult, json_ok};
 
 /// One handle row. Mirrors sodmin's `HandleRecord` DTO.
@@ -78,14 +80,47 @@ pub(super) struct AdminHandleAuditListOutcome {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(super) struct AdminHandleReassignBody {
     pub new_subject_id: String,
-    #[serde(default)]
-    pub reason: Option<String>,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(super) struct AdminHandleRevokeBody {
     #[serde(default)]
     pub reason: Option<String>,
+}
+
+fn validate_destructive_reason(reason: &str) -> Result<String, AppError> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(AppError::invalid_param("reason is required"));
+    }
+    if reason.chars().count() > DESTRUCTIVE_REASON_MAX_CHARS {
+        return Err(AppError::invalid_param(
+            "reason must not exceed 512 characters",
+        ));
+    }
+    if reason.chars().any(char::is_control) {
+        return Err(AppError::invalid_param("reason must be a single line"));
+    }
+
+    let lower = reason.to_ascii_lowercase();
+    const SENSITIVE_MARKERS: &[&str] = &[
+        "-----begin private key",
+        "authorization:",
+        "bearer ey",
+        "password=",
+        "secret=",
+        "token=",
+    ];
+    if SENSITIVE_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return Err(AppError::invalid_param(
+            "reason must not contain credentials or secrets",
+        ));
+    }
+    Ok(reason.to_owned())
 }
 
 pub(super) fn router() -> Router {
@@ -414,6 +449,7 @@ async fn reassign_handle(
     if new_subject_id.is_empty() {
         return Err(AppError::invalid_param("new_subject_id is required"));
     }
+    let reason = validate_destructive_reason(&body.reason)?;
 
     let record = handle_record_by_id(state, &handle_id).await?;
     let previous_subject_id = record.subject_id.clone();
@@ -464,7 +500,7 @@ async fn reassign_handle(
             "handle": format!("@{localpart}"),
             "previous_subject_id": previous_subject_id,
             "new_subject_id": new_subject_id,
-            "reason": body.reason,
+            "reason": reason,
         }),
         "accepted",
     )
@@ -475,4 +511,17 @@ async fn reassign_handle(
     reassigned.last_reassignment_at = Some(now.to_rfc3339());
     reassigned.status = Some("active".to_owned());
     json_ok(reassigned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn destructive_reason_policy_rejects_secrets_and_multiline_text() {
+        assert!(validate_destructive_reason("SEC-1234 forced reassignment").is_ok());
+        assert!(validate_destructive_reason("first\nsecond").is_err());
+        assert!(validate_destructive_reason("password=hunter2").is_err());
+        assert!(validate_destructive_reason(&"x".repeat(513)).is_err());
+    }
 }
