@@ -40,6 +40,11 @@ pub mod reasons {
     pub const AUDIT_AGENT_ATTESTATION_MISMATCH: &str =
         core_error::REASON_AUDIT_AGENT_ATTESTATION_MISMATCH;
 
+    // Spec 2026-07-10 — minimal-metadata content authorship trust anchor
+    // (encryption-and-audit.md §2.10.3).
+    pub const MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID: &str =
+        core_error::REASON_MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID;
+
     // Profile interactions.
     pub const MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE: &str =
         core_error::REASON_MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE;

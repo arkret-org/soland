@@ -275,6 +275,34 @@ pub(crate) async fn dispatch_message_notifications(
         .into_iter()
         .filter(|subject| !subject.trim().is_empty())
         .collect::<BTreeSet<_>>();
+    // SPI-SOL-004 — mention-routing sidecar gate (push-notifications.md
+    // §4.5). Opaque `mention_sidecar_hash` tags on an encrypted message may
+    // only ever be consulted under an effective `recipient_registered_token`
+    // policy; the effective hint is resolved BEFORE any sidecar consumption.
+    // Hardened Realms (minimal-metadata + both audited E2EE profiles) and
+    // undeclared / unknown hints force `disabled`: the tags are dropped here,
+    // unregistered / uncompared / unpersisted, and mention wakeup rides the
+    // blind / batch path. soland has no recipient token registry yet, so even
+    // an opted-in ordinary E2EE Realm falls back to blind delivery — a future
+    // registry MUST be driven through
+    // `mention_routing::drive_mention_routing_sidecar`, never directly.
+    let sidecar_tag_count = payload
+        .get("mention_sidecar_hash")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    if sidecar_tag_count > 0 {
+        let effective_hint = super::mention_routing::effective_realm_mention_routing_hint(
+            state, &realm_id, None,
+        )
+        .await;
+        tracing::debug!(
+            %realm_id,
+            sidecar_tag_count,
+            effective_hint = effective_hint.as_str(),
+            "mention sidecar tags dropped; blind/batch fallback"
+        );
+    }
     if let Some(strand_id) = strand_id.as_deref() {
         for recipient in all_watch_recipients(state, strand_id) {
             if recipient == sender || mentioned_subjects.contains(&recipient) {
