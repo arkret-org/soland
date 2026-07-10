@@ -3,8 +3,8 @@
 //! Surfaces:
 //! - `GET /_soland/admin/{resource}` — paginated dev snapshot of one of the builtin admin
 //!   collections (`realms`, `spaces`, `federation`, `applets`, `agents`, `reports`,
-//!   `invite-tokens`, `policy`, `media`, `handles`). `realms` are security boundaries;
-//!   `spaces` are authorization-transparent navigation containers.
+//!   `invite-tokens`, `policy`, `media`, `handles`). `realms` are security boundaries; `spaces` are
+//!   authorization-transparent navigation containers.
 //!
 //! `actors`, `audit`, `capabilities` and `devices` have moved to the typed
 //! production query endpoints (D14, see [`super::queries`]) and are no
@@ -25,8 +25,8 @@ use serde_json::{Value, json};
 
 use super::{
     accept_local_operations, append_audit_log, discussion_track_for_projection_event,
-    policy_document_to_response, projection_event_from_operation,
-    strand_id_for_projection_event, strand_id_from_realm_id, strand_projection_for_realm,
+    policy_document_to_response, projection_event_from_operation, strand_id_for_projection_event,
+    strand_id_from_realm_id, strand_projection_for_realm,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};

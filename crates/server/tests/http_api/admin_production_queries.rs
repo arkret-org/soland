@@ -109,9 +109,10 @@ async fn admin_actors_query_applies_and_echoes_filters() {
     let actors = page["actors"].as_array().unwrap();
     assert!(!actors.is_empty(), "search must match bob: {page}");
     assert!(
-        actors
-            .iter()
-            .all(|actor| actor["id"].as_str().unwrap_or_default().contains("bob.example")),
+        actors.iter().all(|actor| actor["id"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("bob.example")),
         "server-side search must filter rows: {page}"
     );
     assert_eq!(page["filters"]["search"], "bob.example", "filter echo");
@@ -263,7 +264,10 @@ async fn admin_devices_query_filters_by_name_or_id() {
     assert!(!devices.is_empty(), "bob's device missing: {page}");
     assert!(
         devices.iter().all(|device| {
-            device["id"].as_str().unwrap_or_default().contains("b0b0b0000002")
+            device["id"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("b0b0b0000002")
                 || device["actor_id"]
                     .as_str()
                     .unwrap_or_default()

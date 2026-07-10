@@ -36,12 +36,12 @@ use arkret_sdk::{AccountStatus, Did};
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use util::query_param;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal, util};
 use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
-use util::query_param;
 
 /// Clamp the caller-supplied page size to the configured admin window.
 fn clamp_limit(state: &AppState, limit: Option<usize>) -> usize {
@@ -255,7 +255,14 @@ pub(super) async fn admin_list_actors(
     let (actors, next_cursor, has_more) =
         paginate_by_id(rows, cursor.as_deref(), limit, |actor| actor.id.as_str())?;
 
-    query_audit_trail(state, &session, "admin.actors.query", &filters, actors.len()).await;
+    query_audit_trail(
+        state,
+        &session,
+        "admin.actors.query",
+        &filters,
+        actors.len(),
+    )
+    .await;
     json_ok(AdminActorList {
         actors,
         total: Some(total),
@@ -332,8 +339,8 @@ pub(super) async fn admin_query_audit(
 
     let mut filters = BTreeMap::new();
     let mut simple_filter = |key: &str| {
-        let value = query_param(req, &format!("filter[{key}]"))
-            .filter(|value| !value.trim().is_empty());
+        let value =
+            query_param(req, &format!("filter[{key}]")).filter(|value| !value.trim().is_empty());
         if let Some(value) = &value {
             filters.insert(key.to_owned(), value.clone());
         }
@@ -409,7 +416,14 @@ pub(super) async fn admin_query_audit(
     let (entries, next_cursor, has_more) =
         paginate_by_id(entries, cursor.as_deref(), limit, |entry| entry.id.as_str())?;
 
-    query_audit_trail(state, &session, "admin.audit.query", &filters, entries.len()).await;
+    query_audit_trail(
+        state,
+        &session,
+        "admin.audit.query",
+        &filters,
+        entries.len(),
+    )
+    .await;
     json_ok(AdminAuditList {
         entries,
         total: Some(total),
@@ -612,7 +626,14 @@ pub(super) async fn admin_list_devices(
     let (devices, next_cursor, has_more) =
         paginate_by_id(rows, cursor.as_deref(), limit, |device| device.id.as_str())?;
 
-    query_audit_trail(state, &session, "admin.devices.query", &filters, devices.len()).await;
+    query_audit_trail(
+        state,
+        &session,
+        "admin.devices.query",
+        &filters,
+        devices.len(),
+    )
+    .await;
     json_ok(AdminDeviceList {
         devices,
         total: Some(total),
