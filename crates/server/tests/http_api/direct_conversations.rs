@@ -2,11 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::Utc;
 use arkret_sdk::{
     CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, SignedCrossSigningKey,
     TypedTrustDomainId,
 };
+use chrono::Utc;
 
 use super::common::*;
 
@@ -112,7 +112,7 @@ async fn direct_resolve_fails_closed_without_accepted_contact() {
 
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "contact_not_accepted");
+    assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
 }
 
 #[tokio::test]
@@ -148,7 +148,7 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
 
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "contact_consent_missing");
+    assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
 }
 
 #[tokio::test]
@@ -246,7 +246,7 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
 
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "contact_not_accepted");
+    assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
 }
 
 #[tokio::test]

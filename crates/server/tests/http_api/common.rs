@@ -9,9 +9,9 @@
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 
+pub(crate) use arkret_sdk::{Did, Operation, OperationId, RealmId, new_prefixed_uuid7};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-pub(crate) use arkret_sdk::{Did, Operation, OperationId, RealmId, new_prefixed_uuid7};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 pub(crate) use salvo::http::StatusCode;
 pub(crate) use salvo::test::{ResponseExt, TestClient};

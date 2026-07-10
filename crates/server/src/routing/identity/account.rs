@@ -1442,14 +1442,14 @@ async fn direct_conversation_resolve(
     let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, &scope).await?
     else {
         return Err(direct_resolve_precondition(
-            crate::error::reasons::CONTACT_NOT_ACCEPTED,
-            "direct conversation requires an accepted contact",
+            crate::error::reasons::DIRECT_CONVERSATION_UNAVAILABLE,
+            "direct conversation is unavailable",
         ));
     };
     if !has_active_consent_for_scope(state, &peer, &session.actor, &scope, now()) {
         return Err(direct_resolve_precondition(
-            crate::error::reasons::CONTACT_CONSENT_MISSING,
-            "direct conversation requires peer direct_message consent",
+            crate::error::reasons::DIRECT_CONVERSATION_UNAVAILABLE,
+            "direct conversation is unavailable",
         ));
     }
     let pair_key = direct_pair_key(state, &session.actor, &peer)?;

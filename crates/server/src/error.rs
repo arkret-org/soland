@@ -164,8 +164,8 @@ pub mod reasons {
     // `failed_precondition`.
     pub const REACTION_TARGET_UNSUPPORTED: &str = core_error::REASON_REACTION_TARGET_UNSUPPORTED;
     pub const REACTION_SCOPE_MISMATCH: &str = core_error::REASON_REACTION_SCOPE_MISMATCH;
-    pub const CONTACT_NOT_ACCEPTED: &str = core_error::REASON_CONTACT_NOT_ACCEPTED;
-    pub const CONTACT_CONSENT_MISSING: &str = core_error::REASON_CONTACT_CONSENT_MISSING;
+    pub const DIRECT_CONVERSATION_UNAVAILABLE: &str =
+        core_error::ERROR_CODE_DIRECT_CONVERSATION_UNAVAILABLE;
     pub const PEER_UNRESOLVABLE: &str = core_error::REASON_PEER_UNRESOLVABLE;
     pub const KEYPACKAGE_UNKNOWN: &str = core_error::REASON_KEYPACKAGE_UNKNOWN;
 
