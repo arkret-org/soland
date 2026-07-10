@@ -112,9 +112,15 @@ async fn identity_describe_exposes_external_webvh_provider() {
             .unwrap()
             .iter()
             .any(|root| root["id"] == "external.webvh"
-                && root["base_url"] == "http://webvh.local"
-                && root["freshness_probe"] == "/describe"),
+                && root["base_url"] == "http://webvh.local"),
         "external webvh provider must be present in resolver trust roots: {describe}"
+    );
+    // The freshness probe lives on the provider entry and uses the canonical
+    // describe path (did_resolver_chain::CANONICAL_DESCRIBE_PATH), not the
+    // legacy `/describe`.
+    assert_eq!(
+        describe["did_webvh"]["providers"][0]["freshness_probe"],
+        "/_arkret/describe"
     );
     assert!(
         describe["profiles"]
@@ -270,11 +276,13 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .await
         .unwrap();
     assert_eq!(registered["status"], "created");
+    // DIF did:webvh v1.0: the SCID is the bare base58btc sha256 multihash
+    // (46 chars, `Qm…`) — no multibase `z` prefix.
     assert!(
         registered["did"]
             .as_str()
             .unwrap()
-            .starts_with("did:webvh:z")
+            .starts_with("did:webvh:Qm")
     );
     assert!(
         registered["did"]
@@ -332,7 +340,11 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resolved["did_document"]["id"], registered["did"]);
+    // `did_document` is a DidDocumentRef wrapper: `{did, document}`.
+    assert_eq!(
+        resolved["did_document"]["document"]["id"], registered["did"],
+        "resolve response: {resolved}"
+    );
     assert_eq!(resolved["key_log_head"], registered["key_log_head"]);
 }
 
@@ -391,11 +403,15 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
     let document: Value = did_json.take_json().await.unwrap();
     assert_eq!(document["id"], did);
 
-    // The append-only log is served at the canonical URL too.
+    // A document-only submission (no webvh log-entry `versionId` in the
+    // operation, method_evidence mode `submitted_document`) appends no
+    // `did.jsonl` history: serving non-webvh-shaped lines there would violate
+    // the did:webvh log format, so the canonical log URL stays 404 until a
+    // real log entry is submitted.
     let log_response = TestClient::get("http://server/webvh/bobwebvh/did.jsonl")
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(log_response.status_code.unwrap(), StatusCode::OK);
+    assert_eq!(log_response.status_code.unwrap(), StatusCode::NOT_FOUND);
 
     // An unknown local_id still 404s (the suffix match is exact, not a prefix).
     let unknown = TestClient::get("http://server/webvh/nosuchlocalid/did.json")
