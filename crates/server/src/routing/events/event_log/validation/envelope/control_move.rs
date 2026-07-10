@@ -113,6 +113,13 @@ pub(super) fn cba_effect_cell_family(effect: &Value) -> Result<&str, EventValida
             "effects[] entries require cell",
         )
     })?;
+    if arkret_sdk::CellRef::new(cell.to_owned()).is_err() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "effects[].cell must use canonical ak:cell:ak.component.*.v<n>:<subject> form",
+        ));
+    }
     let Some(rest) = cell.strip_prefix("ak:cell:") else {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,

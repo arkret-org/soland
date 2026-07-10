@@ -235,11 +235,11 @@ fn validate_watch_audit_payload_fields(
         )
     })?;
     let target_cell_id = required_payload_string(payload, "target_cell_id")?;
-    if !target_cell_id.starts_with("ak:cell:") {
+    if arkret_sdk::CellRef::new(target_cell_id).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ak.audit.accessed target_cell_id must use ak:cell:",
+            "ak.audit.accessed target_cell_id must use canonical ak:cell:ak.component.*.v<n>:<subject> form",
         ));
     }
     Ok(())

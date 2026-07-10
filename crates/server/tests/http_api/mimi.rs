@@ -152,7 +152,7 @@ fn mimi_submit_body(
 ) -> Value {
     let governance_binding = mimi_governance_binding(realm_id, group_id, epoch);
     let covered_seals_cell = json!({
-        "cell_id": "ak:cell:mimi-submit-test",
+        "cell_id": format!("ak:cell:ak.component.covered_seals.v1:{group_id}"),
         "seal_refs": ["ak:seal:0196419b-0000-7000-8000-000000000001"],
     });
     if let Value::Object(object) = &mut message {

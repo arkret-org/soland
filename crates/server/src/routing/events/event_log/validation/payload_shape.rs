@@ -42,11 +42,11 @@ pub(super) fn validate_conflict_repair_event_payload(
                 "conflict repair payload requires cell_id",
             )
         })?;
-    if !cell_id.starts_with("ak:cell:") {
+    if arkret_sdk::CellRef::new(cell_id.to_owned()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "conflict repair cell_id must use ak:cell:",
+            "conflict repair cell_id must use canonical ak:cell:ak.component.*.v<n>:<subject> form",
         ));
     }
     let heads = object

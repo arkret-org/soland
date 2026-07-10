@@ -264,7 +264,7 @@ mod control_move_seal_basis_tests {
     fn control_move_with_effects(kind: &str) -> serde_json::Map<String, Value> {
         serde_json::json!({
             "kind": kind,
-            "effects": [{"cell": "ak:cell:x", "op": {"type": "set", "value": 1}}],
+            "effects": [{"cell": "ak:cell:ak.component.test.envelope.v1:x", "op": {"type": "set", "value": 1}}],
         })
         .as_object()
         .unwrap()

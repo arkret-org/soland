@@ -628,8 +628,10 @@ pub(crate) fn validate_conflict_repair_payload(operation: &Operation) -> Result<
         .get("cell_id")
         .and_then(serde_json::Value::as_str)
         .ok_or("conflict repair requires cell_id")?;
-    if !cell_id.starts_with("ak:cell:") {
-        return Err("conflict repair cell_id must use ak:cell:");
+    if arkret_sdk::CellRef::new(cell_id.to_owned()).is_err() {
+        return Err(
+            "conflict repair cell_id must use canonical ak:cell:ak.component.*.v<n>:<subject> form",
+        );
     }
     let heads = operation
         .payload

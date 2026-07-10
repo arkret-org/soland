@@ -36,8 +36,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use anyhow::Result;
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use arkret_sdk::lattice::{CellState, SealedOp};
 use arkret_sdk::state_res::{
     StoreError, apply_seal, compute_state_root, control_event_set_root, effective_seal_view,
@@ -46,6 +44,8 @@ use arkret_sdk::state_res::{
 use arkret_sdk::{
     CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::SigningKey;
 use parking_lot::Mutex;
 
@@ -905,7 +905,8 @@ mod tests {
         );
 
         // 2) Single cell -> single-leaf root == leaf hash (no node prefix).
-        let cell_a = CellRef::new("ak:cell:ck.x:1".to_owned()).unwrap();
+        let cell_a =
+            CellRef::new("ak:cell:ak.component.test.state_root_a.v1:1".to_owned()).unwrap();
         let val_a = json!("alpha");
         let mut one = BTreeMap::new();
         one.insert(cell_a.clone(), CellState::Value(val_a.clone()));
@@ -916,8 +917,9 @@ mod tests {
         );
 
         // 3) Two cells -> H(0x01 || leaf(lo) || leaf(hi)), leaves ordered by ascending cell wire
-        //    string ("ak:cell:ck.x:1" < "ak:cell:ck.y:2").
-        let cell_b = CellRef::new("ak:cell:ck.y:2".to_owned()).unwrap();
+        //    string (`state_root_a` sorts before `state_root_b`).
+        let cell_b =
+            CellRef::new("ak:cell:ak.component.test.state_root_b.v1:2".to_owned()).unwrap();
         let val_b = json!("beta");
         let cell_a_wire = cell_a.as_str().to_owned();
         let cell_b_wire = cell_b.as_str().to_owned();

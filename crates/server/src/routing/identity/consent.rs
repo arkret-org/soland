@@ -7,11 +7,11 @@
 
 use std::collections::BTreeSet;
 
-use chrono::{DateTime, Utc};
 use arkret_sdk::{
-    ConsentCellList, ConsentCellView, ConsentRequestRequestBody, ConsentState,
+    CellRef, ConsentCellList, ConsentCellView, ConsentRequestRequestBody, ConsentState,
     ConsentUpdateRequestBody, Did, EventId, Operation,
 };
+use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -1094,11 +1094,10 @@ fn consent_cell_id(holder: &str, peer: &str, scope: &str) -> String {
 }
 
 fn consent_cell_id_for_consent_id(consent_id: &str) -> String {
-    if consent_id.starts_with("ak:cell:") {
-        consent_id.to_owned()
-    } else {
-        format!("ak:cell:ak.component.consent.grant.v1:{consent_id}")
+    if let Ok(cell_ref) = CellRef::new(consent_id.to_owned()) {
+        return cell_ref.into_string();
     }
+    format!("ak:cell:ak.component.consent.grant.v1:{consent_id}")
 }
 
 fn consent_id(payload: &Value) -> Result<String, AppError> {
