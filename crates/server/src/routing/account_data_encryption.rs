@@ -1,9 +1,8 @@
 use std::sync::OnceLock;
 
-use arkret_sdk::{Did, Hash, ProtocolSchemaRegistry, RealmId};
+use arkret_sdk::{Did, ProtocolSchemaRegistry, RealmId};
 use serde_json::{Map, Value};
 
-const CLIENT_SIDE_CONFORMANCE: &str = "client_side_conformance";
 const ACCOUNT_DATA_TYPE_AGENT_DRAFT: &str = "ak.agent.draft.v1";
 const ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION: &str = "ak.agent.sidecar_projection.v1";
 const ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION: &str = "ak.agent.participation.v1";
@@ -62,30 +61,13 @@ const FORBIDDEN_PLAINTEXT_FIELDS: &[&str] = &[
     "local_path",
 ];
 
-const MARKER_TOP_LEVEL_FIELDS: &[&str] = &[
-    CLIENT_SIDE_CONFORMANCE,
-    "ciphertext",
-    "content_type",
-    "version",
-    "payload_digest",
-    "aad_digest",
-];
-
-const MARKER_FIELDS: &[&str] = &[
-    "encrypted_account_data",
-    "payload_digest",
-    "plaintext_schema_id",
-    "profile_id",
-    "validated_at",
-];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AccountDataEncryptionError {
     InvalidKeyPattern,
     ValueMustBeObject,
     PlaintextField,
     MissingEncryptedCarrier,
-    InvalidEnvelopeMetadataOrMarker,
+    InvalidEnvelopeMetadata,
 }
 
 impl AccountDataEncryptionError {
@@ -99,10 +81,10 @@ impl AccountDataEncryptionError {
             }
             Self::PlaintextField => "private account_data content must not expose plaintext fields",
             Self::MissingEncryptedCarrier => {
-                "private account_data content requires encrypted envelope metadata or client-side conformance marker"
+                "private account_data content requires encrypted envelope metadata"
             }
-            Self::InvalidEnvelopeMetadataOrMarker => {
-                "private account_data encrypted envelope metadata or client-side conformance marker is invalid"
+            Self::InvalidEnvelopeMetadata => {
+                "private account_data encrypted envelope metadata is invalid"
             }
         }
     }
@@ -225,8 +207,8 @@ pub(crate) fn validate_encrypted_account_data_value(
             return validate_encrypted_carrier(carrier);
         }
     }
-    if object.contains_key("ciphertext") || object.contains_key(CLIENT_SIDE_CONFORMANCE) {
-        return Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker);
+    if object.contains_key("ciphertext") {
+        return Err(AccountDataEncryptionError::InvalidEnvelopeMetadata);
     }
     Err(AccountDataEncryptionError::MissingEncryptedCarrier)
 }
@@ -246,7 +228,7 @@ fn validate_presence_visibility_projection(
         .map(str::trim)
     {
         Some("public" | "contacts_only" | "nobody") => Ok(()),
-        _ => Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker),
+        _ => Err(AccountDataEncryptionError::InvalidEnvelopeMetadata),
     }
 }
 
@@ -315,7 +297,6 @@ fn field_is_forbidden_plaintext(field: &str) -> bool {
 
 fn validate_encrypted_carrier(value: &Value) -> Result<(), AccountDataEncryptionError> {
     validate_encrypted_envelope_metadata(value)
-        .or_else(|_| validate_client_side_conformance_marker(value))
 }
 
 fn validate_encrypted_envelope_metadata(value: &Value) -> Result<(), AccountDataEncryptionError> {
@@ -328,68 +309,10 @@ fn validate_encrypted_envelope_metadata(value: &Value) -> Result<(), AccountData
                 .flatten()
         })
         .as_ref()
-        .ok_or(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker)?;
+        .ok_or(AccountDataEncryptionError::InvalidEnvelopeMetadata)?;
     registry
         .validate_value(arkret_sdk::ENCRYPTED_ENVELOPE_SCHEMA, value)
-        .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker)
-}
-
-fn validate_client_side_conformance_marker(
-    value: &Value,
-) -> Result<(), AccountDataEncryptionError> {
-    let object = value
-        .as_object()
-        .ok_or(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker)?;
-    if object
-        .keys()
-        .any(|field| !MARKER_TOP_LEVEL_FIELDS.contains(&field.as_str()))
-    {
-        return Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker);
-    }
-    let marker = object
-        .get(CLIENT_SIDE_CONFORMANCE)
-        .and_then(Value::as_object)
-        .ok_or(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker)?;
-    if marker
-        .keys()
-        .any(|field| !MARKER_FIELDS.contains(&field.as_str()))
-    {
-        return Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker);
-    }
-    if marker
-        .get("encrypted_account_data")
-        .and_then(Value::as_bool)
-        != Some(true)
-    {
-        return Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker);
-    }
-    let payload_digest = marker
-        .get("payload_digest")
-        .or_else(|| object.get("payload_digest"))
-        .and_then(Value::as_str)
-        .ok_or(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker)?;
-    Hash::new(payload_digest.to_owned())
-        .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker)?;
-    if let Some(schema_id) = marker.get("plaintext_schema_id").and_then(Value::as_str)
-        && !schema_id.starts_with("ak.schema.")
-    {
-        return Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker);
-    }
-    if marker
-        .get("profile_id")
-        .and_then(Value::as_str)
-        .is_some_and(|profile_id| !profile_id.starts_with("ak.profile."))
-    {
-        return Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker);
-    }
-    if object
-        .get("ciphertext")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
-    {
-        return Err(AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker);
-    }
-    Ok(())
+        .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)
 }
 
 #[cfg(test)]
@@ -443,8 +366,10 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_account_data_accepts_client_side_marker() {
-        validate_encrypted_account_data_value(private_key(), &conformance_marker()).unwrap();
+    fn encrypted_account_data_rejects_client_side_marker() {
+        let error = validate_encrypted_account_data_value(private_key(), &conformance_marker())
+            .unwrap_err();
+        assert_eq!(error, AccountDataEncryptionError::InvalidEnvelopeMetadata);
     }
 
     #[test]
@@ -467,10 +392,7 @@ mod tests {
             validate_encrypted_account_data_value(private_key(), &json!({"ciphertext": "opaque"}))
                 .unwrap_err();
 
-        assert_eq!(
-            err,
-            AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker
-        );
+        assert_eq!(err, AccountDataEncryptionError::InvalidEnvelopeMetadata);
     }
 
     #[test]
@@ -545,13 +467,13 @@ mod tests {
     }
 
     #[test]
-    fn account_data_set_body_may_carry_encrypted_marker() {
+    fn account_data_set_body_may_carry_encrypted_envelope() {
         validate_encrypted_account_data_value(
             private_key(),
             &json!({
                 "key": private_key(),
                 "owner": "did:web:alice.example",
-                "body": conformance_marker(),
+                "body": encrypted_envelope(),
                 "updated_at": "2026-06-18T00:00:00Z"
             }),
         )
@@ -567,17 +489,14 @@ mod tests {
             }),
         )
         .unwrap_err();
-        assert_eq!(
-            err,
-            AccountDataEncryptionError::InvalidEnvelopeMetadataOrMarker
-        );
+        assert_eq!(err, AccountDataEncryptionError::InvalidEnvelopeMetadata);
     }
 
     #[test]
     fn reminder_rejects_plaintext_note_and_target_ref() {
         let key = "ak.reminders.v1:local-reminder-1";
         validate_encrypted_account_data_key(key).unwrap();
-        validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
+        validate_encrypted_account_data_value(key, &encrypted_envelope()).unwrap();
 
         let err = validate_encrypted_account_data_value(
             key,
@@ -587,7 +506,7 @@ mod tests {
                 "remind_at": "2026-06-19T08:00:00Z",
                 "note": "private reminder note",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
-                "encrypted_payload": conformance_marker()
+                "encrypted_payload": encrypted_envelope()
             }),
         )
         .unwrap_err();
@@ -599,7 +518,7 @@ mod tests {
     fn snooze_rejects_plaintext_target_ref() {
         let key = "ak.snooze.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         validate_encrypted_account_data_key(key).unwrap();
-        validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
+        validate_encrypted_account_data_value(key, &encrypted_envelope()).unwrap();
 
         let err = validate_encrypted_account_data_value(
             key,
@@ -608,7 +527,7 @@ mod tests {
                 "target_ref": "ak:strand:01904100-0000-7000-8000-000000000001",
                 "snooze_expires_at": "2026-06-19T09:00:00Z",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
-                "encrypted_payload": conformance_marker()
+                "encrypted_payload": encrypted_envelope()
             }),
         )
         .unwrap_err();
@@ -620,7 +539,7 @@ mod tests {
     fn scheduled_send_rejects_plaintext_message_payload() {
         let key = "ak.scheduled_send.v1:ak:message:01904100-0000-7000-8000-000000000001";
         validate_encrypted_account_data_key(key).unwrap();
-        validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
+        validate_encrypted_account_data_value(key, &encrypted_envelope()).unwrap();
 
         let err = validate_encrypted_account_data_value(
             key,
@@ -634,7 +553,7 @@ mod tests {
                 },
                 "message_payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
-                "encrypted_payload": conformance_marker()
+                "encrypted_payload": encrypted_envelope()
             }),
         )
         .unwrap_err();
@@ -646,7 +565,7 @@ mod tests {
     fn search_index_manifest_rejects_plaintext_manifest_fields() {
         let key = "ak.search.index_manifest.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         validate_encrypted_account_data_key(key).unwrap();
-        validate_encrypted_account_data_value(key, &conformance_marker()).unwrap();
+        validate_encrypted_account_data_value(key, &encrypted_envelope()).unwrap();
 
         let err = validate_encrypted_account_data_value(
             key,
@@ -657,7 +576,7 @@ mod tests {
                     "blob_ref": "ak:blob:sha256:1111111111111111111111111111111111111111111111111111111111111111",
                     "ciphertext_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
                 }],
-                "encrypted_payload": conformance_marker()
+                "encrypted_payload": encrypted_envelope()
             }),
         )
         .unwrap_err();

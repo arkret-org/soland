@@ -5,7 +5,6 @@ DROP TABLE IF EXISTS account_localparts CASCADE;
 DROP TABLE IF EXISTS accounts CASCADE;
 DROP TABLE IF EXISTS account_lifecycle CASCADE;
 DROP TABLE IF EXISTS handle_releases CASCADE;
-DROP TABLE IF EXISTS agent_grants CASCADE;
 DROP TABLE IF EXISTS agent_keys CASCADE;
 DROP TABLE IF EXISTS agent_participation CASCADE;
 DROP TABLE IF EXISTS agent_participation_ceiling CASCADE;

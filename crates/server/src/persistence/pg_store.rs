@@ -239,10 +239,6 @@ impl PersistenceStore for PgPersistenceStore {
         &self.push_devices
     }
 
-    fn push_rules(&self) -> &dyn PushRuleStore {
-        self.fallback.push_rules()
-    }
-
     fn presence(&self) -> &dyn PresenceStore {
         &self.presence
     }

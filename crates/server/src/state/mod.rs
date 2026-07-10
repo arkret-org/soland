@@ -46,7 +46,7 @@ pub use records::{
     MultisigPendingRecord, OrganizationPolicyRecord, OrganizationRecord,
     OutboundPushBridgeCacheRecord, PSI_HIT_BUCKET_SECS, PSI_PROBE_MAX_PER_WINDOW,
     PSI_PROBE_TRACKER_MAX_ENTRIES, PSI_PROBE_WINDOW, PolicyDocumentRecord, PresenceRecord,
-    ProjectionEventRecord, PsiProbeOutcome, PsiProbeRecord, PushRuleRecord, ReadReceiptRelayRecord,
+    ProjectionEventRecord, PsiProbeOutcome, PsiProbeRecord, ReadReceiptRelayRecord,
     RealmInviteRecord, RealmMetaRecord, RealmModerationPolicyRecord,
     RealmOrganizationStatementRecord, RecoveryPolicyRecord, RecoveryReceiptRecord,
     RecoverySessionRecord, RetentionPolicyRecord, RetentionTombstoneRecord, SessionRecord,

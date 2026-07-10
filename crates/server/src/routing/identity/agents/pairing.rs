@@ -39,16 +39,7 @@ pub(super) async fn resolve_agent_pairing(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(agent_pairing_not_found)?;
-    let record = state
-        .persistence
-        .agents()
-        .get_by_pairing_request_id(pairing_request_id)
-        .await
-        .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
-        .ok_or_else(agent_pairing_not_found)?;
-    if record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code) {
-        return Err(agent_pairing_not_found());
-    }
+    let record = lookup_pairing_record(state, pairing_request_id, pairing_code, None).await?;
     ensure_pairing_request_open(&record).map_err(|_| agent_pairing_not_found())?;
     let agent_principal_id = pairing_record_string(&record, "agent_principal_id")?;
     let pairing_expires_at = pairing_record_timestamp(&record, "pairing_expires_at")?;
@@ -99,27 +90,15 @@ pub(super) async fn submit_agent_runtime_key_request(
             "verification_method DID must match agent_principal_id",
         ));
     }
-    let mut agent_record = state
-        .persistence
-        .agents()
-        .get_by_pairing_request_id(&body.pairing_request_id)
-        .await
-        .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
-        .ok_or_else(agent_pairing_not_found)?;
-    if agent_record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code) {
-        return Err(agent_pairing_not_found());
-    }
+    let mut agent_record = lookup_pairing_record(
+        state,
+        &body.pairing_request_id,
+        pairing_code,
+        Some(agent_principal_id),
+    )
+    .await?;
     ensure_pairing_request_open(&agent_record)?;
     ensure_pairing_request_id_matches(&agent_record, &body.pairing_request_id)?;
-    if agent_record
-        .get("agent_principal_id")
-        .and_then(Value::as_str)
-        != Some(agent_principal_id)
-    {
-        return Err(pairing_failed_precondition(
-            "agent_principal_id does not match the open pairing request",
-        ));
-    }
     let key_pair_body = agent_key_pair_body_from_runtime_approval(&body);
     verify_runtime_key_pair_proof_of_possession(
         &key_pair_body,
@@ -179,18 +158,46 @@ pub(super) async fn agent_runtime_key_request_status(
 ) -> JsonResult<AgentRuntimeApprovalStatusOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let agent_record = state
-        .persistence
-        .agents()
-        .get_by_pairing_request_id(&body.pairing_request_id)
-        .await
-        .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
-        .ok_or_else(agent_pairing_not_found)?;
+    let agent_record = lookup_pairing_record(
+        state,
+        &body.pairing_request_id,
+        &body.pairing_code,
+        Some(body.agent_principal_id.as_str()),
+    )
+    .await?;
     json_ok(agent_runtime_key_request_status_outcome(
         &agent_record,
         &body,
         chrono::Utc::now(),
     )?)
+}
+
+/// Resolve the private pairing credential tuple without revealing which
+/// component failed. Endpoint-specific lifecycle checks remain at the caller.
+async fn lookup_pairing_record(
+    state: &AppState,
+    pairing_request_id: &str,
+    pairing_code: &str,
+    agent_principal_id: Option<&str>,
+) -> Result<Value, AppError> {
+    if pairing_request_id.trim().is_empty() || pairing_code.trim().is_empty() {
+        return Err(agent_pairing_not_found());
+    }
+    let record = state
+        .persistence
+        .agents()
+        .get_by_pairing_request_id(pairing_request_id)
+        .await
+        .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
+        .ok_or_else(agent_pairing_not_found)?;
+    if record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code)
+        || agent_principal_id.is_some_and(|expected| {
+            record.get("agent_principal_id").and_then(Value::as_str) != Some(expected)
+        })
+    {
+        return Err(agent_pairing_not_found());
+    }
+    Ok(record)
 }
 
 /// Pure decision core for the open runtime-key-request status poll.

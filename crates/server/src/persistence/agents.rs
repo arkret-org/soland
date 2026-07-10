@@ -436,6 +436,12 @@ struct AgentPrincipalRow {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+const AGENT_COLUMNS: &str = "id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, \
+     agent_slug, state, requested_scope, accountability, self_realm_id, provision_event_refs, \
+     pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
+     runtime_key_request, approval_requested_at, authorized_event_ref, \
+     authorized_verification_method, authorized_public_key_digest, created_at, updated_at";
+
 impl From<AgentPrincipalRow> for Value {
     fn from(row: AgentPrincipalRow) -> Self {
         serde_json::json!({
@@ -614,14 +620,9 @@ impl AgentStore for PgAgentStore {
 
     async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(
-            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
-             requested_scope, accountability, self_realm_id, provision_event_refs, \
-             pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
-             runtime_key_request, approval_requested_at, authorized_event_ref, \
-             authorized_verification_method, authorized_public_key_digest, \
-             created_at, updated_at FROM agent_principals WHERE id = $1",
-        )
+        sql_query(format!(
+            "SELECT {AGENT_COLUMNS} FROM agent_principals WHERE id = $1"
+        ))
         .bind::<Text, _>(agent_principal_id)
         .get_result::<AgentPrincipalRow>(&mut *conn)
         .await
@@ -635,14 +636,9 @@ impl AgentStore for PgAgentStore {
         pairing_request_id: &str,
     ) -> PersistenceResult<Option<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(
-            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
-             requested_scope, accountability, self_realm_id, provision_event_refs, \
-             pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
-             runtime_key_request, approval_requested_at, authorized_event_ref, \
-             authorized_verification_method, authorized_public_key_digest, \
-             created_at, updated_at FROM agent_principals WHERE pairing_request_id = $1",
-        )
+        sql_query(format!(
+            "SELECT {AGENT_COLUMNS} FROM agent_principals WHERE pairing_request_id = $1"
+        ))
         .bind::<Text, _>(pairing_request_id)
         .get_result::<AgentPrincipalRow>(&mut *conn)
         .await
@@ -653,15 +649,9 @@ impl AgentStore for PgAgentStore {
 
     async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(
-            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
-             requested_scope, accountability, self_realm_id, provision_event_refs, \
-             pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
-             runtime_key_request, approval_requested_at, authorized_event_ref, \
-             authorized_verification_method, authorized_public_key_digest, \
-             created_at, updated_at FROM agent_principals WHERE controller_id = $1 \
-             ORDER BY created_at",
-        )
+        sql_query(format!(
+            "SELECT {AGENT_COLUMNS} FROM agent_principals WHERE controller_id = $1 ORDER BY created_at"
+        ))
         .bind::<Text, _>(controller_did)
         .load::<AgentPrincipalRow>(&mut *conn)
         .await

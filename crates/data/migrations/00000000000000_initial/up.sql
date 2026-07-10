@@ -43,19 +43,6 @@ CREATE TABLE public.handle_releases (
     released_at timestamp with time zone NOT NULL
 );
 
-CREATE TABLE public.agent_grants (
-    id text NOT NULL,
-    agent_principal_id text NOT NULL,
-    grant_kind text NOT NULL,
-    scope jsonb NOT NULL,
-    state text DEFAULT 'active'::text NOT NULL,
-    created_at timestamp with time zone NOT NULL,
-    detached_at timestamp with time zone,
-    expires_at timestamp with time zone,
-    CONSTRAINT agent_grants_id_check CHECK (((id ~~ 'ak.accountability_grant:%'::text) OR (id ~~ 'ak:grant:%'::text))),
-    CONSTRAINT agent_grants_state_check CHECK ((state = ANY (ARRAY['active'::text, 'detached'::text, 'revoked'::text, 'expired'::text])))
-);
-
 CREATE TABLE public.agent_keys (
     id uuid NOT NULL,
     agent_principal_id text NOT NULL,
@@ -1168,9 +1155,6 @@ ALTER TABLE ONLY public.account_lifecycle
 ALTER TABLE ONLY public.handle_releases
     ADD CONSTRAINT handle_releases_pkey PRIMARY KEY (localpart);
 
-ALTER TABLE ONLY public.agent_grants
-    ADD CONSTRAINT agent_grants_pkey PRIMARY KEY (id);
-
 ALTER TABLE ONLY public.agent_keys
     ADD CONSTRAINT agent_keys_pkey PRIMARY KEY (id);
 
@@ -1458,15 +1442,11 @@ ALTER TABLE ONLY public.webvh_log_events
 ALTER TABLE ONLY public.service_identity
     ADD CONSTRAINT service_identity_pkey PRIMARY KEY (id);
 
-CREATE INDEX agent_grants_principal_idx ON public.agent_grants USING btree (agent_principal_id);
-
 CREATE INDEX account_localparts_account_idx ON public.account_localparts USING btree (account_id);
 
 CREATE UNIQUE INDEX account_localparts_primary_account_idx ON public.account_localparts USING btree (account_id) WHERE (is_primary);
 
 CREATE INDEX account_lifecycle_state_idx ON public.account_lifecycle USING btree (state, changed_at);
-
-CREATE INDEX agent_grants_state_idx ON public.agent_grants USING btree (state);
 
 CREATE INDEX agent_keys_principal_idx ON public.agent_keys USING btree (agent_principal_id);
 
@@ -1730,9 +1710,6 @@ CREATE INDEX webvh_log_events_did_seq_idx ON public.webvh_log_events USING btree
 
 ALTER TABLE ONLY public.account_localparts
     ADD CONSTRAINT account_localparts_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
-
-ALTER TABLE ONLY public.agent_grants
-    ADD CONSTRAINT agent_grants_agent_principal_id_fkey FOREIGN KEY (agent_principal_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.agent_keys
     ADD CONSTRAINT agent_keys_agent_principal_id_fkey FOREIGN KEY (agent_principal_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;

@@ -811,16 +811,6 @@ pub struct ReadReceiptRelayRecord {
 }
 
 #[derive(Clone, Debug)]
-pub struct PushRuleRecord {
-    pub actor: String,
-    pub rule_id: String,
-    pub enabled: bool,
-    pub actions: Vec<String>,
-    pub conditions: Value,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug)]
 pub struct OutboundPushBridgeCacheRecord {
     pub push_gateway_url: String,
     pub service_base_url: String,

@@ -165,7 +165,6 @@ pub trait PersistenceStore: Send + Sync {
     fn moderation(&self) -> &dyn ModerationStore;
     fn federation_operations(&self) -> &dyn FederationOperationsStore;
     fn push_devices(&self) -> &dyn PushDeviceStore;
-    fn push_rules(&self) -> &dyn PushRuleStore;
     fn presence(&self) -> &dyn PresenceStore;
     fn typing(&self) -> &dyn TypingStore;
     fn call_signal_relay(&self) -> &dyn CallSignalRelayStore;

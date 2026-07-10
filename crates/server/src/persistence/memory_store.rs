@@ -32,7 +32,6 @@ pub struct SolandMemoryPersistenceStore {
     moderation: MemoryModerationStore,
     federation_operations: MemoryFederationOperationsStore,
     push_devices: MemoryPushDeviceStore,
-    push_rules: MemoryPushRuleStore,
     presence: MemoryPresenceStore,
     typing: MemoryTypingStore,
     call_signal_relay: MemoryCallSignalRelayStore,
@@ -100,7 +99,6 @@ impl SolandMemoryPersistenceStore {
             moderation: MemoryModerationStore::new(),
             federation_operations: MemoryFederationOperationsStore::new(),
             push_devices: MemoryPushDeviceStore::new(),
-            push_rules: MemoryPushRuleStore::new(),
             presence: MemoryPresenceStore::new(),
             typing: MemoryTypingStore::new(),
             call_signal_relay: MemoryCallSignalRelayStore::new(),
@@ -254,10 +252,6 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
 
     fn push_devices(&self) -> &dyn PushDeviceStore {
         &self.push_devices
-    }
-
-    fn push_rules(&self) -> &dyn PushRuleStore {
-        &self.push_rules
     }
 
     fn presence(&self) -> &dyn PresenceStore {

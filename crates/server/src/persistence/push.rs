@@ -15,14 +15,6 @@ pub trait PushDeviceStore: Send + Sync {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
 }
 
-/// Per-actor push rules.
-#[async_trait]
-pub trait PushRuleStore: Send + Sync {
-    async fn put(&self, rule: PushRuleRecord) -> PersistenceResult<()>;
-    async fn delete(&self, actor: &str, rule_id: &str) -> PersistenceResult<()>;
-    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<PushRuleRecord>>;
-}
-
 /// Outbound push-bridge contract cache (`bridge_describe_url` → snapshot).
 ///
 /// C33.1 (T0-3a): the cache row doubles as the canonical gateway-contract
@@ -156,43 +148,6 @@ impl PushDeviceStore for MemoryPushDeviceStore {
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self.data.lock().clone())
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct MemoryPushRuleStore {
-    data: Mutex<BTreeMap<(String, String), PushRuleRecord>>,
-}
-
-impl MemoryPushRuleStore {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-}
-
-#[async_trait]
-impl PushRuleStore for MemoryPushRuleStore {
-    async fn put(&self, rule: PushRuleRecord) -> PersistenceResult<()> {
-        let key = (rule.actor.clone(), rule.rule_id.clone());
-        self.data.lock().insert(key, rule);
-        Ok(())
-    }
-
-    async fn delete(&self, actor: &str, rule_id: &str) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .remove(&(actor.to_owned(), rule_id.to_owned()));
-        Ok(())
-    }
-
-    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<PushRuleRecord>> {
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .filter(|rule| rule.actor == actor)
-            .cloned()
-            .collect())
     }
 }
 

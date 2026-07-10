@@ -573,35 +573,15 @@ pub(super) async fn rotate_agent_key(
     let agent_id = agent_principal_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
-    // spec `agent_rotate_key_request_body` = `{replacement_key, proof_of_possession}`.
-    let replacement_kid = body
+    let _replacement_kid = body
         .replacement_key
         .get("kid")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| AppError::invalid_param("replacement_key.kid is required"))?;
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "ak.self.agent.command.rotate_key",
-        json!({
-            "agent_principal_id": agent_id,
-            "replacement_key": body.replacement_key,
-        }),
-        "accepted",
-    )
-    .await;
-    let _ = replacement_kid;
-    // spec `agent_rotate_key_outcome` = `{ok, authorized_event_ref}`. The
-    // authorized event id pins the new key authorization (P2-impl: emit the
-    // real ak.agent.key.revoke + ak.agent.key.authorize chain under it and
-    // invalidate session-grants bound to the revoked key).
-    let authorized_event_ref = EventId::new(ids::generate_event_id())
-        .map_err(|err| AppError::internal(format!("generated event id invalid: {err}")))?;
-    json_ok(AgentRotateKeyOutcome {
-        ok: true,
-        authorized_event_ref,
-    })
+    Err(AppError::unsupported_feature(
+        "agent key rotation requires a durable revoke + authorize event chain and is not available",
+    ))
 }
 
 #[endpoint(

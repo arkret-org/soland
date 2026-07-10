@@ -425,34 +425,6 @@ pub use arkret_sdk::models::{
     AuthzCheckOutcome, AuthzCheckRequestBody, PushRegisterDeviceRequestBody,
     PushUnregisterDeviceRequestBody,
 };
-
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct PushRulesOutcome {
-    pub rules: Vec<Value>,
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct UpsertPushRuleOutcome {
-    pub ok: bool,
-    pub rule: Value,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct UpsertPushRuleRequestBody {
-    pub rule_id: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub actions: Vec<String>,
-    #[serde(default)]
-    pub conditions: Value,
-}
-
 // Moderation report request/outcome are the SDK DTOs (`model/api.rs` carries
 // `service-operation-dtos.schema.json#/$defs/ModerationReportOutcome`:
 // `status` enum `submitted|resolved`, `routed_to` is an array of bare DIDs);

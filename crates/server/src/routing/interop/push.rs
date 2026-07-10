@@ -3,31 +3,20 @@
 //! Surfaces:
 //! - `POST /_arkret/edge/push/register-device` — register a device token + push gateway
 //! - `POST /_arkret/edge/push/unregister-device` — remove an authenticated actor's device token
-//! - `POST /_arkret/edge/push/notify` — fan-out a notification through the rule engine (see the
-//!   12-fn helper block at the bottom of this file).
-//!
-//! Push dispatch rules live in the server-local `PushRuleStore`. Client
-//! notification preferences such as `ak.push_rules`/DND remain actor-private
-//! encrypted account data and are never parsed by this module.
+//! - `POST /_arkret/edge/push/notify` — validate the privacy-preserving target and gateway contract
+//!   before fan-out.
 //!
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an
 //! `X-Arkret-Session-Grant` header for clients that haven't yet picked up a
 //! bearer session. When coauth introspection is configured, the bridge uses
 //! the same audience/scope/proof validation as `/_arkret/gate/account/session-grants`.
 //! Spec rule: no DID in push payload / TURN username.
-//!
-//! Push-rule matching uses the helpers at the bottom: `push_rule_matches`
-//! / `push_condition_matches` / `push_field_matches` / `value_at_path` /
-//! `value_matches_expected` / `push_value_for_condition` / `push_rejection`
-//! / `push_device_suppressed_by_rule` / `is_valid_push_rule_id` /
-//! `is_supported_push_action` / `push_notification_leaks_private_payload` /
-//! `push_rule_to_json`.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -36,16 +25,15 @@ use subtle::ConstantTimeEq;
 use super::audit::append_audit_log;
 use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
 use super::push_outbound::{derive_push_gateway_service_base_url, join_push_gateway_url};
-use super::{authenticated_session, now, sha256_hex, validate_canonical_json_value};
+use super::{authenticated_session, now, sha256_hex};
 use crate::error::AppError;
 use crate::persistence::DriftResult;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, PushRuleRecord, SessionRecord};
+use crate::state::{AppState, SessionRecord};
 use crate::wire::{
-    OkOutcome, PushNotifyOutcome, PushNotifyRequestBody, PushRegisterDeviceRequestBody,
-    PushRulesOutcome, PushUnregisterDeviceRequestBody, SessionGrantIntrospectionProof,
-    UpsertPushRuleOutcome, UpsertPushRuleRequestBody,
+    PushNotifyOutcome, PushNotifyRequestBody, PushRegisterDeviceRequestBody,
+    PushUnregisterDeviceRequestBody, SessionGrantIntrospectionProof,
 };
 
 /// C33.1 (T0-3a): freshness budget for the persisted gateway-contract
@@ -381,111 +369,6 @@ pub(super) async fn push_unregister(
 }
 
 #[endpoint(
-    operation_id = "org.arkret.soland.push.rules",
-    tags("push"),
-    summary = "List push notification rules for the authenticated actor"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.push.rules"))]
-pub(super) async fn push_rules(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<PushRulesOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let rules = list_push_rule_records(state, &session.actor)
-        .await
-        .iter()
-        .map(push_rule_to_json)
-        .collect::<Vec<_>>();
-    json_ok(PushRulesOutcome {
-        rules,
-        next_cursor: None,
-    })
-}
-
-#[endpoint(
-    operation_id = "org.arkret.soland.push.upsert_rule",
-    tags("push"),
-    summary = "Idempotently create or update a push notification rule"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.push.upsert_rule"))]
-pub(super) async fn upsert_push_rule(
-    aa: AuthArgs,
-    body: JsonBody<UpsertPushRuleRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<UpsertPushRuleOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    if !is_valid_push_rule_id(&body.rule_id) {
-        return Err(AppError::invalid_param("invalid push rule id"));
-    }
-    if let Err(message) = validate_canonical_json_value(&body.conditions) {
-        return Err(AppError::invalid_param(message));
-    }
-    let actions = if body.actions.is_empty() {
-        vec!["notify".to_owned()]
-    } else {
-        let mut actions = Vec::new();
-        for action in body.actions {
-            let action = action.trim().to_owned();
-            if !is_supported_push_action(&action) {
-                return Err(AppError::invalid_param("unsupported push rule action"));
-            }
-            actions.push(action);
-        }
-        actions
-    };
-    let rule = PushRuleRecord {
-        actor: session.actor.clone(),
-        rule_id: body.rule_id.clone(),
-        enabled: body.enabled,
-        actions,
-        conditions: body.conditions,
-        updated_at: now(),
-    };
-    state
-        .persistence
-        .push_rules()
-        .put(rule.clone())
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(UpsertPushRuleOutcome {
-        ok: true,
-        rule: push_rule_to_json(&rule),
-    })
-}
-
-#[endpoint(
-    operation_id = "org.arkret.soland.push.delete_rule",
-    tags("push"),
-    summary = "Delete a push notification rule"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.push.delete_rule"))]
-pub(super) async fn delete_push_rule(
-    aa: AuthArgs,
-    rule_id: PathParam<String>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<OkOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let rule_id = rule_id.into_inner();
-    if !is_valid_push_rule_id(&rule_id) {
-        return Err(AppError::invalid_param("invalid push rule id"));
-    }
-    state
-        .persistence
-        .push_rules()
-        .delete(&session.actor, &rule_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(OkOutcome { ok: true })
-}
-
-#[endpoint(
     operation_id = "ak.edge.push.command.notify",
     tags("push"),
     summary = "Fan out a push notification through the rule engine"
@@ -588,12 +471,6 @@ pub(super) async fn push_notify(
                 Some(drift_label.to_owned()),
             ));
             continue;
-        }
-
-        if let Some(rule_id) =
-            push_device_suppressed_by_rule(state, actor, &notification, registered_device).await
-        {
-            rejected.push(push_rejection(device, "push_rule", Some(rule_id)));
         }
     }
     json_ok(PushNotifyOutcome { rejected })
@@ -792,140 +669,6 @@ fn push_notification_leaks_private_payload(
     }
 }
 
-fn push_rule_to_json(rule: &PushRuleRecord) -> Value {
-    json!({
-        "rule_id": rule.rule_id,
-        "enabled": rule.enabled,
-        "actions": rule.actions,
-        "conditions": rule.conditions,
-        "updated_at": rule.updated_at,
-    })
-}
-
-async fn push_device_suppressed_by_rule(
-    state: &AppState,
-    actor: &str,
-    notification: &Value,
-    device: &Value,
-) -> Option<String> {
-    list_push_rule_records(state, actor)
-        .await
-        .into_iter()
-        .filter(|rule| rule.enabled)
-        .find(|rule| {
-            rule.actions.iter().any(|action| action == "dont_notify")
-                && push_rule_matches(rule, notification, device)
-        })
-        .map(|rule| rule.rule_id)
-}
-
-async fn list_push_rule_records(state: &AppState, actor: &str) -> Vec<PushRuleRecord> {
-    state
-        .persistence
-        .push_rules()
-        .list_for_actor(actor)
-        .await
-        .unwrap_or_else(|error| {
-            tracing::error!(%error, actor = %actor, "failed to list push rules");
-            Vec::new()
-        })
-}
-
-fn push_rule_matches(rule: &PushRuleRecord, notification: &Value, device: &Value) -> bool {
-    match &rule.conditions {
-        Value::Null => true,
-        Value::Object(conditions) if conditions.is_empty() => true,
-        Value::Object(condition)
-            if condition.contains_key("field") || condition.contains_key("key") =>
-        {
-            push_condition_matches(&Value::Object(condition.clone()), notification, device)
-        }
-        Value::Object(conditions) => conditions
-            .iter()
-            .all(|(field, expected)| push_field_matches(field, expected, notification, device)),
-        Value::Array(conditions) if conditions.is_empty() => true,
-        Value::Array(conditions) => conditions
-            .iter()
-            .all(|condition| push_condition_matches(condition, notification, device)),
-        _ => false,
-    }
-}
-
-fn push_condition_matches(condition: &Value, notification: &Value, device: &Value) -> bool {
-    let Some(condition) = condition.as_object() else {
-        return false;
-    };
-    let Some(field) = condition
-        .get("field")
-        .or_else(|| condition.get("key"))
-        .and_then(|value| value.as_str())
-    else {
-        return false;
-    };
-    if let Some(exists) = condition.get("exists").and_then(|value| value.as_bool()) {
-        return push_value_for_condition(field, notification, device).is_some() == exists;
-    }
-    let expected = condition
-        .get("equals")
-        .or_else(|| condition.get("eq"))
-        .or_else(|| condition.get("value"))
-        .or_else(|| condition.get("one_of"))
-        .unwrap_or(&Value::Bool(true));
-    push_field_matches(field, expected, notification, device)
-}
-
-fn push_field_matches(field: &str, expected: &Value, notification: &Value, device: &Value) -> bool {
-    push_value_for_condition(field, notification, device)
-        .is_some_and(|actual| value_matches_expected(actual, expected))
-}
-
-fn push_value_for_condition<'a>(
-    field: &str,
-    notification: &'a Value,
-    device: &'a Value,
-) -> Option<&'a Value> {
-    if let Some(path) = field.strip_prefix("device.") {
-        return value_at_path(device, path);
-    }
-    if let Some(path) = field.strip_prefix("notification.") {
-        return value_at_path(notification, path);
-    }
-    value_at_path(device, field).or_else(|| value_at_path(notification, field))
-}
-
-fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-    let mut current = value;
-    for segment in path.split('.') {
-        current = current.get(segment)?;
-    }
-    Some(current)
-}
-
-fn value_matches_expected(actual: &Value, expected: &Value) -> bool {
-    match expected {
-        Value::Array(values) => values
-            .iter()
-            .any(|expected| value_matches_expected(actual, expected)),
-        Value::Object(object) => {
-            if let Some(expected) = object
-                .get("equals")
-                .or_else(|| object.get("eq"))
-                .or_else(|| object.get("value"))
-            {
-                return value_matches_expected(actual, expected);
-            }
-            if let Some(one_of) = object.get("one_of").and_then(|value| value.as_array()) {
-                return one_of
-                    .iter()
-                    .any(|expected| value_matches_expected(actual, expected));
-            }
-            actual == expected
-        }
-        Value::String(expected) => actual.as_str() == Some(expected.as_str()),
-        _ => actual == expected,
-    }
-}
-
 fn push_rejection(device: Value, reason: &str, detail: Option<String>) -> Value {
     let mut rejected = match device {
         Value::Object(object) => Value::Object(object),
@@ -934,11 +677,6 @@ fn push_rejection(device: Value, reason: &str, detail: Option<String>) -> Value 
     if let Some(object) = rejected.as_object_mut() {
         object.insert("reason".to_owned(), Value::String(reason.to_owned()));
         if let Some(detail) = detail {
-            // Both `push_rule` and `contract_drift` rejections supply a
-            // small string detail (the rule id, or a `DriftResult` label
-            // like `unknown` / `digest_mismatch`); historically this was
-            // surfaced as `rule_id`, but C33.1 reuses the same envelope so
-            // operator dashboards keep one shape.
             let key = match reason {
                 "contract_drift" => "drift_result",
                 _ => "rule_id",
@@ -947,19 +685,6 @@ fn push_rejection(device: Value, reason: &str, detail: Option<String>) -> Value 
         }
     }
     rejected
-}
-
-fn is_valid_push_rule_id(value: &str) -> bool {
-    let value = value.trim();
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '$'))
-}
-
-fn is_supported_push_action(action: &str) -> bool {
-    matches!(action, "notify" | "dont_notify" | "highlight" | "sound")
 }
 
 #[cfg(test)]

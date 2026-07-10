@@ -23,7 +23,7 @@ init-env:
 
 # Run soland locally. Uses DATABASE_URL from .env when set; otherwise uses memory storage.
 dev:
-    cargo run -- --bind {{ bind }}
+    CARGO_TARGET_DIR=target/dev cargo run -- --bind {{ bind }}
 
 # Alias for `dev`.
 start: dev
