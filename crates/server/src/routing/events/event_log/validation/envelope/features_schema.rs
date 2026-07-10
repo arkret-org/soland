@@ -261,22 +261,31 @@ pub(crate) fn validate_event_schema_and_payload(
     ) {
         return validate_space_container_lifecycle_payload(payload);
     }
-    arkret_sdk::schema::event_payload_validator_catalog()
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("event payload validator catalog unavailable: {error}"),
-            )
-        })?
-        .validate_payload(kind, payload)
-        .map_err(|error| {
+    let catalog = arkret_sdk::schema::event_payload_validator_catalog().map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("event payload validator catalog unavailable: {error}"),
+        )
+    })?;
+    // A few active standard kinds are validated by dedicated sibling schemas
+    // instead of an event-payload def (`ak.read_cursor.advance`,
+    // `ak.relation.tombstone`, `ak.moderation.franking_proof` — see the SDK's
+    // KINDS_WITHOUT_EVENT_PAYLOAD_VALIDATOR guard). The catalog fails closed
+    // on them, so only dispatch kinds it actually covers; the uncovered kinds
+    // keep their manual operation-semantics validators downstream. New kinds
+    // cannot slip through silently: the SDK's
+    // catalog_covers_every_active_standard_kind test forces every new active
+    // kind to either resolve a validator or be an explicit exception.
+    if catalog.has_payload_validator(kind) {
+        catalog.validate_payload(kind, payload).map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
                 format!("event payload violates the registered payload schema: {error}"),
             )
         })?;
+    }
     validate_realm_create_policy_constraints(kind, payload)?;
     Ok(())
 }
