@@ -3,6 +3,13 @@ extend-ignore-identifiers-re = [
     # *sigh* this just isn't worth the cost of fixing
     "AttributeID.*Supress.*",
 ]
+extend-ignore-re = [
+    # multibase/base58 strings (did:key, did:webvh)
+    "z[1-9A-HJ-NP-Za-km-z]{20,}",
+    # long base64 / base64url runs (signatures, JWT segments, fixtures)
+    "[A-Za-z0-9+/=]{40,}",
+    "[A-Za-z0-9_-]{40,}",
+]
 
 [default.extend-identifiers]
 # *sigh* this just isn't worth the cost of fixing
@@ -13,6 +20,22 @@ AttributeIDSupressMenu = "AttributeIDSupressMenu"
 teh = "teh"
 Hashi = "Hashi"
 consts = "consts"
+# DB table/column names: account_datas etc.
+datas = "datas"
+# opt-in shorthand in identifiers: explicit_optin
+optin = "optin"
+# coauth's Encrypter type referenced in comments
+encrypter = "encrypter"
+# accepted variant spellings
+unparseable = "unparseable"
+referencable = "referencable"
+# hyphenated prefix: mis-configured, mis-routed, ...
+mis = "mis"
+Mis = "Mis"
+# deliberate canonical-ordering test key {"ba": 1}
+ba = "ba"
+# hex-bytes comment annotating the ASCII "eference" tail of "reference"
+eference = "eference"
 
 [files]
 extend-exclude = ["**/*.js", "**/*.css", "**/*.html", "examples/*/static/**/*.*"]
