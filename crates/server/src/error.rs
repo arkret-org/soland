@@ -349,6 +349,8 @@ pub struct AppError {
     /// `<kind>_not_active`, `batch_not_supported`). New code should prefer
     /// a canonical `ErrorCode` variant.
     pub wire_code_override: Option<String>,
+    /// Stable protocol reason code rendered as `error.details.reason_code`.
+    pub reason_code: Option<String>,
     /// Free-form diagnostic explaining *why* this error fired.
     ///
     /// Round 2 — surfaced through the rendered envelope as
@@ -379,6 +381,7 @@ impl AppError {
             message: message.into(),
             status: None,
             wire_code_override: None,
+            reason_code: None,
             reason_detail: None,
             top_level_reason: None,
         }
@@ -393,6 +396,12 @@ impl AppError {
     /// the rationale + caveats.
     pub fn with_wire_code(mut self, wire_code: impl Into<String>) -> Self {
         self.wire_code_override = Some(wire_code.into());
+        self
+    }
+
+    /// Attach a stable protocol reason code without replacing `error.code`.
+    pub fn with_reason_code(mut self, reason_code: impl Into<String>) -> Self {
+        self.reason_code = Some(reason_code.into());
         self
     }
 
@@ -507,6 +516,15 @@ impl Writer for AppError {
                 reason,
                 self.reason_detail.as_deref(),
             );
+        } else if let Some(reason_code) = self.reason_code.as_deref() {
+            crate::routing::system::util::render_error_with_reason_code(
+                res,
+                status,
+                &wire,
+                public_message,
+                reason_code,
+                self.reason_detail.as_deref(),
+            );
         } else if let Some(reason_detail) = self.reason_detail.as_deref() {
             crate::routing::system::util::render_error_with_detail(
                 res,
@@ -528,17 +546,18 @@ impl EndpointOutRegister for AppError {
         // status. The wire representation is the spec-canonical
         // `{ ok: false, error: { code, message, ... }, request_id }`.
         //
-        // Round 2 — when an `AppError::reason_detail` is set, the
-        // rendered envelope carries `error.details.reason_detail: string`.
+        // Stable protocol rejections may carry `error.details.reason_code`;
+        // opaque diagnostics may carry `error.details.reason_detail`.
         // The SDK schema already types `details` as `serde_json::Value`,
         // so the field is documentation-only — describe its shape and
         // stability contract in each response's `description` rather
         // than mutating the SDK-owned schema.
         let envelope_schema = <arkret_sdk::ErrorEnvelope as ToSchema>::to_schema(components);
-        const REASON_DETAIL_DOC: &str = " (envelope `error.details.reason_detail`: \
-            Option<String> — free-form diagnostic; unstable, do not parse)";
+        const ERROR_DETAILS_DOC: &str = " (envelope details may contain stable \
+            `reason_code: string` and/or unstable `reason_detail: string`; do not parse \
+            `reason_detail`)";
         let response = |description: &'static str| -> oapi::Response {
-            let combined = format!("{description}{REASON_DETAIL_DOC}");
+            let combined = format!("{description}{ERROR_DETAILS_DOC}");
             oapi::Response::new(combined).add_content(
                 "application/json",
                 oapi::Content::new(envelope_schema.clone()),

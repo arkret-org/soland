@@ -4,13 +4,12 @@
 //! - `DELETE /_arkret/self/realms/{realm_id}/links/{target_realm_id}` — tombstone an existing link.
 //! - `GET /_arkret/self/realms/{realm_id}/effective-policy` — read the merged effective policy
 //!   (walks the inheritance chain).
-//! - Cycle-detection negative: a 3-realm `governed_by` triangle MUST be rejected with
-//!   `realm_link_cycle` at the third POST.
+//! - General directed cycles are accepted; self-links and illegal FSM transitions are rejected.
 
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
-use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+use soland::config::AppConfig;
 use soland::service;
 use soland::state::AppState;
 use soland_data::Db;
@@ -101,8 +100,7 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
     assert_eq!(body["target_realm_id"], REALM_A);
     assert_eq!(body["status"], "active");
 
-    // 2. Explicit inheritance opt-in on B (spec §6.1 — opt-in is mandatory; cycle detection alone
-    //    doesn't enable inheritance).
+    // 2. Explicit inheritance opt-in on B (spec §6.1 — a link alone doesn't enable inheritance).
     project_inheritance_policy(&state, REALM_B, REALM_A, &["b.policy"]);
     project_inheritance_policy(&state, REALM_A, REALM_A, &["a.policy"]);
 
@@ -143,11 +141,9 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
     );
 }
 
-/// G3.S5 acceptance — cycle detection rejects a 3-realm `governed_by`
-/// triangle. A → B and B → C succeed; C → A closes the cycle and MUST
-/// be rejected with HTTP 422 + `error.code` `realm_link_cycle`.
+/// Realm Link is a general graph: a directed triangle is valid.
 #[tokio::test]
-async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
+async fn realm_links_post_general_directed_cycle_is_allowed() {
     let svc = app();
     let token = dev_token(&svc).await;
 
@@ -175,8 +171,8 @@ async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
         .await;
     assert_eq!(r2.status_code, Some(StatusCode::OK));
 
-    // Edge C → A would close A→B→C→A — MUST be rejected.
-    let mut r3 = TestClient::post(format!("http://server/_arkret/self/realms/{REALM_C}/links"))
+    // Edge C → A closes A→B→C→A and remains valid.
+    let r3 = TestClient::post(format!("http://server/_arkret/self/realms/{REALM_C}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "target_realm_id": REALM_A,
@@ -185,16 +181,7 @@ async fn realm_links_post_cycle_rejected_with_realm_link_cycle() {
         }))
         .send(&svc)
         .await;
-    assert_eq!(
-        r3.status_code,
-        Some(StatusCode::UNPROCESSABLE_ENTITY),
-        "cycle MUST be rejected with 422 Unprocessable Entity"
-    );
-    let body: Value = r3.take_json().await.expect("error envelope is JSON");
-    assert_eq!(
-        body["error"]["code"], "realm_link_cycle",
-        "rejection MUST carry the spec reason code: {body}"
-    );
+    assert_eq!(r3.status_code, Some(StatusCode::OK));
 }
 
 /// G3.S5 — DELETE a link, verify the effective policy recomputes
@@ -284,10 +271,35 @@ async fn realm_links_delete_recomputes_effective_policy() {
         !allowed2.contains(&"b.policy"),
         "after DELETE D→C, the transitive walk to B must be cut: {allowed2:?}"
     );
+
+    // Tombstoned is terminal. A later attempt to reactivate the same cell
+    // fails with the canonical FSM reason.
+    let mut reactivate =
+        TestClient::post(format!("http://server/_arkret/self/realms/{REALM_D}/links"))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&json!({
+                "target_realm_id": REALM_C,
+                "link_kind": "governed_by",
+                "status": "active",
+            }))
+            .send(&svc)
+            .await;
+    assert_eq!(
+        reactivate.status_code,
+        Some(StatusCode::UNPROCESSABLE_ENTITY)
+    );
+    let body: Value = reactivate
+        .take_json()
+        .await
+        .expect("error envelope is JSON");
+    assert_eq!(body["error"]["code"], "failed_precondition");
+    assert_eq!(
+        body["error"]["details"]["reason_code"],
+        "realm_link_invalid_transition"
+    );
 }
 
-/// G3.S5 — self-link is rejected via the same 422 path used for cycle
-/// detection (different code, same HTTP shape).
+/// G3.S5 — self-link is rejected as a schema violation with HTTP 422.
 #[tokio::test]
 async fn realm_links_post_self_link_rejected() {
     let svc = app();
@@ -303,7 +315,11 @@ async fn realm_links_post_self_link_rejected() {
         .await;
     assert_eq!(r.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
     let body: Value = r.take_json().await.expect("error envelope is JSON");
-    assert_eq!(body["error"]["code"], "realm_link_self_reference");
+    assert_eq!(body["error"]["code"], "schema_violation");
+    assert_eq!(
+        body["error"]["details"]["reason_code"],
+        "realm_link_self_reference"
+    );
 }
 
 /// G3.S5 — effective-policy on a Realm with no

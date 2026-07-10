@@ -5,9 +5,8 @@
 //!   ` — list the typed cross-Realm links projected from `ak.realm.link` events. Powered by
 //!   [`crate::reducer::ProjectionState::realm_links_query`].
 //! - `POST /_arkret/self/realms/{realm_id}/links` — write a `ak.realm.link` Move from `realm_id →
-//!   target_realm_id`. The reducer runs the `realm_link_*` validators including cycle detection
-//!   (G3.S5); a rejected payload comes back as HTTP 422 with the spec reason code (e.g.
-//!   `realm_link_cycle`, `realm_link_self_reference`).
+//!   target_realm_id`. The reducer runs the canonical Realm Link FSM validators; a rejected payload
+//!   comes back as HTTP 422 with the spec reason code.
 //! - `DELETE /_arkret/self/realms/{realm_id}/links/{target_realm_id}` — write a tombstoning
 //!   `ak.realm.link` Move (status = `tombstoned`) for the `(realm_id, target_realm_id, link_kind)`
 //!   triple. `link_kind` defaults to `governed_by`; callers may override via query param.
@@ -279,7 +278,7 @@ async fn list_member_applications(
 /// G3.S5 — POST a new `ak.realm.link` Move. Builds an `Operation` for
 /// `arkret_sdk::events::kinds::REALM_LINK` and routes through the standard
 /// `accept_local_operations` pipeline so reducer-level validators
-/// (cycle detection, kind validation, self-reference rejection) all run.
+/// (FSM, kind validation, self-reference rejection) all run.
 #[endpoint(
     operation_id = "ak.self.realm_link.command.create",
     tags("realms"),
@@ -343,20 +342,21 @@ async fn post_realm_link(
     })
 }
 
-/// Map a reducer rejection reason code (e.g. `realm_link_cycle`,
-/// `realm_link_self_reference`, `realm_link_kind_invalid`) into a 422
-/// `AppError` whose wire `error.code` matches the spec reason code. We
-/// override both the HTTP status (422 per task spec) and the wire code
-/// so downstream tests / clients can branch on the canonical string.
+/// Map a reducer rejection reason code into the protocol error family.
 fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
-    AppError::new(crate::error::ErrorCode::FailedPrecondition, reason)
+    let code = if reason == arkret_sdk::REASON_REALM_LINK_SELF_REFERENCE {
+        crate::error::ErrorCode::SchemaViolation
+    } else {
+        crate::error::ErrorCode::FailedPrecondition
+    };
+    AppError::new(code, reason)
         .with_status(StatusCode::UNPROCESSABLE_ENTITY)
-        .with_wire_code(reason)
+        .with_reason_code(reason)
 }
 
 /// G3.S5 — DELETE a `ak.realm.link`. Writes a `tombstoned`-status
 /// Move for the `(realm_id, target_realm_id, link_kind)` triple. The
-/// underlying cell is or_set keyed on the triple, so the tombstone
+/// underlying cell is an FSM keyed on the triple, so the tombstone
 /// flip replaces the previous status in place (spec §4).
 ///
 /// `link_kind` is sourced from the `link_kind` query param; defaults
@@ -394,8 +394,7 @@ async fn delete_realm_link(
         .transpose()?
         .unwrap_or(RealmLinkKind::GovernedBy);
     let status = RealmLinkStatus::Tombstoned;
-    // Preflight (same reasoning as POST). Tombstones aren't
-    // cycle-checked, but kind / status validation still applies.
+    // Preflight (same reasoning as POST). Kind and FSM validation still apply.
     {
         let projection = state.projection.lock();
         check_realm_link_admissible(

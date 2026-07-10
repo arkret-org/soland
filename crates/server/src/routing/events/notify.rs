@@ -139,24 +139,6 @@ fn mention_subjects(payload: &Value) -> Vec<String> {
     out
 }
 
-fn mention_sidecar_hashes(payload: &Value) -> BTreeSet<String> {
-    payload
-        .get("mention_sidecar_hash")
-        .or_else(|| {
-            payload
-                .get("payload")
-                .and_then(|payload| payload.get("mention_sidecar_hash"))
-        })
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
 fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
     let mut members = BTreeSet::new();
     if let Ok(parsed_realm_id) = arkret_sdk::RealmId::new(realm_id.to_owned()) {
@@ -175,21 +157,6 @@ fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
         );
     }
     members
-}
-
-fn sidecar_hash_for_recipient(realm_id: &str, recipient_id: &str) -> String {
-    arkret_sdk::canonical::sha256_hex(format!("{realm_id}|{recipient_id}").as_bytes())
-}
-
-fn mention_sidecar_subjects(state: &AppState, realm_id: &str, payload: &Value) -> BTreeSet<String> {
-    let sidecar_hashes = mention_sidecar_hashes(payload);
-    if sidecar_hashes.is_empty() {
-        return BTreeSet::new();
-    }
-    realm_joined_members(state, realm_id)
-        .into_iter()
-        .filter(|member| sidecar_hashes.contains(&sidecar_hash_for_recipient(realm_id, member)))
-        .collect()
 }
 
 /// Effective `accept_third_party_mention` for an agent in the message
@@ -306,7 +273,6 @@ pub(crate) async fn dispatch_message_notifications(
         .map(ToOwned::to_owned);
     let mentioned_subjects = mention_subjects(payload)
         .into_iter()
-        .chain(mention_sidecar_subjects(state, &realm_id, payload).into_iter())
         .filter(|subject| !subject.trim().is_empty())
         .collect::<BTreeSet<_>>();
     if let Some(strand_id) = strand_id.as_deref() {
@@ -857,11 +823,10 @@ mod tests {
         )
     }
 
-    fn encrypted_sidecar_mention_message(
+    fn encrypted_unregistered_sidecar_message(
         realm_id: &str,
         seed: &str,
         sender: &str,
-        recipient: &str,
     ) -> arkret_sdk::Operation {
         arkret_sdk::Operation::create(
             arkret_sdk::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
@@ -871,7 +836,7 @@ mod tests {
             json!({
                 "sender": sender,
                 "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
-                "mention_sidecar_hash": [sidecar_hash_for_recipient(realm_id, recipient)],
+                "mention_sidecar_hash": ["unregistered-opaque-tag"],
                 "encrypted": true,
                 "encrypted_content": {
                     "content_type": "ak.message.v1",
@@ -1119,7 +1084,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn encrypted_mention_sidecar_routes_only_to_matching_member() {
+    async fn unregistered_mention_sidecar_is_never_compared_to_member_ids() {
         let state = test_state();
         let realm_id = "ak:realm:01904100-0000-7000-8000-000000009974";
         let alice = "did:web:alice.example";
@@ -1127,7 +1092,7 @@ mod tests {
         let carol = "did:web:carol.example";
         seed_realm_members(&state, realm_id, &[alice, bob, carol]);
 
-        let delivered = encrypted_sidecar_mention_message(realm_id, "000000009975", alice, bob);
+        let delivered = encrypted_unregistered_sidecar_message(realm_id, "000000009975", alice);
         dispatch_message_notifications(&state, &delivered).await;
 
         let bob_notifications = state
@@ -1136,13 +1101,7 @@ mod tests {
             .list_for_recipient(bob)
             .await
             .unwrap();
-        assert_eq!(bob_notifications.len(), 1);
-        assert_eq!(
-            bob_notifications[0]
-                .get("notification_type")
-                .and_then(Value::as_str),
-            Some("mention")
-        );
+        assert!(bob_notifications.is_empty());
         assert!(
             state
                 .persistence

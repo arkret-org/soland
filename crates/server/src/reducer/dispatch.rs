@@ -671,7 +671,7 @@ fn apply_call_summary_dispatch(
 }
 
 /// R3.1 — dispatch for `ak.realm.link`. Projects the typed link payload
-/// into the `ak.component.realm.link.v1` or_set cell + structured
+/// into the `ak.component.realm.link.v1` FSM cell + structured
 /// `realm_links` / `realm_links_inbound` caches.
 fn apply_realm_link_dispatch(
     s: &mut ProjectionState,

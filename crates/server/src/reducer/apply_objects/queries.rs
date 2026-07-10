@@ -658,10 +658,8 @@ impl ProjectionState {
     /// for a Realm, walking up the `governed_by` link chain when the
     /// realm itself has no row of its own (org-level fallback). Returns
     /// `None` if neither the realm nor any ancestor declared a policy
-    /// server. The walk caps at depth 8 to avoid runaway cycles —
-    /// `realm_links.rs` does cycle detection on writes, but the cap is
-    /// a defence-in-depth for projections that may have hydrated from
-    /// pre-cycle-detection persistence.
+    /// server. The walk caps at depth 8 and uses a visited set because
+    /// general Realm Link graphs may contain cycles.
     pub fn realm_policy_server_config(&self, realm_id: &str) -> Option<&RealmPolicyServerConfig> {
         if let Some(cfg) = self.realm_policy_servers.get(realm_id) {
             return Some(cfg);

@@ -1,4 +1,4 @@
-//! G3.S5 — Realm-link state machine, cycle detection, and explicit
+//! G3.S5 — Realm-link state machine and explicit
 //! policy inheritance.
 //!
 //! ## Architecture
@@ -8,37 +8,17 @@
 //! `realm_links` / `realm_links_inbound` side-band caches. This module
 //! layers the cross-link semantics on top of that projection:
 //!
-//! 1. **State machine** — links transition through `active → rejected` or `active → tombstoned`.
-//!    Per `realm-links.md §4` `status` is the terminal field on the cell; a new event for the same
-//!    `(source, target, link_kind)` triple replaces the previous status. Projection-derived
-//!    statuses (`confirmed` / `unconfirmed_link`) live one level above the cell and are not stored
-//!    in the cell itself.
+//! 1. **State machine** — links use the SDK's canonical `fsm/reject` transition matrix. General
+//!    directed cycles are valid graph shapes; only a self-reference is rejected at admission.
 //!
-//! 2. **Cycle detection** — before an `active` link is admitted, the reducer walks the existing
-//!    link graph DFS from the proposed `target_realm_id` and rejects with `realm_link_cycle` if any
-//!    directed path leads back to `source_realm_id`. Only the **directed governance / inheritance**
-//!    link kinds participate in the cycle check (`governed_by`, `inherits_policy_from`,
-//!    `confidential_extension_of`, `split_from`, `replaces`). `discoverable_from`,
-//!    `join_gate_from`, and `mirror_of` are symmetric / advisory and MAY form cycles — the spec
-//!    doesn't forbid e.g. `A mirror_of B` paired with `B mirror_of A`.
-//!
-//!    **Complexity**: O(V + E) per check, where V/E are the realms /
-//!    directed-kind edges visited from the proposed `target_realm_id`.
-//!    A `BTreeSet<String>` visited set short-circuits revisits.
-//!    Acceptable for the link graph cardinalities the spec anticipates
-//!    (single-digit governance roots, dozens of children per root).
-//!    TODO: migrate to incremental cycle detection (PK / Bender et al.,
-//!    "A New Approach to Incremental Cycle Detection and Related
-//!    Problems") if the link graph grows past ~10⁴ edges.
-//!
-//! 3. **Explicit inheritance** — `realm-links.md §6` requires the child Realm to opt in via
+//! 2. **Explicit inheritance** — `realm-links.md §6` requires the child Realm to opt in via
 //!    `ak.realm.inheritance_policy`. Walking the link graph for policy without that opt-in MUST NOT
 //!    yield any inherited rules ("no implicit cascading", §5). The [`effective_policy_for_realm`]
 //!    helper enforces this: when no `RealmInheritancePolicyState` is present for the realm,
 //!    `inheritance_mode` is `"none"` and the chain is empty regardless of how many `governed_by` /
 //!    `inherits_policy_from` parents exist in the link graph.
 //!
-//! 4. **Effective policy** — computed on demand from
+//! 3. **Effective policy** — computed on demand from
 //!    [`ProjectionState::realm_inheritance_policies`] + [`ProjectionState::realm_links`]. We
 //!    deliberately do NOT cache this in projection state: caching is bounded only by the (small)
 //!    link-graph fanout, and re-computing on each query keeps the invalidation surface ("recompute
@@ -56,64 +36,20 @@ use serde_json::{Value, json};
 
 use super::{ProjectionState, RealmInheritancePolicyState, RealmLinkState};
 
-/// Directed link kinds for which the reducer enforces cycle detection.
+/// Projection-local cell id for a Realm Link composite subject.
 ///
-/// Mirror'd / discoverable / join-gate links are advisory pointers and
-/// the spec does not forbid them participating in cycles
-/// (`mirror_of` in particular is naturally symmetric for DR pairs).
-const CYCLE_CHECKED_LINK_KINDS: &[&str] = &[
-    "governed_by",
-    "inherits_policy_from",
-    "confidential_extension_of",
-    "split_from",
-    "replaces",
-];
-
-/// Returns `true` if `link_kind` participates in cycle detection.
-pub fn is_cycle_checked_kind(link_kind: &str) -> bool {
-    CYCLE_CHECKED_LINK_KINDS.contains(&link_kind)
-}
-
-/// Walk the existing realm-link graph DFS starting from
-/// `start_realm_id` and return `true` if any directed path made of
-/// **active** + cycle-checked links reaches `forbidden_realm_id`.
-///
-/// Used by `ProjectionState::apply_realm_link` to reject a proposed
-/// `source → target` link when an existing chain `target → ... → source`
-/// already exists (which the new edge would close into a cycle).
-///
-/// Algorithm: bounded DFS with a `BTreeSet<String>` visited set.
-/// Complexity O(V + E) where V/E count the realms and directed-kind
-/// edges reachable from `start_realm_id`. See module docs.
-pub fn path_exists(
-    state: &ProjectionState,
-    start_realm_id: &str,
-    forbidden_realm_id: &str,
-) -> bool {
-    let mut visited: BTreeSet<String> = BTreeSet::new();
-    let mut stack: Vec<String> = vec![start_realm_id.to_owned()];
-    while let Some(current) = stack.pop() {
-        if !visited.insert(current.clone()) {
-            continue;
-        }
-        if current == forbidden_realm_id {
-            return true;
-        }
-        if let Some(outbound) = state.realm_links.get(&current) {
-            for link in outbound {
-                if link.status != "active" {
-                    continue;
-                }
-                if !is_cycle_checked_kind(&link.link_kind) {
-                    continue;
-                }
-                if !visited.contains(&link.target_realm_id) {
-                    stack.push(link.target_realm_id.clone());
-                }
-            }
-        }
-    }
-    false
+/// The protocol subject is `(target_realm_id, link_kind)` inside an enclosing
+/// Realm. `ProjectionState::cells` is a flat process-wide map, so its local key
+/// prepends that enclosing Realm before applying the SDK's canonical composite
+/// subject hash. This key is internal and is never emitted as the wire subject.
+pub fn realm_link_projection_cell_ref(
+    source_realm_id: &str,
+    target_realm_id: &str,
+    link_kind: &str,
+) -> Option<arkret_sdk::CellRef> {
+    let subject =
+        arkret_sdk::composite_subject(&[source_realm_id, target_realm_id, link_kind]).ok()?;
+    arkret_sdk::CellRef::new(format!("ak:cell:ak.component.realm.link.v1:{subject}")).ok()
 }
 
 /// Inheritance mode emitted on the effective-policy response.
@@ -177,9 +113,8 @@ pub const MAX_INHERITANCE_CHAIN: usize = 8;
 ///   `ak.realm.inheritance_policy` projection — per spec §5 inheritance MUST be explicit.
 /// - Walks `governed_by` / `inherits_policy_from` `active` links only. Rejected / tombstoned links
 ///   contribute nothing (spec §4 + §6.3).
-/// - Stops at [`MAX_INHERITANCE_CHAIN`] depth or upon revisiting a realm already in the chain
-///   (defence-in-depth — the cycle check on `apply_realm_link` should already prevent loops, but
-///   the read path can be invoked on a corrupted projection during recovery).
+/// - Stops at [`MAX_INHERITANCE_CHAIN`] depth or upon revisiting a realm already in the chain;
+///   general Realm Link graphs may contain cycles.
 pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> EffectivePolicy {
     let own = state.realm_inheritance_policy(realm_id);
     let inheritance_mode = if own.is_some() {
@@ -438,7 +373,7 @@ pub fn outbound_links<'a>(state: &'a ProjectionState, realm_id: &str) -> &'a [Re
 ///
 /// Returns the spec rejection reason code on failure (e.g.
 /// `realm_link_self_reference`, `realm_link_kind_invalid`,
-/// `realm_link_status_invalid`, `realm_link_cycle`), or `Ok(())` when
+/// `realm_link_status_invalid`, `realm_link_invalid_transition`), or `Ok(())` when
 /// the link is admissible.
 pub fn check_realm_link_admissible(
     state: &ProjectionState,
@@ -453,14 +388,20 @@ pub fn check_realm_link_admissible(
     if source_realm_id == target_realm_id {
         return Err("realm_link_self_reference");
     }
-    if !matches!(status, "active" | "rejected" | "tombstoned") {
+    let Some(next_status) = arkret_sdk::RealmLinkStatus::parse(status) else {
         return Err("realm_link_status_invalid");
-    }
-    if status == "active"
-        && is_cycle_checked_kind(link_kind)
-        && path_exists(state, target_realm_id, source_realm_id)
-    {
-        return Err("realm_link_cycle");
+    };
+    let current_status = state
+        .realm_links
+        .get(source_realm_id)
+        .and_then(|links| {
+            links
+                .iter()
+                .find(|link| link.target_realm_id == target_realm_id && link.link_kind == link_kind)
+        })
+        .and_then(|link| arkret_sdk::RealmLinkStatus::parse(&link.status));
+    if current_status.is_some_and(|current| !current.can_transition_to(next_status)) {
+        return Err(arkret_sdk::REASON_REALM_LINK_INVALID_TRANSITION);
     }
     Ok(())
 }
@@ -527,11 +468,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_link_active_succeeds_when_no_cycle() {
+    fn apply_link_active_succeeds() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        // A → B → C, all governed_by. No back edge from C to A, so the
-        // graph is acyclic and every accept should land.
+        // A → B → C, all governed_by.
         let e1 = state.apply(&link_op(REALM_A, REALM_B, "governed_by", "active"), &hlc);
         let e2 = state.apply(&link_op(REALM_B, REALM_C, "governed_by", "active"), &hlc);
         assert!(matches!(
@@ -542,8 +482,7 @@ mod tests {
             e2,
             crate::reducer::ProjectionEffect::RealmLinkProjected { .. }
         ));
-        // No cycle: a fresh D → A active link succeeds even though A
-        // reaches a chain of children.
+        // A fresh D → A active link succeeds even though A reaches a chain.
         let e3 = state.apply(&link_op(REALM_D, REALM_A, "governed_by", "active"), &hlc);
         assert!(matches!(
             e3,
@@ -552,27 +491,21 @@ mod tests {
     }
 
     #[test]
-    fn apply_link_cycle_rejected_with_realm_link_cycle() {
+    fn apply_link_general_directed_cycle_is_allowed() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        // A → B → C, all governed_by. Then attempt C → A — DFS from A
-        // finds a path back to C, so the new edge C → A would close the
-        // triangle.
+        // Realm Link is a general graph. A → B → C → A is valid.
         state.apply(&link_op(REALM_A, REALM_B, "governed_by", "active"), &hlc);
         state.apply(&link_op(REALM_B, REALM_C, "governed_by", "active"), &hlc);
         let cycle = state.apply(&link_op(REALM_C, REALM_A, "governed_by", "active"), &hlc);
-        match cycle {
-            crate::reducer::ProjectionEffect::Rejected { reason } => {
-                assert_eq!(reason, "realm_link_cycle");
-            }
-            other => panic!("expected Rejected(realm_link_cycle), got {other:?}"),
-        }
-        // Sanity: the rejected edge MUST NOT appear in the structured
-        // cache (cycle reject happens before the upsert).
+        assert!(matches!(
+            cycle,
+            crate::reducer::ProjectionEffect::RealmLinkProjected { .. }
+        ));
         let rows = outbound_links(&state, REALM_C);
         assert!(
-            rows.iter().all(|r| r.target_realm_id != REALM_A),
-            "rejected cycle edge leaked into the projection cache: {rows:?}"
+            rows.iter().any(|r| r.target_realm_id == REALM_A),
+            "accepted cycle edge missing from the projection cache: {rows:?}"
         );
     }
 
@@ -580,9 +513,7 @@ mod tests {
     fn apply_link_self_link_rejected() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        // Self-reference is caught by the pre-existing
-        // `realm_link_self_reference` guard, independent of the cycle
-        // check — both are correctness invariants.
+        // Self-reference is the only graph-shape admission rejection.
         let effect = state.apply(&link_op(REALM_A, REALM_A, "governed_by", "active"), &hlc);
         match effect {
             crate::reducer::ProjectionEffect::Rejected { reason } => {
@@ -593,12 +524,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_link_cycle_skipped_for_mirror_or_discoverable() {
+    fn apply_link_symmetric_pair_is_allowed() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        // mirror_of pairs are inherently symmetric (DR / replication
-        // setups) — A mirror_of B + B mirror_of A is the canonical
-        // healthy shape, NOT a cycle the reducer should reject.
+        // mirror_of pairs are inherently symmetric for DR/replication setups.
         let e1 = state.apply(&link_op(REALM_A, REALM_B, "mirror_of", "active"), &hlc);
         let e2 = state.apply(&link_op(REALM_B, REALM_A, "mirror_of", "active"), &hlc);
         assert!(matches!(
@@ -612,24 +541,54 @@ mod tests {
     }
 
     #[test]
-    fn apply_link_cycle_allowed_when_existing_edges_rejected() {
+    fn apply_link_tombstone_is_terminal() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        // Build A → B → C, then flip A → B to `rejected`. The cycle
-        // detector MUST treat rejected edges as severed, so re-adding
-        // C → A is now safe.
         state.apply(&link_op(REALM_A, REALM_B, "governed_by", "active"), &hlc);
-        state.apply(&link_op(REALM_B, REALM_C, "governed_by", "active"), &hlc);
-        // Sever A → B.
-        state.apply(&link_op(REALM_A, REALM_B, "governed_by", "rejected"), &hlc);
-        let effect = state.apply(&link_op(REALM_C, REALM_A, "governed_by", "active"), &hlc);
-        assert!(
-            matches!(
+        state.apply(
+            &link_op(REALM_A, REALM_B, "governed_by", "tombstoned"),
+            &hlc,
+        );
+        let effect = state.apply(&link_op(REALM_A, REALM_B, "governed_by", "active"), &hlc);
+        assert!(matches!(
+            effect,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == arkret_sdk::REASON_REALM_LINK_INVALID_TRANSITION
+        ));
+    }
+
+    #[test]
+    fn apply_link_accepts_the_sdk_fsm_matrix() {
+        let hlc = ServerHlc::new("test");
+        for initial in arkret_sdk::REALM_LINK_INITIAL_STATES {
+            let mut state = ProjectionState::new();
+            let effect = state.apply(
+                &link_op(REALM_A, REALM_B, "governed_by", initial.as_str()),
+                &hlc,
+            );
+            assert!(matches!(
                 effect,
                 crate::reducer::ProjectionEffect::RealmLinkProjected { .. }
-            ),
-            "expected RealmLinkProjected after severing the A→B edge, got {effect:?}"
-        );
+            ));
+        }
+
+        for (from, to) in arkret_sdk::REALM_LINK_ALLOWED_TRANSITIONS {
+            let mut state = ProjectionState::new();
+            state.apply(
+                &link_op(REALM_A, REALM_B, "governed_by", from.as_str()),
+                &hlc,
+            );
+            let effect = state.apply(&link_op(REALM_A, REALM_B, "governed_by", to.as_str()), &hlc);
+            assert!(
+                matches!(
+                    effect,
+                    crate::reducer::ProjectionEffect::RealmLinkProjected { .. }
+                ),
+                "declared transition {} -> {} was rejected: {effect:?}",
+                from.as_str(),
+                to.as_str()
+            );
+        }
     }
 
     #[test]
@@ -735,27 +694,5 @@ mod tests {
             allow.is_empty(),
             "no inherited policies when mode=none: {allow:?}"
         );
-    }
-
-    #[test]
-    fn is_cycle_checked_kind_covers_directed_governance() {
-        // Pin the set in case the spec adds a new directed kind — the
-        // test fails loudly so the maintainer must consciously decide
-        // whether it should be cycle-checked.
-        for k in [
-            "governed_by",
-            "inherits_policy_from",
-            "confidential_extension_of",
-            "split_from",
-            "replaces",
-        ] {
-            assert!(is_cycle_checked_kind(k), "{k} must be cycle-checked");
-        }
-        for k in ["discoverable_from", "join_gate_from", "mirror_of"] {
-            assert!(
-                !is_cycle_checked_kind(k),
-                "{k} must NOT be cycle-checked (symmetric / advisory)"
-            );
-        }
     }
 }

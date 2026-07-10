@@ -432,9 +432,9 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 requirements: RELATION_ID_REQUIREMENTS,
                 validate: Some(validate_relation_operation_payload),
             },
-            // G3.S5 — `ak.realm.link`. Permissive schema (target_realm_id +
-            // link_kind required; the reducer's `apply_realm_link`
-            // enforces the rest including cycle detection). We register
+            // G3.S5 — `ak.realm.link`. Permissive schema (target_realm_id,
+            // link_kind, and materialized status required; the reducer's `apply_realm_link`
+            // enforces the rest including the canonical FSM). We register
             // here so `accept_local_operations` doesn't fall through to
             // the SDK artifact validator (whose `realm_id` pattern is
             // stricter than the in-tree fixtures need for testing —

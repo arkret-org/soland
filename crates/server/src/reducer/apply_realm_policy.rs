@@ -114,20 +114,6 @@ impl ProjectionState {
         ProjectionEffect::RealmPolicyComponentsProjected { realm_id }
     }
 
-    /// R3.1 — project a `ak.realm.link` event.
-    ///
-    /// Writes to the canonical `ak.component.realm.link.v1` cell (or_set
-    /// lattice, cell_subject = `(realm_id, target_realm_id, link_kind)`)
-    /// AND mirrors into the structured `realm_links` /
-    /// `realm_links_inbound` caches consumed by the
-    /// `/_soland/self/realms/{id}/links` query API.
-    ///
-    /// Schema-level validation:
-    /// - `link_kind` MUST be one of the eight canonical values declared on
-    ///   `arkret_sdk::RealmLinkKind`.
-    /// - `target_realm_id` is required and MUST be a Realm-shaped id.
-    /// - `status` defaults to `active`; valid values are `active|rejected|tombstoned`.
-    /// - Self-referential links (target == source) are rejected with `realm_link_self_reference`.
     pub(crate) fn apply_realm_disappearing_policy(
         &mut self,
         operation: &Operation,
@@ -560,6 +546,10 @@ impl ProjectionState {
         }
     }
 
+    /// Project a canonical `ak.realm.link` event into its FSM cell and query caches.
+    ///
+    /// The HTTP operation materializes its default `status=active` before this
+    /// point. Durable Event admission requires `status` explicitly.
     pub(crate) fn apply_realm_link(
         &mut self,
         operation: &Operation,
@@ -595,25 +585,23 @@ impl ProjectionState {
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or("active");
-        if !matches!(status, "active" | "rejected" | "tombstoned") {
+        let Some(next_status) = arkret_sdk::RealmLinkStatus::parse(status) else {
             return ProjectionEffect::Rejected {
                 reason: "realm_link_status_invalid".to_owned(),
             };
-        }
-        // G3.S5 — cycle detection. Only `active` links on the directed
-        // governance kinds participate (see
-        // `reducer::realm_links::CYCLE_CHECKED_LINK_KINDS`). DFS from
-        // the proposed `target_realm_id` back to `realm_id`: if a path
-        // already exists, the new edge would close it into a cycle and
-        // we reject with `realm_link_cycle`. Rejected / tombstoned
-        // status flips are admitted unconditionally — they sever the
-        // edge rather than introduce one.
-        if status == "active"
-            && realm_links::is_cycle_checked_kind(link_kind)
-            && realm_links::path_exists(self, target_realm_id, &realm_id)
-        {
+        };
+        let current_status = self
+            .realm_links
+            .get(&realm_id)
+            .and_then(|links| {
+                links.iter().find(|link| {
+                    link.target_realm_id == target_realm_id && link.link_kind == link_kind
+                })
+            })
+            .and_then(|link| arkret_sdk::RealmLinkStatus::parse(&link.status));
+        if current_status.is_some_and(|current| !current.can_transition_to(next_status)) {
             return ProjectionEffect::Rejected {
-                reason: "realm_link_cycle".to_owned(),
+                reason: arkret_sdk::REASON_REALM_LINK_INVALID_TRANSITION.to_owned(),
             };
         }
         let label = operation
@@ -627,12 +615,10 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
 
-        // Cell write — or_set keyed by composite subject. Encode subject
-        // as `(realm, target, link_kind)` joined by `|` (cells store
-        // strings; reducer-side decoders re-split).
-        if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
-            "ak:cell:ak.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
-        )) {
+        // Cell write — FSM keyed by the canonical composite subject.
+        if let Some(cell_id) =
+            realm_links::realm_link_projection_cell_ref(&realm_id, target_realm_id, link_kind)
+        {
             let value = serde_json::json!({
                 "realm_id": realm_id,
                 "target_realm_id": target_realm_id,

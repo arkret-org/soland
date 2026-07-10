@@ -58,6 +58,33 @@ pub fn render_error_with_detail(
     ));
 }
 
+/// Render a canonical error with a stable `error.details.reason_code` and an
+/// optional opaque diagnostic.
+pub fn render_error_with_reason_code(
+    res: &mut Response,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    reason_code: &str,
+    reason_detail: Option<&str>,
+) {
+    let request_id = ids::generate_request_id();
+    let mut envelope = arkret_sdk::ErrorEnvelope::new(code, message)
+        .with_request_id(request_id)
+        .with_detail(
+            "reason_code",
+            serde_json::Value::String(reason_code.to_owned()),
+        );
+    if let Some(reason_detail) = reason_detail {
+        envelope = envelope.with_detail(
+            "reason_detail",
+            serde_json::Value::String(reason_detail.to_owned()),
+        );
+    }
+    res.status_code(status);
+    res.render(Json(envelope));
+}
+
 /// Variant of [`render_error`] that stamps a **stable** top-level `reason`
 /// discriminator (and `error.reason` mirror) alongside the canonical envelope.
 ///

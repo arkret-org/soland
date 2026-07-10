@@ -164,9 +164,11 @@ fn realm_link_cell_value_persisted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     state.apply(&link_op(REALM_A, REALM_B, "join_gate_from", None), &hlc);
-    let cell_id = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ak.component.realm.link.v1:{REALM_A}|{REALM_B}|join_gate_from"
-    ))
+    let cell_id = soland::reducer::realm_links::realm_link_projection_cell_ref(
+        REALM_A,
+        REALM_B,
+        "join_gate_from",
+    )
     .unwrap();
     let value = state.cell_value(&cell_id).expect("cell must be projected");
     assert_eq!(

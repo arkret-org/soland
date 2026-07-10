@@ -119,17 +119,18 @@ pub(crate) const RELATION_ID_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequ
     RELATION_ID_FIELDS,
     "relation operation requires relation_id",
 )];
-// G3.S5 — `ak.realm.link` Move payload. The wire schema also permits
-// `status` / `label` / `commitment`, but those are optional and the
-// reducer assigns defaults. Required fields only.
+// G3.S5 — durable `ak.realm.link` Event payload. Operation DTO defaults
+// are materialized before signing; persistent Events must carry `status`.
 pub(crate) const REALM_LINK_TARGET_FIELDS: &[&str] = &["target_realm_id"];
 pub(crate) const REALM_LINK_KIND_FIELDS: &[&str] = &["link_kind"];
+pub(crate) const REALM_LINK_STATUS_FIELDS: &[&str] = &["status"];
 pub(crate) const REALM_LINK_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         REALM_LINK_TARGET_FIELDS,
         "ak.realm.link requires target_realm_id",
     ),
     PayloadRequirement::AnyOf(REALM_LINK_KIND_FIELDS, "ak.realm.link requires link_kind"),
+    PayloadRequirement::AnyOf(REALM_LINK_STATUS_FIELDS, "ak.realm.link requires status"),
 ];
 pub(crate) const REALM_INHERITANCE_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(

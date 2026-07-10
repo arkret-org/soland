@@ -160,7 +160,7 @@ pub enum ProjectionEffect {
         call_id: String,
     },
     /// R3.1 — `ak.realm.link` event was projected into the
-    /// `ak.component.realm.link.v1` or_set cell + the `realm_links`
+    /// `ak.component.realm.link.v1` FSM cell + the `realm_links`
     /// structured cache.
     RealmLinkProjected {
         realm_id: String,
