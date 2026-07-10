@@ -172,7 +172,7 @@ pub async fn validate_operation_policy(
             )
             .await?;
         }
-        // 3a — verify the cross_signing_binding on ANY ck.device.authorize at
+        // 3a — verify the cross_signing_binding on ANY ak.device.authorize at
         // ingest (recovery /complete, or a future client-submitted control event).
         if kinds::canonical_kind_string(operation) == "ak.device.authorize" {
             crate::routing::identity::cross_signing::validate_device_authorize_binding(

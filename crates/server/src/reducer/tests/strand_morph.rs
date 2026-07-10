@@ -333,7 +333,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
         "create does not set updated_at"
     );
 
-    // ck.strand.move — state unchanged, updated_at advances.
+    // ak.strand.move — state unchanged, updated_at advances.
     let move_effect = state.apply(
         &make_operation(
             arkret_sdk::events::kinds::STRAND_MOVE,
@@ -365,7 +365,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
         Some("did:web:alice.example")
     );
 
-    // ck.strand.reorder — same family, same effect.
+    // ak.strand.reorder — same family, same effect.
     let reorder_effect = state.apply(
         &make_operation(
             arkret_sdk::events::kinds::STRAND_REORDER,

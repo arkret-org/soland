@@ -1058,7 +1058,7 @@ fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabl
 #[tokio::test]
 async fn ephemeral_call_signal_enforces_structural_contract() {
     // `webrtc-signaling.md` §5 — the /ephemeral relay structurally validates
-    // ck.call.signal envelopes (device_id + proof present, payload
+    // ak.call.signal envelopes (device_id + proof present, payload
     // {call_id, signal_type, seq} with a canonical signal_type incl.
     // moderation). It does NOT cryptographically verify the proof (receiver's
     // job).

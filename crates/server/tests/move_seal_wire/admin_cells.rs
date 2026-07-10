@@ -113,8 +113,8 @@ async fn admin_list_cells_filters_by_prefix() {
     let app = service(state.clone());
 
     // Seed two distinct cell families:
-    //   1. ck.component.member.state.v1 (member_cell, sealed → join)
-    //   2. ck.component.consent.grant.v1 (or-set, sealed via consent move)
+    //   1. ak.component.member.state.v1 (member_cell, sealed → join)
+    //   2. ak.component.consent.grant.v1 (or-set, sealed via consent move)
     let _ = seed_member_cell_join(state.clone(), &token).await;
     let consent_move = build_consent_grant_add_move();
     let _: Value = TestClient::post("http://server/_soland/peer/moves")

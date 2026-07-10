@@ -225,7 +225,7 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
     let value = state
         .realm_metadata_cell_value("ak:realm:01904100-0000-7000-8000-cfc039892036")
         .expect("metadata cell should resolve to Value");
-    // SOL-ORG-01 regression: ck.realm.update must NOT touch the
+    // SOL-ORG-01 regression: ak.realm.update must NOT touch the
     // organization relationship cell family.
     assert!(
         state

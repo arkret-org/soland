@@ -328,7 +328,7 @@ pub(super) async fn validate_strand_watch_audit_pair(
         .ok_or_else(|| manage_others_audit_error("audit_pair event is not accepted"))?;
     if audit_record.kind != arkret_sdk::events::kinds::AUDIT_ACCESSED {
         return Err(manage_others_audit_error(
-            "audit_pair ref must point to ck.audit.accessed",
+            "audit_pair ref must point to ak.audit.accessed",
         ));
     }
     let audit_payload = audit_record

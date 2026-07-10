@@ -235,7 +235,7 @@ async fn peer_contacts_submit(
     let delivery = req
         .parse_json::<PeerContactDeliveryRequest>()
         .await
-        .map_err(|_| AppError::bad_json("invalid ck.peer.contacts.command.submit request body"))?;
+        .map_err(|_| AppError::bad_json("invalid ak.peer.contacts.command.submit request body"))?;
     let body = serde_json::to_value(&delivery).map_err(|error| {
         AppError::internal(format!("contact delivery request serialize: {error}"))
     })?;
@@ -282,7 +282,7 @@ async fn peer_contacts_submit(
     if delivery.fact_kind == PeerContactFactKind::Requested {
         let Some(evidence) = delivery.introduction_evidence.as_ref() else {
             return Err(super::super::events::peer::schema_violation(
-                "introduction_evidence is required for ck.contact.requested",
+                "introduction_evidence is required for ak.contact.requested",
             ));
         };
         validate_contact_introduction_evidence_digest(&payload, evidence)?;

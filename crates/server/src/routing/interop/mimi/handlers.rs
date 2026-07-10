@@ -207,7 +207,7 @@ pub(super) async fn mimi_notify(
 #[endpoint(
     operation_id = "ak.open.mimi.command.submit_message",
     tags("mimi"),
-    summary = "Submit a MIMI room message (mapped into ck.message.create projection)"
+    summary = "Submit a MIMI room message (mapped into ak.message.create projection)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.submit_message"))]
 pub(super) async fn mimi_room_message(
@@ -538,7 +538,7 @@ pub(super) async fn mimi_consent_update(
             "consent_grants_space_capability": false,
             "membership_still_required": true,
             "holder_private_materialized": materialized.is_some(),
-            "mapped_event_kind": if granted { "ak.consent.grant" } else { "ck.consent.revoke" }
+            "mapped_event_kind": if granted { "ak.consent.grant" } else { "ak.consent.revoke" }
         }),
     );
     json_ok(MimiUpdateConsentOutcome {
@@ -655,7 +655,7 @@ pub(super) async fn mimi_identifiers_query(
 #[endpoint(
     operation_id = "ak.open.mimi.command.report_abuse",
     tags("mimi"),
-    summary = "File a MIMI abuse report (mirrors as ck.self.moderation.report projection event)"
+    summary = "File a MIMI abuse report (mirrors as ak.self.moderation.report projection event)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.report_abuse"))]
 pub(super) async fn mimi_report_abuse(

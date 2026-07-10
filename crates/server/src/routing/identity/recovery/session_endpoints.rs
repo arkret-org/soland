@@ -37,7 +37,7 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 // session transitions to `completed` and the response is the schema's
 // complete_response (authorization_event_id / device_list_update_event_id).
 // Remaining nuance (not faked): the SSK signature inside cross_signing_binding
-// is not re-verified here (no accepted ck.cross_signing.publish state yet —
+// is not re-verified here (no accepted ak.cross_signing.publish state yet —
 // Phase 4), and these ids identify accepted operations in the reducer/projection;
 // wiring them into the durable event-envelope read store is Phase 3.
 
@@ -1016,7 +1016,7 @@ pub(super) async fn recovery_session_complete(
     let authorization_event_id = authorization_event_id_typed.as_str().to_owned();
     let device_list_update_event_id = device_list_update_event_id_typed.as_str().to_owned();
 
-    // Resolve + verify the referenced ck.device.authorize.
+    // Resolve + verify the referenced ak.device.authorize.
     let authorize_payload =
         resolve_control_event_payload(state, &authorization_event_id, "ak.device.authorize")
             .await?;
@@ -1072,7 +1072,7 @@ pub(super) async fn recovery_session_complete(
         binding,
     )?;
 
-    // Resolve + verify the referenced ck.device.list_update.
+    // Resolve + verify the referenced ak.device.list_update.
     let list_update_payload =
         resolve_control_event_payload(state, &device_list_update_event_id, "ak.device.list_update")
             .await?;
@@ -1131,7 +1131,7 @@ pub(super) async fn recovery_session_complete(
                 "proof_summary": proof_summary,
                 "authorized_at": now.to_rfc3339_opts(SecondsFormat::Millis, true),
             },
-            // The accepted device key (from the referenced ck.device.authorize),
+            // The accepted device key (from the referenced ak.device.authorize),
             // used to verify a later recovery_receipt is signed by THIS device
             // (recovery-receipt.schema.json auth_data.verification_method, §15 step 7).
             "device_public_key": typed_authorize.device_public_key,

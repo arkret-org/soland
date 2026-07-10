@@ -1232,7 +1232,7 @@ mod agent_key_flag_tests {
         assert!(!state.agent_has_authorized_key(AGENT));
         assert_eq!(state.grant_ids_for_subject(AGENT), vec![GRANT.to_owned()]);
 
-        // Pairing: ck.agent.key.authorize clears the flag for the agent.
+        // Pairing: ak.agent.key.authorize clears the flag for the agent.
         let effect = state.apply_agent_key_authorize(&op(
             "agent_key_authorize",
             json!({ "agent_principal_id": AGENT, "key_id": "ak:agent_key:dev1" }),

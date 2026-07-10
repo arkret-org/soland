@@ -98,12 +98,12 @@ pub(crate) fn validate_reaction_target_kind(
 /// wire-broken `target_ref` form; producers must emit canonical `space_id`.
 fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<(), &'static str> {
     match kind {
-        // ck.space.archive / ck.space.restore use the typed
+        // ak.space.archive / ak.space.restore use the typed
         // SpaceStateTransitionPayload (space_id, new_state, reason?).
         // The removed top-level `target_ref` form is rejected
         // unconditionally; everything else passes through to the
         // per-kind SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS validator below.
-        "ak.space.archive" | "ck.space.restore" => {
+        "ak.space.archive" | "ak.space.restore" => {
             if operation.payload.get("target_ref").is_some() {
                 return Err(
                     "ak.space.archive/restore removed `target_ref` form rejected by round-4 wire",
@@ -111,7 +111,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // ck.space.tombstone — same removed-field reject rule.
+        // ak.space.tombstone — same removed-field reject rule.
         "ak.space.tombstone" => {
             if operation.payload.get("target_ref").is_some() {
                 return Err(
@@ -120,7 +120,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // ck.consent.revoke — observed_dots[] required; implicit
+        // ak.consent.revoke — observed_dots[] required; implicit
         // cascade is schema_violation. We accept the call sites that
         // do not yet emit consent.revoke events (no payload to check)
         // by returning Ok when the payload doesn't even resemble a
@@ -137,7 +137,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 .or_else(|_| validate_observed_dots_payload(operation))
                 .map_err(|_| "ak.consent.revoke payload violates observed_dots requirement")
         }
-        // ck.cross_signing.publish — round 4 CAS-register cell with
+        // ak.cross_signing.publish — round 4 CAS-register cell with
         // required `expected_previous_generation`. The reducer accepts
         // only when expected_previous_generation == current_generation
         // and new_generation == current_generation + 1. We enforce
@@ -168,7 +168,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // ck.applet.interop_session.start — round 4 requires the
+        // ak.applet.interop_session.start — round 4 requires the
         // `applet_id` to be either a DID or a strictly-validated
         // `ak:applet:<uuidv7>` typed id.
         "ak.applet.interop_session.start" => {
@@ -179,7 +179,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // ck.audit.policy_access — when `access_kind=e2ee_late_recovery`
+        // ak.audit.policy_access — when `access_kind=e2ee_late_recovery`
         // the payload MUST carry `late_recovery_original_event_id`.
         "ak.audit.policy_access" => {
             if let Some(access_kind) = operation
@@ -202,7 +202,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         "ak.realm.media_service" => {
             if operation.payload.get("sfu_endpoint").is_some() {
                 return Err(
-                    "realm_media_service_requires_foci: ck.realm.media_service must use foci[]",
+                    "realm_media_service_requires_foci: ak.realm.media_service must use foci[]",
                 );
             }
             Ok(())
@@ -237,7 +237,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 && operation.payload.get("previous_session_focus").is_none()
             {
                 return Err(
-                    "session_focus_already_committed: ck.call.state.session_focus is write-once",
+                    "session_focus_already_committed: ak.call.state.session_focus is write-once",
                 );
             }
             if let Some(participants) = operation
@@ -264,7 +264,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                     if scheme != Some(arkret_sdk::PARTICIPANT_BINDING_SCHEMA) {
                         return Err(
                             "participant_binding_invalid: participant_binding.scheme must be \
-                             ck.media.participant_binding.v1",
+                             ak.media.participant_binding.v1",
                         );
                     }
                     if binding
@@ -303,7 +303,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        "ak.profile.create" | "ck.profile.update" => Ok(()),
+        "ak.profile.create" | "ak.profile.update" => Ok(()),
         _ => Ok(()),
     }
 }

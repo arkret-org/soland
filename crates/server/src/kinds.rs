@@ -383,7 +383,7 @@ mod audit_profile_tests {
             "profiles": ["ak.profile.mls.minimal_metadata_realm.v1"]
         })));
         assert!(payload_declares_minimal_metadata_realm(&json!({
-            "active_profiles": ["ak.profile.core.v1", "ck.profile.mls.minimal_metadata_realm.v1"]
+            "active_profiles": ["ak.profile.core.v1", "ak.profile.mls.minimal_metadata_realm.v1"]
         })));
         assert!(!payload_declares_minimal_metadata_realm(&json!({
             "profiles": ["ak.profile.core.v1"]

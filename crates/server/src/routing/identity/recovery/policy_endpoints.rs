@@ -133,7 +133,7 @@ pub(super) async fn recovery_policies_get(
 #[endpoint(
     operation_id = "ak.root.identity.recovery_policy.command.publish",
     tags("identity", "recovery"),
-    summary = "Submit a ck.schema.recovery_policy.v1 policy (REC-1)",
+    summary = "Submit a ak.schema.recovery_policy.v1 policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(

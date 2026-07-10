@@ -240,7 +240,7 @@ pub(super) fn validate_key_backup_unlock_proof_shape(
 ) -> Result<(), AppError> {
     if required_proof_string(proof, "schema")? != "ak.schema.key_backup_unlock_proof.v1" {
         return Err(schema_error(
-            "key backup unlock proof schema must be ck.schema.key_backup_unlock_proof.v1",
+            "key backup unlock proof schema must be ak.schema.key_backup_unlock_proof.v1",
         ));
     }
     let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;

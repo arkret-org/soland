@@ -253,7 +253,7 @@ pub(crate) fn verify_call_state_participant_bindings(
     // `ck.call.state` carrying a `participant_binding` for a realm with no
     // projected media_service epoch has no authority to anchor the issuer.
     let anchors = media_service_anchors(state, event_realm_id).ok_or(
-        "token_issuer_unauthorised: realm has no current-epoch ck.realm.media_service to anchor \
+        "token_issuer_unauthorised: realm has no current-epoch ak.realm.media_service to anchor \
          participant_binding.issuer_kid",
     )?;
     let notary_key = state.notary_verifying_key();
@@ -269,7 +269,7 @@ pub(crate) fn verify_call_state_participant_bindings(
         if !anchors.anchors(issuer_kid) {
             return Err(
                 "token_issuer_unauthorised: participant_binding.issuer_kid is not anchored to the \
-                 current epoch ck.realm.media_service.service_id",
+                 current epoch ak.realm.media_service.service_id",
             );
         }
 

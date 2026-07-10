@@ -42,7 +42,7 @@ async fn peer_events_describe_advertises_formal_surface() {
             .any(|op| op == "ak.peer.events.query.frontier")
     );
     // `ck.peer.snapshot.query.manifest_head` MUST NOT be declared while soland cannot
-    // produce a signed ck.schema.snapshot.v1 manifest; the endpoint
+    // produce a signed ak.schema.snapshot.v1 manifest; the endpoint
     // answers `not_implemented` instead (service-surface.md §5.2).
     assert!(
         !operations

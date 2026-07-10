@@ -117,9 +117,9 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
     if arkret_sdk::events::is_ephemeral_kind(kind) {
         return Some((
             ErrorCode::SchemaViolation,
-            "ephemeral kind MUST be carried via ck.schema.ephemeral_envelope.v1 \
-             (broadcast forms) or ck.schema.device_message.v1 \
-             (ck.key.verification.* to-device); not durable ck.self.events.command.submit",
+            "ephemeral kind MUST be carried via ak.schema.ephemeral_envelope.v1 \
+             (broadcast forms) or ak.schema.device_message.v1 \
+             (ck.key.verification.* to-device); not durable ak.self.events.command.submit",
         ));
     }
     if arkret_sdk::events::is_receipt_object_only(kind) {
@@ -144,7 +144,7 @@ pub fn terminal_realm_check(
     if realm_in_terminal_state && !arkret_sdk::events::kinds::is_audit_kind(kind) {
         return Some((
             ErrorCode::FailedPrecondition,
-            "Realm has reached ck.realm.tombstone or ck.realm.destroy \
+            "Realm has reached ak.realm.tombstone or ak.realm.destroy \
              terminal state; only audit-class events are accepted",
         ));
     }

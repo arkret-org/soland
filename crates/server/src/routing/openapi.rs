@@ -736,14 +736,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         PathItemType::Post,
         "identity",
         "ak.root.identity.recovery_policy.command.publish",
-        "submit a ck.schema.recovery_policy.v1 policy",
+        "submit a ak.schema.recovery_policy.v1 policy",
     ),
     (
         "/_soland/root/identity/recovery-receipt",
         PathItemType::Post,
         "identity",
         "org.arkret.soland.identity.recovery_receipt.put",
-        "submit a ck.schema.recovery_receipt.v1 receipt",
+        "submit a ak.schema.recovery_receipt.v1 receipt",
     ),
 ];
 

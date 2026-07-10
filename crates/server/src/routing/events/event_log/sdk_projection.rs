@@ -216,7 +216,7 @@ pub(crate) fn projection_operation_from_event(
     }
     if matches!(
         parsed.kind.as_str(),
-        "ak.consent.grant" | "ck.consent.revoke"
+        "ak.consent.grant" | "ak.consent.revoke"
     ) {
         payload_object
             .entry("actor_seq".to_owned())
@@ -376,7 +376,7 @@ pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     {
         return None;
     }
-    // Non-message events (e.g. ck.strand.create / ck.strand.update) legitimately
+    // Non-message events (e.g. ak.strand.create / ak.strand.update) legitimately
     // carry the object's own `scope_circle_id`.
     let payload = object.get("payload").and_then(Value::as_object)?;
     if let Some(scope_circle_id) = payload.get("scope_circle_id").and_then(Value::as_str) {

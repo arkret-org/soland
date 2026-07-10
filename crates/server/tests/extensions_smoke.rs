@@ -127,7 +127,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
                 && event.payload["applet_id"] == json!(applet_id)
                 && event.payload["bot_actor_id"] == json!(bot_actor_id)
         }),
-        "install must append ck.applet.registration projection"
+        "install must append ak.applet.registration projection"
     );
 
     let stored_applet = state

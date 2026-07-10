@@ -345,7 +345,7 @@ async fn validate_moderation_franking_proof(
         .ok_or_else(|| AppError::invalid_param("franking_proof must be an object"))?;
     if object.get("kind").and_then(Value::as_str) != Some(MODERATION_FRANKING_PROOF_KIND) {
         return Err(AppError::invalid_param(
-            "franking_proof.kind must be ck.moderation.franking_proof",
+            "franking_proof.kind must be ak.moderation.franking_proof",
         ));
     }
     if object.get("realm_id").and_then(Value::as_str) != Some(realm_id) {

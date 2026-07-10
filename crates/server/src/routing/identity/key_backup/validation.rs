@@ -65,7 +65,7 @@ pub(super) fn validate_extra_keys(
     for key in extra.keys() {
         if !is_x_extension_key(key) {
             return Err(schema_error(format!(
-                "{path}.{key} is not defined by ck.schema.key_backup.v1"
+                "{path}.{key} is not defined by ak.schema.key_backup.v1"
             )));
         }
     }
@@ -95,7 +95,7 @@ pub(super) fn validate_key_backup_extension_extras_typed(
                 ) && !is_x_extension_key(key)
                 {
                     return Err(schema_error(format!(
-                        "key backup encryption.kdf.params.{key} is not defined by ck.schema.key_backup.v1"
+                        "key backup encryption.kdf.params.{key} is not defined by ak.schema.key_backup.v1"
                     )));
                 }
             }
@@ -127,7 +127,7 @@ pub(super) fn validate_key_backup_body_typed(
     if key_backup_extra_str(backup, "schema") == Some("ak.secret_storage.v1") {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            "ak.secret_storage.v1 wire form is not accepted; senders MUST use ck.schema.key_backup.v1",
+            "ak.secret_storage.v1 wire form is not accepted; senders MUST use ak.schema.key_backup.v1",
         )
         .with_wire_code("key_backup_wire_schema_required"));
     }

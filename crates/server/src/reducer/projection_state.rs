@@ -127,7 +127,7 @@ pub struct ProjectionState {
     /// mirror table is the `projection_space_containers` durable table.
     pub space_containers: BTreeMap<String, SpaceContainerProjection>,
     /// Server-side Strand projection. Mirrors the canonical state-machine
-    /// for ck.strand.create / update / archive / restore. Unlike Space
+    /// for ak.strand.create / update / archive / restore. Unlike Space
     /// there is no dedicated `ck.strand.tombstone` event; terminal state
     /// is reached via `ck.redaction`. Mirror table is `projection_strands`
     /// (durable).
@@ -858,8 +858,8 @@ impl ProjectionState {
     /// "cell-state-only event reached the inline cache by mistake"
     /// branch.
     ///
-    /// All cell-state events (ck.realm.policy / ck.realm.read_receipt_policy /
-    /// ck.consent.* / ck.member.state / ck.realm.* facets) are routed via
+    /// All cell-state events (ck.realm.policy / ak.realm.read_receipt_policy /
+    /// ck.consent.* / ak.member.state / ck.realm.* facets) are routed via
     /// the Move/Seal pipeline through `LatticeKind` impls in
     /// `lattice_kinds.rs`; the structured ProjectionState fields don't
     /// mirror them. `routing/projection.rs::project_read_receipt_policy`

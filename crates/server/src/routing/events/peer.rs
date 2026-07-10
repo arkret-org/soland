@@ -110,7 +110,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
                 res,
                 StatusCode::BAD_REQUEST,
                 "bad_json",
-                "invalid ck.peer.events.command.submit request body",
+                "invalid ak.peer.events.command.submit request body",
             );
             return;
         }
@@ -149,7 +149,7 @@ async fn peer_events_query_post(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let request = parse_json_body::<EventsQueryPostRequestBody>(
         req,
-        "invalid ck.peer.events.query.scan request body",
+        "invalid ak.peer.events.query.scan request body",
     )
     .await?;
     let body = serde_json::to_value(&request).map_err(|error| {
@@ -174,7 +174,7 @@ async fn peer_events_resolve(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let request = parse_json_body::<EventsResolveRequestBody>(
         req,
-        "invalid ck.peer.events.query.resolve request body",
+        "invalid ak.peer.events.query.resolve request body",
     )
     .await?;
     let body = serde_json::to_value(&request).map_err(|error| {
@@ -386,7 +386,7 @@ async fn peer_snapshot_head(
     Err(AppError::new(
         crate::error::ErrorCode::NotImplemented,
         "ak.peer.snapshot.query.manifest_head is not implemented: this deployment cannot \
-         produce a signed ck.schema.snapshot.v1 manifest",
+         produce a signed ak.schema.snapshot.v1 manifest",
     ))
 }
 

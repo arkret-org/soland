@@ -12,8 +12,8 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     let service_did = "did:web:applet.example";
     let agent_id = "did:web:agent.example";
 
-    // Build an applet registration event. ck.applet.registration uses
-    // ck.schema.event_payload.v1 since there's no dedicated applet
+    // Build an applet registration event. ak.applet.registration uses
+    // ak.schema.event_payload.v1 since there's no dedicated applet
     // schema in the spec registry (applet payload is free-form per
     // spec extensions/applet-integration.md).
     let registration_payload = serde_json::json!({
@@ -401,7 +401,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-deaddeaddead";
     let agent_id = "did:web:unregistered-agent.example";
 
-    // Intentionally skip the ck.agent.endpoint step — this is the
+    // Intentionally skip the ak.agent.endpoint step — this is the
     // dispatch-failure path.
     let mut payload = serde_json::json!({
         "counterparty_agent": agent_id,
@@ -683,7 +683,7 @@ async fn agent_discover_reflects_endpoint_projection_and_fails_closed() {
     let token = dev_token(state.clone()).await;
     let agent_id = "did:web:discover-agent.example";
 
-    // Register a ck.agent.endpoint declaring a2a + acp endpoints with
+    // Register a ak.agent.endpoint declaring a2a + acp endpoints with
     // distinct agent_card_url / metadata_url plus a non-registry protocol
     // that discover MUST drop (spec §11 adapter registry subset).
     let endpoint_payload = serde_json::json!({

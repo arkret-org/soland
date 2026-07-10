@@ -335,7 +335,7 @@ pub(crate) async fn submit_federation_events(
                     res,
                     StatusCode::BAD_REQUEST,
                     "bad_json",
-                    &format!("invalid ck.peer.events.command.submit request body: {error}"),
+                    &format!("invalid ak.peer.events.command.submit request body: {error}"),
                 );
                 return;
             }

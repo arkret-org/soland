@@ -199,8 +199,8 @@ fn circle_self_join_requires_open_rule() {
 }
 
 // CKP — encryption-floor one-way ratchet (realm-and-space.md §2.5,
-// circle.md §7). Vectors: ck.vector.e2ee.content_floor_downgrade_rejected,
-// ck.vector.e2ee.metadata_floor_downgrade_rejected, ck.vector.e2ee.in_place_enable.
+// circle.md §7). Vectors: ak.vector.e2ee.content_floor_downgrade_rejected,
+// ak.vector.e2ee.metadata_floor_downgrade_rejected, ak.vector.e2ee.in_place_enable.
 #[test]
 fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
     let mut state = ProjectionState::new();

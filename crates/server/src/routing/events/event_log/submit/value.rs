@@ -376,7 +376,7 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
-            // capabilities.md §10.2 — a ck.capability.delegate that closes a
+            // capabilities.md §10.2 — a ak.capability.delegate that closes a
             // delegation cycle MUST be rejected before it projects.
             if let Err(reason) = proj.check_delegation_cycle(operation) {
                 return Err(SubmitOneError::new(

@@ -464,7 +464,7 @@ pub(crate) const MORPH_SCHEMA_MIGRATE_REQUIREMENTS: &[PayloadRequirement] = &[
         "morph schema_migrate operation requires compatibility_class",
     ),
 ];
-// Strand position events (ck.strand.move / ck.strand.reorder).
+// Strand position events (ck.strand.move / ak.strand.reorder).
 pub(crate) const STRAND_POSITION_BOARD_FIELDS: &[&str] = &["board_space_id"];
 pub(crate) const STRAND_MOVE_TARGET_FIELDS: &[&str] = &["target_space_id"];
 pub(crate) const STRAND_REORDER_SPACE_FIELDS: &[&str] = &["space_id", "list_space_id"];

@@ -640,7 +640,7 @@ pub fn validate_canonical_json_value_inner(
                 prev_key = Some(key);
             }
             for (key, value) in object {
-                // A `patch` map is a ck.schema.patch.v1 (`ck.patch.v1`) field
+                // A `patch` map is a ak.schema.patch.v1 (`ck.patch.v1`) field
                 // delta: its keys are patch *paths* (dotted snake_case segments
                 // per event-and-patch.md §4.2.1), not canonical JSON field names,
                 // so they are validated as paths and their op values are recursed

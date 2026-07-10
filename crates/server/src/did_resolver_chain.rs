@@ -270,7 +270,7 @@ fn validate_webvh_provider_describe(
     }
     if !string_array_contains(body.get("supported_operations"), "ak.server.query.describe") {
         return Err(
-            "webvh provider describe does not advertise ck.server.query.describe".to_owned(),
+            "webvh provider describe does not advertise ak.server.query.describe".to_owned(),
         );
     }
     Ok(())

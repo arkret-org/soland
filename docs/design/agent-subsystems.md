@@ -56,7 +56,7 @@ fn apply_capability_grant(&mut self, op: &Operation) -> ProjectionEffect {
     // payload: { capability_id, issuer, subject, actions[], resources[], constraints[], expires_at }
     let cap_id = op.payload.get("capability_id").and_then(Value::as_str)...; // reject if missing
     let cell = CellRef::new(format!("ak:cell:ck.component.capability.grant.v1:{cap_id}"))?;
-    // 校验:issuer 有 ck.capability.grant 授权(已有 authz 引擎);subject/resources 格式;
+    // 校验:issuer 有 ak.capability.grant 授权(已有 authz 引擎);subject/resources 格式;
     //       resources 的 realm_id == op.realm_id。
     self.cells.insert(cell, CellState::Value(grant_value));      // 与现有 grant 读侧同 schema
     ProjectionEffect::CapabilityGrantProjected { capability_id, action: "granted" }
@@ -69,7 +69,7 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 ### participation.set 编排(替换当前 TODO)
 `routing/identity/agents.rs::set_agent_participation` 在落库后:
 1. 由 effective(已算)推导目标 grant:
-   - `reply=true` → actions `["ak.message.create","ck.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `arkret_sdk::authz::ResourceSelector`)。
+   - `reply=true` → actions `["ak.message.create","ak.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `arkret_sdk::authz::ResourceSelector`)。
    - `act_on_behalf=true` → 追加 CKP-0008 §4.10 act-on-behalf grant(constraints:`approval_required`/`controller_approval_required`)。
 2. capability_id 确定性派生:`ck:capability:` + `hash(agent_principal_id, scope_key, "reply"|"aob")` → 同 scope 同 bit 复用一条 grant,幂等。
 3. effective bit=true 且 grant 不存在/已 revoked → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_GRANT, payload)`;bit=false 且 grant active → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_REVOKE, {capability_id})`。

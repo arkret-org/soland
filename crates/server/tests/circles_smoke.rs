@@ -178,7 +178,7 @@ fn circle_create_plaintext_under_e2ee_realm_rejected() {
 
 #[test]
 fn circle_content_floor_below_realm_rejected() {
-    // ck.vector.circle.content_floor_below_realm_rejected.v1 — an MLS Circle
+    // ak.vector.circle.content_floor_below_realm_rejected.v1 — an MLS Circle
     // (so the encryption_profile check passes) that declares a content floor
     // LOWER than the parent Realm's effective floor is rejected (circle.md §7).
     let mut state = ProjectionState::new();

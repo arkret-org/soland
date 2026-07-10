@@ -108,7 +108,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "relation update",
             kind: arkret_sdk::events::kinds::RELATION_UPDATE,
             // relation_update_payload: anyOf {relation_id, patch} | {target_ref, patch} |
-            // {relation_id, status}. patch is a ck.patch.v1 map (path -> patch_value);
+            // {relation_id, status}. patch is a ak.patch.v1 map (path -> patch_value);
             // a plain value is shorthand for {$op:set,value}.
             payload: json!({"relation_id": "ak:relation:01904100-0000-7000-8000-71604d58ec0b", "patch": {"weight": 1}}),
             valid: true,

@@ -104,7 +104,7 @@ pub(super) async fn set_agent_participation(
     .await;
     // CKP-0016 §5.2 / CKP-0008 §4.9 (dev option B) — materialise the effective
     // participation decision into a durable capability grant. effective reply
-    // ⇒ `ck.capability.grant` (ck.message.create + ck.reaction.add over the
+    // ⇒ `ck.capability.grant` (ck.message.create + ak.reaction.add over the
     // scope resource); otherwise `ck.capability.revoke` (idempotent). The
     // grant id is deterministic per (agent, scope_key) so set/unset/set
     // converge on a single cell. Production submits these from inkson.

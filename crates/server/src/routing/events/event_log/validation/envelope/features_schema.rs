@@ -235,7 +235,7 @@ pub(crate) fn validate_event_schema_and_payload(
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "schema_violation",
-                    "event envelope violates ck.schema.event.v1",
+                    "event envelope violates ak.schema.event.v1",
                 )
             })?;
     }

@@ -100,7 +100,7 @@ impl ProjectionState {
                     statement_id = %payload.statement_id,
                     organization_id = %payload.organization_id.as_str(),
                     error = %error,
-                    "rejected ck.realm.organization: organization-side verification failed"
+                    "rejected ak.realm.organization: organization-side verification failed"
                 );
                 return ProjectionEffect::Rejected { reason };
             }

@@ -64,7 +64,7 @@ pub struct PutRealmPolicyServerRequestBody {
 #[endpoint(
     operation_id = "ak.self.realm_policy_server.resource.get",
     tags("realms"),
-    summary = "Read the projected ck.realm.policy_server config (G3.S2)"
+    summary = "Read the projected ak.realm.policy_server config (G3.S2)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.get"))]
 async fn get_realm_policy_server(
@@ -84,7 +84,7 @@ async fn get_realm_policy_server(
             Some(c) => (c.clone(), true),
             None => {
                 return Err(AppError::not_found(
-                    "no ck.realm.policy_server declared for this realm",
+                    "no ak.realm.policy_server declared for this realm",
                 ));
             }
         },
@@ -104,7 +104,7 @@ async fn get_realm_policy_server(
 #[endpoint(
     operation_id = "ak.self.realm_policy_server.resource.replace",
     tags("realms"),
-    summary = "Submit a ck.realm.policy_server Move (G3.S2)"
+    summary = "Submit a ak.realm.policy_server Move (G3.S2)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.replace"))]
 async fn put_realm_policy_server(
@@ -173,7 +173,7 @@ async fn put_realm_policy_server(
 #[endpoint(
     operation_id = "ak.self.realm_policy_server.resource.delete",
     tags("realms"),
-    summary = "Tombstone the ck.realm.policy_server cell (G3.S2)"
+    summary = "Tombstone the ak.realm.policy_server cell (G3.S2)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.delete"))]
 async fn delete_realm_policy_server(
@@ -193,7 +193,7 @@ async fn delete_realm_policy_server(
     let mut projection = state.projection.lock();
     if projection.realm_policy_servers.remove(&realm_id).is_none() {
         return Err(AppError::not_found(
-            "no ck.realm.policy_server to tombstone for this realm",
+            "no ak.realm.policy_server to tombstone for this realm",
         ));
     }
     if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
@@ -209,7 +209,7 @@ async fn delete_realm_policy_server(
         kind = "policy_server_tombstone",
         realm_id = %realm_id,
         actor = %session.actor,
-        "G3.S2: ck.realm.policy_server tombstoned"
+        "G3.S2: ak.realm.policy_server tombstoned"
     );
     empty_ok()
 }

@@ -67,7 +67,7 @@ async fn recovery_receipt_rejects_tampered_proof_digest() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_receipt_rejects_unauthorized_device() {
-    // §15 step 7 — a receipt for a device with no accepted ck.device.authorize
+    // §15 step 7 — a receipt for a device with no accepted ak.device.authorize
     // MUST be rejected (no authorized device key to verify against).
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[79u8; 32]);

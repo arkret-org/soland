@@ -292,7 +292,7 @@ fn validate_scope_rotate_events(
     if events.is_empty() {
         return Err(scope_rotate_failed(
             "mls_rotate_events_required",
-            "circle scope rotation requires at least one ck.mls.commit event",
+            "circle scope rotation requires at least one ak.mls.commit event",
         ));
     }
 
@@ -301,7 +301,7 @@ fn validate_scope_rotate_events(
     for event in events {
         let kind = event.kind.as_str();
         match kind {
-            "ak.mls.genesis" | "ck.mls.proposal" | "ck.mls.commit" | "ck.mls.welcome" => {}
+            "ak.mls.genesis" | "ak.mls.proposal" | "ak.mls.commit" | "ak.mls.welcome" => {}
             _ => {
                 return Err(scope_rotate_failed(
                     "mls_rotate_event_kind_invalid",
@@ -352,7 +352,7 @@ fn validate_scope_rotate_events(
     if !saw_commit {
         return Err(scope_rotate_failed(
             "mls_rotate_commit_required",
-            "circle scope rotation requires a ck.mls.commit event",
+            "circle scope rotation requires a ak.mls.commit event",
         ));
     }
 

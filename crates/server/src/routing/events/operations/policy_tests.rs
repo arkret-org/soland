@@ -73,7 +73,7 @@ fn service_attested_device_authorize_binding_accepts_projection_metadata() {
         "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
         "device_public_key": "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG",
         "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
-        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
         "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
         "not_before": "2026-06-22T14:45:51Z",
         "enrollment_authority_binding": {
@@ -103,7 +103,7 @@ fn signed_service_attested_device_authorize_payload(
         "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
         "device_public_key": device_public_key,
         "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
-        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
         "device_key_algorithm": "EdDSA",
         "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
         "not_before": "2026-06-22T14:45:51Z",
@@ -2027,7 +2027,7 @@ async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme(
 
     validate_operation_policy(&state, &[create])
         .await
-        .expect("pre-join history is valid when ck.realm.create declares exporter-AEAD");
+        .expect("pre-join history is valid when ak.realm.create declares exporter-AEAD");
 }
 
 #[tokio::test]

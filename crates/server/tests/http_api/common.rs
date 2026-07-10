@@ -1186,7 +1186,7 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
     }
     if matches!(
         kind,
-        "ak.strand.archive" | "ck.strand.restore" | "ck.strand.tombstone"
+        "ak.strand.archive" | "ak.strand.restore" | "ak.strand.tombstone"
     ) {
         if !object.contains_key("target_ref") {
             if let Some(strand_id) = object.get("strand_id").and_then(Value::as_str) {

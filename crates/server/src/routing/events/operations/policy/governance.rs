@@ -123,7 +123,7 @@ pub(super) async fn validate_set_default_strand_policy(
     // A grant of either the precise action or the broad realm-admin action
     // authorizes the write. `ck.realm.admin` aggregates Realm governance, so
     // an admin holder need not also hold the narrow set_default_strand action.
-    for action in ["ak.realm.set_default_strand", "ck.realm.admin"] {
+    for action in ["ak.realm.set_default_strand", "ak.realm.admin"] {
         if state
             .authz
             .check(

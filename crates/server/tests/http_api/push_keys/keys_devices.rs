@@ -122,7 +122,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ak.mls.welcome", encrypted_envelope("ck.mls.welcome", "opaque"))
+                        device_message_target("ak.mls.welcome", encrypted_envelope("ak.mls.welcome", "opaque"))
                 }
             }
         }))
@@ -140,7 +140,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ak.mls.welcome", encrypted_envelope("ck.mls.welcome", "opaque"))
+                        device_message_target("ak.mls.welcome", encrypted_envelope("ak.mls.welcome", "opaque"))
                 }
             }
         }))
@@ -776,7 +776,7 @@ async fn keys_query_exposes_service_attested_device_anchor() {
 }
 
 /// Build a real, fully-signed `(ck.cross_signing.publish payload,
-/// ck.device.authorize cross_signing_binding)` pair for `principal` / `device`
+/// ak.device.authorize cross_signing_binding)` pair for `principal` / `device`
 /// using the supplied PSK / SSK keypairs and the SDK canonical-input
 /// constructors (the same ones the server's `check_device_cross_signing_binding`
 /// uses). Returns `(publish_payload_json, device_authorize_payload_json,
@@ -864,7 +864,7 @@ fn tier2_publish_and_authorize(
         "device_id": device,
         "device_public_key": device_public_key,
         "hpke_key": "z6LSTestTier2HpkeKey",
-        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
         "cross_signing_binding": {
             "verification_method": format!("{principal}#ck_self_signing_v1"),
             "alg": "EdDSA",

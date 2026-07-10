@@ -48,7 +48,7 @@ pub(crate) async fn validate_device_enrollment_authority_binding(
     let executed_by = event_string_field(object, &["executed_by"]).ok_or_else(|| {
         invalid(
             "device_enrollment_authority_not_designated",
-            "service_attested ck.device.authorize requires envelope executed_by",
+            "service_attested ak.device.authorize requires envelope executed_by",
             StatusCode::FORBIDDEN,
         )
     })?;
@@ -63,7 +63,7 @@ pub(crate) async fn validate_device_enrollment_authority_binding(
         event_string_field(object, &["authorization_ref"]).ok_or_else(|| {
             invalid(
                 "device_enrollment_authority_not_designated",
-                "service_attested ck.device.authorize requires envelope authorization_ref",
+                "service_attested ak.device.authorize requires envelope authorization_ref",
                 StatusCode::FORBIDDEN,
             )
         })?;

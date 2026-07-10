@@ -1800,14 +1800,14 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
 fn sync_filter_digest_normalizes_account_filter_collections() {
     let filter_a = json!({
         "realms": ["ak:realm:b", "ak:realm:a", "ak:realm:a"],
-        "event_types": ["ak.reaction.add", "ck.message.create", "ck.message.create"],
-        "not_event_types": ["ak.redaction", "ck.audit.accessed"],
+        "event_types": ["ak.reaction.add", "ak.message.create", "ak.message.create"],
+        "not_event_types": ["ak.redaction", "ak.audit.accessed"],
         "lazy_load_members": false,
         "include_redundant_members": false
     });
     let filter_b = json!({
         "realms": ["ak:realm:a", "ak:realm:b"],
-        "event_types": ["ak.message.create", "ck.reaction.add"],
+        "event_types": ["ak.message.create", "ak.reaction.add"],
         "not_event_types": ["ak.audit.accessed", "ck.redaction"]
     });
     assert_eq!(
@@ -1833,8 +1833,8 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
         "realms": ["ak:realm:b", "ak:realm:a", "ak:realm:a"],
         "actors": ["did:web:bob.example", "did:web:alice.example"],
         "filters": {
-            "kind": ["ak.reaction.add", "ck.message.create", "ck.message.create"],
-            "not_event_types": ["ak.redaction", "ck.audit.accessed"]
+            "kind": ["ak.reaction.add", "ak.message.create", "ak.message.create"],
+            "not_event_types": ["ak.redaction", "ak.audit.accessed"]
         },
         "order": "default"
     });
@@ -1843,7 +1843,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
         "realms": ["ak:realm:a", "ak:realm:b"],
         "actors": ["did:web:alice.example", "did:web:bob.example"],
         "filters": {
-            "kind": ["ak.message.create", "ck.reaction.add"],
+            "kind": ["ak.message.create", "ak.reaction.add"],
             "not_event_types": ["ak.audit.accessed", "ck.redaction"]
         },
         "order": "default"
@@ -1858,7 +1858,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
         "realms": ["ak:realm:a", "ak:realm:b"],
         "actors": ["did:web:alice.example", "did:web:bob.example"],
         "filters": {
-            "kind": ["ak.message.create", "ck.reaction.add"],
+            "kind": ["ak.message.create", "ak.reaction.add"],
             "not_event_types": ["ak.audit.accessed", "ck.redaction"]
         },
         "order": "ascending"

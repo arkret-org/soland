@@ -635,7 +635,7 @@ mod spec_sync_validator_tests {
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ak.schema.old"],
-                "to_schema_refs": ["ak.schema.old", "ck.schema.new"],
+                "to_schema_refs": ["ak.schema.old", "ak.schema.new"],
                 "compatibility_class": "additive",
                 "authorization_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 "capability_action": "ak.morph.schema.migrate"
@@ -932,7 +932,7 @@ mod derived_relation_and_morph_immutability_tests {
                 "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
                 "device_public_key": "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG",
                 "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
-                "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+                "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
                 "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
                 "not_before": "2026-06-22T14:45:51Z",
                 "enrollment_authority_binding": {
@@ -959,7 +959,7 @@ mod derived_relation_and_morph_immutability_tests {
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "device_public_key": "z6MkDeviceKey",
                 "hpke_key": "z6LSDeviceHpkeKey",
-                "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ck.mls.v1"],
+                "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
                 "authorized_by": "did:web:alice.example",
                 "not_before": "2026-05-30T00:00:00Z",
                 "device_signature": "c2ln",
@@ -982,7 +982,7 @@ mod derived_relation_and_morph_immutability_tests {
     }
 
     // relation.md §3.2 — `watches` is always a derived edge; a direct
-    // ck.relation.create MUST be rejected.
+    // ak.relation.create MUST be rejected.
     #[test]
     fn relation_create_watches_is_rejected() {
         let operation = op(
@@ -1001,7 +1001,7 @@ mod derived_relation_and_morph_immutability_tests {
     }
 
     // relation.md §3.2 line 83/84 — Board/List `contains` (Space `from_ref`) is
-    // a derived projection; a direct ck.relation.create MUST be rejected.
+    // a derived projection; a direct ak.relation.create MUST be rejected.
     #[test]
     fn relation_create_container_contains_is_rejected() {
         let operation = op(
@@ -1117,7 +1117,7 @@ mod derived_relation_and_morph_immutability_tests {
     }
 
     // morph.md §2 line 47 — the stage axis and reserved business fields are
-    // forbidden-wire on ck.morph.update, in both the dotted `fields.<name>`
+    // forbidden-wire on ak.morph.update, in both the dotted `fields.<name>`
     // form and a whole-`fields` object replace.
     #[test]
     fn morph_update_stage_axis_is_forbidden_wire() {

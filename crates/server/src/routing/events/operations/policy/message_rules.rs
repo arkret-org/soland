@@ -345,9 +345,9 @@ pub(super) async fn validate_message_edit_redact_window_policy(
     };
 
     let (own_action, broad_action) = if is_redact {
-        ("ak.message.redact.own", "ck.message.redact")
+        ("ak.message.redact.own", "ak.message.redact")
     } else {
-        ("ak.message.revise.own", "ck.message.revise")
+        ("ak.message.revise.own", "ak.message.revise")
     };
 
     let grants = state.authz.grants_for_subject(actor, realm_id);

@@ -18,7 +18,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ak.mls.application", encrypted_envelope("ck.mls.application", ciphertext))
+                        device_message_target("ak.mls.application", encrypted_envelope("ak.mls.application", ciphertext))
                 }
             }
         }))
@@ -55,7 +55,7 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ak.mls.application", encrypted_envelope("ck.mls.application", "ack-ciphertext"))
+                        device_message_target("ak.mls.application", encrypted_envelope("ak.mls.application", "ack-ciphertext"))
                 }
             }
         }))
@@ -234,7 +234,7 @@ async fn device_messages_evicted_after_session_logout() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ak.mls.welcome", encrypted_envelope("ck.mls.welcome", "logout-ciphertext"))
+                        device_message_target("ak.mls.welcome", encrypted_envelope("ak.mls.welcome", "logout-ciphertext"))
                 }
             }
         }))

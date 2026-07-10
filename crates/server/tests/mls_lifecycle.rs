@@ -201,7 +201,7 @@ async fn mls_lifecycle_end_to_end() {
     seed_cross_signing_generation(&state, alice_did, 3);
     let realm_id = "ak:realm:01904100-0000-7000-8000-00000000e2ee";
 
-    // ── 1. upload a KeyPackage (W1C: ck.self.keys.keypackages.upload.create) ──
+    // ── 1. upload a KeyPackage (W1C: ak.self.keys.keypackages.upload.create) ──
     let keypackage_id = "ak:mls_keypackage:t-01";
     let keypackage_id_mismatch = "ak:mls_keypackage:t-02";
     let uploaded_keypackage_ref = "ak:mls:keypackage:test-01";
@@ -211,7 +211,7 @@ async fn mls_lifecycle_end_to_end() {
     let keypackage_digest = arkret_sdk::canonical::sha256_digest(keypackage_bytes);
     let mismatch_keypackage_digest =
         arkret_sdk::canonical::sha256_digest(mismatch_keypackage_bytes);
-    let capabilities = json!(["ak.mls.rfc9420", "ck.mls.profile.full"]);
+    let capabilities = json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
     let capabilities_digest = sha256_json(&capabilities);
     let mismatch_capabilities = json!(["ak.mls.rfc9420"]);
     let device_signature = json!({
@@ -286,7 +286,7 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(published_row.capabilities_digest, capabilities_digest);
     assert_eq!(published_row.ssk_generation, Some(3));
 
-    // ── 2a. atomic claim wins (W1C: ck.self.keys.keypackages.command.claim) ───
+    // ── 2a. atomic claim wins (W1C: ak.self.keys.keypackages.command.claim) ───
     let claim_url = "http://server/_arkret/self/keys/keypackages/claim".to_owned();
     let claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)

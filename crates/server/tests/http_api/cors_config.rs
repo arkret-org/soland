@@ -157,7 +157,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     .await;
     let realm_id = created_realm["realm_id"].as_str().unwrap().to_owned();
 
-    // Submit alice's ck.member.state{membership=invite} pointing at bob.
+    // Submit alice's ak.member.state{membership=invite} pointing at bob.
     let event_id = "ak:event:01904100-0000-7000-8000-aa00000000ee";
     let payload = serde_json::json!({
         "actor_id": bob_did,

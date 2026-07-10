@@ -624,8 +624,8 @@ async fn project_accepted_operations_inner(
         {
             project_member_identity_update(state, operation);
         }
-        // Cache ck.realm.read_receipt_policy state into ProjectionState so
-        // ephemeral ck.receipt.read fanout (and other readers) can hit a
+        // Cache ak.realm.read_receipt_policy state into ProjectionState so
+        // ephemeral ak.receipt.read fanout (and other readers) can hit a
         // BTreeMap lookup instead of scanning the durable Event store.
         // (R1.2 renamed `ck.space.read_receipt_policy` to `ck.realm.*`.)
         if kinds::canonical_kind_string(operation) == "ak.realm.read_receipt_policy" {
@@ -717,7 +717,7 @@ async fn project_accepted_operations_inner(
         }
         let projected = projection_event_from_operation(operation, Some(origin));
         // Broadcast every accepted projection
-        // event to live subscribers on ck.events.subscribe. Subscribers
+        // event to live subscribers on ak.events.subscribe. Subscribers
         // filter by `realm_id`. `send` returns Err only if there are no
         // active receivers — that's not an error path, it's the steady
         // state when no one's subscribed.
@@ -867,7 +867,7 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
             realm_id = %record.realm_id,
             organization_id = %record.organization_id,
             relationship = %record.relationship,
-            "failed to persist ck.realm.organization relationship statement"
+            "failed to persist ak.realm.organization relationship statement"
         );
     }
 }
@@ -1133,7 +1133,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     let typed: arkret_sdk::DeviceAuthorizePayload = match serde_json::from_value(wire_payload) {
         Ok(typed) => typed,
         Err(error) => {
-            tracing::warn!(%error, "accepted ck.device.authorize payload is not the typed wire shape; skipping projection");
+            tracing::warn!(%error, "accepted ak.device.authorize payload is not the typed wire shape; skipping projection");
             return;
         }
     };
@@ -1234,7 +1234,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         revoked_at,
     };
     if let Err(error) = state.persistence.devices().put(&device).await {
-        tracing::warn!(%error, "failed to project ck.device.authorize device_public_key");
+        tracing::warn!(%error, "failed to project ak.device.authorize device_public_key");
     }
 }
 

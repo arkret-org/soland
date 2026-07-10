@@ -70,9 +70,9 @@ pub(crate) async fn relay_ephemeral_read_receipt(
         position: 0,
     };
     if let Err(error) = state.persistence.read_receipt_relay().append(record).await {
-        tracing::error!(%error, "failed to relay ephemeral ck.receipt.read");
+        tracing::error!(%error, "failed to relay ephemeral ak.receipt.read");
         return Err(AppError::internal(
-            "failed to relay ck.receipt.read for realm sync",
+            "failed to relay ak.receipt.read for realm sync",
         ));
     }
     let _ = state.event_broadcast.send(EventNotification::ephemeral(

@@ -241,7 +241,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "expires_at": (chrono::Utc::now() + chrono::Duration::minutes(10))
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "methods": ["ak.sas.v1", "ck.qr.v1"],
+        "methods": ["ak.sas.v1", "ak.qr.v1"],
         "purpose": "same_principal_device_authorization",
         "pairing_code": "pairing-code",
         "new_device_pubkey": pair_device_pubkey(new_device),
@@ -637,7 +637,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     // A fresh call id with NO `ck.call.state` cell and NO ephemeral session.
     let call_id = new_prefixed_uuid7("ak:call:");
 
-    // Without ck.call.join, even a realm member is denied (§6).
+    // Without ak.call.join, even a realm member is denied (§6).
     let mut denied = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
@@ -655,7 +655,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
         "capability_denied"
     );
 
-    // Grant ck.call.join → the token is issued against the brand-new call even
+    // Grant ak.call.join → the token is issued against the brand-new call even
     // though no signaling session and no `ck.call.state` cell exist.
     grant_call_capability(
         &state,
@@ -701,7 +701,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
     let session_id = new_prefixed_uuid7("ak:call:");
-    // §6 — grant ck.call.join so the join gate passes and the focus/issuer
+    // §6 — grant ak.call.join so the join gate passes and the focus/issuer
     // mismatch errors (not capability_denied) are what surfaces.
     grant_call_capability(
         &state,
@@ -793,7 +793,7 @@ async fn rtc_media_token_rejects_non_member_actor() {
 #[tokio::test]
 async fn rtc_media_token_requires_call_join_capability() {
     // `media-service-binding.md` §6 — a realm member + call participant that
-    // does NOT hold ck.call.join is denied; granting the capability lets the
+    // does NOT hold ak.call.join is denied; granting the capability lets the
     // exchange proceed.
     // Use the LiveKit-configured deployment so the oldest-membership default
     // focus (`ak:focus:livekit:green`) can mint a real token once join is held.
@@ -816,7 +816,7 @@ async fn rtc_media_token_requires_call_join_capability() {
         "focus_id": "ak:focus:livekit:green"
     });
 
-    // No ck.call.join → capability_denied even though bob is a member+participant.
+    // No ak.call.join → capability_denied even though bob is a member+participant.
     let mut denied = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&exchange_body)
@@ -826,7 +826,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     let denied_body: Value = denied.take_json().await.unwrap();
     assert_eq!(denied_body["error"]["code"], "capability_denied");
 
-    // After granting ck.call.join, the exchange is admitted (focus matches the
+    // After granting ak.call.join, the exchange is admitted (focus matches the
     // oldest-membership default).
     grant_call_capability(&state, DEMO_REALM_ID, bob, "ak.call.join");
     let granted: Value = TestClient::post("http://server/_arkret/self/rtc/token")
@@ -899,7 +899,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
     let session_id = new_prefixed_uuid7("ak:call:");
-    // §6 — token exchange requires ck.call.join.
+    // §6 — token exchange requires ak.call.join.
     grant_call_capability(
         &state,
         DEMO_REALM_ID,
@@ -1029,7 +1029,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
 
     let session_id = new_prefixed_uuid7("ak:call:");
-    // §6 — bob needs ck.call.join to exchange a token before the ban.
+    // §6 — bob needs ak.call.join to exchange a token before the ban.
     grant_call_capability(&state, DEMO_REALM_ID, bob, "ak.call.join");
 
     // Before the ban, bob can exchange a media token (no committed focus, so

@@ -69,7 +69,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ak.schema.core.v1" || profile == "ck.reducer.v1")
+            .any(|profile| profile == "ak.schema.core.v1" || profile == "ak.reducer.v1")
     );
     assert!(
         describe["supported_schema_profiles"]

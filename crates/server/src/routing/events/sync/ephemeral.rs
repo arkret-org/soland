@@ -93,7 +93,7 @@ pub(super) async fn submit_ephemeral(
             .await
             {
                 return Err(crate::error::AppError::capability_denied(
-                    "actor does not hold the ck.call.signal.send capability for this realm",
+                    "actor does not hold the ak.call.signal.send capability for this realm",
                 ));
             }
             let payload = admit_ephemeral_call_signal(&envelope)?;
@@ -153,9 +153,9 @@ async fn relay_ephemeral_call_signal(
         position: 0,
     };
     if let Err(error) = state.persistence.call_signal_relay().append(record).await {
-        tracing::error!(%error, "failed to relay ephemeral ck.call.signal");
+        tracing::error!(%error, "failed to relay ephemeral ak.call.signal");
         return Err(crate::error::AppError::internal(
-            "failed to relay ck.call.signal for realm broadcast",
+            "failed to relay ak.call.signal for realm broadcast",
         ));
     }
     // Broadcast breadth = Realm members other than the sender; the precise
@@ -172,7 +172,7 @@ fn validate_ephemeral_envelope(
 ) -> Result<(), crate::error::AppError> {
     if !matches!(
         envelope.kind.as_str(),
-        "ak.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read" | "ck.realm_key.request"
+        "ak.call.signal" | "ck.presence" | "ck.typing" | "ak.receipt.read" | "ak.realm_key.request"
     ) {
         return Err(crate::error::AppError::invalid_param(
             "unsupported ephemeral kind",
@@ -201,7 +201,7 @@ fn validate_ephemeral_envelope(
     // admission rules in realm_key_request.rs.)
     if matches!(
         envelope.kind.as_str(),
-        "ak.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read"
+        "ak.call.signal" | "ck.presence" | "ck.typing" | "ak.receipt.read"
     ) {
         validate_ephemeral_broadcast_proof_shape(envelope)?;
     }
@@ -402,7 +402,7 @@ async fn admit_ephemeral_read_receipt(
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::PolicyViolation,
             format!(
-                "Realm '{realm_id}' read_receipt_policy.disclosure=disabled; ck.receipt.read dropped"
+                "Realm '{realm_id}' read_receipt_policy.disclosure=disabled; ak.receipt.read dropped"
             ),
         )
         .with_status(StatusCode::FORBIDDEN));

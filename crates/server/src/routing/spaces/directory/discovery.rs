@@ -19,7 +19,7 @@ pub(super) async fn private_contact_discovery(
     let _ = authenticated_session(state, req).await.ok();
     let _ = body.into_inner();
     Err(AppError::unsupported_feature(
-        "private contact discovery requires ck.private_contact_discovery.v1 two-round VOPRF set-membership PSI; plaintext identifier matching is disabled",
+        "private contact discovery requires ak.private_contact_discovery.v1 two-round VOPRF set-membership PSI; plaintext identifier matching is disabled",
     ))
 }
 

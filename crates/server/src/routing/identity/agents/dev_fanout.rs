@@ -434,7 +434,7 @@ pub(super) async fn materialize_capability_grant(
         "realm_id": realm_id,
         "issuer": session.actor.clone(),
         "subject": agent_principal_id,
-        "actions": ["ak.message.create", "ck.reaction.add"],
+        "actions": ["ak.message.create", "ak.reaction.add"],
         "resources": [resource],
         "issued_at": issued_at,
         "proofs": [{

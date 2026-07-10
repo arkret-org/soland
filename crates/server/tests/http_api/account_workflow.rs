@@ -675,7 +675,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         "did:web:alice.example",
         &realm_id,
         "ak:strand:workflow",
-        serde_json::json!({"kind": "ak.content.composite", "body": "invalid", "parts": [{"kind": "ck.content.image", "body": "image"}]}),
+        serde_json::json!({"kind": "ak.content.composite", "body": "invalid", "parts": [{"kind": "ak.content.image", "body": "image"}]}),
         false,
     )
     .await;
@@ -954,7 +954,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
 
     // Protocol snapshot head fails closed: soland cannot produce a signed
-    // ck.schema.snapshot.v1 manifest, so `ck.self.snapshot.query.manifest_head` answers
+    // ak.schema.snapshot.v1 manifest, so `ck.self.snapshot.query.manifest_head` answers
     // `not_implemented` (spec service-surface.md §5.2).
     let mut protocol_head = TestClient::get(format!(
         "http://server/_arkret/self/snapshot/head?realm_id={realm_id}"

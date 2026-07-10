@@ -311,7 +311,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                     %invite_id,
                     invitee = %invitee.as_str(),
                     realm_id = %operation.realm_id,
-                    "projected seed-member invite via ck.member.state event"
+                    "projected seed-member invite via ak.member.state event"
                 ),
                 Err(error) => tracing::warn!(%error, "failed to project realm invite"),
             }

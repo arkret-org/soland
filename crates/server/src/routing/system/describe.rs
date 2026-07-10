@@ -359,7 +359,7 @@ pub(crate) fn apply_claim_level_partition(
                  gate for E2EE DataEvent seal_refs. This is the cross-deployment E2EE \
                  federation interop floor (crypto-media/encryption-and-audit.md §2.5 / \
                  §295); a principal server federating MLS-backed Realms MUST advertise \
-                 it, and it is mutually exclusive with ck.profile.e2ee_relaxed.v1 \
+                 it, and it is mutually exclusive with ak.profile.e2ee_relaxed.v1 \
                  (not claimed)."
                     .to_owned(),
             ),
@@ -376,8 +376,8 @@ pub(crate) fn apply_claim_level_partition(
         },
         arkret_sdk::ClaimedProfileEntry {
             notes: Some(
-                "Agent protocol interop extension profile: ck.agent.endpoint registry, \
-                 /_arkret/self/agents/discover, ck.agent.interop_session.* lifecycle + \
+                "Agent protocol interop extension profile: ak.agent.endpoint registry, \
+                 /_arkret/self/agents/discover, ak.agent.interop_session.* lifecycle + \
                  Ed25519 audit_binding. See zh/extensions/agent-protocol-interop.md."
                     .to_owned(),
             ),

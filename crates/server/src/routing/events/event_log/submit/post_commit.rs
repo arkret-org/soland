@@ -151,7 +151,7 @@ pub(super) async fn enqueue_peer_event_fanout(
                 tracing::warn!(
                     event_id,
                     peer_did = %peer.service_did,
-                    "failed to build typed dynamic ck.peer.events.command.submit service binding"
+                    "failed to build typed dynamic ak.peer.events.command.submit service binding"
                 );
                 continue;
             }
@@ -183,7 +183,7 @@ pub(super) async fn enqueue_peer_event_fanout(
                 tracing::warn!(
                     event_id,
                     peer_did = %peer.service_did,
-                    "failed to encode dynamic ck.peer.events.command.submit body"
+                    "failed to encode dynamic ak.peer.events.command.submit body"
                 );
                 continue;
             }
@@ -206,7 +206,7 @@ pub(super) async fn enqueue_peer_event_fanout(
                 event_id,
                 peer = %peer.url,
                 peer_did = %peer.service_did,
-                "failed to enqueue dynamic ck.peer.events.command.submit fanout"
+                "failed to enqueue dynamic ak.peer.events.command.submit fanout"
             );
         }
     }
@@ -235,7 +235,7 @@ fn dynamic_peer_event_targets(
         // non-capability events are gated.
         let is_capability_control_event = matches!(
             parsed.kind.as_str(),
-            "ak.capability.revoke" | "ck.capability.grant" | "ck.capability.delegate"
+            "ak.capability.revoke" | "ak.capability.grant" | "ak.capability.delegate"
         );
         let revoked_peers = if is_capability_control_event {
             std::collections::BTreeSet::new()

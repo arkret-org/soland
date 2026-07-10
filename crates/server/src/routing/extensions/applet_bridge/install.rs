@@ -619,7 +619,7 @@ pub(super) async fn append_portal_message(
         .any(|capability| capability_allows_message_create(capability))
     {
         return Err(AppError::capability_denied(
-            "applet install does not grant ck.message.create",
+            "applet install does not grant ak.message.create",
         ));
     }
     let operation_id = ids::generate_operation_id();
@@ -1274,7 +1274,7 @@ pub(super) async fn require_realm_admin(
         return Ok(());
     }
     Err(
-        AppError::capability_denied("actor lacks ck.realm.admin over the applet install realm")
+        AppError::capability_denied("actor lacks ak.realm.admin over the applet install realm")
             .with_wire_code("applet_registration_unauthorized"),
     )
 }

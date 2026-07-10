@@ -104,7 +104,7 @@ fn realm_link_entry_from(row: &RealmLinkState) -> Result<RealmLinkEntry, AppErro
 #[endpoint(
     operation_id = "ak.self.realm_link.query.list",
     tags("realms"),
-    summary = "List typed cross-Realm links projected from ck.realm.link"
+    summary = "List typed cross-Realm links projected from ak.realm.link"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.query.list"))]
 async fn list_realm_links(
@@ -283,7 +283,7 @@ async fn list_member_applications(
 #[endpoint(
     operation_id = "ak.self.realm_link.command.create",
     tags("realms"),
-    summary = "Submit a ck.realm.link Move (G3.S5)"
+    summary = "Submit a ak.realm.link Move (G3.S5)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.command.create"))]
 async fn post_realm_link(
@@ -365,7 +365,7 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
 #[endpoint(
     operation_id = "ak.self.realm_link.resource.delete",
     tags("realms"),
-    summary = "Tombstone a ck.realm.link (G3.S5)"
+    summary = "Tombstone a ak.realm.link (G3.S5)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.resource.delete"))]
 async fn delete_realm_link(

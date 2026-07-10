@@ -584,7 +584,7 @@ pub(super) async fn rotate_agent_key(
     let _ = replacement_kid;
     // spec `agent_rotate_key_outcome` = `{ok, authorized_event_ref}`. The
     // authorized event id pins the new key authorization (P2-impl: emit the
-    // real ck.agent.key.revoke + ck.agent.key.authorize chain under it and
+    // real ak.agent.key.revoke + ak.agent.key.authorize chain under it and
     // invalidate session-grants bound to the revoked key).
     let authorized_event_ref = EventId::new(ids::generate_event_id())
         .map_err(|err| AppError::internal(format!("generated event id invalid: {err}")))?;

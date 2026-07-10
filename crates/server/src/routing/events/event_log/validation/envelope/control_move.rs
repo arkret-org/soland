@@ -160,7 +160,7 @@ pub(super) fn is_realm_bootstrap_followup_kind(kind: &str) -> bool {
         arkret_sdk::events::kinds::MEMBER_STATE
             | arkret_sdk::events::kinds::REALM_HISTORY_VISIBILITY
             // `restricted` history_visibility bootstraps MUST carry a
-            // ck.realm.history_sharing_policy in the same ordered batch
+            // ak.realm.history_sharing_policy in the same ordered batch
             // (payload_shape.rs `history_sharing_policy_missing`); it is a
             // genesis-time policy Control Move exactly like the siblings here.
             | arkret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY

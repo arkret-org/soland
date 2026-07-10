@@ -719,14 +719,14 @@ fn profile_limitations() -> Vec<Value> {
         json!({
             "area": "snapshot.head",
             "status": "standard_self_supported",
-            "reason": "ak.self.snapshot.query.manifest_head returns a signed ck.schema.snapshot.v1 manifest; the /_soland dev bundle remains a product-face compatibility surface"
+            "reason": "ak.self.snapshot.query.manifest_head returns a signed ak.schema.snapshot.v1 manifest; the /_soland dev bundle remains a product-face compatibility surface"
         }),
         json!({
             "area": "account_auth.device_pair",
             "status": "standard_gate_supported",
             "spec_operation": "ak.gate.account.command.pair_device",
             "canonical_path": "/_arkret/gate/account/device-pair",
-            "reason": "ak.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ck.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
+            "reason": "ak.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ak.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
         }),
         json!({
             "area": "federation.private_inbound_rail",
@@ -1037,7 +1037,7 @@ pub fn describe(
             "org.arkret.soland.feature.blob.upload".to_owned(),
             // Spec crypto-media/media-and-blob.md §2.1 — protocol-level
             // feature id for the resumable (tus) upload companion binding
-            // of ck.self.blob.upload. Pairs with the `kind="tus"` entry in
+            // of ak.self.blob.upload. Pairs with the `kind="tus"` entry in
             // supported_bindings below.
             "ak.feature.blob.resumable_upload.tus.v1".to_owned(),
             "ak.feature.mls_last_resort_keypackage.v1".to_owned(),
@@ -1079,7 +1079,7 @@ pub fn describe(
             arkret_sdk::SupportedBinding::new("http_json")
                 .with_base_url(public_base_url.trim_end_matches('/')),
             // Per-operation HTTP companion binding (transport-bindings.md
-            // §6.1): tus 1.0.0 resumable upload for ck.self.blob.upload.
+            // §6.1): tus 1.0.0 resumable upload for ak.self.blob.upload.
             // Versions/extensions mirror the OPTIONS probe answers of
             // routing::interop::blob_resumable — describe and wire MUST
             // agree.

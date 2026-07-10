@@ -342,7 +342,7 @@ impl PolicyClient {
         let realm_id_str = input.realm_id.as_str().to_owned();
         let config = config_lookup(&realm_id_str).ok_or_else(|| {
             PolicyClientError::Configuration(format!(
-                "no ck.realm.policy_server config for {realm_id_str}"
+                "no ak.realm.policy_server config for {realm_id_str}"
             ))
         })?;
 

@@ -393,7 +393,7 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
     };
     match record.claim_nonces.get(&claim_nonce) {
         Some(existing_operation_id) if existing_operation_id != operation.operation_id.as_str() => {
-            tracing::debug!(invite_id = %invite_id, "duplicate ck.invite.claim nonce ignored");
+            tracing::debug!(invite_id = %invite_id, "duplicate ak.invite.claim nonce ignored");
             return;
         }
         Some(_) => {}
@@ -585,7 +585,7 @@ pub(super) async fn project_invite_create_operation(
                 invite_id = %invite_id,
                 invitee = %invitee.as_str(),
                 realm_id = %operation.realm_id,
-                "projected invite via ck.invite.create event"
+                "projected invite via ak.invite.create event"
             );
             touch_realm(state, operation.realm_id.as_str()).await;
         }

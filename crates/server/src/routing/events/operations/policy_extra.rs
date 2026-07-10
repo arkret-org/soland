@@ -987,9 +987,9 @@ pub(crate) fn validate_morph_schema_migrate_capability(
     // are not broken.
     if !matches!(
         action,
-        Some("ak.morph.schema_migrate" | "ck.morph.schema.migrate")
+        Some("ak.morph.schema_migrate" | "ak.morph.schema.migrate")
     ) {
-        return Err("ak.morph.schema_migrate requires ck.morph.schema_migrate capability");
+        return Err("ak.morph.schema_migrate requires ak.morph.schema_migrate capability");
     }
     Ok(())
 }

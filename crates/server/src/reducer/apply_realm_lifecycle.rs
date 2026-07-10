@@ -709,12 +709,12 @@ impl ProjectionState {
         //
         // Per spec event-kind-registry, each ck.realm.* lifecycle event
         // writes a distinct cell family with its own lattice:
-        //   ck.realm.create     → ck.component.realm.create.v1  (genesis singleton)
-        //   ck.realm.update     → ck.component.realm.metadata.v1 (cas-register, singleton)
-        //   ck.realm.archive    → ck.component.realm.archive.v1 (cas-register, singleton)
-        //   ck.realm.freeze     → ck.component.realm.freeze.v1 (cas-register, singleton)
-        //   ck.realm.tombstone  → ck.component.realm.tombstone.v1 (cas-register, singleton)
-        //   ck.realm.destroy    → ck.component.realm.destroy.v1 (cas-register, singleton)
+        //   ak.realm.create     → ak.component.realm.create.v1  (genesis singleton)
+        //   ak.realm.update     → ak.component.realm.metadata.v1 (cas-register, singleton)
+        //   ak.realm.archive    → ak.component.realm.archive.v1 (cas-register, singleton)
+        //   ak.realm.freeze     → ak.component.realm.freeze.v1 (cas-register, singleton)
+        //   ak.realm.tombstone  → ak.component.realm.tombstone.v1 (cas-register, singleton)
+        //   ak.realm.destroy    → ak.component.realm.destroy.v1 (cas-register, singleton)
         //
         // Stream-F (Wave 1B): tombstone and destroy are both terminal but
         // write distinct cell families. Bottom = reject; a second
@@ -900,7 +900,7 @@ impl ProjectionState {
             };
         }
 
-        // Stream-F (Wave 1B): ck.realm.tombstone preconditions. The
+        // Stream-F (Wave 1B): ak.realm.tombstone preconditions. The
         // event MUST carry a syntactically valid `successor_realm_id`
         // pointing at a `ak:realm:<UUIDv7>` distinct from the
         // terminating Realm. Absent → `missing_successor`; malformed →
@@ -931,7 +931,7 @@ impl ProjectionState {
                 }
             }
         }
-        // ck.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
+        // ak.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
         if kind == arkret_sdk::events::kinds::REALM_DESTROY && payload_successor_realm_id.is_some()
         {
             return ProjectionEffect::Rejected {

@@ -1025,7 +1025,7 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
         &valid,
         valid.as_object().unwrap(),
     )
-    .expect("canonical ck.strand.update strand_patch_payload should validate");
+    .expect("canonical ak.strand.update strand_patch_payload should validate");
 
     let invalid_patch_op = json!({
         "payload": {
@@ -1045,7 +1045,7 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
         &invalid_patch_op,
         invalid_patch_op.as_object().unwrap(),
     )
-    .expect_err("ak.strand.update patch operations must match ck.patch.v1 exactly");
+    .expect_err("ak.strand.update patch operations must match ak.patch.v1 exactly");
     assert_eq!(err.code, "schema_violation");
 }
 
@@ -1151,11 +1151,11 @@ fn event_payload_validator_enforces_patch_family_schema() {
             catalog
                 .validate_payload(event_kind, &invalid_payload)
                 .is_err(),
-            "{event_kind} must reject patch ops outside ck.patch.v1"
+            "{event_kind} must reject patch ops outside ak.patch.v1"
         );
     }
 
-    // ck.profile.realm_override carries a Realm-scoped override and uses the
+    // ak.profile.realm_override carries a Realm-scoped override and uses the
     // dedicated profile_realm_override_payload (target_ref + target_realm_id
     // + patch), not the generic object_patch_payload.
     catalog
@@ -1980,7 +1980,7 @@ fn relaxed_e2ee_data_event_keeps_capability_gate_without_covered_seals_gate() {
 
 // ----------------------------------------------------------------------------
 // Device-identity B-model (device-lifecycle.md §5.4): service_attested
-// ck.device.authorize enrollment-authority binding admission.
+// ak.device.authorize enrollment-authority binding admission.
 // ----------------------------------------------------------------------------
 
 /// Ingest a principal DID document that designates `authority_did` as the
@@ -2018,7 +2018,7 @@ async fn ingest_principal_with_enrollment_authority(
         .expect("ingest principal webvh document");
 }
 
-/// Build a `service_attested` ck.device.authorize envelope object for
+/// Build a `service_attested` ak.device.authorize envelope object for
 /// `principal_did`, authorized by `authority_did`, with a self-certifying
 /// `device_id` derived from `device_pubkey`.
 fn service_attested_device_authorize_object(

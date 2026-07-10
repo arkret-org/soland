@@ -662,7 +662,7 @@ async fn handle_rtc_token(
     .await
     {
         return Err(AppError::capability_denied(
-            "actor does not hold the ck.call.join capability for this realm",
+            "actor does not hold the ak.call.join capability for this realm",
         ));
     }
 
@@ -1049,7 +1049,7 @@ async fn call_state_from_event_log(
                     event_id = %record.event_id,
                     call_id = %call_id,
                     reason = %reason,
-                    "accepted ck.call.state did not project during RTC token cold projection"
+                    "accepted ak.call.state did not project during RTC token cold projection"
                 );
             }
             _ => {}
@@ -1115,7 +1115,7 @@ fn media_service_epoch_for_realm(
     }
     .ok_or_else(|| {
         token_issuer_unauthorised(format!(
-            "realm `{realm_id}` has no projected ck.realm.media_service epoch"
+            "realm `{realm_id}` has no projected ak.realm.media_service epoch"
         ))
     })?;
     parse_media_service_epoch(realm_id, &value)

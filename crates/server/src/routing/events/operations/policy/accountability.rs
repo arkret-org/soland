@@ -20,7 +20,7 @@ pub(super) async fn validate_accountability_profile_policy(
 ) -> Result<(), &'static str> {
     if !matches!(
         kinds::canonical_kind_string(operation).as_str(),
-        "ak.profile.create" | "ck.profile.update"
+        "ak.profile.create" | "ak.profile.update"
     ) {
         return Ok(());
     }

@@ -734,19 +734,19 @@ pub(super) async fn submit_direct_realm_genesis(
     let realm_scope = arkret_sdk::RealmId::new(realm_id.to_owned())
         .map_err(|_| "generated invalid direct conversation realm id")?;
 
-    // ck.realm.create — DM Realm well-known shape (spec §7): mls_rfc9420
+    // ak.realm.create — DM Realm well-known shape (spec §7): mls_rfc9420
     // encryption profile, fail-closed join rule, direct-conversation
     // discriminator in `fields`. The creator is treated as a member by the
     // genesis bootstrap.
     let realm_op = direct_realm_create_operation(state, realm_scope.clone(), actor)?;
     crate::routing::accept_local_operations(state, actor, std::slice::from_ref(&realm_op)).await?;
 
-    // ck.member.state{join} — add the peer so both participants are active
+    // ak.member.state{join} — add the peer so both participants are active
     // members (active member count == 2, spec §7).
     let member_op = direct_member_join_operation(realm_scope.clone(), peer)?;
     crate::routing::accept_local_operations(state, actor, std::slice::from_ref(&member_op)).await?;
 
-    // ck.strand.create — main discussion Strand (spec §8): discussion track is
+    // ak.strand.create — main discussion Strand (spec §8): discussion track is
     // primary; no Circle scope.
     let strand_op = direct_strand_create_operation(realm_scope, main_strand_id, actor)?;
     crate::routing::accept_local_operations(state, actor, std::slice::from_ref(&strand_op)).await?;

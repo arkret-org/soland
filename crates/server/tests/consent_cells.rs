@@ -562,7 +562,7 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
     );
     assert_eq!(
         bob_row["invite_consent_grant_ref"], grant_event_id,
-        "row carries bob's ck.consent.grant event ref: {bob_row}"
+        "row carries bob's ak.consent.grant event ref: {bob_row}"
     );
     assert!(
         grant_event_id.starts_with("ak:event:"),

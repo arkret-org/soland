@@ -438,7 +438,7 @@ impl EventStore for PgEventStore {
         sql_query(
             "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
              FROM canonical_events \
-             WHERE kind IN ('ak.member.state', 'ck.circle.member.state') \
+             WHERE kind IN ('ak.member.state', 'ak.circle.member.state') \
                 OR (envelope #> '{payload,sync_endpoints}') IS NOT NULL \
                 OR (envelope #> '{payload,object,sync_endpoints}') IS NOT NULL \
                 OR (envelope #> '{payload,patch,sync_endpoints}') IS NOT NULL \

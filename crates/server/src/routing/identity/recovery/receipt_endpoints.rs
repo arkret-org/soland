@@ -54,7 +54,7 @@ pub(super) fn recovery_receipt_item(
 #[endpoint(
     operation_id = "org.arkret.soland.identity.recovery_receipt.put",
     tags("identity", "recovery"),
-    summary = "Record a ck.schema.recovery_receipt.v1 receipt (REC-1)",
+    summary = "Record a ak.schema.recovery_receipt.v1 receipt (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(

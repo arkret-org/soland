@@ -194,7 +194,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
                 AgentDispatchSnapshot::Missing => (
                     "unknown_agent",
                     format!(
-                        "counterparty_agent `{agent_principal_id}` is not registered (no ck.agent.endpoint accepted)"
+                        "counterparty_agent `{agent_principal_id}` is not registered (no ak.agent.endpoint accepted)"
                     ),
                     "agent_echo_bridge_failed",
                 ),

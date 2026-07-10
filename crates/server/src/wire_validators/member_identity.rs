@@ -43,7 +43,7 @@ fn deny_forbidden_fields(object: &Value, location: &str) -> Result<(), WireRejec
                 reasons::MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN,
                 format!(
                     "{location}.{field} is forbidden; MemberIdentity no longer carries handle \
-                     lifecycle (use ck.schema.handle_claim.v1)"
+                     lifecycle (use ak.schema.handle_claim.v1)"
                 ),
             ));
         }

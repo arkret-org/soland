@@ -319,7 +319,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
 ) -> Result<(), AppError> {
     if envelope.get("kind").and_then(Value::as_str) != Some("ak.agent.key.authorize") {
         return Err(AppError::invalid_param(
-            "authorize_event.kind must be ck.agent.key.authorize",
+            "authorize_event.kind must be ak.agent.key.authorize",
         ));
     }
     if envelope.get("actor_id").and_then(Value::as_str) != Some(controller) {

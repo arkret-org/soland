@@ -72,7 +72,7 @@ pub(crate) fn apply_morph_transformation_rules(
         }
         match rule_id {
             "ak.transform.identity.v1" => {}
-            "ak.transform.rename.v1" | "ck.transform.type_widen.v1" => {
+            "ak.transform.rename.v1" | "ak.transform.type_widen.v1" => {
                 let Some(from) = rule_object.get("from").and_then(Value::as_str) else {
                     return Err("unsupported_transformation_rule");
                 };

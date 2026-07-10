@@ -221,7 +221,7 @@ R3 surfaces recovery as a first-class wire strand. Lifecycle:
 ```text
 [client]                  [soland]                              [witnesses]
    | create policy           |                                       |
-   |------------------------>|  ck.recovery.policy.create             |
+   |------------------------>|  ak.recovery.policy.create             |
    |                         |---------------------+                 |
    |                         |  policy_id, version |                 |
    |<------------------------|                     |                 |
@@ -233,7 +233,7 @@ R3 surfaces recovery as a first-class wire strand. Lifecycle:
    |                         |<--------------------------------------|
    |                         |                                       |
    |  complete session       |                                       |
-   |------------------------>|  ck.recovery.session.complete          |
+   |------------------------>|  ak.recovery.session.complete          |
    |                         |   - emits RecoveryReceipt              |
    |<------------------------|                                       |
 ```

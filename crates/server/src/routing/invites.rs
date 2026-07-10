@@ -64,7 +64,7 @@ async fn peer_invites_submit(
     let delivery = req
         .parse_json::<InviteDeliveryRequest>()
         .await
-        .map_err(|_| AppError::bad_json("invalid ck.peer.invites.command.submit request body"))?;
+        .map_err(|_| AppError::bad_json("invalid ak.peer.invites.command.submit request body"))?;
     let body = serde_json::to_value(&delivery).map_err(|error| {
         AppError::internal(format!("invite delivery request serialize: {error}"))
     })?;
@@ -1346,7 +1346,7 @@ fn validate_invite_delivery_consistency(
         != Some(arkret_sdk::events::kinds::INVITE_CREATE)
     {
         return Err(super::events::peer::schema_violation(
-            "invite_event.kind must be ck.invite.create",
+            "invite_event.kind must be ak.invite.create",
         ));
     }
     let payload = body

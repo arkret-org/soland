@@ -7,7 +7,7 @@ impl ProjectionState {
     /// else `Ok(())`. Used by `event_log::submit_event` to short-circuit
     /// HTTP admission with a 412 failed_precondition instead of letting
     /// the reducer accept-then-reject after persistence. Unknown Space container
-    /// (no prior ck.space.create projected) returns Ok — causal /
+    /// (no prior ak.space.create projected) returns Ok — causal /
     /// backfill ordering is allowed; the reducer queues the operation for
     /// pending replay instead of applying a no-op.
     pub fn check_space_container_lifecycle_transition(
@@ -319,7 +319,7 @@ impl ProjectionState {
     /// Apply a `ck.space.archive` / `ck.space.restore` / `ck.space.tombstone`
     /// event with the canonical state-machine guard from
     /// `common-fields.md §5.1`. Unknown Space container (no prior
-    /// ck.space.create in the projection) is queued for pending replay so causal /
+    /// ak.space.create in the projection) is queued for pending replay so causal /
     /// backfill ordering doesn't get lost. Invalid source
     /// state returns `Rejected { reason }` with the spec reason_code;
     /// `event_log::submit_event` maps that to HTTP 412.

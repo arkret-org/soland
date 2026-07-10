@@ -1105,7 +1105,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
         .collect();
     assert_eq!(
         kinds,
-        vec!["ak.key.verification.request", "ck.message.notify"],
+        vec!["ak.key.verification.request", "ak.message.notify"],
         "queued after reset: {queued:?}"
     );
     assert_eq!(
@@ -1154,7 +1154,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_complete_rejected_after_cross_signing_reset() {
-    // A ck.cross_signing.reset retires the current generation (removes the
+    // A ak.cross_signing.reset retires the current generation (removes the
     // accepted publish). A device-authorize binding can then no longer verify —
     // completion MUST reject (cross_signing_state_missing), proving reset
     // invalidates stale bindings.

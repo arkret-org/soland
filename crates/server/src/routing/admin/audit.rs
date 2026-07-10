@@ -118,7 +118,7 @@ pub(super) fn ops_router() -> Router {
 #[endpoint(
     operation_id = "org.arkret.soland.audit.franking.verify",
     tags("audit"),
-    summary = "Verify a ck.moderation.franking_proof integrity digest"
+    summary = "Verify a ak.moderation.franking_proof integrity digest"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.audit.franking.verify"))]
 async fn verify_franking_proof(
@@ -160,7 +160,7 @@ async fn verify_franking_proof(
 #[endpoint(
     operation_id = "org.arkret.soland.audit.erasure_receipts.list",
     tags("audit"),
-    summary = "List ck.audit.erasure_receipt projection rows + fanout state"
+    summary = "List ak.audit.erasure_receipt projection rows + fanout state"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.audit.erasure_receipts.list"))]
 async fn audit_erasure_receipts(
