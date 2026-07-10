@@ -87,6 +87,14 @@ pub trait MlsKeyPackageStore: Send + Sync {
     ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Snapshot all rows. Diagnostics + the integration test rely on it.
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
+    /// All rows claimed by `mls_group_id` (excluding the sentinel
+    /// `"revoked"` claims). Ordered by `consumed_at` then `id` so callers
+    /// get a stable leaf iteration order. Feeds the minimal-metadata
+    /// author-credential admission view (encryption-and-audit.md §2.10.3).
+    async fn list_claimed_by_group(
+        &self,
+        mls_group_id: &str,
+    ) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
 }
 
 /// G3.S1 — Welcome to-device queue store. Each recipient device drains
@@ -230,6 +238,24 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>> {
         Ok(self.rows.lock().values().cloned().collect())
+    }
+
+    async fn list_claimed_by_group(
+        &self,
+        mls_group_id: &str,
+    ) -> PersistenceResult<Vec<MlsKeyPackageRow>> {
+        let mut rows: Vec<MlsKeyPackageRow> = self
+            .rows
+            .lock()
+            .values()
+            .filter(|row| {
+                mls_group_id != "revoked"
+                    && row.claimed_by_mls_group_id.as_deref() == Some(mls_group_id)
+            })
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| (a.consumed_at, &a.id).cmp(&(b.consumed_at, &b.id)));
+        Ok(rows)
     }
 }
 
@@ -619,6 +645,30 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
+        .load::<MlsKeyPackagePgRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(MlsKeyPackageRow::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn list_claimed_by_group(
+        &self,
+        mls_group_id: &str,
+    ) -> PersistenceResult<Vec<MlsKeyPackageRow>> {
+        if mls_group_id == "revoked" {
+            return Ok(Vec::new());
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
+             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, consumed_at, \
+             created_at \
+             FROM mls_key_packages WHERE claimed_by_mls_group_id = $1 \
+             ORDER BY consumed_at ASC NULLS FIRST, id ASC",
+        )
+        .bind::<Text, _>(mls_group_id)
         .load::<MlsKeyPackagePgRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(MlsKeyPackageRow::from).collect())

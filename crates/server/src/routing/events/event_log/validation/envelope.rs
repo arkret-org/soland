@@ -242,9 +242,12 @@ mod capability_refs;
 mod control_move;
 mod envelope_core;
 mod features_schema;
+mod minimal_metadata_author;
 mod proofs;
 
 use applet::*;
+#[allow(unused_imports)]
+pub(crate) use minimal_metadata_author::admit_minimal_metadata_author_claim;
 pub(in crate::routing::events::event_log) use capability_refs::validate_data_event_capability_refs;
 use capability_refs::*;
 use control_move::*;

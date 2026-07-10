@@ -1,3 +1,6 @@
+use super::minimal_metadata_author::{
+    minimal_metadata_author_context, validate_minimal_metadata_author_proof,
+};
 use super::*;
 
 pub(crate) async fn validate_event_proofs(
@@ -46,6 +49,18 @@ pub(crate) async fn validate_event_proofs(
     // checks ran earlier in this function.
     let proof_root =
         event_string_field(object, &["executed_by"]).unwrap_or_else(|| actor_id.to_owned());
+    // §2.10.3 — minimal-metadata content Events authenticate authorship
+    // against the active MLS LeafNode at the envelope's `(group_id, epoch,
+    // group_state_ref)` instead of the DID-document / directory path. The
+    // context is only `Some` when the Realm positively declared the
+    // minimal-metadata profile AND the payload carries an encrypted-content
+    // envelope; it applies to production verification only (the dev-proof
+    // shape keeps its fixture semantics).
+    let minimal_metadata_context = if is_production {
+        minimal_metadata_author_context(object, state).await
+    } else {
+        None
+    };
     for proof in proofs {
         let Some(proof_object) = proof.as_object() else {
             return Err(event_validation_error(
@@ -180,6 +195,23 @@ pub(crate) async fn validate_event_proofs(
                 &created_at,
                 proof_object,
             )?;
+            // §2.10.3 minimal-metadata branch: LeafNode trust anchor, pure
+            // did:key fragment key material, zero DID-freshness / resolver /
+            // principal-directory calls. Mutually exclusive with the
+            // DID-document path below.
+            if let Some(context) = &minimal_metadata_context {
+                validate_minimal_metadata_author_proof(
+                    state,
+                    context,
+                    object,
+                    actor_id,
+                    &verification_method,
+                    &proof_binding_bytes,
+                    &jws,
+                )
+                .await?;
+                continue;
+            }
             // High-risk path: enforce DID document freshness before event
             // proof verification (fail-closed-on-stale). Stale or missing
             // evidence must not be used for signature verification. The signer
