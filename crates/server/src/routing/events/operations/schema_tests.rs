@@ -747,29 +747,29 @@ mod sdk_artifact_schema_tests {
             "principal_id": "did:web:alice.example",
             "trust_domain": "ak:trust_domain:soland.local",
             "principal_signing_key": {
-                "kid": "did:web:alice.example#ck_principal_signing_v1",
+                "kid": "did:web:alice.example#ak_principal_signing_v1",
                 "alg": "EdDSA",
                 "public_key": "z6MkPrincipalAlice",
                 "key_format": "multibase"
             },
             "self_signing_key": {
-                "kid": "did:web:alice.example#ck_self_signing_v1",
+                "kid": "did:web:alice.example#ak_self_signing_v1",
                 "alg": "EdDSA",
                 "public_key": "z6MkSelfAlice",
                 "key_format": "multibase",
                 "binding": {
-                    "verification_method": "did:web:alice.example#ck_principal_signing_v1",
+                    "verification_method": "did:web:alice.example#ak_principal_signing_v1",
                     "alg": "EdDSA",
                     "signature": "c2ln"
                 }
             },
             "user_signing_key": {
-                "kid": "did:web:alice.example#ck_user_signing_v1",
+                "kid": "did:web:alice.example#ak_user_signing_v1",
                 "alg": "EdDSA",
                 "public_key": "z6MkUserAlice",
                 "key_format": "multibase",
                 "binding": {
-                    "verification_method": "did:web:alice.example#ck_principal_signing_v1",
+                    "verification_method": "did:web:alice.example#ak_principal_signing_v1",
                     "alg": "EdDSA",
                     "signature": "c2ln"
                 }

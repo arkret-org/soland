@@ -6,7 +6,7 @@
 //!
 //! All fns are `pub` because sync/projection writers consume them.
 //! This is a derivation layer the server fakes for clients that already
-//! speak the strand protocol; a future real `ck.strand.*` reducer state
+//! speak the strand protocol; a future real `ak.strand.*` reducer state
 //! will replace it once the wire schema lands.
 //!
 //! Naming boundary: a Strand is the object/container projected for a Realm.

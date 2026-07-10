@@ -38,8 +38,8 @@ and the project tracks Arkret v1 spec revisions.
 ### AKP-0007 — Circle primitive rollout (P2A; arkret-spec floor `2b0d70d`)
 
 Aggressive mode; no compatibility shim. Tracks the SDK's P1 baseline
-(`circle-rollout` branch) and consumes the seven `ck.circle.*` durable event
-kinds, six `ck.circle.*` capability actions, and six new failed-precondition
+(`circle-rollout` branch) and consumes the seven `ak.circle.*` durable event
+kinds, six `ak.circle.*` capability actions, and six new failed-precondition
 reason codes registered in `arkret-spec` `9cb47c1..2b0d70d`.
 
 - **BREAKING** `Strand.discussion_realm_ref` is no longer accepted on the wire.
@@ -56,7 +56,7 @@ reason codes registered in `arkret-spec` `9cb47c1..2b0d70d`.
   `Circle.members ⊆ Realm.members` and the four canonical AKP-0007
   reasons (`circle_realm_mismatch`, `circle_not_active`,
   `circle_already_terminal`, `circle_member_must_be_realm_member`).
-- 7 active `ck.circle.*` event kinds (`create` / `update` / `archive` /
+- 7 active `ak.circle.*` event kinds (`create` / `update` / `archive` /
   `restore` / `tombstone` / `member.state` / `anchor_commit`) wired into
   the reducer dispatch (`anchor_commit` is reducer-derived per
   `NON_REDUCER_EVENT_KINDS`).
@@ -69,7 +69,7 @@ reason codes registered in `arkret-spec` `9cb47c1..2b0d70d`.
   diesel symmetry only — see `DEPLOYMENT.md` §11 for the disk-sizing
   estimate.
 - Authz: `allowed_circle_ids` constraint type added to the local
-  evaluator. Required by the six `ck.circle.*` capability actions per
+  evaluator. Required by the six `ak.circle.*` capability actions per
   the spec's `required_constraints` declaration.
 - 6 AKP-0007 sub-reason codes re-exported via `crate::error::reasons::*`
   (`circle_realm_mismatch`, `circle_not_active`,
@@ -188,11 +188,11 @@ below. Producers on the old wire MUST upgrade.
 #### Changed (wire-breaking)
 
 - **`POST /api/v1/events` ephemeral kind reject** — the 12 ephemeral
-  kinds (`ak.call.signal`, `ck.presence`, `ck.typing`, `ak.receipt.read`,
+  kinds (`ak.call.signal`, `ak.presence`, `ak.typing`, `ak.receipt.read`,
   `ak.key.verification.*`) hard-reject with `schema_violation`. Senders
   MUST switch to `ak.schema.ephemeral_envelope.v1` (broadcast forms)
   or `ak.schema.device_message.v1` (to-device key verification) (T02).
-- **`POST /api/v1/events` receipt-object reject** — `ck.event_batch_receipt`
+- **`POST /api/v1/events` receipt-object reject** — `ak.event_batch_receipt`
   hard-rejects as Event.kind; it is a receipt object only (T23).
 - **`POST /api/v1/events` terminal Realm reject** — any non-audit-class
   event on a Realm whose `ak.realm.destroy` has been applied returns

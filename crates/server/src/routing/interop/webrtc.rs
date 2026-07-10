@@ -243,7 +243,7 @@ async fn issue_ice_config(
     let force_turn = body.force_turn;
     // `webrtc-signaling.md` §4.1 — REST-style (draft-uberti) TURN credential.
     // username = `<expiry-unix>:<pairwise-pseudonym>`; the pseudonym keeps the
-    // existing private-key-derived `ck_pseudonym_call_<16hex>` form (does not
+    // existing private-key-derived `ak_pseudonym_call_<16hex>` form (does not
     // leak identity), and `<expiry-unix>` is the credential's own expiry so
     // coturn enforces TTL on its side.
     let pseudonym = pairwise_turn_username(
@@ -334,7 +334,7 @@ fn floor_to_bucket(timestamp: DateTime<Utc>, bucket_seconds: u32) -> DateTime<Ut
 }
 
 /// Per-call pairwise TURN pseudonym (`webrtc-signaling.md` §4.1). The
-/// identity segment is `ck_pseudonym_call_<16-hex>` and MUST NOT leak the
+/// identity segment is `ak_pseudonym_call_<16-hex>` and MUST NOT leak the
 /// principal DID / handle / a stable cross-call id to the TURN operator.
 ///
 /// Freshness (§4.1 lines 204/213): the pseudonym is HMAC-derived under the
@@ -454,7 +454,7 @@ const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "ak.component.realm.media_service.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MediaProviderKind {
-    CokretNative,
+    ArkretNative,
     LiveKit,
     Mediasoup,
 }
@@ -462,7 +462,7 @@ enum MediaProviderKind {
 impl MediaProviderKind {
     fn parse(value: &str) -> Result<Self, AppError> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "arkret-native" | "arkret_native" => Ok(Self::CokretNative),
+            "arkret-native" | "arkret_native" => Ok(Self::ArkretNative),
             "livekit" => Ok(Self::LiveKit),
             "mediasoup" => Ok(Self::Mediasoup),
             _ => Err(AppError::new(
@@ -475,7 +475,7 @@ impl MediaProviderKind {
 
     fn as_wire(self) -> &'static str {
         match self {
-            Self::CokretNative => "arkret-native",
+            Self::ArkretNative => "arkret-native",
             Self::LiveKit => "livekit",
             Self::Mediasoup => "mediasoup",
         }
@@ -483,7 +483,7 @@ impl MediaProviderKind {
 
     fn token_prefix(self) -> &'static str {
         match self {
-            Self::CokretNative => "arkret-native",
+            Self::ArkretNative => "arkret-native",
             Self::LiveKit => "livekit",
             Self::Mediasoup => "mediasoup",
         }
@@ -561,18 +561,18 @@ trait MediaTokenIssuer {
     ) -> Result<IssuedMediaToken, AppError>;
 }
 
-struct CokretNativeMediaIssuer;
+struct ArkretNativeMediaIssuer;
 struct LiveKitMediaIssuer;
 struct MediasoupMediaIssuer;
 
-impl MediaTokenIssuer for CokretNativeMediaIssuer {
+impl MediaTokenIssuer for ArkretNativeMediaIssuer {
     fn issue(
         &self,
         request: &MediaTokenIssueRequestBody<'_>,
         ctx: &MediaTokenSigningContext<'_>,
     ) -> Result<IssuedMediaToken, AppError> {
         Ok(issue_signed_backend_token(
-            MediaProviderKind::CokretNative,
+            MediaProviderKind::ArkretNative,
             request,
             ctx.notary_signing_key,
         ))
@@ -1239,7 +1239,7 @@ fn normalized_media_foci(realm_id: &str, config: &Value) -> Result<Vec<Value>, A
 
 fn media_token_issuer_for(provider: MediaProviderKind) -> Box<dyn MediaTokenIssuer> {
     match provider {
-        MediaProviderKind::CokretNative => Box::new(CokretNativeMediaIssuer),
+        MediaProviderKind::ArkretNative => Box::new(ArkretNativeMediaIssuer),
         MediaProviderKind::LiveKit => Box::new(LiveKitMediaIssuer),
         MediaProviderKind::Mediasoup => Box::new(MediasoupMediaIssuer),
     }
@@ -1505,7 +1505,7 @@ mod tests {
     #[test]
     fn token_media_permissions_gate_screen_after_mute_adjustment() {
         let focus = MediaProviderConfig {
-            provider: MediaProviderKind::CokretNative,
+            provider: MediaProviderKind::ArkretNative,
             focus_id: "ak:focus:arkret-native:test".to_owned(),
             issuer_kid: "did:web:media.example#key-1".to_owned(),
             audience: "media".to_owned(),
@@ -1532,7 +1532,7 @@ mod tests {
 }
 
 // `webrtc-signaling.md` §3 — canonical capability actions. The registry is
-// the truth source; the spec body and this server MUST use the `ck.`-prefixed
+// the truth source; the spec body and this server MUST use the `ak.`-prefixed
 // forms and MUST NOT accept the bare `call.*` names.
 const CAP_CALL_JOIN: &str = "ak.call.join";
 const CAP_CALL_SCREEN_SHARE: &str = "ak.call.screen_share";

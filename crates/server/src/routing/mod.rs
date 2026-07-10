@@ -68,7 +68,7 @@ mod router_build;
 // OpenAPI document construction + the soland-extension operation table.
 mod openapi;
 // 404/405 disambiguation, framework error catcher, sync-token guard, and the
-// `CokretOpenApiDoc` depot type.
+// `ArkretOpenApiDoc` depot type.
 mod openapi_routes;
 // Snapshot manifest builders + small inventory/token helpers.
 mod snapshot;
@@ -89,7 +89,7 @@ pub(crate) use openapi::soland_extension_operation_ids;
 use openapi::{cached_arkret_openapi_doc, arkret_openapi_yaml};
 // Framework error catcher + OpenAPI doc depot type consumed by `crate::service`
 // and `crate::routing` children.
-pub use openapi_routes::CokretOpenApiDoc;
+pub use openapi_routes::ArkretOpenApiDoc;
 pub(crate) use openapi_routes::error_catcher;
 use openapi_routes::{
     api_not_found, pattern_matches_path, populate_known_routes, wait_for_sync_token,

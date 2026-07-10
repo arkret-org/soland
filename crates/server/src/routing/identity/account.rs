@@ -1432,7 +1432,7 @@ async fn direct_conversation_resolve(
     }
     let peer = body.peer.as_str().to_owned();
     // The peer MAY be remote (hosted on another Principal Server): a cross-PS
-    // accepted contact is established by federated `ck.contact.*` facts (spec
+    // accepted contact is established by federated `ak.contact.*` facts (spec
     // §4.1), and the resolver only needs a verifiable accepted contact + the
     // peer's direct_message consent, both of which the federated accept fact
     // projects locally. So we do NOT require the peer to be a local account;

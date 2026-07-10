@@ -9,7 +9,7 @@
 //! (`service-http-binding.md` §1007 keeps policy_document storage out of the
 //! core operation surface). It is therefore served off the protocol root and
 //! uses reverse-domain `org.arkret.soland.policy_document.*` operation ids
-//! rather than the `ck.*` protocol namespace:
+//! rather than the `ak.*` protocol namespace:
 //! - `GET    /_soland/self/policies`            list owner-scoped policies
 //! - `POST   /_soland/self/policies`            upsert one policy document
 //! - `GET    /_soland/self/policies/{id}`       read one policy document

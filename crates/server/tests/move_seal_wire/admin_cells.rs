@@ -201,7 +201,7 @@ async fn admin_list_cells_requires_realm_id_query_param() {
     let app = service(state.clone());
 
     // Missing realm_id → 400 missing_param.
-    let mut resp = TestClient::get("http://server/_soland/admin/cells?prefix=ck.")
+    let mut resp = TestClient::get("http://server/_soland/admin/cells?prefix=ak.")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;

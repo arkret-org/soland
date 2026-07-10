@@ -73,7 +73,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "generic redaction",
             kind: arkret_sdk::events::kinds::REDACTION,
-            // ck.redaction validates its payload against message_redact_payload
+            // ak.redaction validates its payload against message_redact_payload
             // (anyOf message_id | target_ref | event_id | target_event_id, with
             // additionalProperties=false). The target pointer `redacts` is an
             // event-ENVELOPE field (event-envelope.schema.json), not part of the

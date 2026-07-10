@@ -134,7 +134,7 @@ The `kid` (Key ID) embedded in `service_signature` is the canonical name
 soland uses to look up the signing key. Form:
 
 ```text
-ck-media-issuer/<realm-short-or-deployment-label>/<yyyy>-<NN>
+ak-media-issuer/<realm-short-or-deployment-label>/<yyyy>-<NN>
 ```
 
 - `realm-short-or-deployment-label` is either the realm's 8-char short id

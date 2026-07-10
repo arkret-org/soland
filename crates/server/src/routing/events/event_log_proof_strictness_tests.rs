@@ -1984,7 +1984,7 @@ fn relaxed_e2ee_data_event_keeps_capability_gate_without_covered_seals_gate() {
 // ----------------------------------------------------------------------------
 
 /// Ingest a principal DID document that designates `authority_did` as the
-/// CokretDeviceEnrollmentAuthority via a `service` entry whose `id` is
+/// ArkretDeviceEnrollmentAuthority via a `service` entry whose `id` is
 /// `service_id`.
 async fn ingest_principal_with_enrollment_authority(
     state: &AppState,

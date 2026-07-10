@@ -19,7 +19,7 @@ pub fn well_known_arkret_router() -> Router {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct WellKnownCokretEndpoints {
+struct WellKnownArkretEndpoints {
     openapi: String,
     peer_events: String,
     peer_events_frontier: String,
@@ -27,13 +27,13 @@ struct WellKnownCokretEndpoints {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct WellKnownCokretOutcome {
+struct WellKnownArkretOutcome {
     schema: String,
     service_did: String,
     trust_domain: String,
     public_base_url: String,
     fanout_topology: String,
-    endpoints: WellKnownCokretEndpoints,
+    endpoints: WellKnownArkretEndpoints,
     version: String,
 }
 
@@ -43,7 +43,7 @@ struct WellKnownCokretOutcome {
     summary = "Server description for federation discovery"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.well_known.arkret"))]
-async fn well_known_arkret(depot: &mut Depot) -> JsonResult<WellKnownCokretOutcome> {
+async fn well_known_arkret(depot: &mut Depot) -> JsonResult<WellKnownArkretOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     // Spec: B.3 — server description endpoint. Returns the small set
     // of identifiers a peer needs before opening an authenticated
@@ -53,13 +53,13 @@ async fn well_known_arkret(depot: &mut Depot) -> JsonResult<WellKnownCokretOutco
     // re-validating on every request.
     let fanout_topology = state.settings().federation_fanout_topology.as_str();
     let public_base_url = state.config.public_base_url.trim_end_matches('/');
-    json_ok(WellKnownCokretOutcome {
+    json_ok(WellKnownArkretOutcome {
         schema: "ak.schema.server_description.v1".to_owned(),
         service_did: state.config.service_did.clone(),
         trust_domain: state.config.trust_domain.clone(),
         public_base_url: state.config.public_base_url.clone(),
         fanout_topology: fanout_topology.to_owned(),
-        endpoints: WellKnownCokretEndpoints {
+        endpoints: WellKnownArkretEndpoints {
             openapi: format!("{}/.well-known/arkret/openapi.json", public_base_url),
             peer_events: format!("{}/_arkret/peer/events", public_base_url),
             peer_events_frontier: format!("{}/_arkret/peer/events/frontier", public_base_url),

@@ -93,7 +93,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
     router
         .unshift(
             Router::with_path(".well-known/arkret/openapi.yaml")
-                .hoop(affix_state::inject(CokretOpenApiDoc(doc.clone())))
+                .hoop(affix_state::inject(ArkretOpenApiDoc(doc.clone())))
                 .get(arkret_openapi_yaml),
         )
         .unshift(doc.into_router(".well-known/arkret/openapi.json"))
@@ -229,7 +229,7 @@ fn soland_local_router() -> Router {
                 // `service-http-binding.md` §1007.
                 .push(access::product_router())
                 // Organization governance CRUD is deployment-local product
-                // state; it must not occupy the `ck.self.*` protocol surface.
+                // state; it must not occupy the `ak.self.*` protocol surface.
                 .push(organizations::router())
                 // Join-policy candidate member-application read surface
                 // (`/_soland/self/realms/{realm_id}/applications`). `member.application`

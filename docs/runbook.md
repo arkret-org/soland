@@ -276,7 +276,7 @@ soland is the canonical issuer of media tokens. The wire surface is
 
 `service_signature.kid` rotation:
 
-- KIDs follow `ck-media-issuer/{realm_id_short}/{yyyy}-{NN}` where NN is a
+- KIDs follow `ak-media-issuer/{realm_id_short}/{yyyy}-{NN}` where NN is a
   monotone counter per realm-year.
 - Active set is **previous + current + next** for at least one rotation
   cycle; tokens with `expires_at` inside their own kid's validity window
@@ -329,7 +329,7 @@ Fallout:
 - Federation peers that haven't yet upgraded their accountability shape
   may have their federated events rejected. Coordinate the flip with
   federation partners.
-- The toggle is realm-scoped, not globally global. Audit `ck.realm.*`
+- The toggle is realm-scoped, not globally global. Audit `ak.realm.*`
   events to confirm rollout.
 
 Rollback: flip the profile back off; in-flight in-flight rejects will

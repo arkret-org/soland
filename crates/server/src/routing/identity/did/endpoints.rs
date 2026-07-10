@@ -233,7 +233,7 @@ pub struct EmbeddedWebvhRegisterRequestBody {
     pub proof: Option<Value>,
     /// DID (`did:key:z…`) of the device enrollment authority the registering
     /// client designates in the inception document via a
-    /// `CokretDeviceEnrollmentAuthority` service entry (decision 0002 / D1).
+    /// `ArkretDeviceEnrollmentAuthority` service entry (decision 0002 / D1).
     /// When present it MUST be reflected in the reconstructed document so the
     /// SCID + log proof verify; absent for callers that designate no authority.
     #[serde(default)]

@@ -19,13 +19,13 @@ pub(super) fn extension_actor_id_document(
 ) -> Value {
     let mut service = vec![json!({
         "id": format!("{did}#portal"),
-        "type": "CokretPortalRealm",
+        "type": "ArkretPortalRealm",
         "serviceEndpoint": applet.portal_realm_id,
     })];
     if actor_kind == "bot_actor" {
         service.push(json!({
             "id": format!("{did}#applet"),
-            "type": "CokretApplet",
+            "type": "ArkretApplet",
             "serviceEndpoint": applet.applet_id,
         }));
     }

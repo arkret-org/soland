@@ -7,7 +7,7 @@
 //!   12-fn helper block at the bottom of this file).
 //!
 //! Push dispatch rules live in the server-local `PushRuleStore`. Client
-//! notification preferences such as `ck.push_rules`/DND remain actor-private
+//! notification preferences such as `ak.push_rules`/DND remain actor-private
 //! encrypted account data and are never parsed by this module.
 //!
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an

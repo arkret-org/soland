@@ -28,7 +28,7 @@ fn consent_revoke_accepts_non_empty_observed_dots() {
 }
 
 #[test]
-fn applet_id_accepts_did_or_ck_form() {
+fn applet_id_accepts_did_or_ak_form() {
     assert!(validate_applet_id("did:web:applet.example").is_ok());
     assert!(validate_applet_id("ak:applet:01904100-0000-7000-8000-000000000001").is_ok());
     assert!(validate_applet_id("not-a-valid-id").is_err());

@@ -541,7 +541,7 @@ diesel::table! {
     }
 }
 
-// Server-side Space-container projection state for ck.space.* lifecycle events.
+// Server-side Space-container projection state for ak.space.* lifecycle events.
 diesel::table! {
     projection_spaces (id) {
         id -> Uuid,
@@ -565,7 +565,7 @@ diesel::table! {
     }
 }
 
-// Strand / Morph projection state for ck.strand.* / ck.morph.* lifecycle
+// Strand / Morph projection state for ak.strand.* / ak.morph.* lifecycle
 // events. Spec: arkret-spec/v1/zh/models/common-fields.md §5.1
 // (canonical state-transition table). State enum mirrors ObjectState
 // from arkret-sdk: active / archived / deleted / redacted (no

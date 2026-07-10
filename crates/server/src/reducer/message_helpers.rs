@@ -282,7 +282,7 @@ pub(crate) fn read_scope_key(scope: &ReadScopeWire) -> String {
     )
 }
 
-/// Extract the typed-id object reference from a `ck.redaction` event
+/// Extract the typed-id object reference from a `ak.redaction` event
 /// payload, used by both the reducer (`apply_redaction`) and the preflight
 /// (`check_redaction_target_transition`). Returns `None` for redactions
 /// that only carry a `target_event_id` (message redaction path), or when no

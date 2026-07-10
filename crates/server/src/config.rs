@@ -304,7 +304,7 @@ pub struct AppConfig {
     /// (`GET /_soland/self/realms/{realm_id}/applications`,
     /// `org.arkret.soland.member_application.query.list`). `member.application`
     /// is a spec candidate concept (`governance/join-policy.md` §7.2) that MUST
-    /// stay off the `/_arkret/...` protocol root and out of the `ck.*` namespace
+    /// stay off the `/_arkret/...` protocol root and out of the `ak.*` namespace
     /// until formally registered; the read surface is fail-closed (404) unless
     /// this profile is declared.
     /// Env: `SOLAND_CANDIDATE_JOIN_POLICY` (default false).

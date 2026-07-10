@@ -708,7 +708,7 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
 /// 2. **derived-edge single-source** (§3.2): `watches` (truth source
 ///    `ak.component.strand.watch.v1`, write path `ak.strand.watch.set`) and Board/List `contains`
 ///    (truth source `ak.space.parent` / `ak.strand.move`) are derived projections; a direct
-///    `ck.relation.*` on them MUST `schema_violation`. The container `contains` shape is identified
+///    `ak.relation.*` on them MUST `schema_violation`. The container `contains` shape is identified
 ///    by a Space `from_ref` (`ak:space:…`); a `Strand -> Strand` `contains` stays a
 ///    directly-writable weak relation (§3.2 line 85) and is not blocked.
 pub(crate) fn validate_relation_operation_payload(

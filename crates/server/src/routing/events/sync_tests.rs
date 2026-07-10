@@ -1808,7 +1808,7 @@ fn sync_filter_digest_normalizes_account_filter_collections() {
     let filter_b = json!({
         "realms": ["ak:realm:a", "ak:realm:b"],
         "event_types": ["ak.message.create", "ak.reaction.add"],
-        "not_event_types": ["ak.audit.accessed", "ck.redaction"]
+        "not_event_types": ["ak.audit.accessed", "ak.redaction"]
     });
     assert_eq!(
         sync_filter_digest(Some(&filter_a)),
@@ -1818,7 +1818,7 @@ fn sync_filter_digest_normalizes_account_filter_collections() {
     let narrowed = json!({
         "realms": ["ak:realm:a", "ak:realm:b"],
         "event_types": ["ak.message.create"],
-        "not_event_types": ["ak.audit.accessed", "ck.redaction"]
+        "not_event_types": ["ak.audit.accessed", "ak.redaction"]
     });
     assert_ne!(
         sync_filter_digest(Some(&filter_a)),
@@ -1844,7 +1844,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
         "actors": ["did:web:alice.example", "did:web:bob.example"],
         "filters": {
             "kind": ["ak.message.create", "ak.reaction.add"],
-            "not_event_types": ["ak.audit.accessed", "ck.redaction"]
+            "not_event_types": ["ak.audit.accessed", "ak.redaction"]
         },
         "order": "default"
     });
@@ -1859,7 +1859,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
         "actors": ["did:web:alice.example", "did:web:bob.example"],
         "filters": {
             "kind": ["ak.message.create", "ak.reaction.add"],
-            "not_event_types": ["ak.audit.accessed", "ck.redaction"]
+            "not_event_types": ["ak.audit.accessed", "ak.redaction"]
         },
         "order": "ascending"
     });

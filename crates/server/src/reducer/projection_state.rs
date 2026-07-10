@@ -120,7 +120,7 @@ pub struct ProjectionState {
     /// Server-side Space-container projection —
     /// `container_space_id -> SpaceContainerProjection`.
     /// Maintains the canonical state-machine described in
-    /// `arkret-spec/v1/zh/models/common-fields.md §5.1` for `ck.space.*`
+    /// `arkret-spec/v1/zh/models/common-fields.md §5.1` for `ak.space.*`
     /// lifecycle events. Used by `event_log::submit_event` to reject
     /// invalid transitions with HTTP 412 before persisting. Reducer applies
     /// `ak.space.create` / update / parent / archive / restore / tombstone;
@@ -129,11 +129,11 @@ pub struct ProjectionState {
     /// Server-side Strand projection. Mirrors the canonical state-machine
     /// for ak.strand.create / update / archive / restore. Unlike Space
     /// there is no dedicated `ak.strand.tombstone` event; terminal state
-    /// is reached via `ck.redaction`. Mirror table is `projection_strands`
+    /// is reached via `ak.redaction`. Mirror table is `projection_strands`
     /// (durable).
     pub strands: BTreeMap<String, StrandProjection>,
     /// AKP-0007 — server-side Circle projection. Mirrors the canonical
-    /// state-machine for `ck.circle.*` lifecycle / membership events
+    /// state-machine for `ak.circle.*` lifecycle / membership events
     /// (spec b7d35be `zh/models/circle.md`). Keyed by `circle_id`
     /// (`ak:circle:<uuid>`); membership and parent-Realm binding live in
     /// the struct so the wire layer can enforce
@@ -164,7 +164,7 @@ pub struct ProjectionState {
     pub agents: BTreeMap<String, SolandAgentProjection>,
     /// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — FSM lifecycle
     /// state for each agent_principal_id. Driven by
-    /// `ck.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
+    /// `ak.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
     /// for any agent_principal_id we've seen; `Deactivated` is terminal
     /// (no transition out, no resume after).
     pub agent_lifecycles: BTreeMap<String, AgentLifecycleState>,
@@ -859,7 +859,7 @@ impl ProjectionState {
     /// branch.
     ///
     /// All cell-state events (ak.realm.policy / ak.realm.read_receipt_policy /
-    /// ck.consent.* / ak.member.state / ck.realm.* facets) are routed via
+    /// ak.consent.* / ak.member.state / ak.realm.* facets) are routed via
     /// the Move/Seal pipeline through `LatticeKind` impls in
     /// `lattice_kinds.rs`; the structured ProjectionState fields don't
     /// mirror them. `routing/projection.rs::project_read_receipt_policy`
@@ -897,7 +897,7 @@ impl ProjectionState {
     ///   ARE the projection — the registry only validates that the spec maps this event_kind to a
     ///   known cell family, then we trust the inline dispatcher to handle the per-domain effect).
     /// - **No mapping in registry but a known canonical kind**: the kind is durable-Event-only
-    ///   (`ck.message.*` / `ck.reaction.*` etc.); fall through to inline `apply()` exactly as
+    ///   (`ak.message.*` / `ak.reaction.*` etc.); fall through to inline `apply()` exactly as
     ///   before. No log noise.
     /// - **Unknown canonical kind**: spec compliance requires us to fail closed — log at `error`
     ///   level and project as `ProjectionEffect:: Ignored` with `bottom = reject` semantics.
@@ -941,7 +941,7 @@ impl ProjectionState {
 
     // ── Strand / Morph projection state machine ──
 
-    /// Read-only state-machine preflight for a `ck.strand.*` lifecycle event.
+    /// Read-only state-machine preflight for a `ak.strand.*` lifecycle event.
     /// Mirror of `check_space_container_lifecycle_transition` — used by
     /// `event_log::submit_event` to short-circuit HTTP admission with 412
     /// failed_precondition. Unknown Strand returns `Ok` (causal/backfill
@@ -1051,7 +1051,7 @@ impl ProjectionState {
         }))
     }
 
-    /// Read-only preflight for `ck.redaction` events that
+    /// Read-only preflight for `ak.redaction` events that
     /// target a Strand / Morph via `object_ref`. Per spec common-fields.md
     /// §5.1, redaction is legal only from `active` or `archived` source;
     /// terminal source MUST `failed_precondition` with
@@ -1085,7 +1085,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Read-only state-machine preflight for a `ck.morph.*` lifecycle event.
+    /// Read-only state-machine preflight for a `ak.morph.*` lifecycle event.
     /// Same shape as `check_strand_lifecycle_transition`.
     pub fn check_morph_lifecycle_transition(
         &self,

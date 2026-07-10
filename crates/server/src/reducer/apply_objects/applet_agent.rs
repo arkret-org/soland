@@ -236,7 +236,7 @@ impl ProjectionState {
     }
 
     /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — apply
-    /// an `ck.agent.{pause,resume,deactivate}` FSM transition. The
+    /// an `ak.agent.{pause,resume,deactivate}` FSM transition. The
     /// lattice is `fsm` with `bottom=reject`; allowed transitions are:
     ///   - Active → Paused                 via `ak.self.agent.pause`
     ///   - Paused → Active                 via `ak.self.agent.resume`

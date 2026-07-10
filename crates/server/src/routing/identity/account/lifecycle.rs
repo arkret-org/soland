@@ -434,7 +434,7 @@ async fn append_account_state_change_audit(
     identity_link_cache_invalidated: usize,
     capability_cache_invalidated: usize,
 ) {
-    // Product-private audit actions must not occupy the protocol `ck.` prefix.
+    // Product-private audit actions must not occupy the protocol `ak.` prefix.
     let payload = json!({
         "schema": "org.arkret.soland.account.state_change.v1",
         "actor": changed_by,

@@ -34,7 +34,7 @@ pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discuss
 // `(payload.realm_id, payload.actor_id, payload.segment)`. Reducer
 // dispatch lives in `reducer::apply_member_identity_update`; persistence
 // is in `state::MemberIdentityRegistry`.
-// Realm security-boundary lifecycle (`ck.realm.*`). Spec
+// Realm security-boundary lifecycle (`ak.realm.*`). Spec
 // `arkret-spec/spec/v1/zh/models/realm-and-space.md` §2.6.
 //
 // `ak.realm.freeze` is reversible read-only hold. `ak.realm.tombstone` is a

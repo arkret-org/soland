@@ -711,7 +711,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         assert_eq!(
             strand.state.as_str(),
             "redacted",
-            "Strand MUST be in Redacted terminal state after ck.redaction with object_ref"
+            "Strand MUST be in Redacted terminal state after ak.redaction with object_ref"
         );
     }
 

@@ -668,7 +668,7 @@ impl ProjectionState {
         ProjectionEffect::Ignored
     }
 
-    /// Apply a `ck.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
+    /// Apply a `ak.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
     /// of the former Realm lifecycle reducer: the function is now
     /// restricted to the canonical Realm lifecycle kinds
     /// (`ak.realm.create`, `ak.realm.update`, `ak.realm.archive`,
@@ -707,7 +707,7 @@ impl ProjectionState {
 
         // Keep the structured cache and the canonical cells map in sync.
         //
-        // Per spec event-kind-registry, each ck.realm.* lifecycle event
+        // Per spec event-kind-registry, each ak.realm.* lifecycle event
         // writes a distinct cell family with its own lattice:
         //   ak.realm.create     → ak.component.realm.create.v1  (genesis singleton)
         //   ak.realm.update     → ak.component.realm.metadata.v1 (cas-register, singleton)

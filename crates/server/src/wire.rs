@@ -1244,7 +1244,7 @@ pub fn describe(
                     "server_action": "holder_wake_sync_only",
                     "wakeup_kind": "scheduled_send",
                     "planned_message_id_anchor": "ak.message.create.payload.message_id",
-                    "shared_history_materialization": "client_submitted_ck.message.create_only"
+                    "shared_history_materialization": "client_submitted_ak.message.create_only"
                 },
                 "snooze": {
                     "profile": "ak.profile.personal_productivity.v1",

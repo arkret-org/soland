@@ -475,7 +475,7 @@ fn apply_agent_endpoint_dispatch(
 }
 
 // REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — FSM-lattice
-// dispatch for `ck.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
+// dispatch for `ak.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
 // `Deactivated` is terminal (no transition out, no resume after).
 fn apply_agent_pause_dispatch(
     s: &mut ProjectionState,

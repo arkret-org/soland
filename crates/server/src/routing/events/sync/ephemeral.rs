@@ -172,7 +172,7 @@ fn validate_ephemeral_envelope(
 ) -> Result<(), crate::error::AppError> {
     if !matches!(
         envelope.kind.as_str(),
-        "ak.call.signal" | "ck.presence" | "ck.typing" | "ak.receipt.read" | "ak.realm_key.request"
+        "ak.call.signal" | "ak.presence" | "ak.typing" | "ak.receipt.read" | "ak.realm_key.request"
     ) {
         return Err(crate::error::AppError::invalid_param(
             "unsupported ephemeral kind",
@@ -201,7 +201,7 @@ fn validate_ephemeral_envelope(
     // admission rules in realm_key_request.rs.)
     if matches!(
         envelope.kind.as_str(),
-        "ak.call.signal" | "ck.presence" | "ck.typing" | "ak.receipt.read"
+        "ak.call.signal" | "ak.presence" | "ak.typing" | "ak.receipt.read"
     ) {
         validate_ephemeral_broadcast_proof_shape(envelope)?;
     }
@@ -214,7 +214,7 @@ async fn persist_ephemeral_typing(
     realm_id: &str,
     envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
-    // ephemeral-envelope.schema.json ck.typing branch: `track_name` is optional
+    // ephemeral-envelope.schema.json ak.typing branch: `track_name` is optional
     // but const "discussion" in v1 (mirrors message.schema.json); when omitted
     // receivers resolve it to "discussion".
     if let Some(track_name) = envelope.payload.get("track_name") {

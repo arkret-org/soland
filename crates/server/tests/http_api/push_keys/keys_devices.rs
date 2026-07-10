@@ -803,33 +803,33 @@ fn tier2_publish_and_authorize(
         principal_id: principal_did.clone(),
         trust_domain: arkret_sdk::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         principal_signing_key: CrossSigningKeyRecord {
-            kid: format!("{principal}#ck_principal_signing_v1"),
+            kid: format!("{principal}#ak_principal_signing_v1"),
             alg: "EdDSA".to_owned(),
             public_key: psk_multibase.clone(),
             key_format: "multibase".to_owned(),
         },
         self_signing_key: SignedCrossSigningKey {
             key: CrossSigningKeyRecord {
-                kid: format!("{principal}#ck_self_signing_v1"),
+                kid: format!("{principal}#ak_self_signing_v1"),
                 alg: "EdDSA".to_owned(),
                 public_key: ssk_multibase.clone(),
                 key_format: "multibase".to_owned(),
             },
             binding: CrossSigningBinding {
-                verification_method: format!("{principal}#ck_principal_signing_v1"),
+                verification_method: format!("{principal}#ak_principal_signing_v1"),
                 alg: "EdDSA".to_owned(),
                 signature: String::new(),
             },
         },
         user_signing_key: SignedCrossSigningKey {
             key: CrossSigningKeyRecord {
-                kid: format!("{principal}#ck_user_signing_v1"),
+                kid: format!("{principal}#ak_user_signing_v1"),
                 alg: "EdDSA".to_owned(),
                 public_key: "z6MkUserDistinctKey".to_owned(),
                 key_format: "multibase".to_owned(),
             },
             binding: CrossSigningBinding {
-                verification_method: format!("{principal}#ck_principal_signing_v1"),
+                verification_method: format!("{principal}#ak_principal_signing_v1"),
                 alg: "EdDSA".to_owned(),
                 signature: "dW51c2Vk".to_owned(),
             },
@@ -866,7 +866,7 @@ fn tier2_publish_and_authorize(
         "hpke_key": "z6LSTestTier2HpkeKey",
         "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
         "cross_signing_binding": {
-            "verification_method": format!("{principal}#ck_self_signing_v1"),
+            "verification_method": format!("{principal}#ak_self_signing_v1"),
             "alg": "EdDSA",
             "ssk_generation": 1,
             "signature": binding_signature,

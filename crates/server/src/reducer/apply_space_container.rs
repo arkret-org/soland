@@ -1,7 +1,7 @@
 use super::*;
 
 impl ProjectionState {
-    /// Read-only state-machine preflight for a `ck.space.*` container lifecycle
+    /// Read-only state-machine preflight for a `ak.space.*` container lifecycle
     /// operation. Returns `Err(reason_code)` if the projection's current
     /// Space-container state forbids the transition per `common-fields.md §5.1`,
     /// else `Ok(())`. Used by `event_log::submit_event` to short-circuit

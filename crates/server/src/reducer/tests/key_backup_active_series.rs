@@ -21,7 +21,7 @@ fn active_series_payload() -> Value {
         },
         "issued_at": "2026-04-27T00:00:00Z",
         "auth_data": {
-            "verification_method": "did:web:alice.example#ck_device_01964137",
+            "verification_method": "did:web:alice.example#ak_device_01964137",
             "signature_algorithm": "Ed25519",
             "signature": "signature-base64url-placeholder",
             "signed_fields": [

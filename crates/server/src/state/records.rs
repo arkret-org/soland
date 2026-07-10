@@ -739,7 +739,7 @@ pub struct FederationFrontierExchangeRecord {
     pub updated_at: i64,
 }
 
-/// Per-device presence broadcast admitted from `ck.presence`
+/// Per-device presence broadcast admitted from `ak.presence`
 /// (profiles-presence.md §3.3). One actor may have several device rows;
 /// the projection aggregates them (`dnd > online > idle`, all expired →
 /// `offline`) before anything reaches an observer.

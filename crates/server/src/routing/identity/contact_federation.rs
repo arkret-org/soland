@@ -63,7 +63,7 @@ struct PeerContactDeliveryOutcome {
 /// locally) or when the deployment does not list the peer; `Ok(true)` when a
 /// durable outbound delivery was enqueued.
 ///
-/// `fact_kind` is one of the `ck.contact.*` kinds. `fact_payload` carries the
+/// `fact_kind` is one of the `ak.contact.*` kinds. `fact_payload` carries the
 /// projection fields the recipient needs (requester/target/scope/message/
 /// granted_scopes/consent grant refs). The fact is wrapped in a dev-proof
 /// EventEnvelope scoped to the issuer's Principal Control Realm so it is a

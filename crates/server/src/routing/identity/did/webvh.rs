@@ -96,7 +96,7 @@ pub(super) fn did_webvh_descriptor(state: &AppState) -> Value {
             // The embedded webvh provider is a soland *deployment* facility, so
             // its registration entrypoint intentionally lives on the product
             // face (`/_soland/...`), not the protocol face — webvh registration
-            // is not a `ck.*` protocol operation (only resolution is). Flag it
+            // is not a `ak.*` protocol operation (only resolution is). Flag it
             // as deployment-local so clients can distinguish the product-face
             // registration URL from the protocol-face `resolver_url` below.
             "provider_local": true,
@@ -308,17 +308,17 @@ pub(super) fn embedded_webvh_document_value(
     // document byte-for-byte (canonical JSON does not sort array elements), or
     // the SCID / entry hash / log proof recomputed here will not verify. coauth's
     // embedded_webvh provider (coauth services/soland_webvh.rs) appends the
-    // CokretDeviceEnrollmentAuthority service after CokretPrincipalServer when it
+    // ArkretDeviceEnrollmentAuthority service after ArkretPrincipalServer when it
     // designates an enrollment authority; mirror that exactly.
     let mut service = vec![json!({
         "id": format!("{did}#soland"),
-        "type": "CokretPrincipalServer",
+        "type": "ArkretPrincipalServer",
         "serviceEndpoint": service_endpoint,
     })];
     if let Some(authority_did) = enrollment_authority_did {
         service.push(json!({
             "id": format!("{did}#enrollment-authority"),
-            "type": "CokretDeviceEnrollmentAuthority",
+            "type": "ArkretDeviceEnrollmentAuthority",
             "serviceEndpoint": authority_did,
         }));
     }

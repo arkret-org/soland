@@ -24,14 +24,14 @@ in-memory mode keeps the same API for fast local iteration.
 ## Realm vs Space
 
 - **Realm:** security boundary — membership, capability, E2EE, federation.
-  Reducer cells live under `ck.realm.*`; admin routes use `/realms/:id/...`.
+  Reducer cells live under `ak.realm.*`; admin routes use `/realms/:id/...`.
 - **Space:** navigation container — board, list, section, calendar bucket
   inside a Realm.
 
 `ak.realm.link`, `ak.realm.inheritance_policy`, and `ak.capability.derived`
 are the typed edges that wire boundaries together (governed_by /
-discoverable_from / mirror_of). Container lifecycle events use `ck.space.*`;
-security-boundary lifecycle and policy events use `ck.realm.*`.
+discoverable_from / mirror_of). Container lifecycle events use `ak.space.*`;
+security-boundary lifecycle and policy events use `ak.realm.*`.
 
 ## Round R4 (protocol review closures)
 
@@ -81,8 +81,8 @@ normative source. The key operational hooks:
   Enters the canonical transcript of every `ak.cross_signing.reset`
   proof; rotating this value invalidates outstanding proofs.
 - **Ephemeral kinds rejected on `POST /_arkret/self/events`** — producers
-  must route the 12 ephemeral kinds (`ak.call.signal`, `ck.presence`,
-  `ck.typing`, `ak.receipt.read`, `ak.key.verification.*`) through
+  must route the 12 ephemeral kinds (`ak.call.signal`, `ak.presence`,
+  `ak.typing`, `ak.receipt.read`, `ak.key.verification.*`) through
   the ephemeral envelope / device-message channels; no compatibility
   shim.
 - **Realm terminal-state, presign blob fail-closed, federation

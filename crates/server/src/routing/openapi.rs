@@ -38,7 +38,7 @@ fn arkret_openapi_doc(router: &Router) -> OpenApi {
                 // ViewRenderer / AllowedEntityFacetsConstraint /
                 // allowed_entity_facets) was removed alongside the entity
                 // abstraction. View facets are now declared by individual
-                // spec event kinds (`ck.view.*` / `ck.strand.*` / `ck.space.*`)
+                // spec event kinds (`ak.view.*` / `ak.strand.*` / `ak.space.*`)
                 // and bound through cell-family registry mappings.
                 "authz_constraint_kinds": ["allowed_object_facets"],
             }),
@@ -751,7 +751,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
 #[tracing::instrument(skip_all, fields(op = "arkret_openapi_yaml"))]
 pub(crate) async fn arkret_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     let doc = depot
-        .get_typed::<CokretOpenApiDoc>()
+        .get_typed::<ArkretOpenApiDoc>()
         .expect("openapi doc injected");
     let spec = doc.0.to_yaml().unwrap_or_else(|error| {
         tracing::error!(%error, "failed to render openapi yaml");

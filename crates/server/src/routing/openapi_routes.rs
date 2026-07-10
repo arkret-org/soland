@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::*;
 
 #[derive(Clone)]
-pub struct CokretOpenApiDoc(pub OpenApi);
+pub struct ArkretOpenApiDoc(pub OpenApi);
 
 /// Catch-all handler under `/_arkret/*` (and the `/_soland/*` compat mirror,
 /// which mounts the same protocol handlers and must answer errors identically).

@@ -12,7 +12,7 @@ use super::super::*;
 ///
 /// MUST check (device-lifecycle.md §5.4 receiver rules):
 /// `executed_by` (== `binding.authority_did`) is the DID that the principal (`actor_id`) DID
-/// document designates via its `CokretDeviceEnrollmentAuthority` service `serviceEndpoint`, and
+/// document designates via its `ArkretDeviceEnrollmentAuthority` service `serviceEndpoint`, and
 /// `authorization_ref` matches that service entry id (else
 /// `device_enrollment_authority_not_designated`).
 ///
@@ -80,7 +80,7 @@ pub(crate) async fn validate_device_enrollment_authority_binding(
     }
 
     // Resolve the principal (actor_id) DID document and read the anchored
-    // CokretDeviceEnrollmentAuthority service entry. If the binding carries a
+    // ArkretDeviceEnrollmentAuthority service entry. If the binding carries a
     // versionTime provenance anchor, replay the DID log at that time instead
     // of accepting a current-policy-only designation.
     let designated = resolve_enrollment_authority_designation(state, actor_id, binding)
@@ -88,7 +88,7 @@ pub(crate) async fn validate_device_enrollment_authority_binding(
         .ok_or_else(|| {
             invalid(
                 "device_enrollment_authority_not_designated",
-                "principal DID document does not designate a CokretDeviceEnrollmentAuthority",
+                "principal DID document does not designate a ArkretDeviceEnrollmentAuthority",
                 StatusCode::FORBIDDEN,
             )
         })?;
@@ -102,14 +102,14 @@ pub(crate) async fn validate_device_enrollment_authority_binding(
     if designated.service_id != authorization_ref {
         return Err(invalid(
             "device_enrollment_authority_not_designated",
-            "authorization_ref does not match the CokretDeviceEnrollmentAuthority service entry id",
+            "authorization_ref does not match the ArkretDeviceEnrollmentAuthority service entry id",
             StatusCode::FORBIDDEN,
         ));
     }
     Ok(())
 }
 
-/// The `CokretDeviceEnrollmentAuthority` designation read from a principal DID
+/// The `ArkretDeviceEnrollmentAuthority` designation read from a principal DID
 /// document's `service` array: the entry `id` (matched against
 /// `authorization_ref`) and its `serviceEndpoint` DID (matched against
 /// `executed_by` / `authority_did`).
@@ -119,7 +119,7 @@ struct EnrollmentAuthorityDesignation {
 }
 
 /// Read the principal DID document `service` entry of type
-/// `CokretDeviceEnrollmentAuthority` (identity-did.md §3.2). Returns `None` when
+/// `ArkretDeviceEnrollmentAuthority` (identity-did.md §3.2). Returns `None` when
 /// the document is not ingested or carries no such designation. The persisted
 /// raw `did_document` value retains the full `service` array (the SDK
 /// `DidDocument` projection only keeps verificationMethod/alsoKnownAs), so the

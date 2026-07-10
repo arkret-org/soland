@@ -340,7 +340,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             | arkret_sdk::events::kinds::MORPH_ARCHIVE
             | arkret_sdk::events::kinds::MORPH_RESTORE
     );
-    // ck.redaction with an `object_ref` may have flipped a Strand or
+    // ak.redaction with an `object_ref` may have flipped a Strand or
     // Morph to Redacted. Pick up either by attempting both.
     let is_redaction = kind == arkret_sdk::events::kinds::REDACTION;
     if !(is_space_container_kind || is_strand_kind || is_morph_kind || is_redaction) {
@@ -627,7 +627,7 @@ async fn project_accepted_operations_inner(
         // Cache ak.realm.read_receipt_policy state into ProjectionState so
         // ephemeral ak.receipt.read fanout (and other readers) can hit a
         // BTreeMap lookup instead of scanning the durable Event store.
-        // (R1.2 renamed `ak.space.read_receipt_policy` to `ck.realm.*`.)
+        // (R1.2 renamed `ak.space.read_receipt_policy` to `ak.realm.*`.)
         if kinds::canonical_kind_string(operation) == "ak.realm.read_receipt_policy" {
             project_read_receipt_policy(state, operation);
         }

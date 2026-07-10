@@ -2,7 +2,7 @@ use super::*;
 
 /// strand-and-message.md §9.8.2 — a reaction MUST target an object inside its
 /// own effective scope. soland's effective scope is the Realm, so a
-/// `ck.reaction.*` whose `target_ref` resolves to a Message in a different
+/// `ak.reaction.*` whose `target_ref` resolves to a Message in a different
 /// Realm is rejected with `reaction_scope_mismatch` (a `failed_precondition`
 /// sub-reason). The target-kind gate (`reaction_target_unsupported`) already
 /// ran in `validate_operation_semantics`; an unknown / not-yet-observed

@@ -2,10 +2,10 @@
 //!
 //! Hosts the `/_arkret/self/circles/*` admin/CRUD layer (mounted under the
 //! protocol self surface; see `routing/mod.rs`). The Circle *data model*
-//! `ck.circle.*` is spec-canonical; this HTTP surface is the self convenience
+//! `ak.circle.*` is spec-canonical; this HTTP surface is the self convenience
 //! wrapper that builds the canonical operations.
 //!
-//! Each handler builds a `ck.circle.*` Operation and routes it through the standard
+//! Each handler builds a `ak.circle.*` Operation and routes it through the standard
 //! `accept_local_operations` pipeline so the reducer's invariants
 //! (`circle_realm_mismatch`, `circle_member_must_be_realm_member`,
 //! `circle_not_active`, the lifecycle transition matrix) fire identically
@@ -748,7 +748,7 @@ async fn post_scope_rotate(
         circle_id: CircleId::new(circle_id)
             .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
         mls_group_ref,
-        note: Some("mls scope rotation accepted via canonical ck.mls events".to_owned()),
+        note: Some("mls scope rotation accepted via canonical ak.mls events".to_owned()),
         accepted,
         duplicate,
         rejected,

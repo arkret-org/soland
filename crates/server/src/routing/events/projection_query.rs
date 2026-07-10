@@ -1258,7 +1258,7 @@ async fn get_strand_projection(
 }
 
 /// `GET /_soland/self/relations?from_ref=&to_ref=&relation_kind=&state=` —
-/// list relation edges projected from `ck.relation.*` events. Backs the
+/// list relation edges projected from `ak.relation.*` events. Backs the
 /// relation-cardinality invariant checks (e.g. asserting at most one active
 /// `has_default_view` edge per `from_ref`). Filters are AND-combined; `state`
 /// defaults to `active`. Only edges whose `realm_id` is accessible to the

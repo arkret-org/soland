@@ -796,7 +796,7 @@ pub(crate) fn parse_iso8601_duration(value: &str) -> Option<Duration> {
 /// lifecycle event declares. Reads `active_profiles[]` / `profiles[]` from the
 /// payload root, the `object` block, and a `patch.active_profiles` register set
 /// (so `ak.realm.update` declarations are captured as well). Only well-formed
-/// `ck.profile.*` strings are returned.
+/// `ak.profile.*` strings are returned.
 pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
     let mut profiles = Vec::new();
     let mut push_array = |value: Option<&Value>| {

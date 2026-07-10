@@ -286,7 +286,7 @@ pub(crate) async fn seed_did_document_also_known_as(state: &AppState, did: &str,
                 "assertionMethod": [],
                 "service": [{
                     "id": format!("{did}#soland"),
-                    "type": "CokretPrincipalServer",
+                    "type": "ArkretPrincipalServer",
                     "serviceEndpoint": "/_arkret"
                 }]
             }),
@@ -919,7 +919,7 @@ pub(crate) fn test_embedded_webvh_proof(
             "alsoKnownAs": ["acct:alice@example.com"],
             "service": [{
                 "id": format!("{placeholder_did}#soland"),
-                "type": "CokretPrincipalServer",
+                "type": "ArkretPrincipalServer",
                 "serviceEndpoint": principal_server_url.trim_end_matches('/'),
             }],
         },
@@ -995,11 +995,11 @@ pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
 // round 6: the `entity` / `view` abstraction they exercised never landed in
 // `arkret-spec/v1`. Typed objects in the protocol are `ak:strand:` / `ak:space:`
 // / `ak:morph:` / `ak:relation:` / `ak:view:`, each with its own dedicated
-// event kind; presentation concerns belong on `ck.view.*` events going
+// event kind; presentation concerns belong on `ak.view.*` events going
 // through the reducer, not on a free-form `/_arkret/self/entities` /
 // `/_arkret/self/views` scaffold.
 
-/// Build a signed container `ck.space.*` event envelope for the Space
+/// Build a signed container `ak.space.*` event envelope for the Space
 /// (container) state-machine integration test. Mirrors [`signed_event_envelope`]
 /// but with a custom `kind` + `payload`; container lifecycle events do not
 /// carry a message body.
@@ -1118,7 +1118,7 @@ fn optional_string(payload: &Value, field: &str) -> Option<String> {
 // `check_space_container_lifecycle_transition` →
 // `StatusCode::PRECONDITION_FAILED`).
 
-/// Build a signed `ck.strand.*` event envelope for the Strand state-machine
+/// Build a signed `ak.strand.*` event envelope for the Strand state-machine
 /// integration test. Mirror of `signed_space_event` with a Strand-specific
 /// schema_id.
 pub(crate) fn signed_strand_event(
@@ -1203,7 +1203,7 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
     }
 }
 
-/// Build a signed `ck.morph.*` event envelope.
+/// Build a signed `ak.morph.*` event envelope.
 pub(crate) fn signed_morph_event(
     event_id: &str,
     actor_seq: u64,
@@ -1383,11 +1383,11 @@ fn relation_payload_str(payload: &Value, fields: &[&str]) -> Option<String> {
 // guards map to HTTP 412 + canonical reason_code per spec §5.1. Combined
 // Strand+Morph in one test to keep the suite small.
 
-/// Build a signed `ck.redaction` event envelope, used by round 14b to
+/// Build a signed `ak.redaction` event envelope, used by round 14b to
 /// test object-level redaction (Strand / Morph). Mirror of
 /// `signed_event_envelope` for the redaction kind. The spec schema
 /// registry doesn't carry a dedicated `ak.schema.redaction.v1` —
-/// `ck.redaction` is `category=message` per event-kind-registry, so
+/// `ak.redaction` is `category=message` per event-kind-registry, so
 /// reuses `ak.schema.message.v1`.
 pub(crate) fn signed_redaction_event(
     event_id: &str,
@@ -1433,7 +1433,7 @@ pub(crate) fn signed_redaction_event(
 
 // The following comment blocks are descriptive notes for tests that have
 // migrated to dedicated integration files. They are preserved here only
-// as breadcrumbs (round 14b ck.redaction terminal-flip; round 14d/14f/15a
+// as breadcrumbs (round 14b ak.redaction terminal-flip; round 14d/14f/15a
 // projection_query endpoints; round 15b applet/agent registration; round
 // 15d include_terminal filter; round 15f multi-chunk snapshot; round 15h
 // projection write-through). See the corresponding `tests/*.rs` files for

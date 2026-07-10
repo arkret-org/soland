@@ -472,7 +472,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             arkret_sdk::events::kinds::VIEW_CREATE
             | arkret_sdk::events::kinds::VIEW_UPDATE
             | arkret_sdk::events::kinds::VIEW_RECONCILE => {
-                // `ck.view.*` events route through the `ak.component.view.*.v1`
+                // `ak.view.*` events route through the `ak.component.view.*.v1`
                 // cell families in the lattice registry (see
                 // `reducer::lattice_kinds::ViewCreate / ViewUpdate / ViewReconcile`).
                 // The validator just enforces a `view_id` payload key — the

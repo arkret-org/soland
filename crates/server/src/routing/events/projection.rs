@@ -12,9 +12,9 @@
 //! - **outbound**: `events::list_events` and `sync::*` consume `projected_event_page` and
 //!   `sync_timeline_message_json` to render timeline-shaped responses.
 //!
-//! Today this layer only fans out `ck.message.*` / `ak.member.state` /
-//! `ck.realm.*` (security boundary, was `ck.space.*` pre-R1.2) lifecycle
-//! events plus the container `ck.space.*` (was `ck.space.*`) family;
+//! Today this layer only fans out `ak.message.*` / `ak.member.state` /
+//! `ak.realm.*` (security boundary, was `ak.space.*` pre-R1.2) lifecycle
+//! events plus the container `ak.space.*` (was `ak.space.*`) family;
 //! everything else is dropped on the floor (`project_accepted_operations`
 //! only routes message+membership+lifecycle).
 //! Persistence: `projection_events` is in-memory plus a Pg mirror via

@@ -212,7 +212,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     }
     // client-sync.md: the account subscribe surface is read-only.
     // Presence intent (`set_presence`) is NOT a subscribe parameter —
-    // clients broadcast `ck.presence` through
+    // clients broadcast `ak.presence` through
     // `POST /_arkret/self/ephemeral`; any `set_presence` query value is
     // ignored here so establishing or replaying a subscription never
     // triggers a server-side mutation.

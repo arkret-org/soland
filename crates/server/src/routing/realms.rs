@@ -64,7 +64,7 @@ pub(crate) fn router() -> Router {
 ///
 /// Hosts the join-policy member-application read surface. `member.application`
 /// is a spec **candidate** workflow concept (`governance/join-policy.md` §7.2,
-/// `conformance/schema-registry.md:178`) that MUST NOT use the `ck.*` prefix or
+/// `conformance/schema-registry.md:178`) that MUST NOT use the `ak.*` prefix or
 /// occupy the `/_arkret/...` protocol root before formal registration. It is
 /// gated behind the `ak.profile.candidate.join_policy.v1` profile and uses the
 /// reverse-domain `org.arkret.soland.*` operation namespace.
@@ -200,7 +200,7 @@ pub struct MemberApplicationListOutcome {
 /// join-policy.md §7 / §9 — list the Realm's member applications scoped to the
 /// viewer. `member.application` is a spec **candidate** concept (§7.2,
 /// schema-registry.md:178): it MUST stay off the `/_arkret/...` protocol root and
-/// the `ck.*` namespace until formally registered, so this read surface lives on
+/// the `ak.*` namespace until formally registered, so this read surface lives on
 /// the product-local `/_soland/self/realms/{realm_id}/applications` URL under the
 /// reverse-domain `org.arkret.soland.*` namespace and is fail-closed (404) unless
 /// the deployment declares `ak.profile.candidate.join_policy.v1`. Each reviewer

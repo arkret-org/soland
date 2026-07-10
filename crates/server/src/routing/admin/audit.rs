@@ -216,7 +216,7 @@ async fn audit_erasure_receipts(
 /// `POST /_soland/admin/audit/user-action` accepts a batched user-action audit
 /// envelope shape (`actor`, `action`, `outcome`, `note?`, `recorded_at`)
 /// — the same shape that sodmin emits internally and that inkson posts
-/// via `CokretApi::post_audit_user_action`.
+/// via `ArkretApi::post_audit_user_action`.
 ///
 /// The endpoint is authenticated; the posted `actor` MUST match the
 /// session actor (no cross-actor writes). The audit entry is appended

@@ -217,7 +217,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn id_format_is_ck_kind_uuid() {
+    fn id_format_is_ak_kind_uuid() {
         let id = generate_space_id();
         assert!(id.starts_with("ak:space:"));
         let uuid_part = &id["ak:space:".len()..];

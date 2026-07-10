@@ -342,7 +342,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let initial_rules = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     assert!(
         account_data_entry(&initial_rules, "ak.push_rules").is_none(),
-        "initial account_data must not include ck.push_rules: {initial_rules}"
+        "initial account_data must not include ak.push_rules: {initial_rules}"
     );
 
     let plaintext_push_rule = submit_actor_private_event(
@@ -723,7 +723,7 @@ async fn typing_submit_wakes_account_subscribe_stream() {
     assert_eq!(notification.realm_id, DEMO_REALM_ID);
     match notification.kind {
         EventNotificationKind::Ephemeral { kind } => assert_eq!(kind, "ak.typing"),
-        other => panic!("expected ck.typing ephemeral wakeup, got {other:?}"),
+        other => panic!("expected ak.typing ephemeral wakeup, got {other:?}"),
     }
 }
 

@@ -433,9 +433,9 @@ fn strand_position_events_queue_unknown_strand() {
     assert!(state.strands[strand_id].updated_at.is_some());
 }
 
-// ── ck.redaction -> Strand / Morph terminal-state push ──
+// ── ak.redaction -> Strand / Morph terminal-state push ──
 
-/// `ck.redaction` carrying `object_ref: ak:strand:...` flips the
+/// `ak.redaction` carrying `object_ref: ak:strand:...` flips the
 /// StrandProjection state to Redacted (terminal) per spec
 /// common-fields.md §5.1.
 #[test]
@@ -535,7 +535,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
     assert_eq!(state.morphs[morph_id].state, ObjectLifecycleState::Redacted);
 }
 
-/// Preflight rejects `ck.redaction` against an already-terminal
+/// Preflight rejects `ak.redaction` against an already-terminal
 /// Strand with `strand_already_terminal`. Mirror for Morph also covered.
 #[test]
 fn redaction_preflight_rejects_against_already_terminal() {

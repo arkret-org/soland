@@ -2,7 +2,7 @@
 //! `governance/join-policy.md` §7). The `member.application` /
 //! `member.application.review` / `member.application.cancel` records are
 //! candidate profile-private payloads (§1, §7.2, §7.3): they are NOT
-//! standalone `ck.*` Event kinds and MUST NOT be written to shared Realm
+//! standalone `ak.*` Event kinds and MUST NOT be written to shared Realm
 //! history under a bare name. soland carries them as profile-private
 //! sub-objects on the active `ak.member.state` event:
 //!
