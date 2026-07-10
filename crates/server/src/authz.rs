@@ -724,7 +724,7 @@ fn validate_capability_action_shape(
         return Err(wildcard_reason);
     }
     let mut segments = action.split('.');
-    if segments.next() != Some("ak.) {
+    if segments.next() != Some("ak") {
         return Err(invalid_reason);
     }
     let mut saw_segment = false;
