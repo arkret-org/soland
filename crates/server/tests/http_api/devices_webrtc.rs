@@ -950,11 +950,11 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     assert_eq!(claims["video"]["recorder"], false);
     assert_eq!(claims["video"]["hidden"], false);
     let room = claims["video"]["room"].as_str().unwrap();
-    assert!(room.starts_with("ak.call_"));
+    assert!(room.starts_with("ak_call_"));
     assert!(!room.contains(&session_id));
     let room_material = format!("{DEMO_REALM_ID}\0{session_id}\0ak:focus:livekit:green");
     let expected_room = format!(
-        "ak.call_{}",
+        "ak_call_{}",
         &hex::encode(Sha256::digest(room_material.as_bytes()))[..16]
     );
     assert_eq!(room, expected_room);

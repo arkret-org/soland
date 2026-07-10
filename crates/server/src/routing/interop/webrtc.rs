@@ -372,7 +372,7 @@ fn pairwise_turn_username(
     let pseudonym_bytes = arkret_sdk::canonical::canonical_json_bytes(&pseudonym_input)
         .unwrap_or_else(|_| pseudonym_input.to_string().into_bytes());
     let tag = hmac_sha256(&secret, &pseudonym_bytes);
-    format!("ak.pseudonym_call_{}", hex::encode(&tag[..8]))
+    format!("ak_pseudonym_call_{}", hex::encode(&tag[..8]))
 }
 
 /// `webrtc-signaling.md` §4.1 — REST-style (draft-uberti) TURN credential:
@@ -1350,7 +1350,7 @@ fn issue_livekit_backend_token(
         "{}\0{}\0{}",
         request.realm_id, request.call_id, request.focus.focus_id
     );
-    let room = format!("ak.call_{}", &sha256_hex(room_material.as_bytes())[..16]);
+    let room = format!("ak_call_{}", &sha256_hex(room_material.as_bytes())[..16]);
     // LiveKit JWT registered claims (`iat`/`nbf`/`exp`) are NumericDate —
     // seconds since the Unix epoch — not RFC3339 strings.
     let iat = request.issued_at.timestamp();

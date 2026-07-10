@@ -118,7 +118,11 @@ pub(super) async fn enqueue_peer_event_fanout(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) {
-    let peers = dynamic_peer_event_targets(state, parsed);
+    // Directed invite-create events carry their recipient service in the
+    // operation payload rather than in the member projection. Pass the
+    // original envelope through so the fanout target can be resolved before
+    // the invitee has joined (federation.md section 5.1).
+    let peers = dynamic_peer_event_targets(state, parsed, envelope);
     if peers.is_empty() {
         return;
     }
@@ -222,6 +226,7 @@ struct DynamicPeerEventTarget {
 fn dynamic_peer_event_targets(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
 ) -> Vec<DynamicPeerEventTarget> {
     let service_frontiers = {
         let projection = state.projection.lock();
@@ -274,6 +279,28 @@ fn dynamic_peer_event_targets(
             {
                 entry.1.insert(frontier.to_owned());
             }
+        }
+
+        // A directed `ak.invite.create` is routable even before the invitee's
+        // member projection exists locally. Its canonical delivery target is
+        // carried in the event payload, so include that peer as a fanout
+        // target with the operation id as the fallback frontier. This keeps
+        // the service-binding precondition typed while allowing the recipient
+        // Principal Server to project the pending invite.
+        if parsed.kind == "ak.invite.create"
+            && let Some(service_did) = envelope
+                .get("payload")
+                .and_then(Value::as_object)
+                .and_then(|payload| payload.get("invite_delivery_target"))
+                .and_then(Value::as_object)
+                .and_then(|target| target.get("recipient_service_did"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|did| !did.is_empty())
+            && service_did != state.config.service_did
+            && !revoked_peers.contains(service_did)
+        {
+            service_frontiers.entry(service_did.to_owned()).or_default();
         }
         service_frontiers
     };

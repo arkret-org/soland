@@ -140,13 +140,19 @@ fn project_invite_accept_membership(
         .map(|_| "routable".to_owned())
         .or_else(|| Some("unroutable".to_owned()));
     let membership_event_ref = Some(operation.operation_id.as_str().to_owned());
-    let delivery_binding_frontier = recipient_service_did
-        .as_ref()
-        .and(membership_event_ref.clone());
-
     let mut projection = state.projection.lock();
     let key = (realm_id.to_owned(), member.to_owned());
     let previous = projection.members.get(&key).cloned();
+    // A directed invite establishes the service binding before acceptance.
+    // Preserve that frontier on the join transition so the origin server's
+    // subsequent event fanout remains current; only fall back to the accept
+    // event when no prior routable invite binding exists.
+    let delivery_binding_frontier = recipient_service_did.as_ref().and_then(|_| {
+        previous
+            .as_ref()
+            .and_then(|member| member.delivery_binding_frontier.clone())
+            .or_else(|| membership_event_ref.clone())
+    });
     let joined_at = previous
         .as_ref()
         .filter(|membership| membership.state == "join")
@@ -579,8 +585,20 @@ pub(super) async fn project_invite_create_operation(
         created_at: operation.created_at,
         updated_at: None,
     };
+    let delivery_target = record.invite_delivery_target.clone();
     match invites.put(record).await {
         Ok(()) => {
+            // A directed invite establishes the recipient's delivery binding
+            // before the invitee accepts. Keep the member projection in
+            // `routable` state so subsequent Realm events can fan out to the
+            // target service (federation.md §5.1); the membership state remains
+            // `invite` until the invite-accept event is projected.
+            project_invited_delivery_binding(
+                state,
+                operation,
+                invitee.as_str(),
+                delivery_target.as_ref(),
+            );
             tracing::info!(
                 invite_id = %invite_id,
                 invitee = %invitee.as_str(),
@@ -591,6 +609,58 @@ pub(super) async fn project_invite_create_operation(
         }
         Err(error) => tracing::warn!(%error, invite_id = %invite_id, "failed to project invite"),
     }
+}
+
+fn project_invited_delivery_binding(
+    state: &AppState,
+    operation: &Operation,
+    invitee: &str,
+    delivery_target: Option<&Value>,
+) {
+    let Some(recipient_service_did) = delivery_target
+        .and_then(|target| target.get("recipient_service_did"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|did| !did.is_empty())
+    else {
+        return;
+    };
+    let mut projection = state.projection.lock();
+    let key = (operation.realm_id.as_str().to_owned(), invitee.to_owned());
+    let previous = projection.members.get(&key).cloned();
+    let joined_at = previous
+        .as_ref()
+        .filter(|member| member.state == "join")
+        .map(|member| member.joined_at)
+        .unwrap_or(operation.created_at);
+    let membership_state = previous
+        .as_ref()
+        .map(|member| member.state.clone())
+        .unwrap_or_else(|| "invite".to_owned());
+    let role = previous
+        .as_ref()
+        .map(|member| member.role.clone())
+        .unwrap_or_else(|| "member".to_owned());
+    let invited_at = previous
+        .as_ref()
+        .and_then(|member| member.invited_at)
+        .or(Some(operation.created_at));
+    projection.members.insert(
+        key,
+        SolandMembershipState {
+            member: invitee.to_owned(),
+            realm_id: operation.realm_id.as_str().to_owned(),
+            state: membership_state,
+            role,
+            delivery_status: Some("routable".to_owned()),
+            recipient_service_did: Some(recipient_service_did.to_owned()),
+            membership_event_ref: Some(operation.operation_id.as_str().to_owned()),
+            delivery_binding_frontier: Some(operation.operation_id.as_str().to_owned()),
+            invited_at,
+            joined_at,
+            updated_at: operation.created_at,
+        },
+    );
 }
 
 fn invite_id_for_operation(operation: &Operation) -> Option<String> {
