@@ -110,6 +110,8 @@ CREATE TABLE public.agent_principals (
     runtime_key_request jsonb,
     approval_requested_at timestamp with time zone,
     authorized_event_ref text,
+    authorized_verification_method text,
+    authorized_public_key_digest text,
     state_changed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,

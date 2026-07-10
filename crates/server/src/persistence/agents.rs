@@ -426,6 +426,10 @@ struct AgentPrincipalRow {
     approval_requested_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Nullable<Text>)]
     authorized_event_ref: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    authorized_verification_method: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    authorized_public_key_digest: Option<String>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -454,6 +458,8 @@ impl From<AgentPrincipalRow> for Value {
             "approval_requested_at": row.approval_requested_at
                 .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
             "authorized_event_ref": row.authorized_event_ref,
+            "authorized_verification_method": row.authorized_verification_method,
+            "authorized_public_key_digest": row.authorized_public_key_digest,
             "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "updated_at": row.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         })
@@ -550,13 +556,22 @@ impl AgentStore for PgAgentStore {
             .get("authorized_event_ref")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        let authorized_verification_method = record
+            .get("authorized_verification_method")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let authorized_public_key_digest = record
+            .get("authorized_public_key_digest")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
         sql_query(
             "INSERT INTO agent_principals \
              (id, controller_id, agent_id, display_name, agent_slug, state, requested_scope, \
               accountability, self_realm_id, provision_event_refs, pairing_request_id, \
               pairing_code, pairing_expires_at, approval_request_id, runtime_key_request, \
-              approval_requested_at, authorized_event_ref, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW()) \
+              approval_requested_at, authorized_event_ref, authorized_verification_method, \
+              authorized_public_key_digest, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW(), NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
              controller_id = EXCLUDED.controller_id, agent_id = EXCLUDED.agent_id, \
              display_name = EXCLUDED.display_name, agent_slug = EXCLUDED.agent_slug, \
@@ -568,7 +583,9 @@ impl AgentStore for PgAgentStore {
              approval_request_id = EXCLUDED.approval_request_id, \
              runtime_key_request = EXCLUDED.runtime_key_request, \
              approval_requested_at = EXCLUDED.approval_requested_at, \
-             authorized_event_ref = EXCLUDED.authorized_event_ref, updated_at = NOW()",
+             authorized_event_ref = EXCLUDED.authorized_event_ref, \
+             authorized_verification_method = EXCLUDED.authorized_verification_method, \
+             authorized_public_key_digest = EXCLUDED.authorized_public_key_digest, updated_at = NOW()",
         )
         .bind::<Text, _>(&agent_principal_id)
         .bind::<Text, _>(&controller_did)
@@ -587,6 +604,8 @@ impl AgentStore for PgAgentStore {
         .bind::<Nullable<Jsonb>, _>(&runtime_key_request)
         .bind::<Nullable<Timestamptz>, _>(&approval_requested_at)
         .bind::<Nullable<Text>, _>(&authorized_event_ref)
+        .bind::<Nullable<Text>, _>(&authorized_verification_method)
+        .bind::<Nullable<Text>, _>(&authorized_public_key_digest)
         .execute(&mut *conn)
         .await
         .map(|_| ())
@@ -600,6 +619,7 @@ impl AgentStore for PgAgentStore {
              requested_scope, accountability, self_realm_id, provision_event_refs, \
              pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
              runtime_key_request, approval_requested_at, authorized_event_ref, \
+             authorized_verification_method, authorized_public_key_digest, \
              created_at, updated_at FROM agent_principals WHERE id = $1",
         )
         .bind::<Text, _>(agent_principal_id)
@@ -620,6 +640,7 @@ impl AgentStore for PgAgentStore {
              requested_scope, accountability, self_realm_id, provision_event_refs, \
              pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
              runtime_key_request, approval_requested_at, authorized_event_ref, \
+             authorized_verification_method, authorized_public_key_digest, \
              created_at, updated_at FROM agent_principals WHERE pairing_request_id = $1",
         )
         .bind::<Text, _>(pairing_request_id)
@@ -637,6 +658,7 @@ impl AgentStore for PgAgentStore {
              requested_scope, accountability, self_realm_id, provision_event_refs, \
              pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
              runtime_key_request, approval_requested_at, authorized_event_ref, \
+             authorized_verification_method, authorized_public_key_digest, \
              created_at, updated_at FROM agent_principals WHERE controller_id = $1 \
              ORDER BY created_at",
         )

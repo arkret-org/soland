@@ -164,6 +164,104 @@ pub(super) async fn submit_agent_runtime_key_request(
     })
 }
 
+#[endpoint(
+    operation_id = "ak.open.agent_pairing.query.runtime_key_request_status",
+    tags("open"),
+    summary = "Poll the controller decision for a submitted runtime key request"
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.open.agent_pairing.query.runtime_key_request_status")
+)]
+pub(super) async fn agent_runtime_key_request_status(
+    body: JsonBody<AgentRuntimeApprovalStatusRequestBody>,
+    depot: &mut Depot,
+) -> JsonResult<AgentRuntimeApprovalStatusOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let body = body.into_inner();
+    let agent_record = state
+        .persistence
+        .agents()
+        .get_by_pairing_request_id(&body.pairing_request_id)
+        .await
+        .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
+        .ok_or_else(agent_pairing_not_found)?;
+    json_ok(agent_runtime_key_request_status_outcome(
+        &agent_record,
+        &body,
+        chrono::Utc::now(),
+    )?)
+}
+
+/// Pure decision core for the open runtime-key-request status poll.
+///
+/// Anti-enumeration: a record miss and a `pairing_code` /
+/// `agent_principal_id` mismatch are indistinguishable — every mismatch maps
+/// to the same not_found as an unknown `pairing_request_id`. An open pairing
+/// whose `pairing_expires_at` has passed is reported as `pairing_expired`
+/// without waiting for the lazy-expiry write.
+pub(super) fn agent_runtime_key_request_status_outcome(
+    agent_record: &Value,
+    body: &AgentRuntimeApprovalStatusRequestBody,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<AgentRuntimeApprovalStatusOutcome, AppError> {
+    let pairing_code = body.pairing_code.trim();
+    if pairing_code.is_empty() {
+        return Err(agent_pairing_not_found());
+    }
+    if agent_record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code) {
+        return Err(agent_pairing_not_found());
+    }
+    if agent_record
+        .get("agent_principal_id")
+        .and_then(Value::as_str)
+        != Some(body.agent_principal_id.as_str())
+    {
+        return Err(agent_pairing_not_found());
+    }
+    let status = match agent_record.get("state").and_then(Value::as_str) {
+        Some("pending_runtime_key") => {
+            let expired = pairing_record_timestamp(agent_record, "pairing_expires_at")
+                .map(|expires_at| expires_at <= now)
+                .unwrap_or(true);
+            if expired {
+                AgentStatus::PairingExpired
+            } else {
+                AgentStatus::PendingRuntimeKey
+            }
+        }
+        Some("active") => AgentStatus::Active,
+        Some("paused") => AgentStatus::Paused,
+        Some("deactivated") => AgentStatus::Deactivated,
+        Some("pairing_expired") => AgentStatus::PairingExpired,
+        _ => return Err(agent_pairing_not_found()),
+    };
+    let record_string = |key: &str| {
+        agent_record
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+    };
+    let approval_request_id = if status == AgentStatus::PendingRuntimeKey {
+        record_string("approval_request_id")
+    } else {
+        None
+    };
+    let authorized_event_ref = record_string("authorized_event_ref")
+        .map(EventId::new)
+        .transpose()
+        .map_err(|err| AppError::internal(format!("authorized event ref invalid: {err}")))?;
+    Ok(AgentRuntimeApprovalStatusOutcome {
+        ok: true,
+        status,
+        approval_request_id,
+        authorized_event_ref,
+        authorized_verification_method: record_string("authorized_verification_method"),
+        authorized_public_key_digest: record_string("authorized_public_key_digest"),
+    })
+}
+
 /// AKP-0008 (dev option B) — synthesize a controller-authored
 /// `SessionRecord` so the server-side fan-out can author durable sub-events
 /// as the controller (`actor_id == session.actor`). Only used under
@@ -260,6 +358,18 @@ pub(super) async fn agent_key_pair(
         object.insert(
             "authorized_event_ref".to_owned(),
             json!(authorized_event_ref.as_str()),
+        );
+        // Retained so the open runtime-key-request status poll can hand the
+        // runtime the exact key binding the controller approved; a polling
+        // runtime whose key digest differs must treat the pairing as taken
+        // by another runtime.
+        object.insert(
+            "authorized_verification_method".to_owned(),
+            json!(body.verification_method),
+        );
+        object.insert(
+            "authorized_public_key_digest".to_owned(),
+            json!(runtime_public_key_digest),
         );
         object.remove("approval_request_id");
         object.remove("runtime_key_request");

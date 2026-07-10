@@ -166,6 +166,13 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ak.open.agent_pairing.command.submit_runtime_key_request",
         "submit agent runtime key request for controller approval",
     ),
+    (
+        "/_arkret/open/agent-pairing/runtime-key-requests/status",
+        PathItemType::Post,
+        "open",
+        "ak.open.agent_pairing.query.runtime_key_request_status",
+        "poll controller decision for a submitted runtime key request",
+    ),
     // Circle admin surface (`ak.self.circle.*`) was promoted to the protocol
     // surface at `/_arkret/self/circles*`; its operation ids are now emitted by
     // the typed `#[endpoint]` handlers in `circles.rs`, so they no longer appear

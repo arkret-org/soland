@@ -39,7 +39,8 @@ use arkret_sdk::models::{
     AgentProjection, AgentProtocolDiscoverOutcome, AgentProtocolDiscoverRequestBody,
     AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
     AgentRotateKeyOutcome, AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome,
-    AgentRuntimeApprovalRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
+    AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
+    AgentRuntimeApprovalStatusRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
     AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView,
     PublicKey, effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
@@ -122,6 +123,9 @@ pub(crate) fn open_router() -> Router {
     Router::with_path("agent-pairing")
         .push(Router::with_path("resolve").post(resolve_agent_pairing))
         .push(Router::with_path("runtime-key-requests").post(submit_agent_runtime_key_request))
+        .push(
+            Router::with_path("runtime-key-requests/status").post(agent_runtime_key_request_status),
+        )
 }
 
 #[cfg(test)]
@@ -561,6 +565,142 @@ mod tests {
             key_state["approval_requested_at"],
             "2026-07-08T00:00:00.000Z"
         );
+    }
+
+    fn status_request_body(
+        pairing_code: &str,
+        agent_principal_id: &str,
+    ) -> AgentRuntimeApprovalStatusRequestBody {
+        AgentRuntimeApprovalStatusRequestBody {
+            pairing_request_id: "agent_pairing_request:01999999-0000-7000-8000-00000000feed"
+                .to_owned(),
+            pairing_code: pairing_code.to_owned(),
+            agent_principal_id: Did::new(agent_principal_id.to_owned()).unwrap(),
+        }
+    }
+
+    fn status_now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-07-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn runtime_approval_status_reports_pending_request() {
+        let mut record = pending_pairing_record(
+            "did:web:agent.example",
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+        record["approval_request_id"] = json!("agent_runtime_approval:01999999");
+
+        let outcome = agent_runtime_key_request_status_outcome(
+            &record,
+            &status_request_body("12345678", "did:web:agent.example"),
+            status_now(),
+        )
+        .expect("pending status must resolve");
+
+        assert_eq!(outcome.status, AgentStatus::PendingRuntimeKey);
+        assert_eq!(
+            outcome.approval_request_id.as_deref(),
+            Some("agent_runtime_approval:01999999")
+        );
+        assert!(outcome.authorized_event_ref.is_none());
+        assert!(outcome.authorized_public_key_digest.is_none());
+    }
+
+    #[test]
+    fn runtime_approval_status_reports_authorized_key_binding_after_approval() {
+        let mut record = pending_pairing_record(
+            "did:web:agent.example",
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+        record["state"] = json!("active");
+        record["authorized_event_ref"] = json!("ak:event:01999999-0000-7000-8000-000000000001");
+        record["authorized_verification_method"] = json!("did:web:agent.example#runtime-1");
+        record["authorized_public_key_digest"] =
+            json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+        let outcome = agent_runtime_key_request_status_outcome(
+            &record,
+            &status_request_body("12345678", "did:web:agent.example"),
+            status_now(),
+        )
+        .expect("approved status must resolve");
+
+        assert_eq!(outcome.status, AgentStatus::Active);
+        assert!(outcome.approval_request_id.is_none());
+        assert_eq!(
+            outcome.authorized_event_ref.as_ref().map(|id| id.as_str()),
+            Some("ak:event:01999999-0000-7000-8000-000000000001")
+        );
+        assert_eq!(
+            outcome.authorized_verification_method.as_deref(),
+            Some("did:web:agent.example#runtime-1")
+        );
+        assert_eq!(
+            outcome.authorized_public_key_digest.as_deref(),
+            Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+    }
+
+    #[test]
+    fn runtime_approval_status_lazily_reports_expired_open_pairing() {
+        let mut record = pending_pairing_record(
+            "did:web:agent.example",
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2026-07-09T00:00:00Z",
+        );
+        record["approval_request_id"] = json!("agent_runtime_approval:01999999");
+
+        let outcome = agent_runtime_key_request_status_outcome(
+            &record,
+            &status_request_body("12345678", "did:web:agent.example"),
+            status_now(),
+        )
+        .expect("expired status must resolve");
+
+        assert_eq!(outcome.status, AgentStatus::PairingExpired);
+        assert!(outcome.approval_request_id.is_none());
+        assert!(outcome.authorized_event_ref.is_none());
+    }
+
+    #[test]
+    fn runtime_approval_status_mismatch_is_indistinguishable_from_missing_record() {
+        let record = pending_pairing_record(
+            "did:web:agent.example",
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+        let missing = agent_pairing_not_found();
+
+        let wrong_code = agent_runtime_key_request_status_outcome(
+            &record,
+            &status_request_body("00000000", "did:web:agent.example"),
+            status_now(),
+        )
+        .expect_err("wrong pairing code must fail closed");
+        let wrong_principal = agent_runtime_key_request_status_outcome(
+            &record,
+            &status_request_body("12345678", "did:web:intruder.example"),
+            status_now(),
+        )
+        .expect_err("wrong principal must fail closed");
+
+        assert_eq!(wrong_code.wire_code(), missing.wire_code());
+        assert_eq!(wrong_principal.wire_code(), missing.wire_code());
+        assert_eq!(wrong_code.to_string(), missing.to_string());
+        assert_eq!(wrong_principal.to_string(), missing.to_string());
     }
 
     #[test]
