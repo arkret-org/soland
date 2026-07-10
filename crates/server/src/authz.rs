@@ -339,6 +339,26 @@ impl SolandAuthzEngine {
             .collect()
     }
 
+    /// Get all effective grants held by `subject` across every realm.
+    /// Same filtering as [`Self::grants_for_subject`] minus the realm pin —
+    /// read model for the controller-facing agent settings surface
+    /// (`GET /_arkret/self/agents/{id}` `agent_view.grants[]`).
+    pub fn grants_for_subject_all_realms(&self, subject: &str) -> Vec<Grant> {
+        let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
+        let now = chrono::Utc::now();
+        snapshot
+            .iter()
+            .filter(|g| {
+                g.subject == subject
+                    && grant_scope_valid(g).is_ok()
+                    && !g.revoked
+                    && !is_grant_expired(g, now)
+                    && delegation_chain_intact(&snapshot, &g.grant_id, now)
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Get all valid, non-revoked, non-expired, chain-intact grants in a space.
     pub fn grants_in_realm(&self, realm_id: &str) -> Vec<Grant> {
         let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();

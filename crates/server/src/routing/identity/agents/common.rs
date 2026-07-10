@@ -153,8 +153,9 @@ pub(super) fn agent_projection_from_record(record: &Value) -> AgentProjection {
 
 /// Build the spec `agent_view` (`agent-operations.schema.json#/$defs/agent_view`)
 /// from a persisted record: `{agent: <agent_projection>, status, grants[], key_state}`.
-/// The `agent`/`status` pair is required; `grants`/`key_state` default empty until
-/// the per-agent grant + key projections are wired.
+/// The `agent`/`status` pair is required. `grants` defaults empty here — the
+/// `get_agent` read path overlays it from the authz projection
+/// (`grants_for_subject_all_realms`) so the controller UI sees live grants.
 pub(super) fn agent_view_from_record(record: &Value) -> AgentView {
     let status = record
         .get("state")

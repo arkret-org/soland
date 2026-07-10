@@ -286,7 +286,17 @@ pub(super) async fn get_agent(
         return Err(AppError::not_found("agent not found"));
     }
     let record = lazily_expire_pairing(state, &session, record).await;
-    json_ok(agent_view_from_record(&record))
+    let mut view = agent_view_from_record(&record);
+    // Surface the agent's effective capability grants from the authz
+    // projection so the controller UI can list and revoke them; the
+    // persisted record itself never carries grants.
+    view.grants = state
+        .authz
+        .grants_for_subject_all_realms(&agent_id)
+        .into_iter()
+        .filter_map(|grant| serde_json::to_value(grant).ok())
+        .collect();
+    json_ok(view)
 }
 
 /// AKP-0008 §4.3.2 — lazily expire a `pending_runtime_key` agent whose
