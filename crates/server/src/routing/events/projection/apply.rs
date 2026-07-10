@@ -716,19 +716,11 @@ async fn project_accepted_operations_inner(
             tracing::warn!(%error, "failed to persist agent participation ceiling");
         }
         let projected = projection_event_from_operation(operation, Some(origin));
-        // Broadcast every accepted projection
-        // event to live subscribers on ak.events.subscribe. Subscribers
-        // filter by `realm_id`. `send` returns Err only if there are no
-        // active receivers — that's not an error path, it's the steady
-        // state when no one's subscribed.
-        let _ = state
-            .event_broadcast
-            .send(crate::state::EventNotification::event(
-                projected.realm_id.clone(),
-                projected.event_id.clone(),
-                projection_event_json(&projected),
-            ));
-        append_projection_event(state, projected).await;
+        // Persist before broadcast so subscribers never observe an event that
+        // cannot participate in cursor replay.
+        if let Err(error) = persist_and_publish_projection_event(state, projected).await {
+            tracing::warn!(%error, "failed to persist projection event before publish");
+        }
         if let Err(error) = persist_projected_operation(state, origin, operation).await {
             tracing::warn!(
                 error = %error,

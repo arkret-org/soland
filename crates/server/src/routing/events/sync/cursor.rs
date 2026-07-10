@@ -922,38 +922,6 @@ fn cursor_authority_revoked(
     })
 }
 
-/// Spec B1.5 — when an implementation would emit a `Dropped` frame but
-/// cannot supply a resume cursor, the wire-breaking rule downgrades to
-/// `ResyncRequired`. Callers use [`dropped_or_resync`] to construct the
-/// correct flat frame from an optional cursor.
-///
-/// Note: the cursor type expected by `EventsSubscribeFrame::cursor`
-/// is the typed-id `arkret_identifiers::Cursor` (`ak:cursor:<base64url>`),
-/// NOT the `arkret_sdk::Cursor` struct produced by `cursor::Cursor::new()`.
-/// The typed-id is exposed as `arkret_sdk::identifiers::Cursor`.
-pub fn dropped_or_resync(
-    cursor: Option<arkret_sdk::identifiers::Cursor>,
-    _reason: impl Into<String>,
-    reconnect_after_ms: Option<u64>,
-) -> arkret_sdk::EventsSubscribeFrame {
-    match cursor {
-        Some(cursor) => arkret_sdk::EventsSubscribeFrame {
-            kind: arkret_sdk::EventsSubscribeFrameKind::Dropped,
-            realm_id: None,
-            cursor: Some(cursor),
-            payload: serde_json::Value::Null,
-            reconnect_after_ms,
-        },
-        None => arkret_sdk::EventsSubscribeFrame {
-            kind: arkret_sdk::EventsSubscribeFrameKind::ResyncRequired,
-            realm_id: None,
-            cursor: None,
-            payload: serde_json::Value::Null,
-            reconnect_after_ms,
-        },
-    }
-}
-
 /// Spec T03 — minimum length of a base64url cursor handle to supply
 /// ≥128-bit entropy. Spec tightened `h.minLength` from 16 → 22.
 pub const CURSOR_HANDLE_MIN_LENGTH: usize = 22;
@@ -983,19 +951,6 @@ pub fn validate_cursor_handle(handle: &str) -> Result<(), (crate::error::ErrorCo
 #[cfg(test)]
 mod cursor_frame_tests {
     use super::*;
-
-    #[test]
-    fn dropped_without_cursor_downgrades_to_resync() {
-        let body = dropped_or_resync(None, "broadcast_lag", Some(10_000));
-        assert_eq!(
-            body.kind,
-            arkret_sdk::EventsSubscribeFrameKind::ResyncRequired
-        );
-        let cursor = arkret_sdk::identifiers::Cursor::new("ak:cursor:resume").unwrap();
-        let body = dropped_or_resync(Some(cursor), "broadcast_lag", Some(10_000));
-        assert_eq!(body.kind, arkret_sdk::EventsSubscribeFrameKind::Dropped);
-        assert_eq!(body.reconnect_after_ms, Some(10_000));
-    }
 
     #[test]
     fn cursor_handle_minimum_length_enforced() {

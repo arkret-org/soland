@@ -458,12 +458,10 @@ pub(super) async fn emit_mimi_room_binding_event(
         created_at: chrono::Utc::now(),
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        record.realm_id.clone(),
-        record.event_id.clone(),
-        crate::routing::events::projection::projection_event_json(&record),
-    ));
-    if let Err(error) = state.persistence.projection_events().append(record).await {
+    if let Err(error) =
+        crate::routing::events::projection::persist_and_publish_projection_event(state, record)
+            .await
+    {
         tracing::error!(%error, "mimi: failed to append room_binding to projection_events");
     }
     Ok(Some(event_id))

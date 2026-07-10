@@ -293,7 +293,7 @@ pub(crate) async fn create_direct_binding_with_realm(
         "main_strand_create_ref": main_strand_create_ref,
         "created_at": active_binding.created_at.to_rfc3339(),
     });
-    crate::routing::events::projection::append_projection_event(
+    let _ = crate::routing::events::projection::append_projection_event(
         state,
         ProjectionEventRecord {
             event_id: reserved.binding_event_ref.clone(),

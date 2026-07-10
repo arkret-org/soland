@@ -610,10 +610,8 @@ diesel::table! {
 // Append-only projection event log. Mirror of the
 // in-memory `ProjectionEventRecord` stream stamped down via
 // `state.persistence.projection_events().append(...).await` from the
-// routing `project_accepted_operations` path. Surrogate `ordinal`
-// primary key (BIGSERIAL) so retries don't collide on event_id;
-// canonical_events table is where the (actor_id, actor_seq) uniqueness
-// invariant lives.
+// routing `project_accepted_operations` path. `event_id` is unique so an
+// idempotent retry cannot create a second stream position.
 diesel::table! {
     projection_events (id) {
         id -> BigInt,

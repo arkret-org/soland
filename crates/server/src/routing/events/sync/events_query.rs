@@ -5,6 +5,8 @@
 
 use super::*;
 
+const EVENTS_CATCHUP_LIMIT: usize = 100;
+
 /// `ak.self.events.stream.subscribe` at `GET /_arkret/self/events/subscribe`. NDJSON
 /// streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
@@ -15,10 +17,10 @@ use super::*;
 ///   1. Validate inputs (realms, accessibility).
 ///   2. Subscribe to the live event broadcast BEFORE serving history so no events are missed in the
 ///      history-vs-live window.
-///   3. Build an async stream that yields: a) historical event frames (if `include_history=true`,
-///      default true) b) one `catchup_complete` frame c) live event frames as broadcast
-///      notifications arrive d) periodic `heartbeat` frames every 30s of idle e) `dropped` frames
-///      when broadcast lag is detected
+///   3. Build an async stream that yields: a) bounded replay frames when `catchup=true` b) one
+///      `catchup_complete` frame only after replay emitted data c) live event frames as broadcast
+///      notifications arrive d) periodic `heartbeat` frames every 30s of idle e) a terminal
+///      `resync_required` frame when subscription-wide broadcast lag is detected
 ///   4. Stream terminates when:
 ///      - `max_duration_ms` query param elapsed (default 60_000 ms)
 ///      - client disconnects (drops the response stream)
@@ -71,15 +73,22 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
         return;
     }
-    let limit = query_param(req, "limit")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(100)
-        .min(100);
     let after_token = query_param(req, "after");
-    let include_history = query_param(req, "include_history")
-        .as_deref()
-        .map(|value| matches!(value, "true" | "1" | "yes"))
-        .unwrap_or(true);
+    let catchup = match query_param(req, "catchup") {
+        None => false,
+        Some(value) => match value.parse::<bool>() {
+            Ok(catchup) => catchup,
+            Err(_) => {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "catchup must be a boolean",
+                );
+                return;
+            }
+        },
+    };
     // Every cursor this stream hands out is an opaque `ak:cursor:` token (NOT a
     // raw `event_id`): the typed `EventsSubscribeFrame.cursor` is
     // `Option<identifiers::Cursor>`, which rejects anything without the
@@ -133,44 +142,13 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     // miss events that land between history-end and subscribe-start.
     let mut rx = state.event_broadcast.subscribe();
 
-    // Pre-build history frames synchronously (same logic as the old unary
-    // handler). The async stream yields these first, then transitions to
-    // live events.
-    let mut history_frames: Vec<serde_json::Value> = Vec::new();
-    let mut seq: u64 = 0;
-    // The raw `event_id` of the last history event served. The resume cursor is
-    // minted from it once, below — history event frames carry no per-event
-    // cursor (the typed frame's `cursor` is optional, and the single
-    // `catchup_complete` token is what the client resumes from), which also
-    // avoids one cursor-record upsert per history event.
-    let mut last_event_id: Option<String> = None;
-
-    if include_history {
-        for realm_id in &accessible_realms {
-            match projected_event_page(&state, realm_id, resume_event_id.as_deref(), limit).await {
-                Ok(Some(page)) => {
-                    for event in page.items {
-                        if !projection_record_visible_to_session(&state, &event, session.as_ref())
-                            .await
-                        {
-                            continue;
-                        }
-                        seq += 1;
-                        last_event_id = Some(event.event_id.clone());
-                        history_frames.push(json!({
-                            "kind": "event",
-                            "seq": seq,
-                            "payload": projection_event_json(&event)
-                        }));
-                    }
-                    if let Some(next) = page.next_cursor {
-                        last_event_id = Some(next);
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    if error.to_string().contains("invalid_cursor") && accessible_realms.len() == 1
-                    {
+    let realm_filter = accessible_realms.iter().cloned().collect::<BTreeSet<_>>();
+    let replay_upper_bound = if catchup {
+        match resume_event_id.as_deref() {
+            Some(cursor) => {
+                match projected_event_replay_upper_bound(&state, &realm_filter, cursor).await {
+                    Ok(upper_bound) => upper_bound,
+                    Err(error) if error.to_string().contains("invalid_cursor") => {
                         render_error(
                             res,
                             StatusCode::BAD_REQUEST,
@@ -179,31 +157,23 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                         );
                         return;
                     }
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to capture events catch-up upper bound");
+                        render_error(
+                            res,
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "temporarily_unavailable",
+                            "event replay is unavailable",
+                        );
+                        return;
+                    }
                 }
             }
+            None => None,
         }
-    }
-
-    let catchup_cursor = match last_event_id {
-        Some(event_id) => {
-            sync_token_for_events_query(&state, session.as_ref(), &filter_digest, &event_id).await
-        }
-        // No new history event to anchor the catchup cursor to. On a resume poll
-        // (`after=<cursor>`, `include_history=false`) the history loop is skipped
-        // entirely, so this branch is the steady state of an idle realm. We MUST
-        // echo back the client's already-validated, principal-bound `after`
-        // cursor here: minting a `sync_token_for_state` token instead stamps
-        // `principal_id = None`, and the client's next poll resubmitting it is
-        // rejected by `parse_and_validate_events_query_cursor` with
-        // `cursor_integrity_invalid` ("cursor principal does not match request
-        // actor") — an oscillating error on every idle poll. Only fall back to
-        // the service-state token on a fresh subscribe that carried no `after`.
-        None => match after_token.clone() {
-            Some(after) => after,
-            None => sync_token_for_state(&state).await,
-        },
+    } else {
+        None
     };
-    let realm_filter: BTreeSet<String> = accessible_realms.iter().cloned().collect();
     let stream_deadline = tokio::time::Instant::now() + Duration::from_millis(max_duration_ms);
     let session_for_stream = session.clone();
     let subscribe_scope_key_for_stream = subscribe_scope_key.clone();
@@ -211,18 +181,72 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
 
     // The async stream — yields one NDJSON line (Bytes) per frame.
     let body_stream = async_stream::stream! {
-        // 1. Historical frames.
-        for frame in &history_frames {
-            yield Ok::<Bytes, std::io::Error>(ndjson_line(frame));
-        }
-        let mut live_seq = seq;
+        let mut replayed_event_ids = BTreeSet::new();
+        let mut replay_cursor = None;
 
-        // 2. catchup_complete signals end of historical buffer.
-        let catchup = json!({
-            "kind": "catchup_complete",
-            "cursor": catchup_cursor,
-        });
-        yield Ok(ndjson_line(&catchup));
+        // 1. Replay incrementally through the upper bound captured after the
+        // live receiver was installed. Queued notifications for replayed ids
+        // are discarded below, creating one replay-to-live boundary.
+        if let (Some(page_cursor), Some(upper_bound)) =
+            (resume_event_id.clone(), replay_upper_bound.as_deref())
+        {
+            let page = projected_event_page_for_realms_through(
+                &state,
+                &realm_filter,
+                Some(&page_cursor),
+                Some(upper_bound),
+                EVENTS_CATCHUP_LIMIT,
+            )
+            .await;
+            let page = match page {
+                Ok(Some(page)) => page,
+                Ok(None) => return,
+                Err(error) => {
+                    tracing::warn!(%error, "events catch-up replay failed after stream start");
+                    let frame = json!({"kind": "resync_required"});
+                    yield Ok::<Bytes, std::io::Error>(ndjson_line(&frame));
+                    return;
+                }
+            };
+            let has_more = page.has_more;
+            for event in page.items {
+                if !projection_record_visible_to_session(&state, &event, session_for_stream.as_ref()).await {
+                    continue;
+                }
+                replayed_event_ids.insert(event.event_id.clone());
+                let cursor = sync_token_for_events_query(
+                    &state,
+                    session_for_stream.as_ref(),
+                    &filter_digest_for_stream,
+                    &event.event_id,
+                )
+                .await;
+                replay_cursor = Some(cursor.clone());
+                let frame = json!({
+                    "kind": "event",
+                    "realm_id": event.realm_id.clone(),
+                    "cursor": cursor,
+                    "payload": projection_event_json(&event),
+                });
+                yield Ok(ndjson_line(&frame));
+            }
+            if has_more {
+                let frame = json!({"kind": "resync_required"});
+                yield Ok(ndjson_line(&frame));
+                return;
+            }
+        }
+
+        // 2. Completion is legal only when catch-up actually emitted replay data.
+        if let Some(cursor) = replay_cursor.as_ref() {
+            let catchup_complete = json!({
+                "kind": "catchup_complete",
+                "cursor": cursor,
+            });
+            yield Ok(ndjson_line(&catchup_complete));
+        }
+
+        let mut active_realms = realm_filter.clone();
 
         // 3. Live loop: tokio::select on broadcast recv + heartbeat tick + deadline.
         let mut heartbeat = tokio::time::interval(Duration::from_millis(heartbeat_ms));
@@ -233,26 +257,26 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                 biased;
                 _ = tokio::time::sleep_until(stream_deadline) => {
                     // Final heartbeat then close.
-                    let close_frame = json!({
-                        "kind": "heartbeat",
-                        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                        "stream_closing": true,
-                    });
+                    let close_frame = json!({"kind": "heartbeat"});
                     yield Ok(ndjson_line(&close_frame));
                     break;
                 }
                 recv = rx.recv() => {
                     match recv {
                         Ok(notification) => {
-                            if !realm_filter.contains(&notification.realm_id) {
+                            if !active_realms.contains(&notification.realm_id) {
                                 continue;
                             }
+                            let realm_id = notification.realm_id.clone();
                             // Dispatch on notification.kind to
                             // produce the right NDJSON frame shape.
                             use crate::state::EventNotificationKind;
                             let mut terminal = false;
                             let frame = match notification.kind {
                                 EventNotificationKind::Event { cursor, event_payload } => {
+                                    if replayed_event_ids.contains(&cursor) {
+                                        continue;
+                                    }
                                     if !projection_event_value_visible_to_session(
                                         &state,
                                         &event_payload,
@@ -260,7 +284,6 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                     ).await {
                                         continue;
                                     }
-                                    live_seq += 1;
                                     // The broadcast carries the raw `event_id`;
                                     // mint the opaque `ak:cursor:` resume token
                                     // the typed frame requires.
@@ -272,7 +295,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                     ).await;
                                     json!({
                                         "kind": "event",
-                                        "seq": live_seq,
+                                        "realm_id": realm_id,
                                         "cursor": live_cursor,
                                         "payload": event_payload,
                                     })
@@ -280,42 +303,28 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 EventNotificationKind::EpochRotation { previous_epoch, new_epoch } => {
                                     json!({
                                         "kind": "epoch_rotation",
-                                        "realm_id": notification.realm_id,
-                                        "previous_epoch": previous_epoch,
-                                        "new_epoch": new_epoch,
+                                        "realm_id": realm_id,
+                                        "payload": {
+                                            "previous_epoch": previous_epoch,
+                                            "new_epoch": new_epoch,
+                                        },
                                     })
                                 }
-                                EventNotificationKind::Frontier { state_root, seal_id } => {
-                                    json!({
-                                        "kind": "frontier",
-                                        "realm_id": notification.realm_id,
-                                        "state_root": state_root,
-                                        "seal_id": seal_id,
-                                    })
-                                }
-                                EventNotificationKind::ResyncRequired { reason, reconnect_after_ms } => {
-                                    let reconnect_after_ms =
-                                        reconnect_after_ms
-                                            .filter(|value| *value > 0)
-                                            .unwrap_or(SUBSCRIBE_RECONNECT_AFTER_MS);
-                                    arm_subscribe_reconnect(
-                                        &state,
-                                        &subscribe_scope_key_for_stream,
-                                        reconnect_after_ms,
-                                    );
-                                    terminal = true;
+                                EventNotificationKind::Frontier { .. } => continue,
+                                EventNotificationKind::ResyncRequired { .. } => {
+                                    active_realms.remove(&realm_id);
+                                    terminal = active_realms.is_empty();
                                     json!({
                                         "kind": "resync_required",
-                                        "realm_id": notification.realm_id,
-                                        "reason": reason,
-                                        "reconnect_after_ms": reconnect_after_ms,
+                                        "realm_id": realm_id,
                                     })
                                 }
-                                EventNotificationKind::Unauthorized { reason } => {
+                                EventNotificationKind::Unauthorized { reason: _ } => {
+                                    active_realms.remove(&realm_id);
+                                    terminal = active_realms.is_empty();
                                     json!({
                                         "kind": "unauthorized",
-                                        "realm_id": notification.realm_id,
-                                        "reason": reason,
+                                        "realm_id": realm_id,
                                     })
                                 }
                                 EventNotificationKind::Ephemeral { .. } => {
@@ -327,41 +336,22 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 break;
                             }
                         }
-                        Err(RecvError::Lagged(skipped)) => {
+                        Err(RecvError::Lagged(_)) => {
                             // Round 4 (B1.5) — broadcast capacity exceeded.
                             // The typed EventsSubscribeFrame requires a
                             // resume cursor on Dropped; if we don't have a
-                            // valid cursor (the broadcast lag dropped state
-                            // we'd need to mint one) the SDK rule downgrades
-                            // to ResyncRequired. We always carry the
-                            // catchup_cursor we already have, so Dropped is
-                            // safe here.
-                            let cursor_str = catchup_cursor.clone();
-                            // Use the typed-id form (ak:cursor:<base64url>),
-                            // not the cursor::Cursor struct.
-                            let cursor_typed =
-                                arkret_sdk::identifiers::Cursor::new(cursor_str.clone()).ok();
+                            // valid cursor, the SDK rule downgrades to
+                            // ResyncRequired instead of emitting cursorless Dropped.
                             arm_subscribe_reconnect(
                                 &state,
                                 &subscribe_scope_key_for_stream,
                                 SUBSCRIBE_RECONNECT_AFTER_MS,
                             );
-                            let body = dropped_or_resync(
-                                cursor_typed,
-                                format!("broadcast_lagged skipped={skipped}"),
-                                Some(SUBSCRIBE_RECONNECT_AFTER_MS),
-                            );
-                            // Emit the flat frame fields at the top level.
-                            let body_json = serde_json::to_value(&body)
-                                .unwrap_or_else(|_| json!({"kind": "resync_required"}));
-                            let mut frame = body_json;
-                            if let Some(obj) = frame.as_object_mut() {
-                                obj.insert(
-                                    "skipped".to_owned(),
-                                    Value::Number(serde_json::Number::from(skipped)),
-                                );
-                            }
-                            yield Ok(ndjson_line(&frame));
+                            let body_json = json!({
+                                "kind": "resync_required",
+                                "reconnect_after_ms": SUBSCRIBE_RECONNECT_AFTER_MS,
+                            });
+                            yield Ok(ndjson_line(&body_json));
                             break;
                         }
                         Err(RecvError::Closed) => {
@@ -371,10 +361,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                     }
                 }
                 _ = heartbeat.tick() => {
-                    let frame = json!({
-                        "kind": "heartbeat",
-                        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                    });
+                    let frame = json!({"kind": "heartbeat"});
                     yield Ok(ndjson_line(&frame));
                 }
             }

@@ -125,7 +125,7 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events() {
     seed_agent_session_with_scopes(&state, token, &["ak.self.events.query.scan"]).await;
 
     let mut response = TestClient::get(format!(
-        "http://server/_arkret/self/events/subscribe?realms={DEMO_REALM_ID}&include_history=false&max_duration_ms=100",
+        "http://server/_arkret/self/events/subscribe?realms={DEMO_REALM_ID}&catchup=false&max_duration_ms=100",
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state))

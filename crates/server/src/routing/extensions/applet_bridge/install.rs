@@ -25,9 +25,8 @@ use super::types::{
 use crate::error::AppError;
 use crate::ids;
 use crate::reducer::AppletProjection;
-use crate::routing::events::projection::projection_event_json;
 use crate::routing::events::strand::strand_id_from_realm_id;
-use crate::state::{AppState, EventNotification, MessageRecord, ProjectionEventRecord};
+use crate::state::{AppState, MessageRecord, ProjectionEventRecord};
 
 pub(super) const GHOST_PROVISION_ACTION: &str = "ak.applet.ghost.provision";
 
@@ -486,16 +485,11 @@ pub(super) async fn append_applet_registration_projection(
         created_at: chrono::Utc::now(),
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        projection_record.realm_id.clone(),
-        projection_record.event_id.clone(),
-        projection_event_json(&projection_record),
-    ));
-    if let Err(error) = state
-        .persistence
-        .projection_events()
-        .append(projection_record)
-        .await
+    if let Err(error) = crate::routing::events::projection::persist_and_publish_projection_event(
+        state,
+        projection_record,
+    )
+    .await
     {
         tracing::error!(%error, "applet install: failed to append registration projection");
         return Err(AppError::internal(
@@ -661,16 +655,11 @@ pub(super) async fn append_portal_message(
         created_at,
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        projection_record.realm_id.clone(),
-        projection_record.event_id.clone(),
-        projection_event_json(&projection_record),
-    ));
-    if let Err(error) = state
-        .persistence
-        .projection_events()
-        .append(projection_record)
-        .await
+    if let Err(error) = crate::routing::events::projection::persist_and_publish_projection_event(
+        state,
+        projection_record,
+    )
+    .await
     {
         tracing::error!(%error, "applet bridge: failed to append projection event");
         return Err(AppError::internal("failed to persist portal projection"));
@@ -1151,16 +1140,12 @@ async fn append_applet_e2ee_authorization_projection(
         created_at: record.registered_at,
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        projection_record.realm_id.clone(),
-        projection_record.event_id.clone(),
-        projection_event_json(&projection_record),
-    ));
-    state
-        .persistence
-        .projection_events()
-        .append(projection_record)
+    crate::routing::events::projection::persist_and_publish_projection_event(
+        state,
+        projection_record,
+    )
         .await
+        .map(|_| ())
         .map_err(|error| {
             tracing::error!(%error, %event_id, "applet install: failed to append e2ee authorization projection");
             AppError::internal("failed to append applet e2ee authorization projection")

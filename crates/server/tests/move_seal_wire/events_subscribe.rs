@@ -66,9 +66,9 @@ fn sha256_json(value: &Value) -> String {
 ///   2. (Concurrently) submits a message Event via /_arkret/self/events which triggers
 ///      `project_accepted_operations` → broadcast notification.
 ///   3. Asserts the response body contains:
-///      - one `kind="catchup_complete"` frame
+///      - no `kind="catchup_complete"` frame because catch-up was not requested
 ///      - at least one `kind="event"` frame with the message id we sent
-///      - one `kind="heartbeat"` frame with `stream_closing=true` (deadline fire)
+///      - one strict `kind="heartbeat"` frame at the deadline
 #[tokio::test]
 async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
     use std::time::Duration as StdDuration;
@@ -129,39 +129,33 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
         .map(|l| serde_json::from_str(l).expect("ndjson line should parse"))
         .collect();
     assert!(
-        frames.len() >= 2,
-        "expected ≥2 frames (catchup_complete + heartbeat or event); got {} ({:?})",
+        !frames.is_empty(),
+        "expected at least one heartbeat or event frame; got {} ({:?})",
         frames.len(),
         frames
     );
 
-    // Frame kinds we should see at minimum:
     let kinds: Vec<&str> = frames
         .iter()
         .filter_map(|f| f.get("kind").and_then(Value::as_str))
         .collect();
-    assert!(
-        kinds.contains(&"catchup_complete"),
-        "stream should emit a catchup_complete frame; got kinds {kinds:?}"
-    );
+    assert!(!kinds.contains(&"catchup_complete"));
     // Either a live event (writer landed before deadline) or just heartbeat
     // (writer was too late). Both prove the stream is wired correctly.
     let saw_event = frames
         .iter()
         .any(|f| f.get("kind").and_then(Value::as_str) == Some("event"));
-    let saw_closing_heartbeat = frames.iter().any(|f| {
-        f.get("kind").and_then(Value::as_str) == Some("heartbeat")
-            && f.get("stream_closing").and_then(Value::as_bool) == Some(true)
-    });
+    let saw_closing_heartbeat = frames
+        .iter()
+        .any(|f| f.get("kind").and_then(Value::as_str) == Some("heartbeat"));
     assert!(
         saw_event || saw_closing_heartbeat,
         "stream should either deliver the live event OR fire the deadline-close heartbeat; got {frames:?}"
     );
 }
 
-/// Even with no live events at all, the stream emits
-/// `catchup_complete` then a deadline-close heartbeat. Proves the stream
-/// terminates cleanly without indefinite blocking.
+/// Even when catch-up is requested, an empty replay emits no completion before
+/// data and terminates cleanly with a closing heartbeat.
 #[tokio::test]
 async fn events_subscribe_emits_close_heartbeat_at_deadline() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -169,7 +163,7 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
     let app = service(state.clone());
 
     let mut response = TestClient::get(format!(
-        "http://server/_arkret/self/events/subscribe?realms={}&max_duration_ms=300&heartbeat_ms=10000",
+        "http://server/_arkret/self/events/subscribe?realms={}&catchup=true&max_duration_ms=300&heartbeat_ms=10000",
         demo_realm_id()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
@@ -183,16 +177,11 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
         .map(|l| serde_json::from_str(l).expect("ndjson line should parse"))
         .collect();
 
-    // Catchup_complete + deadline-close heartbeat = 2 frames minimum.
+    assert!(!frames.is_empty(), "expected a closing heartbeat");
     assert!(
-        frames.len() >= 2,
-        "expected ≥2 frames at idle; got {} ({frames:?})",
-        frames.len()
-    );
-    assert_eq!(
-        frames[0].get("kind").and_then(Value::as_str),
-        Some("catchup_complete"),
-        "first frame must be catchup_complete"
+        frames
+            .iter()
+            .all(|frame| { frame.get("kind").and_then(Value::as_str) != Some("catchup_complete") })
     );
     let last = frames.last().unwrap();
     assert_eq!(
@@ -200,94 +189,124 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
         Some("heartbeat"),
         "last frame at deadline must be a heartbeat"
     );
-    assert_eq!(
-        last.get("stream_closing").and_then(Value::as_bool),
-        Some(true),
-        "deadline-close heartbeat must carry stream_closing=true"
-    );
+    assert_eq!(last.as_object().map(serde_json::Map::len), Some(1));
 }
 
-/// Regression: every frame the realm subscribe stream emits MUST deserialize
-/// through the SDK's *typed* [`arkret_sdk::EventsSubscribeFrame`] — the exact
-/// type the wasm/native client parses with. The `cursor` field is
-/// `Option<identifiers::Cursor>`, which rejects anything without a
-/// `ak:cursor:` prefix; an earlier build put the raw `event_id` there, so the
-/// client's whole buffered poll errored, never advanced its resume cursor, and
-/// re-requested full history (`include_history=true`, no `after`) on every
-/// iteration — replaying the same events forever.
-///
-/// The older tests in this file parse each line as untyped `serde_json::Value`,
-/// which accepts ANY string in `cursor` and so never exercised the typed
-/// contract — that was the blind spot. This test:
-///   1. seeds a durable history event,
-///   2. subscribes with `include_history=true` and asserts every line parses as the typed frame
-///      (this is what the raw-`event_id` bug broke),
-///   3. asserts `catchup_complete` carries a real `ak:cursor:` token, and
-///   4. feeds that token back as `after` and asserts the history event is NOT replayed (the cursor
-///      actually advances — no duplicates).
+/// Every event frame must be SDK-typed and cursor-bearing. A fresh subscription
+/// starts at the live tail; bounded catch-up begins only from a supplied cursor.
 #[tokio::test]
 async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    // Seed one durable history event directly into the projection store — the
-    // exact rows `projected_event_page` serves as history. Going through the
-    // projection store (rather than `/events` submit) keeps the test
-    // deterministic and isolates the subscribe/cursor surface under test; the
-    // sender matches the dev session actor so it passes visibility.
-    let event_id = "ak:event:01984101-0000-7000-8000-00000000d0c5";
+    let first_event_id = "ak:event:01984101-0000-7000-8000-00000000d0c5";
+    let first_received_at = chrono::Utc::now();
     state
         .persistence
         .projection_events()
         .append(soland::state::ProjectionEventRecord {
-            event_id: event_id.to_owned(),
+            event_id: first_event_id.to_owned(),
             realm_id: demo_realm_id().to_owned(),
             event_kind: "ak.message.create".to_owned(),
             operation_type: "create".to_owned(),
             operation_id: Some("ak:operation:01984101-0000-7000-8000-00000000d0c5".to_owned()),
             sender: Some("did:web:admin.example".to_owned()),
-            payload: json!({"content": {"body": "durable history"}}),
-            created_at: chrono::Utc::now(),
-            received_at: chrono::Utc::now(),
+            payload: json!({"content": {"body": "live anchor"}}),
+            created_at: first_received_at,
+            received_at: first_received_at,
         })
         .await
         .expect("seed projection event");
 
-    // ── Subscribe #1: include history, parse via the TYPED SDK frame. ──
+    let notifier_state = state.clone();
+    let notifier = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        notifier_state
+            .event_broadcast
+            .send(soland::state::EventNotification::event(
+                demo_realm_id().to_owned(),
+                first_event_id.to_owned(),
+                json!({
+                    "event_id": first_event_id,
+                    "realm_id": demo_realm_id(),
+                    "event_kind": "ak.message.create",
+                    "sender": "did:web:admin.example",
+                    "created_at": first_received_at.to_rfc3339(),
+                    "payload": {"content": {"body": "live anchor"}},
+                }),
+            ))
+            .expect("live event notification should have a subscriber");
+    });
+
     let app1 = service(state.clone());
     let mut response = TestClient::get(format!(
-        "http://server/_arkret/self/events/subscribe?realms={}&include_history=true&max_duration_ms=300&heartbeat_ms=10000",
+        "http://server/_arkret/self/events/subscribe?realms={}&catchup=true&max_duration_ms=300&heartbeat_ms=10000",
         demo_realm_id()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(&app1)
     .await;
     let body_string = response.take_string().await.expect("response body");
+    notifier.await.expect("notifier task");
 
-    let typed_frames: Vec<arkret_sdk::EventsSubscribeFrame> = body_string
+    let live_frames: Vec<arkret_sdk::EventsSubscribeFrame> = body_string
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str(line).unwrap_or_else(|err| {
-                panic!(
-                    "subscribe frame must parse as the typed SDK EventsSubscribeFrame \
-                        (a raw event_id in `cursor` regresses this): {err}; line={line}"
-                )
-            })
-        })
+        .map(|line| serde_json::from_str(line).expect("typed events subscribe frame"))
         .collect();
-
-    // The seeded event must show up as a history event frame.
-    let saw_history_event = typed_frames
+    assert!(!live_frames.iter().any(|frame| frame.is_catchup_complete()));
+    let live_event = live_frames
         .iter()
-        .any(|frame| frame.kind == arkret_sdk::EventsSubscribeFrameKind::Event);
-    assert!(
-        saw_history_event,
-        "history event frame missing; frames={typed_frames:?}"
-    );
+        .find(|frame| frame.is_event())
+        .expect("live event frame");
+    assert!(live_event.realm_id.is_some());
+    let first_cursor = live_event
+        .cursor
+        .as_ref()
+        .expect("live event carries cursor")
+        .as_str()
+        .to_owned();
 
-    // catchup_complete must carry a real ak:cursor token, not an event_id.
-    let catchup = typed_frames
+    let second_event_id = "ak:event:01984101-0000-7000-8000-00000000d0c6";
+    state
+        .persistence
+        .projection_events()
+        .append(soland::state::ProjectionEventRecord {
+            event_id: second_event_id.to_owned(),
+            realm_id: demo_realm_id().to_owned(),
+            event_kind: "ak.message.create".to_owned(),
+            operation_type: "create".to_owned(),
+            operation_id: Some("ak:operation:01984101-0000-7000-8000-00000000d0c6".to_owned()),
+            sender: Some("did:web:admin.example".to_owned()),
+            payload: json!({"content": {"body": "bounded catch-up"}}),
+            created_at: first_received_at + chrono::Duration::milliseconds(1),
+            received_at: first_received_at + chrono::Duration::milliseconds(1),
+        })
+        .await
+        .expect("seed catch-up event");
+
+    let app2 = service(state.clone());
+    let mut response2 = TestClient::get(format!(
+        "http://server/_arkret/self/events/subscribe?realms={}&after={first_cursor}&catchup=true&max_duration_ms=300&heartbeat_ms=10000",
+        demo_realm_id(),
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .send(&app2)
+    .await;
+    let body2 = response2.take_string().await.expect("response body");
+    let catchup_frames = body2
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<arkret_sdk::EventsSubscribeFrame>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        catchup_frames
+            .iter()
+            .filter(|frame| frame.is_event())
+            .count(),
+        1
+    );
+    let catchup = catchup_frames
         .iter()
         .find(|frame| frame.kind == arkret_sdk::EventsSubscribeFrameKind::CatchupComplete)
         .expect("a catchup_complete frame");
@@ -302,32 +321,30 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
         "resume cursor must be a ak:cursor token, got {resume_cursor}"
     );
 
-    // ── Subscribe #2: resume from that cursor — history must NOT replay. ──
-    let app2 = service(state.clone());
-    let mut response2 = TestClient::get(format!(
-        // `ak:cursor:<base64url>` is query-safe unencoded: only `:` and the
-        // base64url alphabet (`A-Za-z0-9-_`), all valid query `pchar`s.
-        "http://server/_arkret/self/events/subscribe?realms={}&after={resume_cursor}&max_duration_ms=300&heartbeat_ms=10000",
+    let app3 = service(state.clone());
+    let mut response3 = TestClient::get(format!(
+        "http://server/_arkret/self/events/subscribe?realms={}&after={resume_cursor}&catchup=true&max_duration_ms=300&heartbeat_ms=10000",
         demo_realm_id(),
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
-    .send(&app2)
+    .send(&app3)
     .await;
-    let body2 = response2.take_string().await.expect("response body");
+    let body3 = response3.take_string().await.expect("response body");
 
-    let replayed = body2
+    let replayed = body3
         .lines()
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .any(|frame| {
             frame.get("kind").and_then(Value::as_str) == Some("event")
                 && serde_json::to_string(&frame)
-                    .map(|text| text.contains(event_id))
+                    .map(|text| text.contains(second_event_id))
                     .unwrap_or(false)
         });
     assert!(
         !replayed,
         "resuming from the catchup cursor must not replay the already-seen \
-         history event ({event_id}); body={body2}"
+         event ({second_event_id}); body={body3}"
     );
+    assert!(!body3.contains("\"kind\":\"catchup_complete\""));
 }

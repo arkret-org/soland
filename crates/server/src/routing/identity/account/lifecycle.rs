@@ -544,7 +544,7 @@ async fn append_account_deactivation_propagation_state(
             "targets": peer_targets,
         },
     });
-    crate::routing::events::projection::append_projection_event(
+    let _ = crate::routing::events::projection::append_projection_event(
         state,
         crate::state::ProjectionEventRecord {
             event_id: crate::ids::generate_event_id(),

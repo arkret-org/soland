@@ -366,7 +366,7 @@ async fn append_contact_fact_projection_event(
             .entry("event_id".to_owned())
             .or_insert_with(|| Value::String(event_ref.to_string()));
     }
-    crate::routing::events::projection::append_projection_event(
+    let _ = crate::routing::events::projection::append_projection_event(
         state,
         ProjectionEventRecord {
             event_id: event_ref.to_string(),

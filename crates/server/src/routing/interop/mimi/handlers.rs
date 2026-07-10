@@ -181,11 +181,11 @@ pub(super) async fn mimi_notify(
         created_at: chrono::Utc::now(),
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        notify_record.realm_id.clone(),
-        notify_record.event_id.clone(),
-        crate::routing::events::projection::projection_event_json(&notify_record),
-    ));
+    let _ = crate::routing::events::projection::persist_and_publish_projection_event(
+        state,
+        notify_record,
+    )
+    .await;
 
     let _receipt = mimi_receipt(
         state,
@@ -341,12 +341,11 @@ pub(super) async fn mimi_room_message(
         created_at,
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        projection_record.realm_id.clone(),
-        projection_record.event_id.clone(),
-        projection_event_json(&projection_record),
-    ));
-    append_projection_event(state, projection_record).await;
+    let _ = crate::routing::events::projection::persist_and_publish_projection_event(
+        state,
+        projection_record,
+    )
+    .await;
 
     let _receipt = mimi_receipt(
         state,
@@ -795,16 +794,11 @@ pub(super) async fn mimi_report_abuse(
         created_at: chrono::Utc::now(),
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        report_record.realm_id.clone(),
-        report_record.event_id.clone(),
-        crate::routing::events::projection::projection_event_json(&report_record),
-    ));
-    if let Err(error) = state
-        .persistence
-        .projection_events()
-        .append(report_record)
-        .await
+    if let Err(error) = crate::routing::events::projection::persist_and_publish_projection_event(
+        state,
+        report_record,
+    )
+    .await
     {
         tracing::error!(%error, "mimi: failed to mirror report into projection_events");
     }

@@ -35,8 +35,8 @@ use arkret_sdk::AgentLifecycleState;
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
-use super::projection::append_projection_event;
-use crate::state::{AppState, EventNotification, ProjectionEventRecord};
+use super::projection::persist_and_publish_projection_event;
+use crate::state::{AppState, ProjectionEventRecord};
 use crate::{ids, kinds};
 
 /// Upper bound on in-flight outbound agent-bridge HTTP tasks. Agent
@@ -224,12 +224,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
                 created_at: chrono::Utc::now(),
                 received_at: chrono::Utc::now(),
             };
-            let _ = state.event_broadcast.send(EventNotification::event(
-                error_record.realm_id.clone(),
-                error_record.event_id.clone(),
-                super::projection::projection_event_json(&error_record),
-            ));
-            append_projection_event(state, error_record).await;
+            let _ = persist_and_publish_projection_event(state, error_record).await;
             return;
         }
     };
@@ -260,12 +255,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
         created_at: chrono::Utc::now(),
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        status_record.realm_id.clone(),
-        status_record.event_id.clone(),
-        super::projection::projection_event_json(&status_record),
-    ));
-    append_projection_event(state, status_record).await;
+    let _ = persist_and_publish_projection_event(state, status_record).await;
 
     // If the registered agent carries a real endpoint_url, spawn an
     // async tokio task that POSTs to that URL and emits the result
@@ -546,12 +536,7 @@ async fn emit_agent_result_envelope(
         created_at: chrono::Utc::now(),
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        record.realm_id.clone(),
-        record.event_id.clone(),
-        super::projection::projection_event_json(&record),
-    ));
-    append_projection_event(state, record).await;
+    let _ = persist_and_publish_projection_event(state, record).await;
 }
 
 #[cfg(test)]

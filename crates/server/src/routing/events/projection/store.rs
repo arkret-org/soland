@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use arkret_sdk::{Operation, OperationId};
 use serde_json::{Value, json};
 
@@ -5,19 +7,28 @@ use super::*;
 use crate::kinds;
 use crate::state::{AppState, ProjectionEventRecord};
 
-pub async fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
-    let store = state.persistence.projection_events();
-    let exists = store
-        .snapshot_all()
-        .await
-        .map(|known| known.iter().any(|record| record.event_id == event.event_id))
-        .unwrap_or(false);
-    if exists {
-        return;
+pub async fn append_projection_event(
+    state: &AppState,
+    event: ProjectionEventRecord,
+) -> crate::persistence::PersistenceResult<crate::persistence::ProjectionEventAppendOutcome> {
+    state.persistence.projection_events().append(event).await
+}
+
+pub async fn persist_and_publish_projection_event(
+    state: &AppState,
+    event: ProjectionEventRecord,
+) -> crate::persistence::PersistenceResult<crate::persistence::ProjectionEventAppendOutcome> {
+    let outcome = append_projection_event(state, event.clone()).await?;
+    if outcome == crate::persistence::ProjectionEventAppendOutcome::Inserted {
+        let _ = state
+            .event_broadcast
+            .send(crate::state::EventNotification::event(
+                event.realm_id.clone(),
+                event.event_id.clone(),
+                projection_event_json(&event),
+            ));
     }
-    if let Err(error) = store.append(event).await {
-        tracing::warn!(%error, "failed to persist projection event");
-    }
+    Ok(outcome)
 }
 
 pub async fn projected_event_page(
@@ -26,26 +37,47 @@ pub async fn projected_event_page(
     cursor: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<Option<ProjectedEventPage>> {
-    let mut events = state
-        .persistence
-        .projection_events()
-        .snapshot_all()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|event| event.realm_id == realm_id)
-        .collect::<Vec<_>>();
-    if events.is_empty() {
-        events = load_projected_events_from_pg(state, realm_id).await?;
-    }
+    let realm_ids = BTreeSet::from([realm_id.to_owned()]);
+    projected_event_page_for_realms(state, &realm_ids, cursor, limit).await
+}
+
+pub async fn projected_event_page_for_realms(
+    state: &AppState,
+    realm_ids: &BTreeSet<String>,
+    cursor: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Option<ProjectedEventPage>> {
+    projected_event_page_for_realms_through(state, realm_ids, cursor, None, limit).await
+}
+
+pub async fn projected_event_replay_upper_bound(
+    state: &AppState,
+    realm_ids: &BTreeSet<String>,
+    cursor: &str,
+) -> anyhow::Result<Option<String>> {
+    let events = ordered_projected_events_for_realms(state, realm_ids).await?;
+    let start = events
+        .iter()
+        .position(|event| event.event_id == cursor)
+        .map(|index| index + 1)
+        .ok_or_else(|| anyhow::anyhow!("invalid_cursor: cursor not found"))?;
+    Ok(events
+        .get(start..)
+        .and_then(|events| events.last())
+        .map(|event| event.event_id.clone()))
+}
+
+pub async fn projected_event_page_for_realms_through(
+    state: &AppState,
+    realm_ids: &BTreeSet<String>,
+    cursor: Option<&str>,
+    upper_bound_event_id: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Option<ProjectedEventPage>> {
+    let events = ordered_projected_events_for_realms(state, realm_ids).await?;
     if events.is_empty() {
         return Ok(None);
     }
-    events.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
     let redacted = {
         let projection = state.projection.lock();
         redaction_target_event_ids_from_events(&events, &projection)
@@ -59,10 +91,25 @@ pub async fn projected_event_page(
     } else {
         0
     };
+    let end = match upper_bound_event_id {
+        Some(upper_bound) => events
+            .iter()
+            .position(|event| event.event_id == upper_bound)
+            .map(|index| index + 1)
+            .ok_or_else(|| anyhow::anyhow!("invalid_cursor: replay upper bound not found"))?,
+        None => events.len(),
+    };
+    if end < start {
+        return Err(anyhow::anyhow!(
+            "invalid_cursor: replay upper bound precedes cursor"
+        ));
+    }
     let mut page_items = events
         .into_iter()
         .skip(start)
+        .take(end - start)
         .filter(|event| event_is_visible(event, &redacted))
+        .take(limit.saturating_add(1))
         .collect::<Vec<_>>();
     {
         let projection = state.projection.lock();
@@ -92,6 +139,37 @@ pub async fn projected_event_page(
         next_cursor,
         has_more,
     }))
+}
+
+async fn ordered_projected_events_for_realms(
+    state: &AppState,
+    realm_ids: &BTreeSet<String>,
+) -> anyhow::Result<Vec<ProjectionEventRecord>> {
+    let mut events = state
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|event| realm_ids.contains(&event.realm_id))
+        .collect::<Vec<_>>();
+    let loaded_realms = events
+        .iter()
+        .map(|event| event.realm_id.clone())
+        .collect::<BTreeSet<_>>();
+    for realm_id in realm_ids.difference(&loaded_realms) {
+        events.extend(load_projected_events_from_pg(state, realm_id).await?);
+    }
+    if events.is_empty() {
+        return Ok(events);
+    }
+    events.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    Ok(events)
 }
 
 pub async fn load_projected_events_from_pg(
@@ -243,7 +321,7 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
     if let Some(effect) = reducer_effect {
         mirror_mls_effect_to_persistence(state, origin, "", operation, &effect).await;
     }
-    append_projection_event(
+    let _ = append_projection_event(
         state,
         projection_event_from_operation(operation, Some(origin)),
     )

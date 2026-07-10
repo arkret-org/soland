@@ -24,7 +24,8 @@ use operations::{
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
 use projection::{
-    augment_timeline_message_json, projected_event_page, projection_event_json,
+    augment_timeline_message_json, projected_event_page, projected_event_page_for_realms_through,
+    projected_event_replay_upper_bound, projection_event_json,
     sync_timeline_message_json_with_projection,
 };
 use strand::{

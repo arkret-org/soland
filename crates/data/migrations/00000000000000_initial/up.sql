@@ -821,7 +821,8 @@ CREATE TABLE public.projection_events (
     payload jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     received_at timestamp with time zone NOT NULL DEFAULT now(),
-    effective_scope text
+    effective_scope text,
+    CONSTRAINT projection_events_event_id_key UNIQUE (event_id)
 );
 
 CREATE SEQUENCE public.projection_events_ordinal_seq
@@ -1646,6 +1647,8 @@ CREATE INDEX projection_events_created_at_idx ON public.projection_events USING 
 CREATE INDEX projection_events_effective_scope_idx ON public.projection_events USING btree (effective_scope);
 
 CREATE INDEX projection_events_received_at_idx ON public.projection_events USING btree (received_at);
+
+CREATE INDEX projection_events_stream_order_idx ON public.projection_events USING btree (received_at, event_id);
 
 CREATE INDEX projection_events_space_idx ON public.projection_events USING btree (realm_id);
 

@@ -482,7 +482,7 @@ async fn append_delivered_contact_fact_projection_event(
             Value::String(issuer.to_owned()),
         );
     }
-    crate::routing::events::projection::append_projection_event(
+    let _ = crate::routing::events::projection::append_projection_event(
         state,
         ProjectionEventRecord {
             event_id: contact_event_id.to_owned(),

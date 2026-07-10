@@ -127,9 +127,18 @@ pub struct MorphProjectionRecord {
 }
 
 /// Projection-side event log (append-only, index/debug surfaces).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectionEventAppendOutcome {
+    Inserted,
+    AlreadyExists,
+}
+
 #[async_trait]
 pub trait ProjectionEventStore: Send + Sync {
-    async fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()>;
+    async fn append(
+        &self,
+        record: ProjectionEventRecord,
+    ) -> PersistenceResult<ProjectionEventAppendOutcome>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>>;
     /// SOL-SEC-04 — bounded variant of [`snapshot_all`] that pushes a `LIMIT`
     /// into the query so a single (federation-reachable) request cannot load
@@ -341,9 +350,16 @@ impl MemoryProjectionEventStore {
 
 #[async_trait]
 impl ProjectionEventStore for MemoryProjectionEventStore {
-    async fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()> {
-        self.data.lock().push(record);
-        Ok(())
+    async fn append(
+        &self,
+        record: ProjectionEventRecord,
+    ) -> PersistenceResult<ProjectionEventAppendOutcome> {
+        let mut data = self.data.lock();
+        if data.iter().any(|event| event.event_id == record.event_id) {
+            return Ok(ProjectionEventAppendOutcome::AlreadyExists);
+        }
+        data.push(record);
+        Ok(ProjectionEventAppendOutcome::Inserted)
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
@@ -904,9 +920,8 @@ impl MorphProjectionStore for PgMorphProjectionStore {
 // ── Pg-backed projection_events store ────────────────────────────────────
 // Append-only mirror of the in-memory ProjectionEventRecord stream
 // stamped down by `routing::events::projection::append_projection_event`.
-// Surrogate `ordinal` BIGSERIAL handles retry collisions; the
-// canonical_events table is where the `(actor_id, actor_seq)` uniqueness
-// invariant lives.
+// `event_id` is unique so retries cannot create duplicate stream positions;
+// the surrogate ordinal remains the storage primary key.
 
 pub(crate) struct PgProjectionEventStore {
     pub(crate) pool: PgPool,
@@ -1162,12 +1177,16 @@ fn projected_operation_realm_discoverability(operation: &Operation) -> Option<&s
 
 #[async_trait]
 impl ProjectionEventStore for PgProjectionEventStore {
-    async fn append(&self, record: ProjectionEventRecord) -> PersistenceResult<()> {
+    async fn append(
+        &self,
+        record: ProjectionEventRecord,
+    ) -> PersistenceResult<ProjectionEventAppendOutcome> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_events \
              (event_id, realm_id, event_kind, operation_type, operation_id, sender_id, payload, created_at, received_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (event_id) DO NOTHING",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.event_id))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.realm_id))
@@ -1183,8 +1202,15 @@ impl ProjectionEventStore for PgProjectionEventStore {
         .bind::<Jsonb, _>(&record.payload)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.received_at)
-        .execute(&mut *conn).await
-        .map(|_| ())
+        .execute(&mut *conn)
+        .await
+        .map(|inserted| {
+            if inserted == 0 {
+                ProjectionEventAppendOutcome::AlreadyExists
+            } else {
+                ProjectionEventAppendOutcome::Inserted
+            }
+        })
         .map_err(PersistenceError::from)
     }
 

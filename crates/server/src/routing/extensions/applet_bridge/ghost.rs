@@ -19,8 +19,7 @@ use super::types::{
 };
 use crate::error::AppError;
 use crate::ids;
-use crate::routing::events::projection::projection_event_json;
-use crate::state::{AppState, CanonicalEventRecord, EventNotification, ProjectionEventRecord};
+use crate::state::{AppState, CanonicalEventRecord, ProjectionEventRecord};
 
 pub(super) async fn revoke_applet_record(
     state: &AppState,
@@ -291,16 +290,11 @@ pub(super) async fn persist_formal_applet_event(
             "failed to persist ghost actor provisioning event",
         ));
     }
-    let _ = state.event_broadcast.send(EventNotification::event(
-        event.projection.realm_id.clone(),
-        event.projection.event_id.clone(),
-        projection_event_json(&event.projection),
-    ));
-    if let Err(error) = state
-        .persistence
-        .projection_events()
-        .append(event.projection)
-        .await
+    if let Err(error) = crate::routing::events::projection::persist_and_publish_projection_event(
+        state,
+        event.projection,
+    )
+    .await
     {
         tracing::error!(%error, event_id = %event.event_id, "applet ghost provisioning: failed to persist projection event");
         return Err(AppError::internal(

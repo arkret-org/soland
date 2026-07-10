@@ -29,8 +29,8 @@ use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
 use super::agent_bridge::read_json_body_limited;
-use super::projection::append_projection_event;
-use crate::state::{AppState, EventNotification, ProjectionEventRecord};
+use super::projection::persist_and_publish_projection_event;
+use crate::state::{AppState, ProjectionEventRecord};
 use crate::{ids, kinds};
 
 /// Upper bound on in-flight outbound applet-bridge HTTP tasks. Bridge URLs
@@ -184,12 +184,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
         created_at: chrono::Utc::now(),
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        record.realm_id.clone(),
-        record.event_id.clone(),
-        super::projection::projection_event_json(&record),
-    ));
-    append_projection_event(state, record).await;
+    let _ = persist_and_publish_projection_event(state, record).await;
 }
 
 /// Outcome of an applet bridge invocation.
@@ -319,12 +314,7 @@ async fn emit_applet_outcome_event(
         created_at: chrono::Utc::now(),
         received_at: chrono::Utc::now(),
     };
-    let _ = state.event_broadcast.send(EventNotification::event(
-        record.realm_id.clone(),
-        record.event_id.clone(),
-        super::projection::projection_event_json(&record),
-    ));
-    append_projection_event(state, record).await;
+    let _ = persist_and_publish_projection_event(state, record).await;
 }
 
 #[cfg(test)]

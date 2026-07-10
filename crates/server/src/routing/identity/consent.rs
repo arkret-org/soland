@@ -1400,7 +1400,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
         "mutated_cells": mutated_cells,
         "revoked_at": revoked_at.to_rfc3339(),
     });
-    crate::routing::events::projection::append_projection_event(
+    let _ = crate::routing::events::projection::append_projection_event(
         state,
         ProjectionEventRecord {
             event_id: ids::generate_event_id(),

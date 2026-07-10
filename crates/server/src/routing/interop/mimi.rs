@@ -45,15 +45,12 @@ use super::{append_audit_log, now, sha256_hex};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
-use crate::routing::events::projection::{append_projection_event, projection_event_json};
 use crate::routing::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 use crate::routing::identity::consent::{
     materialize_mimi_consent_request, materialize_mimi_consent_update_by_id,
 };
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{
-    AppState, CanonicalEventRecord, EventNotification, MessageRecord, ProjectionEventRecord,
-};
+use crate::state::{AppState, CanonicalEventRecord, MessageRecord, ProjectionEventRecord};
 
 const EVENT_SCHEMA_ID: &str = "ak.schema.event.v1";
 const MIMI_REASON_GOVERNANCE_BINDING_MISSING: &str = "mimi_governance_binding_missing";
