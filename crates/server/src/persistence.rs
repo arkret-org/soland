@@ -7,9 +7,9 @@
 pub(crate) use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub(crate) use std::sync::Arc;
 
+pub(crate) use arkret_sdk::Operation;
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
-pub(crate) use arkret_sdk::Operation;
 pub(crate) use diesel::sql_types::{
     Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid,
 };

@@ -27,11 +27,11 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::{Duration as StdDuration, Instant};
 
+use arkret_sdk::http_signature::{Ed25519PublicKey, public_key_from_bytes};
+use arkret_sdk::{DeviceId, Did, FreshnessState, SessionGrantProofKind};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use arkret_sdk::http_signature::{Ed25519PublicKey, public_key_from_bytes};
-use arkret_sdk::{DeviceId, Did, FreshnessState, SessionGrantProofKind};
 use ed25519_dalek::{Signature, Verifier};
 use parking_lot::Mutex;
 use salvo::http::StatusCode;

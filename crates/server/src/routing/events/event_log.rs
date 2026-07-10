@@ -15,9 +15,6 @@
 
 use std::collections::BTreeMap;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{DateTime, Duration, Utc};
 use arkret_sdk::http::{
     EventView, EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody,
     EventsSubmitOutcome, EventsSubmitStatus,
@@ -29,6 +26,9 @@ use arkret_sdk::{
     MAX_EVENT_SUBMIT_BATCH, Operation, OperationId, Proof, RealmId, RealmSealFrontierView,
     TypedTrustDomainId, canonical, proof_kind,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};

@@ -4,8 +4,8 @@
 //! `ak.realm.policy_components.join_policy` contains it, `membership=join`
 //! must pass before the member FSM is updated.
 
-use chrono::{Duration, Utc};
 use arkret_sdk::Operation;
+use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};

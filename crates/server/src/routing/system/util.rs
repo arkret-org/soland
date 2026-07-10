@@ -10,9 +10,9 @@
 //! in their owning module so they can carry their own invariants. They will
 //! land here only if they outgrow that scope.
 
+use arkret_sdk::{DeviceId, Did, SpaceId};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use arkret_sdk::{DeviceId, Did, SpaceId};
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
 

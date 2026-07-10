@@ -3,9 +3,6 @@
 //! Implements the v1 private invite delivery endpoint and the body-only
 //! online locator resolver from `sync/invite-addressing.md`.
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::Duration;
 // NOTE: `arkret_sdk::DisclosurePolicy` at the crate root resolves to the
 // auth/DID-proof type (re-exported explicitly), which shadows the
 // invite-addressing one from the `model::*` glob. Import the
@@ -20,6 +17,9 @@ use arkret_sdk::{
     PrincipalLocatorDisplayHint, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
     ReceivePolicyConstraints, ReceivePolicySurface, UnknownInviteAction, canonical,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::Duration;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};

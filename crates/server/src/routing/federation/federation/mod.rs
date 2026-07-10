@@ -63,6 +63,8 @@ fn federation_destination_matches(state: &AppState, destination: &str) -> bool {
 #[cfg(test)]
 use actor_signature::federation_verify_actor_digest;
 #[cfg(test)]
+use arkret_sdk::{Operation, RealmId};
+#[cfg(test)]
 use backfill::operation_frontier_value;
 // Cross-module helpers consumed elsewhere in `crate::routing`.
 pub(crate) use backfill::peer_url_for_service_did;
@@ -72,8 +74,6 @@ pub use backfill::{broadcast_move_to_peers, broadcast_seal_to_peers};
 // on these names resolving through the module that hosts `mod tests`.
 #[cfg(test)]
 use chrono::{Duration, Utc};
-#[cfg(test)]
-use arkret_sdk::{Operation, RealmId};
 pub(super) use endpoints::{
     federation_actor_events, federation_backfill_operations, federation_operation_frontier,
     federation_pull_operations, federation_push_operations, federation_realm_members,

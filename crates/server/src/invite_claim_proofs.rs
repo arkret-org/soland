@@ -1,12 +1,12 @@
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::SecondsFormat;
 #[cfg(test)]
 use arkret_sdk::identity::DidResolver;
 use arkret_sdk::{
     Did, INVITE_CLAIM_AUDIENCE, INVITE_SUBJECT_PROOF_ALG, InviteSubjectProof,
     InviteSubjectProofBody, Operation, canonical,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::SecondsFormat;
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::{Value, json};
 
@@ -479,8 +479,8 @@ fn trimmed_string(value: Option<&Value>) -> Option<&str> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use base64::Engine as _;
     use arkret_sdk::identity::DidDocument;
+    use base64::Engine as _;
     use ed25519_dalek::{Signer as _, SigningKey};
 
     use super::*;

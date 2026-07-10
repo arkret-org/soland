@@ -31,8 +31,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use arkret_sdk::{Did, Operation, OperationId, RealmId};
+use chrono::Utc;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 

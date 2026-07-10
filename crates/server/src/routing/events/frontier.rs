@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Utc};
 use arkret_sdk::{Did, EventId, Hash, RealmId, canonical};
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 /// Convert a per-realm frontier table to the typed

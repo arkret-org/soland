@@ -11,13 +11,13 @@
 
 use std::collections::BTreeSet;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use arkret_sdk::{
     CrossSigningPublishContent, CrossSigningResetContent, CrossSigningResetProof,
     DeviceEnrollmentAuthorityBinding, DeviceId, DeviceQuorumSignature, DeviceStatus,
     DeviceTrustBinding, Did, EventId, MlsWelcomeClaimEnvelope, SignatureMaterial,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
 

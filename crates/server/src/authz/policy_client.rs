@@ -35,14 +35,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use arkret_sdk::identity::DidResolver;
 use arkret_sdk::models::AuthzDecision;
 use arkret_sdk::{
     Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
     PolicyCheckSignature, PolicyCheckSource, RealmId,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -782,8 +782,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use chrono::Utc;
     use arkret_sdk::identity::{DidDocument, DidWebResolver};
+    use chrono::Utc;
     use ed25519_dalek::{Signer, SigningKey};
 
     use super::*;

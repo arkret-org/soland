@@ -11,8 +11,8 @@
 //! `verification_method == actor_id`, and `payload_digest` = the sha256 of
 //! the canonical payload bytes.
 
-use chrono::{Duration, SecondsFormat, Utc};
 use arkret_sdk::canonical;
+use chrono::{Duration, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
 use super::SessionRecord;

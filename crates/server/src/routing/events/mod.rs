@@ -89,8 +89,8 @@ pub fn peer_router() -> Router {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use arkret_sdk::FreshnessState;
+    use chrono::Utc;
 
     use super::*;
     use crate::state::AgentSessionRecord;

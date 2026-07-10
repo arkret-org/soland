@@ -34,9 +34,9 @@
 
 use std::collections::BTreeSet;
 
+use arkret_sdk::{CellRef, Operation};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use arkret_sdk::{CellRef, Operation};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Value, json};
 
@@ -406,11 +406,11 @@ mod cross_impl_tests {
     //! unnoticed (unlike the `ak.call.signal` envelope proof, which has a real
     //! inkson round-trip). This test fails the moment either construction drifts.
 
-    use chrono::{DateTime, Utc};
     use arkret_sdk::{
         CallId, CallMediaParticipantBinding, DeviceId, Did, RealmId,
         participant_binding_signing_input,
     };
+    use chrono::{DateTime, Utc};
     use serde_json::json;
 
     use super::{binding_canonical_bytes, binding_canonical_value, binding_signing_input};

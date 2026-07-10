@@ -24,9 +24,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{DateTime, TimeZone, Utc};
 use arkret_sdk::models::{
     Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
 };
@@ -53,6 +50,9 @@ use arkret_sdk::{
     RecipientServiceType, TargetDescriptor, TargetKind, UserSearchOutcome, canonical,
     parse_address, proof_kind, target_digest, validate_agent_slug,
 };
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::{Signature, Verifier};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;

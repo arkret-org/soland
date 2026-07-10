@@ -86,7 +86,7 @@ pub(crate) use interop::{
 // glob re-exports keep these reachable from `super::*` in the child modules
 // (and from `wire.rs` via `crate::routing::soland_extension_operation_ids`).
 pub(crate) use openapi::soland_extension_operation_ids;
-use openapi::{cached_arkret_openapi_doc, arkret_openapi_yaml};
+use openapi::{arkret_openapi_yaml, cached_arkret_openapi_doc};
 // Framework error catcher + OpenAPI doc depot type consumed by `crate::service`
 // and `crate::routing` children.
 pub use openapi_routes::ArkretOpenApiDoc;

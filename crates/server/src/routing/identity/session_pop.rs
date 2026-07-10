@@ -21,12 +21,12 @@
 //! Bearer session validation itself still runs in the per-handler
 //! `AuthArgs::authenticated_session`; this hoop only adds the PoP layer.
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use arkret_sdk::http_signature::{
     Component, Ed25519PublicKey, SignatureVerificationPolicy, public_key_from_bytes,
     verify_signed_http_message,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use salvo::prelude::*;
 use sha2::{Digest, Sha256};
 

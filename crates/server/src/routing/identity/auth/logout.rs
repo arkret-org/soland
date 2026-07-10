@@ -1,8 +1,8 @@
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use arkret_sdk::{
     AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody, SESSION_REVOKE_LIFECYCLE_PROOF_KIND,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, Verifier as _};
 
 use super::*;

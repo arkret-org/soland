@@ -9,12 +9,12 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
-use base64::Engine as _;
 use arkret_sdk::applet::WebhookSignatureAlg;
 use arkret_sdk::{
     AppletNamespaceEntry, AppletPackage, AppletWireNamespaces, Did, Ed25519MoveSigner, Hash,
     WebhookAuth,
 };
+use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
