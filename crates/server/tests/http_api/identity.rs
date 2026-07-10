@@ -23,10 +23,13 @@ async fn identity_surface_works() {
     let trust_roots = describe["resolver_policy"]["trust_roots"]
         .as_array()
         .expect("resolver trust roots");
+    // Trust roots carry a stable slug `id`; the service DID moved to the
+    // dedicated `service_did` field.
     assert!(
         trust_roots
             .iter()
-            .any(|root| root["id"] == "did:web:soland.local"
+            .any(|root| root["id"] == "soland.local_identity_store"
+                && root["service_did"] == "did:web:soland.local"
                 && root["kind"] == "local_identity_store"
                 && root["proof_verification"]["webvh_witness_quorum"]
                     == "required_when_policy_present"),
@@ -49,7 +52,11 @@ async fn identity_surface_works() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resolved["did_document"]["id"], "did:web:alice.example");
+    // `did_document` is a DidDocumentRef wrapper: `{did, document}`.
+    assert_eq!(
+        resolved["did_document"]["document"]["id"],
+        "did:web:alice.example"
+    );
 
     let document: Value =
         TestClient::get("http://server/_arkret/root/identity/document?did=did:web:alice.example")
@@ -58,7 +65,10 @@ async fn identity_surface_works() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(document["did_document"]["id"], "did:web:alice.example");
+    assert_eq!(
+        document["did_document"]["document"]["id"],
+        "did:web:alice.example"
+    );
 
     let log: Value =
         TestClient::get("http://server/_arkret/root/identity/log?did=did:web:alice.example")

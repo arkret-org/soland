@@ -258,11 +258,12 @@ async fn account_viewer_does_not_authorize_unverified_session_device() {
 
 #[tokio::test]
 async fn account_viewer_authorizes_founding_device_registered_with_account() {
-    // Bootstrap exception (crypto-media/device-lifecycle.md §5.3): the inception
-    // device registered atomically with a brand-new account self-authorizes —
-    // there is no prior device that could approve it, so it MUST surface as
-    // authorized rather than stranding the founding device behind a never-
-    // satisfiable "approve from an existing device" prompt.
+    // Device-identity B-model (decision 0002 / device-lifecycle.md §5.4): a
+    // device becomes `verified` ONLY through a projected `ak.device.authorize`.
+    // The founding device is NOT self-authorized — registration creates an
+    // `unverified`, key-less placeholder (a `verified`-without-key row would
+    // break recovery genesis and projected-device-set verification), and the
+    // enrollment authority's `service_attested` authorize event flips it later.
     let state = AppState::new(test_config(), Db { pool: None });
     let founding_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
     let did = "did:web:bob.example";
@@ -296,8 +297,9 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
         .iter()
         .find(|device| device["device_id"] == founding_device)
         .expect("founding device summary");
-    assert_eq!(founding["status"], "active");
-    assert!(founding.get("authorized_at").is_some());
+    assert_eq!(founding["status"], "unknown", "viewer: {viewer}");
+    assert_eq!(founding["verification_state"], "unverified");
+    assert!(founding["authorized_at"].is_null());
 }
 
 #[tokio::test]
