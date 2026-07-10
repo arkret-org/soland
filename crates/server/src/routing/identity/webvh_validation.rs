@@ -264,11 +264,12 @@ impl From<WebvhValidationError> for AppError {
 /// Iterate pairwise over a log and reject the first chain break.
 ///
 /// Spec: `identity/identity-did.md` §3.4 — `did:webvh` provides
-/// "`did.jsonl` history (SCID + entry hash chain + controller proof)" -
-/// and the embedded provider uses `versionId = "<seq>-<multibase-multihash>"`
-/// where the multihash is sha256 over the canonical JSON of the entry
-/// with `proof` and `versionId` stripped (see `webvh_entry_hash` below;
-/// matches the helper used during write in `did.rs`).
+/// "`did.jsonl` history (SCID + entry hash chain + controller proof)".
+/// Per DIF did:webvh v1.0, `versionId = "<seq>-<hash>"` where the hash is
+/// the bare base58btc sha256 multihash over the canonical JSON of the
+/// entry with `proof` removed and `versionId` set to the predecessor
+/// anchor (the SCID for the genesis entry, the previous `versionId`
+/// otherwise). Matches the helper used during write in `did.rs`.
 pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationError> {
     if log.is_empty() {
         return Err(WebvhValidationError::EmptyLog);
@@ -288,12 +289,22 @@ pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationEr
             reason: "versionId must be \"<seq>-<hash>\"".to_owned(),
         }
     })?;
-    let recomputed_genesis = webvh_entry_hash_multibase(&log[0].payload).map_err(|reason| {
-        WebvhValidationError::MalformedEntry {
+    // The genesis entry-hash preimage anchors on the SCID.
+    let genesis_scid = log[0]
+        .payload
+        .pointer("/parameters/scid")
+        .and_then(Value::as_str)
+        .ok_or_else(|| WebvhValidationError::MalformedEntry {
             at_index: 0,
-            reason,
-        }
-    })?;
+            reason: "genesis entry must declare parameters.scid".to_owned(),
+        })?;
+    let recomputed_genesis =
+        webvh_entry_hash_multibase(&log[0].payload, genesis_scid).map_err(|reason| {
+            WebvhValidationError::MalformedEntry {
+                at_index: 0,
+                reason,
+            }
+        })?;
     if recomputed_genesis != genesis_hash {
         return Err(WebvhValidationError::ChainBreak {
             at_index: 0,
@@ -340,12 +351,13 @@ pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationEr
                 reason: "versionId must be \"<seq>-<hash>\"".to_owned(),
             }
         })?;
-        let recomputed = webvh_entry_hash_multibase(&current.payload).map_err(|reason| {
-            WebvhValidationError::MalformedEntry {
-                at_index: index,
-                reason,
-            }
-        })?;
+        let recomputed =
+            webvh_entry_hash_multibase(&current.payload, prev_version_id).map_err(|reason| {
+                WebvhValidationError::MalformedEntry {
+                    at_index: index,
+                    reason,
+                }
+            })?;
         if recomputed != current_hash {
             return Err(WebvhValidationError::ChainBreak {
                 at_index: index,
@@ -359,12 +371,13 @@ pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationEr
 
 /// Derive the SCID a DID claims, from its genesis log entry.
 ///
-/// The DIF didwebvh v1.0 spec defines the SCID as the multibase multihash
-/// of the canonical JSON of the genesis entry with all `{SCID}`
-/// occurrences (the embedded provider's placeholder convention) and the
-/// `proof` / `versionId` fields stripped. We rebuild that skeleton from
-/// the genesis entry — which is what the embedded provider also does at
-/// write time (see `derive_webvh_scid` in `did.rs`).
+/// The DIF didwebvh v1.0 spec defines the SCID as the bare base58btc
+/// sha256 multihash of the canonical JSON of the preliminary log entry:
+/// all SCID occurrences replaced by the `{SCID}` placeholder, `proof`
+/// removed, and `versionId` set to the bare `{SCID}` placeholder. We
+/// rebuild that skeleton from the genesis entry — which is what the
+/// embedded provider also does at write time (see `derive_webvh_scid`
+/// in `did.rs`).
 pub fn derive_scid_from_genesis(genesis: &WebvhLogEntry) -> Result<String, WebvhValidationError> {
     let skeleton = scid_skeleton_from_genesis(&genesis.payload).map_err(|reason| {
         WebvhValidationError::MalformedEntry {
@@ -378,13 +391,13 @@ pub fn derive_scid_from_genesis(genesis: &WebvhLogEntry) -> Result<String, Webvh
             reason: error.to_string(),
         }
     })?;
-    Ok(sha256_multihash_multibase(&canonical))
+    Ok(sha256_multihash_base58btc(&canonical))
 }
 
 pub(crate) fn derive_webvh_scid_from_skeleton(skeleton: &Value) -> Result<String, String> {
     let canonical =
         arkret_sdk::canonical::canonical_json_bytes(skeleton).map_err(|error| error.to_string())?;
-    Ok(sha256_multihash_multibase(&canonical))
+    Ok(sha256_multihash_base58btc(&canonical))
 }
 
 /// Parse the SCID embedded in a `did:webvh:<scid>:<host-and-path>` DID.
@@ -984,18 +997,29 @@ fn split_version_id(version_id: &str) -> Option<(u64, &str)> {
     Some((seq, hash))
 }
 
-pub(crate) fn webvh_entry_hash_multibase(entry: &Value) -> Result<String, String> {
-    let stripped = strip_webvh_entry_for_hash(entry);
+/// Compute the DIF did:webvh v1.0 entry hash. `prev_anchor` is the
+/// predecessor anchor: the SCID for the inception entry, or the previous
+/// entry's `versionId` for every subsequent entry.
+pub(crate) fn webvh_entry_hash_multibase(
+    entry: &Value,
+    prev_anchor: &str,
+) -> Result<String, String> {
+    let stripped = strip_webvh_entry_for_hash(entry, prev_anchor);
     let canonical = arkret_sdk::canonical::canonical_json_bytes(&stripped)
         .map_err(|error| error.to_string())?;
-    Ok(sha256_multihash_multibase(&canonical))
+    Ok(sha256_multihash_base58btc(&canonical))
 }
 
-pub(crate) fn strip_webvh_entry_for_hash(entry: &Value) -> Value {
+/// Build the did:webvh v1.0 entry-hash preimage: drop `proof[]` and set
+/// `versionId` to the predecessor anchor.
+pub(crate) fn strip_webvh_entry_for_hash(entry: &Value, prev_anchor: &str) -> Value {
     let mut stripped = entry.clone();
     if let Value::Object(map) = &mut stripped {
         map.remove("proof");
-        map.remove("versionId");
+        map.insert(
+            "versionId".to_owned(),
+            Value::String(prev_anchor.to_owned()),
+        );
     }
     stripped
 }
@@ -1019,26 +1043,25 @@ fn scid_skeleton_from_genesis(entry: &Value) -> Result<Value, String> {
     }
     let text = serde_json::to_string(&stripped).map_err(|e| e.to_string())?;
     let substituted = text.replace(&claimed_scid, WEBVH_SCID_PLACEHOLDER);
-    // Restore the placeholder versionId shape so the skeleton matches
-    // what the embedded provider hashed when deriving the SCID at write
-    // time — `{seq}-{SCID}` for the inception entry.
+    // Restore the placeholder versionId shape so the skeleton matches the
+    // did:webvh v1.0 preliminary log entry — the bare `{SCID}` placeholder.
     let mut skeleton: Value = serde_json::from_str(&substituted).map_err(|e| e.to_string())?;
     if let Value::Object(map) = &mut skeleton {
-        map.insert(
-            "versionId".to_owned(),
-            json!(format!("0-{WEBVH_SCID_PLACEHOLDER}")),
-        );
+        map.insert("versionId".to_owned(), json!(WEBVH_SCID_PLACEHOLDER));
     }
     Ok(skeleton)
 }
 
-pub(crate) fn sha256_multihash_multibase(bytes: &[u8]) -> String {
+/// `base58btc(0x12 0x20 || sha256(bytes))` — bare base58btc, NO multibase
+/// `z` prefix, per DIF did:webvh v1.0 (SCIDs and entry hashes are 46-char
+/// `Qm…` strings; multibase `z` applies to keys/signatures only).
+pub(crate) fn sha256_multihash_base58btc(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut multihash = Vec::with_capacity(34);
     multihash.push(0x12); // sha2-256
     multihash.push(0x20); // 32 bytes
     multihash.extend_from_slice(&digest);
-    format!("z{}", bs58::encode(multihash).into_string())
+    bs58::encode(multihash).into_string()
 }
 
 pub(crate) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {
@@ -1109,7 +1132,7 @@ mod tests {
     fn build_genesis(update_key_multibase: &str) -> (String, WebvhLogEntry) {
         // 1) Build the SCID-derivation skeleton (placeholder SCID).
         let skeleton = json!({
-            "versionId": format!("0-{WEBVH_SCID_PLACEHOLDER}"),
+            "versionId": WEBVH_SCID_PLACEHOLDER,
             "versionTime": "2026-05-21T00:00:00Z",
             "parameters": {
                 "scid": WEBVH_SCID_PLACEHOLDER,
@@ -1121,13 +1144,13 @@ mod tests {
             },
         });
         let canonical = arkret_sdk::canonical::canonical_json_bytes(&skeleton).unwrap();
-        let scid = sha256_multihash_multibase(&canonical);
+        let scid = sha256_multihash_base58btc(&canonical);
         // 2) Substitute the real SCID back in everywhere.
         let text = serde_json::to_string(&skeleton).unwrap();
         let realised: Value =
             serde_json::from_str(&text.replace(WEBVH_SCID_PLACEHOLDER, &scid)).unwrap();
-        // 3) Compute the entry's own versionId hash.
-        let entry_hash = webvh_entry_hash_multibase(&realised).unwrap();
+        // 3) Compute the entry's own versionId hash (anchored on the SCID).
+        let entry_hash = webvh_entry_hash_multibase(&realised, &scid).unwrap();
         let mut entry = realised;
         if let Value::Object(map) = &mut entry {
             map.insert("versionId".to_owned(), json!(format!("1-{entry_hash}")));
@@ -1149,7 +1172,7 @@ mod tests {
                 "id": format!("did:webvh:{scid}:test.example:webvh:alice"),
             },
         });
-        let hash = webvh_entry_hash_multibase(&body).unwrap();
+        let hash = webvh_entry_hash_multibase(&body, prev.version_id().unwrap()).unwrap();
         let mut entry = body;
         if let Value::Object(map) = &mut entry {
             map.insert("versionId".to_owned(), json!(format!("2-{hash}")));
@@ -1172,16 +1195,19 @@ mod tests {
         let signing = fresh_signing_key();
         let pubkey_mb = encode_pubkey_multibase(&signing.verifying_key());
         let (scid, genesis) = build_genesis(&pubkey_mb);
+        let genesis_version_id = genesis.version_id().unwrap().to_owned();
         let mut entry_two = build_entry_two(&genesis, &scid).payload;
         if let Value::Object(map) = &mut entry_two {
             map.insert(
                 "previousVersionId".to_owned(),
-                json!("1-zForgedPreviousHash000000000000000000000000"),
+                json!("1-QmForgedPreviousHash00000000000000000000000"),
             );
-            // Recompute this entry's own versionId so we isolate the
-            // failure to the previousVersionId mismatch (otherwise the
-            // self-hash check fires first).
-            let recomputed = webvh_entry_hash_multibase(&Value::Object(map.clone())).unwrap();
+            // Recompute this entry's own versionId (anchored on the genuine
+            // predecessor) so we isolate the failure to the
+            // previousVersionId mismatch rather than the self-hash check.
+            let recomputed =
+                webvh_entry_hash_multibase(&Value::Object(map.clone()), &genesis_version_id)
+                    .unwrap();
             map.insert("versionId".to_owned(), json!(format!("2-{recomputed}")));
         }
         let log = vec![genesis, WebvhLogEntry::new(entry_two)];

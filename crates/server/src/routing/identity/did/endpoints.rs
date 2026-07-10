@@ -404,7 +404,7 @@ pub(crate) async fn embedded_webvh_register(
         }
     }
     let entry_skeleton = json!({
-        "versionId": format!("0-{WEBVH_SCID_PLACEHOLDER}"),
+        "versionId": WEBVH_SCID_PLACEHOLDER,
         "versionTime": version_time,
         "parameters": parameters,
         "state": did_document_skeleton,
@@ -415,7 +415,8 @@ pub(crate) async fn embedded_webvh_register(
     let did_key_id = format!("{}#{}", location.did, did_key_fragment);
     let update_key_id = format!("{}#{}", location.did, update_key_fragment);
     let mut log_entry = substitute_webvh_scid(entry_skeleton, &scid);
-    let version_hash = webvh_entry_hash_multibase(&log_entry).map_err(AppError::invalid_param)?;
+    let version_hash =
+        webvh_entry_hash_multibase(&log_entry, &scid).map_err(AppError::invalid_param)?;
     let version_id = format!("1-{version_hash}");
     if let Value::Object(map) = &mut log_entry {
         map.insert("versionId".to_owned(), Value::String(version_id.clone()));

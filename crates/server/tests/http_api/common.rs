@@ -898,7 +898,7 @@ pub(crate) fn test_embedded_webvh_proof(
     let placeholder_did = format!("did:webvh:{{SCID}}:{method_authority}:webvh:{local_id}");
     let did_key_id = format!("{placeholder_did}#{did_key_fragment}");
     let skeleton = serde_json::json!({
-        "versionId": "0-{SCID}",
+        "versionId": "{SCID}",
         "versionTime": version_time,
         "parameters": {
             "scid": "{SCID}",
@@ -927,7 +927,7 @@ pub(crate) fn test_embedded_webvh_proof(
     let scid = test_scid(&skeleton);
     let did = format!("did:webvh:{scid}:{method_authority}:webvh:{local_id}");
     let mut entry = test_replace_scid(skeleton, &scid);
-    let entry_hash = test_webvh_entry_hash(&entry);
+    let entry_hash = test_webvh_entry_hash(&entry, &scid);
     if let Value::Object(map) = &mut entry {
         map.insert(
             "versionId".to_owned(),
@@ -959,17 +959,22 @@ pub(crate) fn test_webvh_method_authority(url: &str) -> String {
 
 pub(crate) fn test_scid(value: &Value) -> String {
     let canonical = arkret_sdk::canonical::canonical_json_bytes(value).unwrap();
-    test_sha256_multihash_multibase(&canonical)
+    test_sha256_multihash_base58btc(&canonical)
 }
 
-pub(crate) fn test_webvh_entry_hash(value: &Value) -> String {
+/// did:webvh v1.0 entry-hash preimage: drop `proof`, set `versionId` to the
+/// predecessor anchor (the SCID for the inception entry).
+pub(crate) fn test_webvh_entry_hash(value: &Value, prev_anchor: &str) -> String {
     let mut clone = value.clone();
     if let Value::Object(map) = &mut clone {
         map.remove("proof");
-        map.remove("versionId");
+        map.insert(
+            "versionId".to_owned(),
+            Value::String(prev_anchor.to_owned()),
+        );
     }
     let canonical = arkret_sdk::canonical::canonical_json_bytes(&clone).unwrap();
-    test_sha256_multihash_multibase(&canonical)
+    test_sha256_multihash_base58btc(&canonical)
 }
 
 pub(crate) fn test_replace_scid(value: Value, scid: &str) -> Value {
@@ -981,13 +986,14 @@ pub(crate) fn test_replace_scid(value: Value, scid: &str) -> Value {
     .unwrap()
 }
 
-pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
+/// Bare base58btc sha256 multihash — no multibase `z` prefix (did:webvh v1.0).
+pub(crate) fn test_sha256_multihash_base58btc(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut multihash = Vec::with_capacity(34);
     multihash.push(0x12);
     multihash.push(0x20);
     multihash.extend_from_slice(&digest);
-    format!("z{}", bs58::encode(multihash).into_string())
+    bs58::encode(multihash).into_string()
 }
 
 // `standard_entity_types_and_reverse_domain_custom_types_work` and
