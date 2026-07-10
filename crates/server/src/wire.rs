@@ -431,6 +431,10 @@ pub use arkret_sdk::models::{
 // no soland mirrors.
 pub use arkret_sdk::models::{ModerationReportOutcome, ModerationReportRequestBody};
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct UpsertPolicyDocumentRequestBody {
     #[serde(default)]
