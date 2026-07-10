@@ -12,11 +12,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_sdk::http::{
-    ContactList, ContactListRow, ContactRequestOutcome, ContactRequestRequestBody,
-    ContactRespondOutcome, ContactRespondRequestBody, ContactState, ContactTombstone,
-    ContactTombstoneRequestBody, DirectConversationBindingState, DirectConversationResolveOutcome,
-    DirectConversationResolveRequestBody, DirectConversationResolveState,
-    DirectConversationSummary,
+    ContactAgentProjection, ContactList, ContactListRow, ContactRequestOutcome,
+    ContactRequestRequestBody, ContactRespondOutcome, ContactRespondRequestBody, ContactState,
+    ContactTombstone, ContactTombstoneRequestBody, DirectConversationBindingState,
+    DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
+    DirectConversationResolveState, DirectConversationSummary,
 };
 // `arkret_sdk::InviteReceivePolicy` also resolves at the crate root, but the
 // invite-addressing strong type lives under `model`; import it via the

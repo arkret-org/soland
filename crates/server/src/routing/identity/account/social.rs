@@ -882,7 +882,7 @@ pub(crate) async fn list_contacts(
     let records =
         auto_revoke_expired_pending_outgoing_contact_consents(state, &session.actor, records)
             .await?;
-    let contacts = contact_list_rows(state, &session.actor, records);
+    let contacts = contact_list_rows(state, &session.actor, records).await?;
     json_ok(ContactList {
         contacts,
         has_more: false,
@@ -1006,11 +1006,11 @@ fn optional_contact_event_ref(value: &Option<String>) -> Option<EventId> {
         .and_then(|event_ref| EventId::new(event_ref.to_owned()).ok())
 }
 
-fn contact_list_rows(
+async fn contact_list_rows(
     state: &AppState,
     actor: &str,
     records: Vec<ContactRecord>,
-) -> Vec<ContactListRow> {
+) -> Result<Vec<ContactListRow>, AppError> {
     let mut rows: BTreeMap<String, ContactListRow> = BTreeMap::new();
     let mut records = records;
     records.sort_by(|left, right| {
@@ -1041,6 +1041,7 @@ fn contact_list_rows(
             invite_consent_grant_ref: None,
             peer_service_did: None,
             direct_conversation: None,
+            agents: Vec::new(),
         });
         if contact_state_rank(&row_state) > contact_state_rank(&entry.state) {
             entry.state = row_state;
@@ -1090,8 +1091,80 @@ fn contact_list_rows(
             row
         })
         .collect::<Vec<_>>();
+    let mut agent_peers = BTreeSet::new();
+    let mut agents_by_controller = BTreeMap::<String, Vec<ContactAgentProjection>>::new();
+    for row in &out {
+        let can_receive_direct_messages = row.state == ContactState::Accepted
+            && row
+                .effective_scopes
+                .iter()
+                .any(|scope| scope == "direct_message");
+        if !can_receive_direct_messages {
+            continue;
+        }
+        let Some(record) = state
+            .persistence
+            .agents()
+            .get(row.peer.as_str())
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+        else {
+            continue;
+        };
+        if record.get("state").and_then(Value::as_str) != Some("active") {
+            continue;
+        }
+        let Some(controller) = record
+            .get("controller_did")
+            .and_then(Value::as_str)
+            .filter(|controller| *controller != actor)
+            .and_then(|controller| Did::new(controller.to_owned()).ok())
+        else {
+            continue;
+        };
+        let display_name = record
+            .get("display_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let agent_slug = record
+            .get("agent_slug")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        agent_peers.insert(row.peer.to_string());
+        agents_by_controller
+            .entry(controller.to_string())
+            .or_default()
+            .push(ContactAgentProjection {
+                agent_principal_id: row.peer.clone(),
+                controller_principal_id: controller,
+                display_name,
+                agent_slug,
+                direct_conversation: row.direct_conversation.clone(),
+            });
+    }
+    out.retain(|row| !agent_peers.contains(row.peer.as_str()));
+    for row in &mut out {
+        row.agents = agents_by_controller
+            .remove(row.peer.as_str())
+            .unwrap_or_default();
+        row.agents.sort_by(|left, right| {
+            left.display_name
+                .as_deref()
+                .unwrap_or(left.agent_principal_id.as_str())
+                .cmp(
+                    right
+                        .display_name
+                        .as_deref()
+                        .unwrap_or(right.agent_principal_id.as_str()),
+                )
+        });
+    }
     out.sort_by(|left, right| left.peer.cmp(&right.peer));
-    out
+    Ok(out)
 }
 
 /// Map a stored contact FSM status to its actor-relative [`ContactState`].

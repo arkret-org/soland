@@ -121,8 +121,7 @@ async fn identity_describe_exposes_external_webvh_provider() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|root| root["id"] == "external.webvh"
-                && root["base_url"] == "http://webvh.local"),
+            .any(|root| root["id"] == "external.webvh" && root["base_url"] == "http://webvh.local"),
         "external webvh provider must be present in resolver trust roots: {describe}"
     );
     // The freshness probe lives on the provider entry and uses the canonical
