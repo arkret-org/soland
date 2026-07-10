@@ -11,6 +11,7 @@ mod common;
 mod account_data;
 mod account_workflow;
 mod admin_b_track;
+mod admin_production_queries;
 mod agent_bridge;
 mod agents;
 mod auth;

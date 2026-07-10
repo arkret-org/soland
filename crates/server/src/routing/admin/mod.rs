@@ -12,6 +12,7 @@ mod introspect;
 mod invite_tokens;
 mod media;
 mod moderation;
+mod queries;
 mod retention;
 mod seal;
 mod settings;
@@ -22,10 +23,9 @@ pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
 
 use super::system::util;
 use super::{
-    AuthArgs, accept_local_operations, demo_actors, device_inventory_to_json,
-    discussion_track_for_projection_event, now, policy_document_to_response,
-    projection_event_from_operation, realm_has_member, strand_id_for_projection_event,
-    strand_id_from_realm_id, strand_projection_for_realm,
+    AuthArgs, accept_local_operations, discussion_track_for_projection_event, now,
+    policy_document_to_response, projection_event_from_operation, realm_has_member,
+    strand_id_for_projection_event, strand_id_from_realm_id, strand_projection_for_realm,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::state::{AppState, SessionRecord};
@@ -198,6 +198,11 @@ pub fn admin_router() -> Router {
         // B2 — operator handle cluster (list / get / audit / revoke / reassign).
         .push(handles::router())
         .push(actors::router())
+        // D14 — production typed queries replacing the dev snapshot
+        // collection for capabilities / devices (actors and audit hang off
+        // their own routers above/below).
+        .push(Router::with_path("capabilities").get(queries::admin_list_capabilities))
+        .push(Router::with_path("devices").get(queries::admin_list_devices))
         .push(invite_tokens::router())
         .push(media::router())
         .push(moderation::router())

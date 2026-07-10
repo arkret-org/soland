@@ -2,9 +2,13 @@
 //!
 //! Surfaces:
 //! - `GET /_soland/admin/{resource}` — paginated dev snapshot of one of the builtin admin
-//!   collections (`actors`, `realms`, `spaces`, `devices`, `capabilities`, `federation`, `applets`,
-//!   `agents`, `reports`, `invite-tokens`, `audit`, `policy`, `media`, `handles`). `realms` are
-//!   security boundaries; `spaces` are authorization-transparent navigation containers.
+//!   collections (`realms`, `spaces`, `federation`, `applets`, `agents`, `reports`,
+//!   `invite-tokens`, `policy`, `media`, `handles`). `realms` are security boundaries;
+//!   `spaces` are authorization-transparent navigation containers.
+//!
+//! `actors`, `audit`, `capabilities` and `devices` have moved to the typed
+//! production query endpoints (D14, see [`super::queries`]) and are no
+//! longer served here.
 //!
 //! Authorization is enforced by the shared `RequireAdmin` middleware with
 //! the SDK `admin.read` scope before this handler runs. Further hardening
@@ -20,10 +24,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
-    accept_local_operations, append_audit_log, demo_actors, device_inventory_to_json,
-    discussion_track_for_projection_event, policy_document_to_response,
-    projection_event_from_operation, strand_id_for_projection_event, strand_id_from_realm_id,
-    strand_projection_for_realm,
+    accept_local_operations, append_audit_log, discussion_track_for_projection_event,
+    policy_document_to_response, projection_event_from_operation,
+    strand_id_for_projection_event, strand_id_from_realm_id, strand_projection_for_realm,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -42,88 +45,6 @@ pub(super) struct AdminCollectionOutcome {
     total: usize,
     next_cursor: Option<String>,
     production_gap: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminActorProjection {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    actor_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    did: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    account_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    account_row_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    created_at: Option<String>,
-    #[serde(flatten)]
-    #[salvo(schema(value_type = serde_json::Value))]
-    extra: BTreeMap<String, Value>,
-}
-
-impl AdminActorProjection {
-    fn from_projection_value(value: Value) -> Self {
-        let mut fields = match value {
-            Value::Object(fields) => fields,
-            value => {
-                let mut extra = BTreeMap::new();
-                extra.insert("value".to_owned(), value);
-                return Self {
-                    kind: None,
-                    id: None,
-                    actor_id: None,
-                    did: None,
-                    account_id: None,
-                    account_row_id: None,
-                    status: None,
-                    created_at: None,
-                    extra,
-                };
-            }
-        };
-
-        Self {
-            kind: remove_string_field(&mut fields, "kind"),
-            id: remove_string_field(&mut fields, "id"),
-            actor_id: remove_string_field(&mut fields, "actor_id"),
-            did: remove_string_field(&mut fields, "did"),
-            account_id: remove_string_field(&mut fields, "account_id"),
-            account_row_id: remove_string_field(&mut fields, "account_row_id"),
-            status: remove_string_field(&mut fields, "status"),
-            created_at: remove_string_field(&mut fields, "created_at"),
-            extra: fields.into_iter().collect(),
-        }
-    }
-
-    pub(super) fn matches_actor_id(&self, actor_id: &str) -> bool {
-        [
-            self.id.as_deref(),
-            self.actor_id.as_deref(),
-            self.did.as_deref(),
-            self.account_id.as_deref(),
-            self.account_row_id.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|candidate| candidate == actor_id)
-    }
-}
-
-fn remove_string_field(fields: &mut serde_json::Map<String, Value>, field: &str) -> Option<String> {
-    match fields.remove(field) {
-        Some(Value::String(value)) => Some(value),
-        Some(value) => {
-            fields.insert(field.to_owned(), value);
-            None
-        }
-        None => None,
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -229,18 +150,8 @@ pub(super) async fn admin_collection(
     let cursor = cursor.into_inner();
 
     let (field, mut items) = match resource.as_str() {
-        "actors" => (
-            "actors",
-            admin_actor_items(state)
-                .await
-                .into_iter()
-                .map(|item| json!(item))
-                .collect(),
-        ),
         "realms" => ("realms", admin_realm_items(state).await),
         "spaces" => ("spaces", admin_space_container_items(state)),
-        "devices" => ("devices", admin_device_items(state).await),
-        "capabilities" => ("capabilities", admin_capability_items(state)),
         "federation" => ("federation", admin_federation_items(state).await),
         "applets" => ("applets", admin_applet_items(state)),
         "agents" => ("agents", admin_agent_items(state)),
@@ -260,15 +171,6 @@ pub(super) async fn admin_collection(
                 .into_iter()
                 .map(|item| json!(item))
                 .collect(),
-        ),
-        "audit" => (
-            "audit",
-            state
-                .persistence
-                .audit()
-                .snapshot_all()
-                .await
-                .unwrap_or_default(),
         ),
         "policy" => ("policy", admin_policy_items(state).await),
         "media" => ("media", admin_media_items(state).await),
@@ -477,42 +379,6 @@ pub(super) async fn admin_list_realm_members(
     json_ok(admin_realm_member_items(state, &realm_id).await?)
 }
 
-pub(super) async fn admin_actor_items(state: &AppState) -> Vec<AdminActorProjection> {
-    let account_rows: BTreeMap<String, _> = state
-        .persistence
-        .accounts()
-        .list()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|account| (account.did.clone(), account))
-        .collect();
-    demo_actors(state)
-        .await
-        .into_iter()
-        .map(|mut actor| {
-            if let Some(object) = actor.as_object_mut() {
-                let did = object.get("did").and_then(Value::as_str).map(str::to_owned);
-                if let Some(did) = did.as_deref() {
-                    object.insert("id".to_owned(), json!(did));
-                    object.insert("actor_id".to_owned(), json!(did));
-                    object.insert(
-                        "status".to_owned(),
-                        json!(state.account_lifecycle_state(did)),
-                    );
-                    if let Some(account) = account_rows.get(did) {
-                        object.insert("account_id".to_owned(), json!(account.did));
-                        object.insert("account_row_id".to_owned(), json!(account.id));
-                        object.insert("created_at".to_owned(), json!(account.created_at));
-                    }
-                }
-                object.insert("kind".to_owned(), json!("actor"));
-            }
-            AdminActorProjection::from_projection_value(actor)
-        })
-        .collect()
-}
-
 async fn admin_realm_items(state: &AppState) -> Vec<Value> {
     let meta: BTreeMap<String, _> = state
         .persistence
@@ -676,59 +542,6 @@ fn admin_space_container_items(state: &AppState) -> Vec<Value> {
                 "parent_space_id": container.parent_ref,
             })
         })
-        .collect()
-}
-
-async fn admin_device_items(state: &AppState) -> Vec<Value> {
-    state
-        .persistence
-        .devices()
-        .list()
-        .await
-        .map(|devices| {
-            devices
-                .into_iter()
-                .map(|device| {
-                    let mut value = device_inventory_to_json(&device);
-                    if let Some(object) = value.as_object_mut() {
-                        object.insert("kind".to_owned(), json!("device"));
-                    }
-                    value
-                })
-                .collect()
-        })
-        .unwrap_or_else(|_| {
-            BTreeMap::<String, BTreeMap<String, Value>>::new()
-                .iter()
-                .flat_map(|(actor, devices)| {
-                    devices.iter().map(move |(device_id, device)| {
-                        json!({
-                            "kind": "device",
-                            "actor": actor,
-                            "device_id": device_id,
-                            "payload": device,
-                        })
-                    })
-                })
-                .collect()
-        })
-}
-
-fn admin_capability_items(state: &AppState) -> Vec<Value> {
-    // Same non-reentrant-lock concern as `admin_realm_items` — snapshot the
-    // Realm list under lock, drop the guard, then call into authz.
-    let realm_snapshot: Vec<RealmDirectoryEntry> = {
-        let realms = state.realms.lock();
-        realms
-            .search(Default::default())
-            .into_iter()
-            .cloned()
-            .collect()
-    };
-    realm_snapshot
-        .into_iter()
-        .flat_map(|realm| state.authz.grants_in_realm(realm.realm_id.as_str()))
-        .map(|grant| json!(grant))
         .collect()
 }
 

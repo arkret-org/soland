@@ -587,7 +587,10 @@ async fn append_account_deactivation_propagation_state(
     }
 }
 
-fn deactivation_peer_service_targets_for_actor(state: &AppState, actor: &str) -> Vec<Value> {
+pub(crate) fn deactivation_peer_service_targets_for_actor(
+    state: &AppState,
+    actor: &str,
+) -> Vec<Value> {
     let projection = state.projection.lock();
     let actor_realms = projection
         .members

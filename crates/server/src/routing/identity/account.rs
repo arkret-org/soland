@@ -196,7 +196,10 @@ mod lifecycle;
 // Re-export the lifecycle surface so external paths
 // (`crate::routing::identity::account::set_account_lifecycle_state`, etc.,
 // used by federation::erasure_fanout) stay stable after the SOL-07-002 split.
-pub(crate) use lifecycle::{AccountLifecycleChange, set_account_lifecycle_state};
+pub(crate) use lifecycle::{
+    AccountLifecycleChange, deactivation_peer_service_targets_for_actor,
+    set_account_lifecycle_state,
+};
 
 /// `gate` trust-segment account routes — the spec `account_auth` surface
 /// group (tier `deployment_local`) binds account registration to

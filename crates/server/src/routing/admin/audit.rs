@@ -111,6 +111,8 @@ pub(super) fn ingest_router() -> Router {
 /// `/_soland/admin/*` branch.
 pub(super) fn ops_router() -> Router {
     Router::new()
+        // D14 — production typed audit query at the collection root.
+        .push(Router::with_path("audit").get(super::queries::admin_query_audit))
         .push(Router::with_path("audit/events").get(audit_events))
         .push(Router::with_path("audit/erasure-receipts").get(audit_erasure_receipts))
 }

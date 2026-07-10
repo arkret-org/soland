@@ -18,15 +18,22 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage() {
         .await
         .unwrap();
 
+    // D14 — detail row is the typed production `AdminActor` projection.
     assert_eq!(actor["id"], "did:web:alice.example");
-    assert_eq!(actor["actor_id"], "did:web:alice.example");
     assert_eq!(actor["did"], "did:web:alice.example");
-    assert_eq!(actor["account_id"], "did:web:alice.example");
     assert!(
-        actor["account_row_id"]
+        actor["account_id"]
             .as_str()
             .is_some_and(|value| value.starts_with("ak:account:")),
         "actor row must include the durable account row id: {actor}"
+    );
+    assert!(
+        actor["status"].as_str().is_some(),
+        "lifecycle status must be answered authoritatively: {actor}"
+    );
+    assert!(
+        actor["is_admin"].is_boolean(),
+        "is_admin must be answered authoritatively: {actor}"
     );
 }
 
