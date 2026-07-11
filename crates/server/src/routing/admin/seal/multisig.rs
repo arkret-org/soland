@@ -298,17 +298,25 @@ pub(crate) async fn admin_rotate_signing_key(
     if state.config.use_keystore {
         let app_id = format!("soland.{}", state.config.service_did);
         let key_id = format!("arkret:signer:soland-notary:{}", state.config.service_did);
-        let store = arkret_sdk::platform_default_keystore(&app_id);
-        match store.store(&key_id, &seed) {
-            Ok(()) => {
-                keystore_persisted = true;
-                tracing::info!(%key_id, "rotated notary signing key persisted to platform KeyStore");
-            }
+        match arkret_sdk::durable_platform_keystore(&app_id) {
+            Ok(store) => match store.store(&key_id, &seed) {
+                Ok(()) => {
+                    keystore_persisted = true;
+                    tracing::info!(%key_id, "rotated notary signing key persisted to platform KeyStore");
+                }
+                Err(error) => {
+                    let msg = format!(
+                        "platform KeyStore rejected rotated key write ({error}); rotation applied in-process only"
+                    );
+                    tracing::warn!(%error, %key_id, "rotate-signing-key: KeyStore write failed");
+                    keystore_warning = Some(msg);
+                }
+            },
             Err(error) => {
                 let msg = format!(
-                    "platform KeyStore rejected rotated key write ({error}); rotation applied in-process only"
+                    "durable platform KeyStore unavailable ({error}); rotation applied in-process only"
                 );
-                tracing::warn!(%error, %key_id, "rotate-signing-key: KeyStore write failed");
+                tracing::warn!(%error, %key_id, "rotate-signing-key: durable KeyStore unavailable");
                 keystore_warning = Some(msg);
             }
         }

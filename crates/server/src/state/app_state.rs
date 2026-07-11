@@ -413,7 +413,8 @@ impl AppState {
                 if config.use_keystore {
                     let app_id = format!("soland.{service_did}");
                     let key_id = format!("arkret:signer:soland-notary:{service_did}");
-                    let store = arkret_sdk::platform_default_keystore(&app_id);
+                    let store = arkret_sdk::durable_platform_keystore(&app_id)
+                        .expect("use_keystore requires a durable platform key store");
                     if let Ok(bytes) = store.load(&key_id) {
                         if bytes.len() == 32 {
                             let mut seed = [0u8; 32];
@@ -513,7 +514,8 @@ impl AppState {
         // `service_admin_signer` at signing time with a sticky-warn.
         let admin_app_id = format!("soland.{}", config.service_did);
         let admin_keystore_inner: Box<dyn arkret_sdk::KeyStore> = if config.use_keystore {
-            arkret_sdk::platform_default_keystore(&admin_app_id)
+            arkret_sdk::durable_platform_keystore(&admin_app_id)
+                .expect("use_keystore requires a durable platform key store")
         } else {
             Box::new(arkret_sdk::keystore::InMemoryKeyStore::new())
         };

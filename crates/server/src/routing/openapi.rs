@@ -467,8 +467,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
     // policy_document CRUD (`ak.self.policy_document.*`) was promoted to the
     // protocol surface at `/_arkret/self/policies*`; its operation ids are now
     // emitted by the typed `#[endpoint]` handlers in `access/policy.rs`. The
-    // soland-local PATCH compatibility route stays on the product surface but is
-    // registered via its own `#[endpoint]` annotation, not this table.
     (
         "/_arkret/edge/push/register-device",
         PathItemType::Post,

@@ -143,7 +143,7 @@ pub struct AppConfig {
     /// service's verifying key is uniquely bound to the runtime.
     pub agent_audit_binding_signing_seed: Option<[u8; 32]>,
     /// When true, the NotaryWorker loads its signing seed
-    /// from the SDK platform `KeyStore` (`platform_default_keystore("soland.<service_did>")`)
+    /// from the SDK platform `KeyStore` (`durable_platform_keystore("soland.<service_did>")`)
     /// at boot and stores rotated keys back into the same KeyStore. When
     /// false (default), only `notary_signing_key_seed` (env-loaded) is
     /// honored. The KeyStore key id is `arkret:signer:soland-notary:<service_did>`.
