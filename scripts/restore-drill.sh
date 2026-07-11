@@ -19,7 +19,7 @@ if [ ! -f "$TARBALL" ]; then
 fi
 
 DATABASE_URL="${SOLAND_DATABASE_URL:-${DATABASE_URL:-${PASION_DATABASE_URL:-}}}"
-SERVICE_DID="${SOLAND_SERVICE_DID:-did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service}"
+SERVICE_ID="${SOLAND_SERVICE_ID:-did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service}"
 USE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"
 WORKDIR="$(mktemp -d -t soland-restore-XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -36,7 +36,7 @@ for cmd in pg_restore psql sha256sum tar jq; do
     fi
 done
 
-echo "[restore-drill] tarball=$TARBALL service_did=$SERVICE_DID workdir=$WORKDIR"
+echo "[restore-drill] tarball=$TARBALL service_id=$SERVICE_ID workdir=$WORKDIR"
 tar -xzf "$TARBALL" -C "$WORKDIR"
 
 MANIFEST="$WORKDIR/manifest.json"
@@ -76,7 +76,7 @@ if [ "$USE_KEYSTORE" = "true" ] && \
     echo "[restore-drill] step 2/3: keystore restore via soland-rotate-drill --import-only"
     cargo run --quiet --bin soland-rotate-drill -- \
         --import-only \
-        --service-did "$SERVICE_DID" \
+        --service-did "$SERVICE_ID" \
         --input "$WORKDIR/keystore.json"
 else
     echo "[restore-drill] step 2/3: keystore restore skipped"

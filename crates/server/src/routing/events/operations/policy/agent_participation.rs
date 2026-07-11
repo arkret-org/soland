@@ -247,12 +247,12 @@ pub(super) async fn native_agent_exists(
 
 pub(super) async fn agent_lifecycle_rejection_reason(
     state: &AppState,
-    agent_principal_id: &str,
+    agent_id: &str,
 ) -> Result<Option<&'static str>, &'static str> {
     let record_state = state
         .persistence
         .agents()
-        .get(agent_principal_id)
+        .get(agent_id)
         .await
         .map_err(|_| "agent_principal_lookup_unavailable")?
         .and_then(|record| {
@@ -269,7 +269,7 @@ pub(super) async fn agent_lifecycle_rejection_reason(
 
     let projected = {
         let projection = state.projection.lock();
-        projection.agent_lifecycles.get(agent_principal_id).copied()
+        projection.agent_lifecycles.get(agent_id).copied()
     };
     Ok(match projected {
         Some(arkret_sdk::AgentLifecycleState::Paused) => Some("agent_paused"),
@@ -285,7 +285,7 @@ pub(super) fn agent_participation_action(operation: &Operation) -> Option<&str> 
 pub(super) fn validate_agent_act_on_behalf_authorization_ref(
     state: &AppState,
     operation: &Operation,
-    agent_principal_id: &str,
+    agent_id: &str,
 ) -> Result<String, &'static str> {
     let authorization_ref = operation
         .payload
@@ -305,7 +305,7 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
         .unwrap_or_else(|| operation.realm_id.as_str());
     let grants = state
         .authz
-        .grants_for_subject(agent_principal_id, operation.realm_id.as_str());
+        .grants_for_subject(agent_id, operation.realm_id.as_str());
     let Some(grant) = grants
         .iter()
         .find(|grant| grant.grant_id == authorization_ref)
@@ -366,7 +366,7 @@ pub(super) fn agent_action_target_matches(target: &Value, operation: &Operation)
 pub(super) fn validate_agent_act_on_behalf_approval(
     state: &AppState,
     operation: &Operation,
-    agent_principal_id: &str,
+    agent_id: &str,
     authorization_ref: &str,
 ) -> Result<(), &'static str> {
     let request_id = operation
@@ -392,7 +392,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
     if request.status != crate::reducer::AgentActionRequestStatus::Approved {
         return Err("agent_act_on_behalf_approval_request_not_approved");
     }
-    if request.agent_principal_id != agent_principal_id {
+    if request.agent_id != agent_id {
         return Err("agent_act_on_behalf_approval_agent_mismatch");
     }
     let approval = request
@@ -419,7 +419,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
     let expires_at = approval.expires_at;
     drop(projection);
     if !state.remember_agent_approval_nonce(
-        agent_principal_id,
+        agent_id,
         authorization_ref,
         request_id,
         approval_nonce,
@@ -565,7 +565,7 @@ async fn operation_agent_write_context(
 pub(super) fn validate_agent_context_authorization_ref(
     state: &AppState,
     operation: &Operation,
-    agent_principal_id: &str,
+    agent_id: &str,
     authorization_ref: &str,
 ) -> Result<(), &'static str> {
     if !authorization_ref.starts_with("ak:grant:") {
@@ -580,7 +580,7 @@ pub(super) fn validate_agent_context_authorization_ref(
         .unwrap_or_else(|| operation.realm_id.as_str());
     let grants = state
         .authz
-        .grants_for_subject(agent_principal_id, operation.realm_id.as_str());
+        .grants_for_subject(agent_id, operation.realm_id.as_str());
     let Some(grant) = grants
         .iter()
         .find(|grant| grant.grant_id == authorization_ref)
@@ -602,12 +602,12 @@ pub(super) fn validate_agent_context_authorization_ref(
 pub(super) fn validate_agent_context(
     state: &AppState,
     operation: &Operation,
-    agent_principal_id: &str,
+    expected_agent_id: &str,
     envelope_authorization_ref: Option<&str>,
 ) -> Result<(), &'static str> {
     let context = operation_agent_context(operation).ok_or("agent_context_missing")?;
     let agent_id = agent_context_string(context, "agent_id", "agent_context_agent_id_missing")?;
-    if agent_id != agent_principal_id {
+    if agent_id != expected_agent_id {
         return Err("agent_context_agent_mismatch");
     }
     agent_context_string(
@@ -628,7 +628,7 @@ pub(super) fn validate_agent_context(
     validate_agent_context_authorization_ref(
         state,
         operation,
-        agent_principal_id,
+        agent_id,
         context_authorization_ref,
     )?;
     if let Some(envelope_authorization_ref) = envelope_authorization_ref
@@ -650,29 +650,20 @@ pub async fn validate_agent_reply_participation(
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     for operation in operations {
-        let Some((agent_principal_id, mode)) =
-            operation_agent_write_context(state, operation).await?
-        else {
+        let Some((agent_id, mode)) = operation_agent_write_context(state, operation).await? else {
             continue;
         };
-        if let Some(reason) = agent_lifecycle_rejection_reason(state, &agent_principal_id).await? {
+        if let Some(reason) = agent_lifecycle_rejection_reason(state, &agent_id).await? {
             return Err(reason);
         }
         let authorization_ref = if mode == AgentParticipationMode::ActOnBehalf {
             Some(validate_agent_act_on_behalf_authorization_ref(
-                state,
-                operation,
-                &agent_principal_id,
+                state, operation, &agent_id,
             )?)
         } else {
             None
         };
-        validate_agent_context(
-            state,
-            operation,
-            &agent_principal_id,
-            authorization_ref.as_deref(),
-        )?;
+        validate_agent_context(state, operation, &agent_id, authorization_ref.as_deref())?;
         let strand_id = operation
             .payload
             .get("strand_id")
@@ -688,7 +679,7 @@ pub async fn validate_agent_reply_participation(
         let Some(resolved) =
             crate::routing::agent_participation::resolve_agent_participation_for_scope_keys(
                 state,
-                &agent_principal_id,
+                &agent_id,
                 &scope_keys,
             )
             .await
@@ -699,12 +690,7 @@ pub async fn validate_agent_reply_participation(
             return Err(mode.rejection_reason());
         }
         if let Some(authorization_ref) = authorization_ref {
-            validate_agent_act_on_behalf_approval(
-                state,
-                operation,
-                &agent_principal_id,
-                &authorization_ref,
-            )?;
+            validate_agent_act_on_behalf_approval(state, operation, &agent_id, &authorization_ref)?;
         }
     }
     Ok(())

@@ -107,7 +107,7 @@ pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> Stri
 pub(crate) fn sign_trusted_recovery_service_proof(
     signing: &SigningKey,
     session: &Value,
-    service_did: &str,
+    service_id: &str,
     verification_method: &str,
     audience: &str,
     attestation_ref: Option<&str>,
@@ -115,7 +115,7 @@ pub(crate) fn sign_trusted_recovery_service_proof(
     let mut proof_body = serde_json::json!({
         "kind": "trusted_recovery_service",
         "challenge": session["challenge"],
-        "service_did": service_did,
+        "service_id": service_id,
         "audience": audience,
         "verification_method": verification_method,
         "alg": "EdDSA",
@@ -681,10 +681,10 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
         .persistence
         .sessions()
         .put(&SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.config.service_did),
+            token_hash: test_session_credential_hash(token, &state.config.service_id),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
-            audience: state.config.service_did.clone(),
+            audience: state.config.service_id.clone(),
             session_public_key: None,
             agent_session: None,
             expires_at: now + chrono::Duration::minutes(10),

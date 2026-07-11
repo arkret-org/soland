@@ -283,7 +283,7 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
         .await
         .expect("presence stored");
 
-    let body = roster_body(&state.config.service_did);
+    let body = roster_body(&state.config.service_id);
     let initial =
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
     assert!(
@@ -385,7 +385,7 @@ fn roster_session(state: &AppState, actor: &str) -> SessionRecord {
         token_hash: "token".to_owned(),
         actor: actor.to_owned(),
         device_id: "device-1".to_owned(),
-        audience: state.config.service_did.clone(),
+        audience: state.config.service_id.clone(),
         session_public_key: None,
         agent_session: None,
         expires_at: now() + ChronoDuration::hours(1),
@@ -437,7 +437,7 @@ fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) 
             state: membership.to_owned(),
             role: "member".to_owned(),
             delivery_status: None,
-            recipient_service_did: None,
+            recipient_service_id: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
             invited_at: (membership == "invite").then_some(updated_at),
@@ -688,7 +688,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     )
     .await;
 
-    let body = roster_body(&state.config.service_did);
+    let body = roster_body(&state.config.service_id);
     let snapshot =
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
     let timeline_events = snapshot.realms[ROSTER_REALM]["timeline"]["events"]
@@ -759,7 +759,7 @@ fn handle_claim(
         "handle": "alice:soland.local",
         "subject": ROSTER_SUBJECT,
         "issuer": issuer,
-        "issuer_service_did": issuer,
+        "issuer_service_id": issuer,
         "binding_state": binding_state,
         "claim_kind": "handle_binding",
         "visibility": "public",
@@ -781,8 +781,8 @@ fn handle_claim(
     }
     // Keep tests honest: use the configured service DID unless a test is
     // intentionally exercising issuer trust rejection.
-    if issuer == state.config.service_did {
-        claim["issuer_service_did"] = json!(state.config.service_did);
+    if issuer == state.config.service_id {
+        claim["issuer_service_id"] = json!(state.config.service_id);
     }
     claim
 }
@@ -800,7 +800,7 @@ fn roster_row(
     realm: &RealmDirectoryEntry,
     session: Option<&SessionRecord>,
 ) -> Value {
-    let body = roster_body(&state.config.service_did);
+    let body = roster_body(&state.config.service_id);
     roster_members_for_realm(state, realm, session, &body)
         .into_iter()
         .find(|row| row["actor_id"] == ROSTER_ACTOR)
@@ -915,7 +915,7 @@ fn roster_includes_projected_members_and_directory_fallback() {
     insert_projected_membership(&state, "did:web:carol.example", "invite");
     insert_projected_membership(&state, "did:web:dave.example", "knock");
     let realm = roster_realm(false, false);
-    let body = roster_body(&state.config.service_did);
+    let body = roster_body(&state.config.service_id);
     let session = roster_session(&state, ROSTER_ACTOR);
 
     let rows = roster_members_for_realm(&state, &realm, Some(&session), &body);
@@ -945,7 +945,7 @@ fn roster_suppresses_terminal_projected_membership_over_directory_fallback() {
     let state = test_state();
     insert_projected_membership(&state, ROSTER_ACTOR, "leave");
     let realm = roster_realm(false, false);
-    let body = roster_body(&state.config.service_did);
+    let body = roster_body(&state.config.service_id);
 
     let rows = roster_members_for_realm(&state, &realm, None, &body);
 
@@ -958,8 +958,8 @@ fn roster_discloses_handle_claim_for_visible_trusted_issuer() {
     insert_member_identity_subject(&state);
     let claim = handle_claim(
         &state,
-        &state.config.service_did,
-        &state.config.service_did,
+        &state.config.service_id,
+        &state.config.service_id,
         now() + ChronoDuration::hours(1),
         "verified",
         None,
@@ -988,7 +988,7 @@ fn roster_hides_handle_claim_from_untrusted_issuer() {
         handle_claim(
             &state,
             "did:web:evil.example",
-            &state.config.service_did,
+            &state.config.service_id,
             now() + ChronoDuration::hours(1),
             "verified",
             None,
@@ -1012,8 +1012,8 @@ fn roster_hides_expired_handle_claim() {
         &state,
         handle_claim(
             &state,
-            &state.config.service_did,
-            &state.config.service_did,
+            &state.config.service_id,
+            &state.config.service_id,
             now() - ChronoDuration::seconds(1),
             "verified",
             None,
@@ -1036,8 +1036,8 @@ fn roster_hides_revoked_handle_claim() {
         &state,
         handle_claim(
             &state,
-            &state.config.service_did,
-            &state.config.service_did,
+            &state.config.service_id,
+            &state.config.service_id,
             now() + ChronoDuration::hours(1),
             "revoked",
             None,
@@ -1060,8 +1060,8 @@ fn roster_disclosure_depends_on_realm_policy() {
         &state,
         handle_claim(
             &state,
-            &state.config.service_did,
-            &state.config.service_did,
+            &state.config.service_id,
+            &state.config.service_id,
             now() + ChronoDuration::hours(1),
             "verified",
             None,
@@ -1086,8 +1086,8 @@ fn roster_limits_large_inline_handle_claim_payloads() {
     insert_member_identity_subject(&state);
     let claim = handle_claim(
         &state,
-        &state.config.service_did,
-        &state.config.service_did,
+        &state.config.service_id,
+        &state.config.service_id,
         now() + ChronoDuration::hours(1),
         "verified",
         Some(json!([{"blob": "x".repeat(HANDLE_CLAIMS_INLINE_MAX_BYTES + 1)}])),
@@ -1143,7 +1143,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
             .expect("device inserted");
     }
 
-    let body = roster_body(&state.config.service_did);
+    let body = roster_body(&state.config.service_id);
     let initial =
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
     assert_eq!(
@@ -1280,7 +1280,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .await
         .expect("first state event appended");
 
-    let body = roster_body(&state.config.service_did);
+    let body = roster_body(&state.config.service_id);
     let initial =
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
     let initial_events = initial.realms[ROSTER_REALM]["state"]["events"]
@@ -1421,7 +1421,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     )
     .await;
 
-    let body = roster_body(&state.config.service_did);
+    let body = roster_body(&state.config.service_id);
     let initial =
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
     let filter_value = sync_filter_value(body.filter.as_ref());
@@ -1584,7 +1584,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     )
     .await;
 
-    let body = roster_body(&state.config.service_did);
+    let body = roster_body(&state.config.service_id);
     let snapshot =
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
     let timeline_events = snapshot.realms[ROSTER_REALM]["timeline"]["events"]

@@ -10,13 +10,13 @@
 //! # v1 scope
 //!
 //! - **All four notary profiles supported**:
-//!   - `single_did` — straightforward DID match against `service_did`.
+//!   - `single_did` — straightforward DID match against `service_id`.
 //!   - `threshold(k, members[])` — simple deterministic leader election: among the `members` set,
-//!     the lex-smallest DID that *includes* this node's `service_did` is the candidate to sign
-//!     first; if `service_did` IS that candidate, sign; otherwise this pass is a no-op (another
+//!     the lex-smallest DID that *includes* this node's `service_id` is the candidate to sign
+//!     first; if `service_id` IS that candidate, sign; otherwise this pass is a no-op (another
 //!     soland instance owns the round). The signature itself is single-DID — `k`-of-`n` aggregation
 //!     lives on the multi-signer coordinator.
-//!   - `open_set(members[])` — any member may sign; if `service_did ∈ members` this node signs.
+//!   - `open_set(members[])` — any member may sign; if `service_id ∈ members` this node signs.
 //!   - `mixed(primary, recovery_members[])` — primary signs by default; recovery members may sign
 //!     only after the leaf-Seal set has gone stale beyond `revocation_freshness_window_ms` (default
 //!     60_000ms when unset). Among recovery members the lex-smallest reachable DID owns the round
@@ -84,13 +84,13 @@ impl From<StoreError> for NotaryError {
 /// Stateless notary worker. Holds only the service DID; everything else
 /// reads from `AppState` per call.
 pub struct NotaryWorker {
-    service_did: String,
+    service_id: String,
 }
 
 impl NotaryWorker {
-    pub fn for_service(service_did: impl Into<String>) -> Self {
+    pub fn for_service(service_id: impl Into<String>) -> Self {
         Self {
-            service_did: service_did.into(),
+            service_id: service_id.into(),
         }
     }
 
@@ -322,11 +322,11 @@ impl NotaryWorker {
     ///
     /// Profile dispatch:
     ///
-    /// - **Genesis** (no notary cell yet) — implicit `service_did` is the notary.
+    /// - **Genesis** (no notary cell yet) — implicit `service_id` is the notary.
     /// - **Bottom** on the notary cell — Realm-wide pause; not authorized.
-    /// - **single_did** — DID match against `service_did`.
+    /// - **single_did** — DID match against `service_id`.
     /// - **threshold(k, members)** — leader election: among `members`, the lex-smallest DID is the
-    ///   round leader; if it matches `service_did`, this node signs.
+    ///   round leader; if it matches `service_id`, this node signs.
     /// - **open_set(members)** — every listed member may sign; concurrent leaves converge through
     ///   the joined control view. otherwise no-op.
     /// - **mixed(primary, recovery_members, revocation_freshness_window_ms?)** — primary signs by
@@ -344,7 +344,7 @@ impl NotaryWorker {
             .cell_store
             .sealed_ops_for_cell(realm_id, &notary_cell)?;
         if ops.is_empty() {
-            // Genesis Realm — no notary cell yet. Implicit "service_did is
+            // Genesis Realm — no notary cell yet. Implicit "service_id is
             // notary" applies until the first Move sets the cell.
             return Ok(true);
         }
@@ -378,13 +378,13 @@ impl NotaryWorker {
             return Ok(false);
         };
         match notary_value {
-            arkret_sdk::NotaryValue::SingleDid { did, .. } => Ok(did.as_str() == self.service_did),
+            arkret_sdk::NotaryValue::SingleDid { did, .. } => Ok(did.as_str() == self.service_id),
             arkret_sdk::NotaryValue::Threshold { members, .. } => {
                 Ok(self.is_round_leader(&members))
             }
             arkret_sdk::NotaryValue::OpenSet { members } => Ok(members
                 .iter()
-                .any(|member| member.as_str() == self.service_did)),
+                .any(|member| member.as_str() == self.service_id)),
             arkret_sdk::NotaryValue::Mixed {
                 did: primary,
                 recovery_members,
@@ -395,7 +395,7 @@ impl NotaryWorker {
                     .get("revocation_freshness_window_ms")
                     .and_then(|n| n.as_u64())
                     .unwrap_or(60_000);
-                if primary.as_str() == self.service_did {
+                if primary.as_str() == self.service_id {
                     return Ok(true);
                 }
                 // Recovery members take over only if the latest leaf is
@@ -403,7 +403,7 @@ impl NotaryWorker {
                 // recovery member.
                 if recovery_members
                     .iter()
-                    .any(|d| d.as_str() == self.service_did)
+                    .any(|d| d.as_str() == self.service_id)
                     && self.frontier_is_stale(state, realm_id, staleness_ms)?
                 {
                     Ok(self.is_round_leader(&recovery_members))
@@ -415,13 +415,13 @@ impl NotaryWorker {
     }
 
     /// Lex-smallest-DID leader election: this node is the leader when its
-    /// `service_did` is the smallest entry in `members`. Empty list → no
+    /// `service_id` is the smallest entry in `members`. Empty list → no
     /// leader (returns false).
     fn is_round_leader<S: AsRef<str>>(&self, members: &[S]) -> bool {
         let Some(leader) = members.iter().map(|m| m.as_ref()).min() else {
             return false;
         };
-        leader == self.service_did
+        leader == self.service_id
     }
 
     /// Mixed-profile recovery gate: did the latest leaf go stale beyond
@@ -547,7 +547,7 @@ impl NotaryWorker {
     /// and the RFC 7515 §5.2 signing input shape (`BASE64URL(header) ||
     /// '.' || BASE64URL(canonical_bytes)`) byte-for-byte.
     ///
-    /// The verification_method id is `<service_did>#notary-key`; the
+    /// The verification_method id is `<service_id>#notary-key`; the
     /// matching DID Document MUST publish that key for the production
     /// JWS verifier to round-trip the signature. Until the DID document
     /// publishing pipeline lands, production deployments rely on
@@ -574,7 +574,7 @@ impl NotaryWorker {
 
         Ok(MoveSignature {
             alg: "EdDSA".to_owned(),
-            verification_method: format!("{}#notary-key", self.service_did),
+            verification_method: format!("{}#notary-key", self.service_id),
             payload_digest,
             created_at: chrono::Utc::now(),
             jws,
@@ -764,7 +764,7 @@ pub fn ensure_realm_seal_head(
 ) -> Result<Option<Seal>, NotaryError> {
     let mut leaves = state.seal_store.list_leaves(realm_id)?;
     if leaves.is_empty() {
-        let worker = NotaryWorker::for_service(state.config.service_did.clone());
+        let worker = NotaryWorker::for_service(state.config.service_id.clone());
         if !worker.is_authorized_for(state, realm_id)? {
             return Ok(None);
         }
@@ -792,7 +792,7 @@ pub fn run_one_signing_pass(
     realm_id: &RealmId,
     max_control_moves: usize,
 ) -> Result<Option<NotaryOutcome>, NotaryError> {
-    let worker = NotaryWorker::for_service(state.config.service_did.clone());
+    let worker = NotaryWorker::for_service(state.config.service_id.clone());
     worker.sign_pending_for_realm(state, realm_id, max_control_moves)
 }
 

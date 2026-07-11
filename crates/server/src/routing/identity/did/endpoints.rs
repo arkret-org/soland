@@ -12,7 +12,7 @@ pub struct RawDidDocumentJson(
 pub struct IdentityRegistryDescription {
     pub protocol_version: String,
     pub service_type: String,
-    pub service_did: Did,
+    pub service_id: Did,
     pub trust_domain: String,
     pub registry_mode: String,
     pub supported_receipts: Vec<String>,
@@ -122,8 +122,8 @@ pub(crate) async fn identity_describe(
     if did_webvh["enabled"].as_bool().unwrap_or(false) {
         profiles.push("ak.identity.webvh.provider.v1".to_owned());
     }
-    let service_did = Did::new(state.config.service_did.clone())
-        .map_err(|error| AppError::internal(format!("invalid configured service_did: {error}")))?;
+    let service_id = Did::new(state.config.service_id.clone())
+        .map_err(|error| AppError::internal(format!("invalid configured service_id: {error}")))?;
     let supported_did_methods = state
         .config
         .did_resolver_allow_methods
@@ -140,7 +140,7 @@ pub(crate) async fn identity_describe(
     json_ok(IdentityRegistryDescription {
         protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),
         service_type: "identity_registry".to_owned(),
-        service_did,
+        service_id,
         trust_domain: state.config.trust_domain.clone(),
         registry_mode: "development_local".to_owned(),
         supported_receipts: vec!["local".to_owned()],
@@ -959,7 +959,7 @@ pub(crate) async fn identity_receipts(
         receipts: record
             .map(|record| {
                 vec![json!({
-                    "service_did": state.config.service_did.clone(),
+                    "service_id": state.config.service_id.clone(),
                     "did": record.did,
                     "head_event_digest": record.key_log_head,
                     "seq": record.seq,
@@ -1138,7 +1138,7 @@ pub(crate) async fn identity_submit_did_operation(
     };
     let receipts = if append_log_event {
         vec![json!({
-            "service_did": state.config.service_did.clone(),
+            "service_id": state.config.service_id.clone(),
             "did": did,
             "head_event_digest": event_digest,
             "seq": next_seq,

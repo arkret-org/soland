@@ -21,7 +21,7 @@ pub(super) async fn federation_service_binding_current_for_destination(
             .collect::<Vec<_>>()
     };
     // Federation replica / observer admission: when this server hosts the Realm
-    // but is the effective `delivery_binding.recipient_service_did` for zero
+    // but is the effective `delivery_binding.recipient_service_id` for zero
     // local members, there is no local member binding the asserted frontier can
     // be stale against. A conservative deployment (default) still fails closed
     // below; a server explicitly configured as a replica / observer admits the
@@ -29,12 +29,12 @@ pub(super) async fn federation_service_binding_current_for_destination(
     if state.settings().federation_replica_observer
         && !members
             .iter()
-            .any(|member| member.recipient_service_did == state.config.service_did)
+            .any(|member| member.recipient_service_id == state.config.service_id)
     {
         return FederationServiceBindingCheck::Current;
     }
     let result = federation_service_binding_check_from_members(
-        state.config.service_did.as_str(),
+        state.config.service_id.as_str(),
         now(),
         &binding.delivery_binding_frontier,
         members,
@@ -58,7 +58,7 @@ pub(super) fn delivery_binding_member_view(
     if member.delivery_status.as_deref() != Some("routable") {
         return None;
     }
-    let recipient_service_did = member.recipient_service_did.clone()?;
+    let recipient_service_id = member.recipient_service_id.clone()?;
     let delivery_binding_frontier_ref = member
         .delivery_binding_frontier
         .clone()
@@ -66,7 +66,7 @@ pub(super) fn delivery_binding_member_view(
     Some(DeliveryBindingMemberView {
         member: member.member.clone(),
         realm_id: member.realm_id.clone(),
-        recipient_service_did,
+        recipient_service_id,
         membership_event_ref: member.membership_event_ref.clone(),
         delivery_binding_frontier_ref,
         updated_at: member.updated_at,
@@ -74,14 +74,14 @@ pub(super) fn delivery_binding_member_view(
 }
 
 pub(super) fn federation_service_binding_check_from_members(
-    local_service_did: &str,
+    local_service_id: &str,
     now: DateTime<Utc>,
     request_frontier: &[EventId],
     members: Vec<DeliveryBindingMemberView>,
 ) -> FederationServiceBindingCheck {
     let current_local_frontiers = members
         .iter()
-        .filter(|member| member.recipient_service_did == local_service_did)
+        .filter(|member| member.recipient_service_id == local_service_id)
         .map(|member| member.delivery_binding_frontier_ref.clone())
         .collect::<Vec<_>>();
     match federation_delivery_binding_frontier_is_current(request_frontier, current_local_frontiers)
@@ -105,7 +105,7 @@ pub(super) fn federation_service_binding_check_from_members(
             (
                 (
                     evidence.actor_id.as_str().to_owned(),
-                    evidence.new_recipient_service_did.as_str().to_owned(),
+                    evidence.new_recipient_service_id.as_str().to_owned(),
                     evidence.delivery_binding_frontier_ref.clone(),
                 ),
                 evidence,
@@ -119,7 +119,7 @@ pub(super) fn federation_service_binding_check_from_members(
         .into_values()
         .next()
         .expect("one handover evidence candidate");
-    let grace_expired = evidence.new_recipient_service_did.as_str() != local_service_did
+    let grace_expired = evidence.new_recipient_service_id.as_str() != local_service_id
         && now.signed_duration_since(evidence.updated_at)
             > Duration::seconds(DELIVERY_BINDING_HANDOVER_GRACE_SECONDS);
     if grace_expired {
@@ -133,12 +133,12 @@ pub(super) fn delivery_binding_handover_evidence_from_member(
     member: DeliveryBindingMemberView,
 ) -> Option<DeliveryBindingHandoverEvidence> {
     let actor_id = Did::new(member.member.clone()).ok()?;
-    let new_recipient_service_did = Did::new(member.recipient_service_did.clone()).ok()?;
+    let new_recipient_service_id = Did::new(member.recipient_service_id.clone()).ok()?;
     let handover_frontier = vec![EventId::new(member.delivery_binding_frontier_ref.clone()).ok()?];
     Some(DeliveryBindingHandoverEvidence {
         realm_id: member.realm_id,
         actor_id,
-        new_recipient_service_did,
+        new_recipient_service_id,
         handover_frontier,
         membership_event_ref: member.membership_event_ref,
         delivery_binding_frontier_ref: member.delivery_binding_frontier_ref,
@@ -160,7 +160,7 @@ pub(super) async fn delivery_binding_handover_witness(
         "kind": "member_delivery_binding_projection",
         "realm_id": evidence.realm_id.as_str(),
         "actor_id": evidence.actor_id.as_str(),
-        "recipient_service_did": evidence.new_recipient_service_did.as_str(),
+        "recipient_service_id": evidence.new_recipient_service_id.as_str(),
         "delivery_binding_frontier": frontier,
         "membership_event_ref": evidence.membership_event_ref.as_deref(),
         "projection_updated_at": evidence.updated_at.to_rfc3339(),

@@ -29,7 +29,7 @@ struct WellKnownArkretEndpoints {
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct WellKnownArkretOutcome {
     schema: String,
-    service_did: String,
+    service_id: String,
     trust_domain: String,
     public_base_url: String,
     fanout_topology: String,
@@ -55,7 +55,7 @@ async fn well_known_arkret(depot: &mut Depot) -> JsonResult<WellKnownArkretOutco
     let public_base_url = state.config.public_base_url.trim_end_matches('/');
     json_ok(WellKnownArkretOutcome {
         schema: "ak.schema.server_description.v1".to_owned(),
-        service_did: state.config.service_did.clone(),
+        service_id: state.config.service_id.clone(),
         trust_domain: state.config.trust_domain.clone(),
         public_base_url: state.config.public_base_url.clone(),
         fanout_topology: fanout_topology.to_owned(),

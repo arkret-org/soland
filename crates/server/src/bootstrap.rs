@@ -1,15 +1,15 @@
 //! Service-identity self-bootstrap (identity-did.md §3.7).
 //!
-//! Resolves the deployment's own authoritative `service_did` at startup, in the
+//! Resolves the deployment's own authoritative `service_id` at startup, in the
 //! async window after the database is connected but before [`AppState`] (and the
-//! notary / HLC / DID-resolver built from `service_did`) are constructed. The
+//! notary / HLC / DID-resolver built from `service_id`) are constructed. The
 //! resolved DID is written back onto the mutable [`AppConfig`] so every
 //! downstream consumer sees the final value.
 //!
 //! Invariants (identity-did.md §3.7):
 //!   * I-1 key custody — soland self-generates its own signing keys and hosts its own `did.jsonl`;
 //!     it never holds another subject's private key.
-//!   * I-2 persisted identity is authoritative, config `service_did` is a fail-closed pin (a
+//!   * I-2 persisted identity is authoritative, config `service_id` is a fail-closed pin (a
 //!     mismatch rejects startup).
 //!   * I-3 explicit bootstrap gate — self-mint only on an explicit opt-in; first boot with a
 //!     configured DID adopts it (backward-compatible migration); a present store with a
@@ -22,14 +22,14 @@ use std::sync::Arc;
 use rand_chacha::rand_core::SeedableRng;
 use soland_data::Db;
 
-use crate::config::{AppConfig, PLACEHOLDER_SERVICE_DID, derive_trust_domain};
+use crate::config::{AppConfig, PLACEHOLDER_SERVICE_ID, derive_trust_domain};
 use crate::persistence::{
     PersistenceStore, PgPersistenceStore, ServiceIdentityRecord, SolandMemoryPersistenceStore,
     WebvhDocumentRecord, WebvhLogRecord,
 };
 
 /// Build the persistence store from `db`, resolve (pin / adopt / self-mint) the
-/// deployment's service identity, and mutate `config` (`service_did` +
+/// deployment's service identity, and mutate `config` (`service_id` +
 /// `trust_domain`) to the resolved value.
 ///
 /// The same persistence instance used for resolution is returned so the caller
@@ -60,10 +60,10 @@ async fn resolve_service_identity(
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
         .unwrap_or(false);
 
-    // A configured `service_did` that is not the shared placeholder is an
+    // A configured `service_id` that is not the shared placeholder is an
     // operator-supplied pin (existing identity) or adoption source (first boot).
     let configured =
-        (config.service_did != PLACEHOLDER_SERVICE_DID).then(|| config.service_did.clone());
+        (config.service_id != PLACEHOLDER_SERVICE_ID).then(|| config.service_id.clone());
 
     let existing = persistence
         .service_identity()
@@ -76,22 +76,22 @@ async fn resolve_service_identity(
         // fail-closed pin.
         Some(record) => {
             if let Some(configured_did) = &configured {
-                if configured_did != &record.service_did {
+                if configured_did != &record.service_id {
                     anyhow::bail!(
-                        "SOLAND_SERVICE_DID ({configured_did}) does not match the persisted service \
+                        "SOLAND_SERVICE_ID ({configured_did}) does not match the persisted service \
                          identity ({}); refusing to start to avoid a silent identity swap \
-                         (identity-did.md §3.7 I-2). Unset SOLAND_SERVICE_DID to use the persisted \
+                         (identity-did.md §3.7 I-2). Unset SOLAND_SERVICE_ID to use the persisted \
                          identity, or point the deployment at the correct database.",
-                        record.service_did
+                        record.service_id
                     );
                 }
             }
             tracing::info!(
-                service_did = %record.service_did,
+                service_id = %record.service_id,
                 provenance = %record.provenance,
                 "using persisted service identity",
             );
-            record.service_did
+            record.service_id
         }
         None => match configured {
             // I-3 — first boot with an operator-supplied DID: adopt it as the
@@ -101,7 +101,7 @@ async fn resolve_service_identity(
                 persistence
                     .service_identity()
                     .put(ServiceIdentityRecord {
-                        service_did: configured_did.clone(),
+                        service_id: configured_did.clone(),
                         provenance: "adopted_config".to_owned(),
                         did_document: serde_json::json!({}),
                         update_key_seed_multibase: None,
@@ -112,8 +112,8 @@ async fn resolve_service_identity(
                         anyhow::anyhow!("persisting adopted service identity failed: {error}")
                     })?;
                 tracing::info!(
-                    service_did = %configured_did,
-                    "adopted configured SOLAND_SERVICE_DID as the authoritative service identity",
+                    service_id = %configured_did,
+                    "adopted configured SOLAND_SERVICE_ID as the authoritative service identity",
                 );
                 configured_did
             }
@@ -123,7 +123,7 @@ async fn resolve_service_identity(
             None => {
                 if !bootstrap_enabled {
                     anyhow::bail!(
-                        "no service identity is configured or persisted; set SOLAND_SERVICE_DID, or \
+                        "no service identity is configured or persisted; set SOLAND_SERVICE_ID, or \
                          set SOLAND_BOOTSTRAP_SERVICE_IDENTITY=1 to self-mint a did:webvh \
                          (identity-did.md §3.7 I-3)"
                     );
@@ -133,11 +133,11 @@ async fn resolve_service_identity(
         },
     };
 
-    config.service_did = resolved_did;
+    config.service_id = resolved_did;
     // Re-derive the trust domain from the resolved DID (honours an explicit
     // SOLAND_TRUST_DOMAIN override inside `derive_trust_domain`). The value
     // computed at config load may have been derived from the placeholder.
-    config.trust_domain = derive_trust_domain(&config.service_did)?;
+    config.trust_domain = derive_trust_domain(&config.service_id)?;
     Ok(())
 }
 
@@ -223,7 +223,7 @@ async fn mint_local_service_identity(
     persistence
         .service_identity()
         .put(ServiceIdentityRecord {
-            service_did: prepared.did.clone(),
+            service_id: prepared.did.clone(),
             provenance: "bootstrapped_local".to_owned(),
             did_document,
             // The update-key seed is NOT persisted yet: soland has no at-rest
@@ -238,7 +238,7 @@ async fn mint_local_service_identity(
         .map_err(|error| anyhow::anyhow!("persisting minted service identity failed: {error}"))?;
 
     tracing::warn!(
-        service_did = %prepared.did,
+        service_id = %prepared.did,
         "self-bootstrapped a fresh did:webvh service identity; the rotation key is ephemeral \
          (not yet persisted through the KeyStore)",
     );

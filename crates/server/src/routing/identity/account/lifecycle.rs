@@ -499,9 +499,9 @@ async fn append_account_deactivation_propagation_state(
     capability_cache_invalidated: usize,
 ) {
     let peer_targets = deactivation_peer_service_targets_for_actor(state, did);
-    let peer_service_dids = peer_targets
+    let peer_service_ids = peer_targets
         .iter()
-        .filter_map(|target| target.get("service_did").and_then(Value::as_str))
+        .filter_map(|target| target.get("service_id").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     let federation_incomplete = !peer_targets.is_empty();
@@ -540,7 +540,7 @@ async fn append_account_deactivation_propagation_state(
         "propagation": {
             "mode": "eager",
             "requires_peer_ack": true,
-            "target_service_dids": peer_service_dids,
+            "target_service_ids": peer_service_ids,
             "targets": peer_targets,
         },
     });
@@ -611,13 +611,13 @@ pub(crate) fn deactivation_peer_service_targets_for_actor(
             if member.delivery_status.as_deref() != Some("routable") {
                 continue;
             }
-            let Some(service_did) = member.recipient_service_did.as_deref() else {
+            let Some(service_id) = member.recipient_service_id.as_deref() else {
                 continue;
             };
-            if service_did == state.config.service_did {
+            if service_id == state.config.service_id {
                 continue;
             }
-            let entry = targets.entry(service_did.to_owned()).or_default();
+            let entry = targets.entry(service_id.to_owned()).or_default();
             entry.0.insert(realm_id.clone());
             if let Some(frontier) = member.membership_event_ref.as_deref() {
                 entry.1.insert(frontier.to_owned());
@@ -633,9 +633,9 @@ pub(crate) fn deactivation_peer_service_targets_for_actor(
     }
     targets
         .into_iter()
-        .map(|(service_did, (realm_ids, membership_frontier, delivery_binding_frontier))| {
+        .map(|(service_id, (realm_ids, membership_frontier, delivery_binding_frontier))| {
             json!({
-                "service_did": service_did,
+                "service_id": service_id,
                 "realm_ids": realm_ids.into_iter().collect::<Vec<_>>(),
                 "membership_frontier": membership_frontier.into_iter().collect::<Vec<_>>(),
                 "delivery_binding_frontier": delivery_binding_frontier.into_iter().collect::<Vec<_>>(),
@@ -1063,7 +1063,7 @@ fn build_erasure_receipt_value(
     erased_classes: Vec<ErasedClass>,
     completed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, AppError> {
-    let issuer = Did::new(state.config.service_did.clone())
+    let issuer = Did::new(state.config.service_id.clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let retained_stub =
         erasure_retained_stub(&issuer, &receipt_id, &subject, &scope, completed_at)?;

@@ -44,16 +44,16 @@ pub struct MultisigWatchdogConfig {
     pub lease_duration: Duration,
     /// Stable identifier of this soland process. Goes into the
     /// `claimed_by_node_id` column so other nodes can tell whose lease is
-    /// active. Defaults to `service_did + ":" + uuid::v4()` at construction.
+    /// active. Defaults to `service_id + ":" + uuid::v4()` at construction.
     pub node_id: String,
 }
 
 impl MultisigWatchdogConfig {
-    pub fn for_service(service_did: &str) -> Self {
+    pub fn for_service(service_id: &str) -> Self {
         Self {
             tick_interval: Duration::from_secs(DEFAULT_TICK_INTERVAL_SECS),
             lease_duration: Duration::from_secs(LEASE_DURATION_SECS),
-            node_id: format!("{}:{}", service_did, uuid::Uuid::new_v4()),
+            node_id: format!("{}:{}", service_id, uuid::Uuid::new_v4()),
         }
     }
 }
@@ -385,7 +385,7 @@ mod tests {
     fn test_state() -> AppState {
         let config = AppConfig {
             public_base_url: "http://test".to_owned(),
-            service_did: "did:web:test.local".to_owned(),
+            service_id: "did:web:test.local".to_owned(),
             object_storage: crate::config::ObjectStorageConfig::local(std::env::temp_dir()),
             development_mode: true,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
@@ -429,7 +429,7 @@ mod tests {
     #[tokio::test]
     async fn skips_rows_below_threshold() {
         let state = test_state();
-        let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
+        let cfg = MultisigWatchdogConfig::for_service(&state.config.service_id);
         let record = make_record("ak:seal:sha256:01", 3, 1);
         state
             .persistence
@@ -446,7 +446,7 @@ mod tests {
     #[tokio::test]
     async fn skips_rows_with_empty_canonical_bytes() {
         let state = test_state();
-        let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
+        let cfg = MultisigWatchdogConfig::for_service(&state.config.service_id);
         let mut record = make_record("ak:seal:sha256:02", 1, 1);
         record.canonical_b64 = String::new();
         state
@@ -462,7 +462,7 @@ mod tests {
     #[tokio::test]
     async fn claims_eligible_row_and_records_failure_on_invalid_canonical_bytes() {
         let state = test_state();
-        let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
+        let cfg = MultisigWatchdogConfig::for_service(&state.config.service_id);
         let record = make_record("ak:seal:sha256:03", 1, 1);
         state
             .persistence
@@ -490,7 +490,7 @@ mod tests {
     #[tokio::test]
     async fn other_node_lease_is_respected_until_deadline() {
         let state = test_state();
-        let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
+        let cfg = MultisigWatchdogConfig::for_service(&state.config.service_id);
         let mut record = make_record("ak:seal:sha256:04", 1, 1);
         record.claimed_by_node_id = Some("other-node".to_owned());
         record.claimed_until = Some(Utc::now() + chrono::Duration::seconds(120));

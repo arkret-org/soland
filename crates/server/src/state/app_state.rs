@@ -225,7 +225,7 @@ pub struct AppState {
     /// Persistent Ed25519 signing key for NotaryWorker +
     /// admin endpoints (`admin_reconfigure_notary`, `admin_repair_bottom`).
     /// Loaded from `AppConfig::notary_signing_key_seed` at boot when set;
-    /// otherwise minted from `sha256(service_did || nanos_since_epoch)` and
+    /// otherwise minted from `sha256(service_id || nanos_since_epoch)` and
     /// flagged as `NotarySigningKeyOrigin::Ephemeral` so a sticky-warn
     /// fires on first use.
     ///
@@ -244,7 +244,7 @@ pub struct AppState {
     pub notary_signing_key_origin: Arc<Mutex<NotarySigningKeyOrigin>>,
     /// Per-admin signing keys: SDK
     /// [`arkret_sdk::AdminKeyStore`] keyed by the `application_id`
-    /// `soland.<service_did>`. Each admin DID in
+    /// `soland.<service_id>`. Each admin DID in
     /// `config.admin_principal_dids` gets its own ed25519 signing seed
     /// (provisioned at boot in `development_mode`; lazily loaded from the
     /// platform keystore otherwise). The signer for an admin DID is
@@ -360,7 +360,7 @@ impl AppState {
         let mut realms = RealmDirectoryIndex::new();
         let now = chrono::Utc::now();
 
-        let service_did = config.service_did.clone();
+        let service_id = config.service_id.clone();
 
         let object_storage = build_object_storage(&config.object_storage)
             .expect("object storage backend initializes");
@@ -407,12 +407,12 @@ impl AppState {
         //   2. `config.notary_signing_key_seed` (env-loaded) → Configured. When `use_keystore=true`
         //      we *also* persist this seed back to the KeyStore on first boot so subsequent
         //      restarts skip the env path.
-        //   3. SHA-256(service_did || boot_nanos) → Ephemeral.
+        //   3. SHA-256(service_id || boot_nanos) → Ephemeral.
         let (signing_seed, notary_signing_key_origin) =
             (|| -> ([u8; 32], NotarySigningKeyOrigin) {
                 if config.use_keystore {
-                    let app_id = format!("soland.{service_did}");
-                    let key_id = format!("arkret:signer:soland-notary:{service_did}");
+                    let app_id = format!("soland.{service_id}");
+                    let key_id = format!("arkret:signer:soland-notary:{service_id}");
                     let store = arkret_sdk::durable_platform_keystore(&app_id)
                         .expect("use_keystore requires a durable platform key store");
                     if let Ok(bytes) = store.load(&key_id) {
@@ -456,7 +456,7 @@ impl AppState {
                 // posture choice (no implicit long-lived key on disk).
                 //
                 // In `development_mode=true` we drop `boot_nanos` and
-                // derive the seed deterministically from `service_did`
+                // derive the seed deterministically from `service_id`
                 // alone. The trade-off: every dev restart kept invalidating
                 // every previously-issued sync cursor with
                 // `cursor_integrity_invalid` because the freshly-minted
@@ -464,7 +464,7 @@ impl AppState {
                 // dev = `cargo run` doesn't break a connected inkson.
                 let mut hasher = Sha256::new();
                 hasher.update(b"soland:notary-ephemeral:");
-                hasher.update(service_did.as_bytes());
+                hasher.update(service_id.as_bytes());
                 if !config.development_mode {
                     let boot_nanos = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
@@ -502,7 +502,7 @@ impl AppState {
 
         // Per-admin signing keys: build a single
         // [`AdminKeyStore`] for this principal. The application_id
-        // mirrors the NotaryWorker pattern (`soland.<service_did>`) so
+        // mirrors the NotaryWorker pattern (`soland.<service_id>`) so
         // operators only manage one secret-storage namespace.
         //
         // In `development_mode` we proactively mint an ephemeral seed
@@ -512,7 +512,7 @@ impl AppState {
         // pre-populate the platform keystore explicitly — admin DIDs
         // without a provisioned key fall back to
         // `service_admin_signer` at signing time with a sticky-warn.
-        let admin_app_id = format!("soland.{}", config.service_did);
+        let admin_app_id = format!("soland.{}", config.service_id);
         let admin_keystore_inner: Box<dyn arkret_sdk::KeyStore> = if config.use_keystore {
             arkret_sdk::durable_platform_keystore(&admin_app_id)
                 .expect("use_keystore requires a durable platform key store")
@@ -568,7 +568,7 @@ impl AppState {
         Self {
             config,
             settings: initial_settings,
-            hlc: ServerHlc::new(&service_did),
+            hlc: ServerHlc::new(&service_id),
             projection: Arc::new(Mutex::new(hydrated)),
             authz: SolandAuthzEngine::new(),
             db,
@@ -748,7 +748,7 @@ impl AppState {
         hydrate_realms_from_canonical_events(
             self.persistence.as_ref(),
             &mut realm_updates,
-            &self.config.service_did,
+            &self.config.service_id,
         )
         .await;
         {
@@ -1325,7 +1325,7 @@ impl AppState {
     /// expires. Returns false when the nonce was already consumed or expired.
     pub fn remember_agent_approval_nonce(
         &self,
-        agent_principal_id: &str,
+        agent_id: &str,
         authorization_ref: &str,
         request_id: &str,
         approval_nonce: &str,
@@ -1337,7 +1337,7 @@ impl AppState {
         }
         let mut map = self.agent_approval_nonces.lock();
         map.retain(|_, expiry| *expiry > now);
-        let key = format!("{agent_principal_id}:{authorization_ref}:{request_id}:{approval_nonce}");
+        let key = format!("{agent_id}:{authorization_ref}:{request_id}:{approval_nonce}");
         if map.contains_key(&key) {
             return false;
         }

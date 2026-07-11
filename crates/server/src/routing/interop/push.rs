@@ -53,7 +53,7 @@ pub(crate) fn push_target_privacy_derivation_claim(now: chrono::DateTime<chrono:
             "salt_epoch_id": push_target_salt_epoch_id_at(now),
             "salt_rotation_seconds": PUSH_TARGET_SALT_ROTATION_SECONDS,
             "input_binding": [
-                "recipient_service_did",
+                "recipient_service_id",
                 "principal_id",
                 "device_id",
                 "push_route_id",
@@ -72,14 +72,14 @@ fn push_target_salt_epoch_id_at(now: chrono::DateTime<chrono::Utc>) -> String {
 
 fn derive_push_target_id(
     root_key: &[u8; 32],
-    recipient_service_did: &str,
+    recipient_service_id: &str,
     principal_id: &str,
     device_id: &str,
     push_route_id: &str,
     salt_epoch_id: &str,
 ) -> Result<String, AppError> {
     let input = json!({
-        "recipient_service_did": recipient_service_did,
+        "recipient_service_id": recipient_service_id,
         "principal_id": principal_id,
         "device_id": device_id,
         "push_route_id": push_route_id,
@@ -134,21 +134,21 @@ pub(super) async fn push_register(
     let app_id = body.app_id.clone();
     let push_gateway = body.push_gateway.clone();
     let push_key = body.push_key.clone();
-    let recipient_service_did = body
-        .recipient_service_did
+    let recipient_service_id = body
+        .recipient_service_id
         .as_ref()
         .map(|did| did.as_str())
-        .unwrap_or(state.config.service_did.as_str());
-    if recipient_service_did != state.config.service_did {
+        .unwrap_or(state.config.service_id.as_str());
+    if recipient_service_id != state.config.service_id {
         return Err(AppError::invalid_param(
-            "recipient_service_did must match this service",
+            "recipient_service_id must match this service",
         ));
     }
     let push_route_id = push_route_id_for_registration(&body);
     let salt_epoch_id = push_target_salt_epoch_id_at(now());
     let push_target_id = derive_push_target_id(
         &state.push_target_hmac_key,
-        &state.config.service_did,
+        &state.config.service_id,
         &principal_id,
         &device_id,
         &push_route_id,
@@ -194,7 +194,7 @@ pub(super) async fn push_register(
             "app_id": app_id,
             "push_gateway": push_gateway,
             "push_key": push_key,
-            "recipient_service_did": state.config.service_did.as_str(),
+            "recipient_service_id": state.config.service_id.as_str(),
             "push_route_id": push_route_id,
             "push_target_id": push_target_id,
             "salt_epoch_id": salt_epoch_id,
@@ -606,7 +606,7 @@ async fn push_register_session_grant_bridge(
         token_hash: format!("grant-bridge:{}", sha256_hex(grant.as_bytes())),
         actor: principal_id.to_owned(),
         device_id: body.device_id.as_str().to_owned(),
-        audience: state.config.service_did.clone(),
+        audience: state.config.service_id.clone(),
         session_public_key,
         agent_session: None,
         expires_at,

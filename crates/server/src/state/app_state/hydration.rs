@@ -206,7 +206,7 @@ pub(super) async fn hydrate_projections_from_persistence(
                 })
                 .unwrap_or_else(chrono::Utc::now);
             let projection = AppletProjection {
-                service_did: package.service_did.to_string(),
+                service_id: package.service_id.to_string(),
                 namespace,
                 manifest: Some(package.manifest_snapshot()),
                 capabilities: row.get("capabilities").cloned(),
@@ -214,7 +214,7 @@ pub(super) async fn hydrate_projections_from_persistence(
                 updated_at: registered_at,
             };
             proj.applets
-                .insert(projection.service_did.clone(), projection.clone());
+                .insert(projection.service_id.clone(), projection.clone());
             if let Some(applet_id) = applet_id {
                 proj.applets.insert(applet_id, projection);
             }
@@ -341,12 +341,12 @@ pub(super) fn hydrate_applet_install_grants(
             grant_id: grant_id.to_owned(),
             realm_id: portal_realm_id.to_owned(),
             issuer: owner_actor_id.to_owned(),
-            subject: package.service_did.to_string(),
+            subject: package.service_id.to_string(),
             resource: portal_realm_id.to_owned(),
             actions: vec![action.to_owned()],
             constraints: vec![crate::authz::Constraint::AppletDelegationBinding {
                 applet_id: package.applet_id.clone(),
-                executed_by: package.service_did.to_string(),
+                executed_by: package.service_id.to_string(),
                 registration_epoch: package.registration_epoch.to_string(),
             }],
             revoked: false,
@@ -360,14 +360,14 @@ pub(super) fn hydrate_applet_install_grants(
 pub(super) async fn hydrate_realms_from_canonical_events(
     persistence: &dyn crate::persistence::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
-    service_did: &str,
+    service_id: &str,
 ) {
     let Ok(events) = persistence.events().snapshot_all().await else {
         return;
     };
     for record in events {
         if record.kind == "ak.realm.create" {
-            hydrate_realm_create_event(persistence, realms, &record, service_did).await;
+            hydrate_realm_create_event(persistence, realms, &record, service_id).await;
         } else if record.kind == "ak.member.state" {
             // Membership transitions MUST be replayed too, or every joined
             // member except the realm creator (who is seeded by
@@ -459,7 +459,7 @@ pub(super) async fn hydrate_realm_create_event(
     persistence: &dyn crate::persistence::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
     record: &CanonicalEventRecord,
-    service_did: &str,
+    service_id: &str,
 ) {
     let payload_object = record
         .envelope
@@ -571,7 +571,7 @@ pub(super) async fn hydrate_realm_create_event(
     if let Some(canonical) = payload_object
         .and_then(|object| object.get("alias"))
         .and_then(Value::as_str)
-        .and_then(|raw| crate::realm_alias::canonical_realm_alias(service_did, raw))
+        .and_then(|raw| crate::realm_alias::canonical_realm_alias(service_id, raw))
     {
         let taken = realms.entries_iter().any(|(rid, existing)| {
             rid != &realm_id && existing.alias.as_deref() == Some(canonical.as_str())

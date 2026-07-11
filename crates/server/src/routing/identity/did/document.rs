@@ -110,7 +110,7 @@ pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value
     let mut assertion_method = Vec::new();
     let also_known_as = default_also_known_as(state, did);
     if let Some(state) = state
-        && did == state.config.service_did
+        && did == state.config.service_id
     {
         let public_key = arkret_sdk::ed25519_pubkey_to_did_key_multibase(
             state.notary_signing_key().verifying_key().as_bytes(),
@@ -150,7 +150,7 @@ fn default_also_known_as(state: Option<&AppState>, did: &str) -> Vec<String> {
         .or_else(|| {
             state
                 .config
-                .service_did
+                .service_id
                 .strip_prefix("did:web:")
                 .and_then(|value| valid_handle_domain_candidate(&value.replace(':', ".")))
         })

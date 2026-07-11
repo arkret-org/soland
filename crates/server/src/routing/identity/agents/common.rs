@@ -1,11 +1,11 @@
 use super::*;
 
-pub(super) fn controller_dev_session(controller_did: &str, state: &AppState) -> SessionRecord {
+pub(super) fn controller_dev_session(controller_id: &str, state: &AppState) -> SessionRecord {
     SessionRecord {
-        token_hash: format!("agent-dev-fanout:{controller_did}"),
-        actor: controller_did.to_owned(),
+        token_hash: format!("agent-dev-fanout:{controller_id}"),
+        actor: controller_id.to_owned(),
         device_id: "agent-dev-fanout".to_owned(),
-        audience: state.config.service_did.clone(),
+        audience: state.config.service_id.clone(),
         session_public_key: None,
         agent_session: None,
         expires_at: now() + chrono::Duration::minutes(5),
@@ -14,27 +14,25 @@ pub(super) fn controller_dev_session(controller_did: &str, state: &AppState) -> 
     }
 }
 
-pub(super) fn validate_agent_principal_id(value: &str) -> Result<(), AppError> {
+pub(super) fn validate_agent_id(value: &str) -> Result<(), AppError> {
     if validate_did(value).is_err() {
-        return Err(AppError::invalid_param(
-            "agent_principal_id must be a DID scalar",
-        ));
+        return Err(AppError::invalid_param("agent_id must be a DID scalar"));
     }
     Ok(())
 }
 
 pub(super) fn ensure_agent_record_controller(
     record: &Value,
-    agent_principal_id: &str,
+    agent_id: &str,
     session: &SessionRecord,
 ) -> Result<(), AppError> {
-    if record.get("agent_principal_id").and_then(Value::as_str) != Some(agent_principal_id) {
+    if record.get("agent_id").and_then(Value::as_str) != Some(agent_id) {
         return Err(AppError::capability_denied(
             "agent principal record does not match the requested principal",
         ));
     }
-    let Some(controller_did) = record
-        .get("controller_did")
+    let Some(controller_id) = record
+        .get("controller_id")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
     else {
@@ -42,7 +40,7 @@ pub(super) fn ensure_agent_record_controller(
             "agent principal has no controller binding",
         ));
     };
-    if controller_did != session.actor.as_str() {
+    if controller_id != session.actor.as_str() {
         return Err(AppError::capability_denied(
             "agent principal is not controlled by the authenticated session",
         ));
@@ -53,17 +51,17 @@ pub(super) fn ensure_agent_record_controller(
 pub(super) async fn require_agent_controller(
     state: &AppState,
     session: &SessionRecord,
-    agent_principal_id: &str,
+    agent_id: &str,
 ) -> Result<Value, AppError> {
-    validate_agent_principal_id(agent_principal_id)?;
+    validate_agent_id(agent_id)?;
     let record = state
         .persistence
         .agents()
-        .get(agent_principal_id)
+        .get(agent_id)
         .await
         .map_err(|err| AppError::internal(format!("agent controller lookup failed: {err}")))?
         .ok_or_else(|| AppError::capability_denied("agent principal has no controller binding"))?;
-    ensure_agent_record_controller(&record, agent_principal_id, session)?;
+    ensure_agent_record_controller(&record, agent_id, session)?;
     Ok(record)
 }
 
@@ -71,9 +69,9 @@ pub(super) fn ensure_sidecar_controller_request(
     body: &AgentSidecarThreadEnsureRequestBody,
     session: &SessionRecord,
 ) -> Result<(), AppError> {
-    if body.controller_principal_id.as_str() != session.actor.as_str() {
+    if body.controller_id.as_str() != session.actor.as_str() {
         return Err(sidecar_create_denied(
-            "sidecar controller_principal_id must match the authenticated session",
+            "sidecar controller_id must match the authenticated session",
         ));
     }
     Ok(())
@@ -93,12 +91,12 @@ pub(super) fn verification_method_principal(verification_method: &str) -> &str {
 ///
 /// did:webvh-only red line: agent principals MUST NOT use `did:web` (no
 /// key-log history). The DID host is the deployment's real service host
-/// (derived from the configured `service_did`), never a `.agents.example`
+/// (derived from the configured `service_id`), never a `.agents.example`
 /// placeholder. The SCID is a self-certifying multihash derived from a
 /// per-agent genesis skeleton so the identifier is bound to its inception
 /// material rather than being an opaque random string.
-pub(super) fn generate_agent_principal_did(service_did: &str) -> String {
-    let host = crate::config::did_host_from_service_did(service_did)
+pub(super) fn generate_agent_principal_did(service_id: &str) -> String {
+    let host = crate::config::did_host_from_service_id(service_id)
         .unwrap_or_else(|| "soland.local".to_owned());
     let agent_uuid = uuid::Uuid::now_v7();
     // Genesis skeleton: the SCID is the multihash of this canonical structure
@@ -117,8 +115,8 @@ pub(super) fn generate_agent_principal_did(service_did: &str) -> String {
 
 /// Project a persisted agent_principal JSON record into the spec
 /// `agent_projection` shape (`agent-operations.schema.json#/$defs/agent_projection`):
-/// `{agent_principal_id, display_name?, agent_slug?, status, created_at?, updated_at?}`.
-/// soland-internal columns (`controller_did`, `agent_id`, `pairing_*`) are NOT
+/// `{agent_id, display_name?, slug?, status, created_at?, updated_at?}`.
+/// Soland-internal columns (`controller_id`, `pairing_*`) are NOT
 /// part of the protocol projection and are dropped at the wire boundary; the
 /// persistence `state` column carries the `agent_status` enum value verbatim.
 pub(super) fn agent_projection_from_record(record: &Value) -> AgentProjection {
@@ -137,14 +135,15 @@ pub(super) fn agent_projection_from_record(record: &Value) -> AgentProjection {
         _ => AgentStatus::Active,
     };
     AgentProjection {
-        agent_principal_id: Did::new(str_field("agent_principal_id").unwrap_or_default())
+        agent_id: Did::new(str_field("agent_id").unwrap_or_default())
             .unwrap_or_else(|_| Did::new("did:webvh:invalid:invalid").expect("static did")),
         display_name: str_field("display_name")
             .filter(|value| !value.is_empty())
             .map(str::to_owned),
-        agent_slug: str_field("agent_slug")
+        slug: str_field("agent_slug")
             .filter(|value| !value.is_empty())
-            .map(str::to_owned),
+            .map(str::to_owned)
+            .unwrap_or_default(),
         status,
         created_at: parse_ts("created_at"),
         updated_at: parse_ts("updated_at"),

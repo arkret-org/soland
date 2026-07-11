@@ -15,7 +15,7 @@ use crate::wire::{ReadCursorPositionWire, ReadScopeWire};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PushRouteSubject {
-    pub recipient_service_did: String,
+    pub recipient_service_id: String,
     pub principal_id: String,
     pub device_id: String,
     pub push_route: String,
@@ -96,7 +96,7 @@ pub struct ErasureReceiptRecord {
     /// in `peer_status` still has `acked_at.is_none()`.
     pub fanout_status: String,
     /// Stream-F (Wave 2C) — per-peer fanout state. Keyed by the
-    /// peer's `service_did` (canonical federation peer identity from
+    /// peer's `service_id` (canonical federation peer identity from
     /// `config.federation_peers`). The reducer seeds one entry per
     /// configured peer when the receipt is accepted; the federation
     /// outbox stamps `sent_at` as soon as the row is enqueued.
@@ -744,8 +744,8 @@ pub struct DocumentVersionProjection {
 /// last-write-wins projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppletProjection {
-    /// `service_did` of the applet — canonical identity per spec.
-    pub service_did: String,
+    /// `service_id` of the applet — canonical identity per spec.
+    pub service_id: String,
     pub namespace: String,
     /// Optional snapshot of the most recent `manifest` (from the latest
     /// `ak.applet.discovery` event). `None` if only registration has
@@ -753,39 +753,6 @@ pub struct AppletProjection {
     pub manifest: Option<Value>,
     /// Optional capability list from the latest `ak.applet.registration`.
     pub capabilities: Option<Value>,
-    pub registered_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Server-side Agent registry entry. Populated by
-/// `ak.agent.endpoint`. Spec `extensions/agent-integration.md` mirrors
-/// the applet family shape; same simple last-write-wins semantics.
-///
-/// `endpoint_url` is the HTTPS URL the agent runtime listens on. It is
-/// OPTIONAL on the wire (older clients + DID-only agents that resolve
-/// via did:web service entry won't set it), but when present the
-/// reference bridge echoes it back in the
-/// `ak.agent.interop_session.result` envelope's `detail.endpoint_url`
-/// so timeline consumers see which endpoint answered the invocation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SolandAgentProjection {
-    /// `agent_id` — canonical agent runtime DID per spec.
-    pub agent_id: String,
-    /// Protocol the agent speaks (free-form string per spec event-kind-registry
-    /// payload description; no enum enforcement at this layer).
-    pub protocol: String,
-    /// HTTPS endpoint URL — optional. Reference bridge currently
-    /// uses this only as an observability field; production runtimes
-    /// will follow it for outbound dispatch.
-    pub endpoint_url: Option<String>,
-    /// Adapter-registry protocol ids declared across the `endpoints[]`
-    /// array (spec §5.1 / §11: `a2a` / `acp` / `mcp_bridge` /
-    /// `http_custom`). Surfaced by `POST /_arkret/self/agents/discover`.
-    pub supported_protocols: Vec<String>,
-    /// A2A AgentCard URL declared in a `ak.agent.endpoint` entry (§5.1).
-    pub agent_card_url: Option<String>,
-    /// ACP metadata URL declared in a `ak.agent.endpoint` entry (§5.1).
-    pub metadata_url: Option<String>,
     pub registered_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -807,7 +774,7 @@ pub enum AgentActionRequestStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentActionRequestProjection {
     pub request_id: String,
-    pub agent_principal_id: String,
+    pub agent_id: String,
     pub status: AgentActionRequestStatus,
     pub requested_at: chrono::DateTime<chrono::Utc>,
     pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -1207,7 +1174,7 @@ pub struct SolandMembershipState {
     /// Principal Server service DID materialized from the member
     /// `delivery_binding`. This is the single routing source for federated
     /// Realm event delivery; senders must not re-resolve DID Documents.
-    pub recipient_service_did: Option<String>,
+    pub recipient_service_id: Option<String>,
     /// Event frontier that established the current member state.
     pub membership_event_ref: Option<String>,
     /// Event frontier used for the current delivery binding. Falls back to

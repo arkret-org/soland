@@ -144,7 +144,7 @@ fn rfc9421_sign(
 
     let created = now_unix_secs();
     let expires = created + 300;
-    let keyid = format!("{}#federation-fanout-key", state.config.service_did);
+    let keyid = format!("{}#federation-fanout-key", state.config.service_id);
     let covered = [
         "\"@method\"",
         "\"@target-uri\"",
@@ -222,8 +222,8 @@ fn header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<Stri
         .map(ToOwned::to_owned)
 }
 
-fn trust_domain_from_service_did(service_did: &str) -> String {
-    super::federation::trust_domain_from_service_did(service_did)
+fn trust_domain_from_service_id(service_id: &str) -> String {
+    super::federation::trust_domain_from_service_id(service_id)
 }
 
 /// Compute the RFC 9530 `Content-Digest` header value for a body.
@@ -368,7 +368,7 @@ impl FederationDispatcher {
         insert_header_if_valid(
             &mut headers,
             "source-service-did",
-            &self.state.config.service_did,
+            &self.state.config.service_id,
         );
         insert_header_if_valid(&mut headers, "destination-service-did", &row.peer_did);
         insert_header_if_valid(
@@ -379,7 +379,7 @@ impl FederationDispatcher {
         insert_header_if_valid(
             &mut headers,
             "destination-trust-domain",
-            &trust_domain_from_service_did(&row.peer_did),
+            &trust_domain_from_service_id(&row.peer_did),
         );
         let headers = rfc9421_sign(&self.state, headers, "POST", &url, &body_bytes);
 

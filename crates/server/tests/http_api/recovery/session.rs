@@ -410,13 +410,13 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
     let signing = SigningKey::from_bytes(&[134u8; 32]);
     let (principal_id, _vm) = did_key_principal(&signing);
     let service_key = SigningKey::from_bytes(&[135u8; 32]);
-    let (service_did, service_vm) = did_key_principal(&service_key);
+    let (service_id, service_vm) = did_key_principal(&service_key);
     seed_reset_recovery_policy(
         &state,
         &principal_id,
         "trusted_recovery_service",
         serde_json::json!({
-            "trusted_recovery_services": [{ "service_did": service_did.clone() }]
+            "trusted_recovery_services": [{ "service_id": service_id.clone() }]
         }),
     )
     .await;
@@ -443,11 +443,11 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
     .await;
     let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
     let challenge = session["challenge"].as_str().unwrap().to_owned();
-    let audience = state.config.service_did.clone();
+    let audience = state.config.service_id.clone();
     let signature = sign_trusted_recovery_service_proof(
         &service_key,
         &session,
-        &service_did,
+        &service_id,
         &service_vm,
         &audience,
         None,
@@ -457,7 +457,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
         "proof": {
             "kind": "trusted_recovery_service",
             "challenge": challenge,
-            "service_did": service_did.clone(),
+            "service_id": service_id.clone(),
             "audience": audience.clone(),
             "verification_method": service_vm.clone(),
             "alg": "EdDSA",
@@ -521,15 +521,15 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
     let signing = SigningKey::from_bytes(&[136u8; 32]);
     let (principal_id, _vm) = did_key_principal(&signing);
     let service_key = SigningKey::from_bytes(&[137u8; 32]);
-    let (service_did, service_vm) = did_key_principal(&service_key);
+    let (service_id, service_vm) = did_key_principal(&service_key);
     let attacker_service_key = SigningKey::from_bytes(&[138u8; 32]);
-    let (attacker_service_did, attacker_service_vm) = did_key_principal(&attacker_service_key);
+    let (attacker_service_id, attacker_service_vm) = did_key_principal(&attacker_service_key);
     seed_reset_recovery_policy(
         &state,
         &principal_id,
         "trusted_recovery_service",
         serde_json::json!({
-            "trusted_recovery_services": [{ "service_did": service_did.clone() }]
+            "trusted_recovery_services": [{ "service_id": service_id.clone() }]
         }),
     )
     .await;
@@ -556,11 +556,11 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
     .await;
     let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
     let challenge = session["challenge"].as_str().unwrap().to_owned();
-    let audience = state.config.service_did.clone();
+    let audience = state.config.service_id.clone();
     let rejected_signature = sign_trusted_recovery_service_proof(
         &attacker_service_key,
         &session,
-        &attacker_service_did,
+        &attacker_service_id,
         &attacker_service_vm,
         &audience,
         None,
@@ -569,7 +569,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
         "proof": {
             "kind": "trusted_recovery_service",
             "challenge": challenge,
-            "service_did": attacker_service_did.clone(),
+            "service_id": attacker_service_id.clone(),
             "audience": audience.clone(),
             "verification_method": attacker_service_vm.clone(),
             "alg": "EdDSA",
@@ -598,17 +598,17 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
     let accepted_signature = sign_trusted_recovery_service_proof(
         &service_key,
         &session,
-        &service_did,
+        &service_id,
         &service_vm,
-        &state.config.service_did,
+        &state.config.service_id,
         None,
     );
-    let accepted_audience = state.config.service_did.clone();
+    let accepted_audience = state.config.service_id.clone();
     let accepted_body = serde_json::json!({
         "proof": {
             "kind": "trusted_recovery_service",
             "challenge": session["challenge"],
-            "service_did": service_did.clone(),
+            "service_id": service_id.clone(),
             "audience": accepted_audience,
             "verification_method": service_vm.clone(),
             "alg": "EdDSA",
@@ -899,13 +899,13 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     let usk = SigningKey::from_bytes(&[127u8; 32]);
     seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
     let service_key = SigningKey::from_bytes(&[128u8; 32]);
-    let (service_did, service_vm) = did_key_principal(&service_key);
+    let (service_id, service_vm) = did_key_principal(&service_key);
     seed_reset_recovery_policy(
         &state,
         &principal_id,
         "trusted_recovery_service",
         serde_json::json!({
-            "trusted_recovery_services": [{ "service_did": service_did }]
+            "trusted_recovery_services": [{ "service_id": service_id }]
         }),
     )
     .await;
@@ -922,7 +922,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
         &event_id,
         serde_json::json!({
             "kind": "trusted_recovery_service",
-            "service_did": service_did,
+            "service_id": service_id,
             "verification_method": service_vm,
             "alg": "EdDSA",
             "signature": ""

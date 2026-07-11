@@ -134,17 +134,17 @@ pub(super) async fn build_ghost_accountability_grant_event(
     state: &AppState,
     record: &AppletRecord,
     provision: &GhostActorProvisionRequestBody,
-    service_did: &Did,
+    service_id: &Did,
     ghost_actor_id: &Did,
     realm_id: &RealmId,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<FormalAppletEvent, AppError> {
     let proof = production_payload_proof(
         state,
-        service_did,
+        service_id,
         "applet-accountability-grant",
         &json!({
-            "issuer": service_did,
+            "issuer": service_id,
             "subject": ghost_actor_id,
             "applet_id": provision.applet_id,
             "realm_id": realm_id,
@@ -156,7 +156,7 @@ pub(super) async fn build_ghost_accountability_grant_event(
         now,
     )?;
     let grant = AccountabilityGrantPayload::new(
-        service_did.clone(),
+        service_id.clone(),
         ghost_actor_id.clone(),
         AccountabilityScope::Multiple(vec![
             "applet_ghost_actor".to_owned(),
@@ -174,7 +174,7 @@ pub(super) async fn build_ghost_accountability_grant_event(
     let event = grant
         .to_event(
             realm_id.clone(),
-            next_actor_seq(state, service_did.as_str()).await?,
+            next_actor_seq(state, service_id.as_str()).await?,
             next_hlc(state)?,
             None,
         )
@@ -184,12 +184,12 @@ pub(super) async fn build_ghost_accountability_grant_event(
     formal_event_from_sdk_event(
         state,
         event,
-        service_did,
+        service_id,
         "applet_ghost_accountability_grant",
-        Some(service_did.as_str()),
+        Some(service_id.as_str()),
         json!({
             "applet_id": record.applet_id,
-            "service_did": service_did,
+            "service_id": service_id,
             "ghost_actor_id": ghost_actor_id,
             "protocol": provision.protocol,
             "tenant": provision.tenant,
@@ -204,7 +204,7 @@ pub(super) async fn build_ghost_profile_create_event(
     record: &AppletRecord,
     provision: &GhostActorProvisionRequestBody,
     applet_id: AppletId,
-    service_did: &Did,
+    service_id: &Did,
     ghost_actor_id: &Did,
     realm_id: &RealmId,
     authorization_ref: &str,
@@ -225,7 +225,7 @@ pub(super) async fn build_ghost_profile_create_event(
         "realm_id": realm_id,
         "external_ref": provision.external_ref,
     });
-    let mut accountable_principal_ids = vec![service_did.clone()];
+    let mut accountable_principal_ids = vec![service_id.clone()];
     if let Ok(controller) = Did::new(record.registry_did.clone())
         && !accountable_principal_ids
             .iter()
@@ -243,7 +243,7 @@ pub(super) async fn build_ghost_profile_create_event(
     .with_accountable_principal_ids(accountable_principal_ids)
     .with_external_ref(external_ref);
     let authorization = AppletDelegatedEventAuthorization::new(
-        service_did.clone(),
+        service_id.clone(),
         authorization_ref.to_owned(),
         applet_id,
     );
@@ -263,12 +263,12 @@ pub(super) async fn build_ghost_profile_create_event(
     formal_event_from_sdk_event(
         state,
         event,
-        service_did,
+        service_id,
         "applet_ghost_profile_create",
         Some(ghost_actor_id.as_str()),
         json!({
             "applet_id": record.applet_id,
-            "service_did": service_did,
+            "service_id": service_id,
             "ghost_actor_id": ghost_actor_id,
             "authorization_ref": authorization_ref,
             "protocol": provision.protocol,
@@ -499,9 +499,9 @@ pub(super) fn ensure_formal_ghost_provision_allowed(
         AppError::conflict("formal ghost provisioning requires package install")
             .with_wire_code("applet_install_required")
     })?;
-    if package.service_did != provision.service_did {
+    if package.service_id != provision.service_id {
         return Err(AppError::capability_denied(
-            "service_did does not match installed applet package",
+            "service_id does not match installed applet package",
         ));
     }
     if record.portal_realm_id != provision.realm_id.as_str() {

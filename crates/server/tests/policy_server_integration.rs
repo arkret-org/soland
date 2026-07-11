@@ -57,7 +57,7 @@ fn input(bypass_cache: bool) -> PolicyCheckRequestInput {
         realm_id: RealmId::new(REALM_ID).unwrap(),
         actor_id: Did::new("did:web:alice.example").unwrap(),
         action: "ak.message.create".to_owned(),
-        source_service_did: Did::new("did:web:soland.local").unwrap(),
+        source_service_id: Did::new("did:web:soland.local").unwrap(),
         source_service_type: "principal_server".to_owned(),
         source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
         signed_transport: true,
@@ -104,7 +104,7 @@ fn wire_request(input: &PolicyCheckRequestInput) -> PolicyCheckRequestBody {
         action: input.action.clone(),
         request_canonical_digest: input.canonical_request_hash(),
         source: PolicyCheckSource {
-            service_did: input.source_service_did.clone(),
+            service_id: input.source_service_id.clone(),
             service_type: input.source_service_type.clone(),
             source_ip_digest: Some(input.source_ip_digest.clone()),
             signed_transport: input.signed_transport,

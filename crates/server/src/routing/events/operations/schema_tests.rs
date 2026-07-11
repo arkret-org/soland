@@ -20,7 +20,7 @@ mod invite_create_schema_tests {
             "invite_id": "ak:invite:01904100-0000-7000-8000-000000000701",
             "invitee": "did:web:bob.example",
             "invite_delivery_target": {
-                "recipient_service_did": "did:web:local.host",
+                "recipient_service_id": "did:web:local.host",
                 "recipient_service_type": "principal_server"
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -287,7 +287,7 @@ mod realm_plaintext_visible_services_schema_tests {
             arkret_sdk::events::kinds::REALM_PLAINTEXT_VISIBLE_SERVICES,
             json!({
                 "services": [{
-                    "service_did": "did:web:soland.local",
+                    "service_id": "did:web:soland.local",
                     "service_type": "principal_server",
                     "data_classes": ["message_content", "notification_summary"],
                     "purposes": ["message_index", "notification_fanout"],
@@ -510,8 +510,8 @@ mod agent_action_schema_tests {
             json!({
                 "approval_id": "ak:agent_approval:01904100-0000-7000-8000-000000000001",
                 "draft_id": "ak:agent_draft:01904100-0000-7000-8000-000000000001",
-                "agent_principal_id": "did:web:agent.example",
-                "controller_principal_id": "did:web:alice.example",
+                "agent_id": "did:web:agent.example",
+                "controller_id": "did:web:alice.example",
                 "proposed_action": "ak.message.create",
                 "target": {
                     "kind": "realm",
@@ -552,8 +552,8 @@ mod agent_action_schema_tests {
             json!({
                 "rejection_id": "ak:agent_rejection:01904100-0000-7000-8000-000000000001",
                 "draft_id": "ak:agent_draft:01904100-0000-7000-8000-000000000001",
-                "agent_principal_id": "did:web:agent.example",
-                "controller_principal_id": "did:web:alice.example",
+                "agent_id": "did:web:agent.example",
+                "controller_id": "did:web:alice.example",
                 "reason": "needs review",
                 "rejected_at": "2026-06-19T00:00:00Z"
             }),

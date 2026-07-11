@@ -263,8 +263,8 @@ pub(crate) const REALM_SEARCH_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[
         "ak.realm.search_policy requires enabled_profile_refs",
     ),
     PayloadRequirement::Required(
-        "allowed_service_dids",
-        "ak.realm.search_policy requires allowed_service_dids",
+        "allowed_service_ids",
+        "ak.realm.search_policy requires allowed_service_ids",
     ),
     PayloadRequirement::Required(
         "data_classes",
@@ -522,8 +522,8 @@ pub(crate) const STRAND_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
 // Applet protocol family.
 //
 // Spec `extensions/applet-integration.md` + event-kind-registry rows:
-//   `ak.applet.registration` → service_did + namespace + capabilities
-//   `ak.applet.discovery`    → service_did + manifest
+//   `ak.applet.registration` → service_id + namespace + capabilities
+//   `ak.applet.discovery`    → service_id + manifest
 //   `ak.applet.interop_session.start`  → applet_id + session_id + params
 //   `ak.applet.interop_session.status` → session_id + status + detail
 //   `ak.applet.bridge_error`            → session_id + errcode + message
@@ -533,11 +533,11 @@ pub(crate) const STRAND_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
 // the applet bridge layer + per-applet contract validators that read
 // the payload after admission.
 pub(crate) const APPLET_REGISTRATION_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("service_did", "applet registration requires service_did"),
+    PayloadRequirement::Required("service_id", "applet registration requires service_id"),
     PayloadRequirement::Required("namespace", "applet registration requires namespace"),
 ];
 pub(crate) const APPLET_DISCOVERY_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("service_did", "applet discovery requires service_did"),
+    PayloadRequirement::Required("service_id", "applet discovery requires service_id"),
     PayloadRequirement::Required("manifest", "applet discovery requires manifest"),
 ];
 pub(crate) const APPLET_SESSION_START_REQUIREMENTS: &[PayloadRequirement] = &[
@@ -562,76 +562,26 @@ pub(crate) const APPLET_BRIDGE_ERROR_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("errcode", "applet bridge_error requires errcode"),
 ];
 
-// Agent protocol family. Mirror of applet but with a terminal
-// `*.result` event that carries the audit-binding proof + signed agent
-// result.
-pub(crate) const AGENT_ENDPOINT_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("agent_id", "agent endpoint requires agent_id"),
-    PayloadRequirement::Required("endpoints", "agent endpoint requires endpoints"),
-];
-pub(crate) const AGENT_SESSION_START_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "session_id",
-        "agent interop_session.start requires session_id",
-    ),
-    PayloadRequirement::Required(
-        "counterparty_agent",
-        "agent interop_session.start requires counterparty_agent",
-    ),
-    PayloadRequirement::Required("protocol", "agent interop_session.start requires protocol"),
-    PayloadRequirement::Required(
-        "capability_grant",
-        "agent interop_session.start requires capability_grant",
-    ),
-];
-pub(crate) const AGENT_SESSION_STATUS_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "session_id",
-        "agent interop_session.status requires session_id",
-    ),
-    PayloadRequirement::Required("status", "agent interop_session.status requires status"),
-];
-pub(crate) const AGENT_SESSION_RESULT_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "session_id",
-        "agent interop_session.result requires session_id",
-    ),
-    PayloadRequirement::Required("result", "agent interop_session.result requires result"),
-    PayloadRequirement::Required(
-        "audit_binding",
-        "agent interop_session.result requires audit_binding",
-    ),
-];
-
 // R3 spec-sync (2026-05-27) — agent lifecycle FSM payloads. Wire
 // shape per spec `agent_pause_payload` / `agent_resume_payload` /
 // `agent_deactivate_payload`. The FSM transition guard runs in the
 // reducer (REDU-1, `apply_agent_lifecycle`).
 pub(crate) const AGENT_PAUSE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "agent_principal_id",
-        "ak.self.agent.pause requires agent_principal_id",
-    ),
+    PayloadRequirement::Required("agent_id", "ak.self.agent.pause requires agent_id"),
     PayloadRequirement::Required(
         "status_changed_at",
         "ak.self.agent.pause requires status_changed_at",
     ),
 ];
 pub(crate) const AGENT_RESUME_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "agent_principal_id",
-        "ak.self.agent.resume requires agent_principal_id",
-    ),
+    PayloadRequirement::Required("agent_id", "ak.self.agent.resume requires agent_id"),
     PayloadRequirement::Required(
         "status_changed_at",
         "ak.self.agent.resume requires status_changed_at",
     ),
 ];
 pub(crate) const AGENT_DEACTIVATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "agent_principal_id",
-        "ak.self.agent.deactivate requires agent_principal_id",
-    ),
+    PayloadRequirement::Required("agent_id", "ak.self.agent.deactivate requires agent_id"),
     PayloadRequirement::Required(
         "status_changed_at",
         "ak.self.agent.deactivate requires status_changed_at",
@@ -641,17 +591,11 @@ pub(crate) const AGENT_DEACTIVATE_REQUIREMENTS: &[PayloadRequirement] = &[
 // R3 spec-sync — `actor_private_event` payloads. These do NOT advance
 // the seal frontier / actor_seq (reducer_input=false).
 pub(crate) const AGENT_DRAFT_PROPOSE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "agent_principal_id",
-        "ak.agent.draft.propose requires agent_principal_id",
-    ),
+    PayloadRequirement::Required("agent_id", "ak.agent.draft.propose requires agent_id"),
     PayloadRequirement::Required("draft_id", "ak.agent.draft.propose requires draft_id"),
 ];
 pub(crate) const AGENT_ACTION_REQUEST_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "agent_principal_id",
-        "ak.agent.action_request requires agent_principal_id",
-    ),
+    PayloadRequirement::Required("agent_id", "ak.agent.action_request requires agent_id"),
     PayloadRequirement::Required("request_id", "ak.agent.action_request requires request_id"),
 ];
 pub(crate) const AGENT_ACTION_APPROVE_REQUIREMENTS: &[PayloadRequirement] =

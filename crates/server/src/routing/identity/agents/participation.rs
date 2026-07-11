@@ -49,14 +49,14 @@ pub(super) fn agent_participation_failed_precondition(reason: &'static str) -> A
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.resource.replace"))]
 pub(super) async fn set_agent_participation(
     aa: AuthArgs,
-    agent_principal_id: PathParam<String>,
+    agent_id: PathParam<String>,
     body: JsonBody<AgentParticipationSetReqBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentParticipationResBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_principal_id.into_inner();
+    let agent_id = agent_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     let ceiling = resolve_effective_ceiling(state, &body.scope).await;
@@ -75,7 +75,7 @@ pub(super) async fn set_agent_participation(
         .persistence
         .agent_participation()
         .put_selection(json!({
-            "agent_principal_id": agent_id,
+            "agent_id": agent_id,
             "scope_kind": participation_scope_kind(&body.scope),
             "scope_key": body.scope.scope_key(),
             "realm_id": body.scope.realm_id().as_str(),
@@ -91,8 +91,8 @@ pub(super) async fn set_agent_participation(
         Some(&session.actor),
         "ak.self.agent.participation.resource.replace",
         json!({
-            "agent_principal_id": agent_id,
-            "controller_principal_id": session.actor.clone(),
+            "agent_id": agent_id,
+            "controller_id": session.actor.clone(),
             "scope": scope_value,
             "scope_key": body.scope.scope_key(),
             "selection": selection_value,
@@ -121,7 +121,7 @@ pub(super) async fn set_agent_participation(
     }
     json_ok(AgentParticipationResBody {
         ok: true,
-        agent_principal_id: agent_id,
+        agent_id,
         entries: vec![AgentParticipationEntry {
             scope: body.scope,
             selection: body.selection,
@@ -132,13 +132,13 @@ pub(super) async fn set_agent_participation(
 }
 
 /// Deterministic capability grant id for a materialised participation
-/// selection, keyed by (agent_principal_id, scope_key) so toggling the
+/// selection, keyed by (agent_id, scope_key) so toggling the
 /// selection converges on one grant cell (AKP-0016 §5.2).
-pub(super) fn participation_grant_id(agent_principal_id: &str, scope_key: &str) -> String {
+pub(super) fn participation_grant_id(agent_id: &str, scope_key: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(b"ak:grant:agent_participation:v1:");
-    hasher.update(agent_principal_id.as_bytes());
+    hasher.update(agent_id.as_bytes());
     hasher.update(b"\0");
     hasher.update(scope_key.as_bytes());
     let digest = hasher.finalize();
@@ -188,7 +188,7 @@ pub(super) fn is_capability_grant_id(grant_id: &str) -> bool {
 
 pub(super) fn normalize_sidecar_exposure_ack(
     value: Option<Value>,
-    controller_did: &str,
+    controller_id: &str,
 ) -> Result<Option<Value>, AppError> {
     let Some(value) = value else {
         return Ok(None);
@@ -198,7 +198,7 @@ pub(super) fn normalize_sidecar_exposure_ack(
     }
     let ack: AgentSidecarExposureAck = serde_json::from_value(value)
         .map_err(|err| AppError::invalid_param(format!("sidecar_exposure_ack invalid: {err}")))?;
-    if ack.acknowledged_by.as_str() != controller_did {
+    if ack.acknowledged_by.as_str() != controller_id {
         return Err(AppError::capability_denied(
             "sidecar_exposure_ack.acknowledged_by must match the controller session",
         ));
@@ -240,13 +240,13 @@ pub(super) fn normalize_sidecar_exposure_ack(
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.resource.get"))]
 pub(super) async fn get_agent_participation(
     aa: AuthArgs,
-    agent_principal_id: PathParam<String>,
+    agent_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentParticipationResBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_principal_id.into_inner();
+    let agent_id = agent_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     let selections = state
         .persistence
@@ -275,7 +275,7 @@ pub(super) async fn get_agent_participation(
     }
     json_ok(AgentParticipationResBody {
         ok: true,
-        agent_principal_id: agent_id,
+        agent_id,
         entries,
     })
 }

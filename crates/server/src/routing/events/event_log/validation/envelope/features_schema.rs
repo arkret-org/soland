@@ -124,7 +124,7 @@ pub(super) fn service_declared_event_requirement_features(
             .map(|feature| (*feature).to_owned()),
     );
     let mut description = crate::wire::describe(
-        &state.config.service_did,
+        &state.config.service_id,
         &state.config.public_base_url,
         state.db.mode(),
         state.config.development_mode,

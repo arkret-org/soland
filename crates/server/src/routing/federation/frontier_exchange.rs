@@ -74,7 +74,7 @@ impl FrontierExchangeWorker {
                 }
             };
             for peer in &peers {
-                if peer.did == self.state.config.service_did {
+                if peer.did == self.state.config.service_id {
                     continue;
                 }
                 let result = self.probe_peer(&peer.url, &peer.did, &realm_id).await;
@@ -90,7 +90,7 @@ impl FrontierExchangeWorker {
                             .map_err(|error| error.to_string())?;
                         tracing::debug!(
                             realm_id,
-                            peer_service_did = %peer.did,
+                            peer_service_id = %peer.did,
                             status = %record.status,
                             worker = "federation_frontier_exchange",
                             "frontier exchange succeeded"
@@ -170,7 +170,7 @@ impl FrontierExchangeWorker {
         if record.status == FEDERATION_FRONTIER_STATUS_STALE_PEER {
             tracing::error!(
                 realm_id,
-                peer_service_did = %peer_did,
+                peer_service_id = %peer_did,
                 consecutive_failures = record.consecutive_failures,
                 reason,
                 remote_frontier_root = remote_root.unwrap_or(""),
@@ -180,7 +180,7 @@ impl FrontierExchangeWorker {
         } else {
             tracing::warn!(
                 realm_id,
-                peer_service_did = %peer_did,
+                peer_service_id = %peer_did,
                 consecutive_failures = record.consecutive_failures,
                 reason,
                 worker = "federation_frontier_exchange",
@@ -193,11 +193,7 @@ impl FrontierExchangeWorker {
 
 fn signed_get_headers(state: &AppState, peer_did: &str, target_url: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    insert_header(
-        &mut headers,
-        "source-service-did",
-        &state.config.service_did,
-    );
+    insert_header(&mut headers, "source-service-did", &state.config.service_id);
     insert_header(&mut headers, "destination-service-did", peer_did);
     insert_header(
         &mut headers,
@@ -207,12 +203,12 @@ fn signed_get_headers(state: &AppState, peer_did: &str, target_url: &str) -> Hea
     insert_header(
         &mut headers,
         "destination-trust-domain",
-        &super::federation::trust_domain_from_service_did(peer_did),
+        &super::federation::trust_domain_from_service_id(peer_did),
     );
 
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
-    let keyid = format!("{}#federation-fanout-key", state.config.service_did);
+    let keyid = format!("{}#federation-fanout-key", state.config.service_id);
     let covered = [
         "\"@method\"",
         "\"@target-uri\"",
@@ -340,12 +336,12 @@ fn validate_frontier_response(
 pub async fn inbound_peer_is_stale(
     state: &AppState,
     realm_id: &str,
-    peer_service_did: &str,
+    peer_service_id: &str,
 ) -> Result<bool, String> {
     state
         .persistence
         .federation_frontier_exchange()
-        .get(realm_id, peer_service_did)
+        .get(realm_id, peer_service_id)
         .await
         .map(|record| {
             record.is_some_and(|record| record.status == FEDERATION_FRONTIER_STATUS_STALE_PEER)

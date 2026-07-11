@@ -476,7 +476,7 @@ pub(super) fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &s
             "realm_id": realm_id,
             "channel_id": Value::Null
         },
-        "hub_provider": state.config.service_did.clone(),
+        "hub_provider": state.config.service_id.clone(),
         "local_provider_role": "hub",
         "mls_group_id": format!("mls:{}", room_id),
         "policy_root": arkret_sdk::canonical::sha256_digest(format!("{realm_id}:{room_id}:policy").as_bytes()),

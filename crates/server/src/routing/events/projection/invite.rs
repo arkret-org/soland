@@ -130,12 +130,12 @@ fn project_invite_accept_membership(
     invite_delivery_target: Option<&Value>,
     operation: &Operation,
 ) {
-    let recipient_service_did = invite_delivery_target
-        .and_then(|target| target.get("recipient_service_did"))
+    let recipient_service_id = invite_delivery_target
+        .and_then(|target| target.get("recipient_service_id"))
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned);
-    let delivery_status = recipient_service_did
+    let delivery_status = recipient_service_id
         .as_ref()
         .map(|_| "routable".to_owned())
         .or_else(|| Some("unroutable".to_owned()));
@@ -147,7 +147,7 @@ fn project_invite_accept_membership(
     // Preserve that frontier on the join transition so the origin server's
     // subsequent event fanout remains current; only fall back to the accept
     // event when no prior routable invite binding exists.
-    let delivery_binding_frontier = recipient_service_did.as_ref().and_then(|_| {
+    let delivery_binding_frontier = recipient_service_id.as_ref().and_then(|_| {
         previous
             .as_ref()
             .and_then(|member| member.delivery_binding_frontier.clone())
@@ -166,7 +166,7 @@ fn project_invite_accept_membership(
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status,
-            recipient_service_did,
+            recipient_service_id,
             membership_event_ref,
             delivery_binding_frontier,
             invited_at: previous
@@ -617,8 +617,8 @@ fn project_invited_delivery_binding(
     invitee: &str,
     delivery_target: Option<&Value>,
 ) {
-    let Some(recipient_service_did) = delivery_target
-        .and_then(|target| target.get("recipient_service_did"))
+    let Some(recipient_service_id) = delivery_target
+        .and_then(|target| target.get("recipient_service_id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|did| !did.is_empty())
@@ -653,7 +653,7 @@ fn project_invited_delivery_binding(
             state: membership_state,
             role,
             delivery_status: Some("routable".to_owned()),
-            recipient_service_did: Some(recipient_service_did.to_owned()),
+            recipient_service_id: Some(recipient_service_id.to_owned()),
             membership_event_ref: Some(operation.operation_id.as_str().to_owned()),
             delivery_binding_frontier: Some(operation.operation_id.as_str().to_owned()),
             invited_at,
@@ -769,8 +769,8 @@ fn claim_binding_matches(
     if binding.get("claim_nonce").and_then(Value::as_str) != Some(claim_nonce) {
         return false;
     }
-    let Some(service_did) = binding
-        .get("verification_service_did")
+    let Some(service_id) = binding
+        .get("verification_service_id")
         .and_then(Value::as_str)
     else {
         return false;
@@ -778,9 +778,9 @@ fn claim_binding_matches(
     if record
         .third_party_id
         .as_ref()
-        .and_then(|third_party| third_party.get("verification_service_did"))
+        .and_then(|third_party| third_party.get("verification_service_id"))
         .and_then(Value::as_str)
-        != Some(service_did)
+        != Some(service_id)
     {
         return false;
     }
@@ -813,13 +813,11 @@ fn invitee_for_operation(operation: &Operation) -> Option<Did> {
 fn invite_delivery_target_for_operation(operation: &Operation) -> Option<Value> {
     let target = operation.payload.get("invite_delivery_target")?;
     let object = target.as_object()?;
-    let service_did = object
-        .get("recipient_service_did")
-        .and_then(Value::as_str)?;
-    if Did::new(service_did.to_owned()).is_err() {
+    let service_id = object.get("recipient_service_id").and_then(Value::as_str)?;
+    if Did::new(service_id.to_owned()).is_err() {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "ak.invite.create supplied invalid invite_delivery_target.recipient_service_did"
+            "ak.invite.create supplied invalid invite_delivery_target.recipient_service_id"
         );
         return None;
     }
@@ -883,7 +881,7 @@ fn collect_plaintext_services_from_value(payload: &Value, services: &mut Vec<Str
         for item in items {
             if let Some(service) = item.as_str() {
                 push_service(service);
-            } else if let Some(service) = item.get("service_did").and_then(|value| value.as_str()) {
+            } else if let Some(service) = item.get("service_id").and_then(|value| value.as_str()) {
                 push_service(service);
             }
         }
@@ -928,7 +926,7 @@ fn merge_typed_plaintext_services(
     if let Some(typed) = typed {
         for service in typed.services {
             let classes = by_service
-                .entry(service.service_did.as_str().to_owned())
+                .entry(service.service_id.as_str().to_owned())
                 .or_default();
             classes.extend(service.data_classes);
         }
@@ -939,8 +937,8 @@ fn merge_typed_plaintext_services(
         let Some(object) = item.as_object() else {
             continue;
         };
-        let Some(service_did) = object
-            .get("service_did")
+        let Some(service_id) = object
+            .get("service_id")
             .or_else(|| object.get("did"))
             .and_then(Value::as_str)
             .filter(|value| Did::new((*value).to_owned()).is_ok())
@@ -958,7 +956,7 @@ fn merge_typed_plaintext_services(
             .collect::<BTreeSet<_>>();
         if !classes.is_empty() {
             by_service
-                .entry(service_did.to_owned())
+                .entry(service_id.to_owned())
                 .or_default()
                 .extend(classes);
         }

@@ -501,10 +501,10 @@ mod tests {
     #[tokio::test]
     async fn controller_private_writer_classifier_uses_agent_principal_projection() {
         let store = SolandMemoryPersistenceStore::new();
-        let agent_principal_id = "did:web:agent.alice.example";
+        let agent_id = "did:web:agent.alice.example";
 
         assert!(
-            !session_actor_is_agent_runtime(store.agents(), agent_principal_id)
+            !session_actor_is_agent_runtime(store.agents(), agent_id)
                 .await
                 .unwrap()
         );
@@ -512,8 +512,8 @@ mod tests {
         store
             .agents()
             .put(json!({
-                "agent_principal_id": agent_principal_id,
-                "controller_did": "did:web:alice.example",
+                "agent_id": agent_id,
+                "controller_id": "did:web:alice.example",
                 "agent_id": "ak:agent:0196419b-0000-7000-8000-000000000001",
                 "display_name": "Alice Assistant",
                 "state": "active"
@@ -522,7 +522,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            session_actor_is_agent_runtime(store.agents(), agent_principal_id)
+            session_actor_is_agent_runtime(store.agents(), agent_id)
                 .await
                 .unwrap()
         );

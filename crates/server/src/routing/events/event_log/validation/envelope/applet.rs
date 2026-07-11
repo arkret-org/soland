@@ -85,7 +85,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
             "applet delegated Event requires a package install",
         )
     })?;
-    if !applet_executor_in_subject_set(&record, package.service_did.as_str(), &executed_by) {
+    if !applet_executor_in_subject_set(&record, package.service_id.as_str(), &executed_by) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "applet_namespace_mismatch",
@@ -184,7 +184,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
             )
         })?;
     let document =
-        crate::jws_verify::resolve_did_document(state, &package.service_did).map_err(|reason| {
+        crate::jws_verify::resolve_did_document(state, &package.service_id).map_err(|reason| {
             tracing::debug!(%reason, %applet_id, "applet registration_epoch DID resolution failed");
             event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -203,7 +203,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
             )
         })?;
 
-    if executed_by == package.service_did.as_str()
+    if executed_by == package.service_id.as_str()
         && let Some(verification_method) = first_event_proof_verification_method(object)
         && !evidence.contains_signing_key(&verification_method)
     {
@@ -237,10 +237,10 @@ pub(super) fn applet_delegation_binding_reason(
 
 pub(super) fn applet_executor_in_subject_set(
     record: &crate::routing::extensions::applet_bridge::AppletRecord,
-    service_did: &str,
+    service_id: &str,
     executed_by: &str,
 ) -> bool {
-    executed_by == service_did
+    executed_by == service_id
         || executed_by == record.bot_actor_id
         || record
             .ghosts

@@ -120,9 +120,9 @@ pub enum ProjectionEffect {
         level_public: Option<bool>,
     },
     /// Applet registry projection updated (registration or discovery).
-    /// Keyed by the applet's `service_did`.
+    /// Keyed by the applet's `service_id`.
     AppletProjectionUpdated {
-        service_did: String,
+        service_id: String,
     },
     /// R1.2 — `ak.realm.delivery_binding_policy` event was projected
     /// into the canonical `ak.component.realm.delivery_binding_policy.v1`
@@ -215,18 +215,13 @@ pub enum ProjectionEffect {
         realm_id: String,
         parent_grant_id: Option<String>,
     },
-    /// Agent registry projection updated (endpoint). Keyed by the
-    /// agent's `agent_id`.
-    AgentProjectionUpdated {
-        agent_id: String,
-    },
     /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — agent
-    /// lifecycle FSM transition projected. `agent_principal_id` is the DID
+    /// lifecycle FSM transition projected. `agent_id` is the DID
     /// from the payload; `new_state` is the post-transition
     /// AgentLifecycleState. Bottom = `Reject`;
     /// Deactivated is terminal.
     AgentLifecycleProjected {
-        agent_principal_id: String,
+        agent_id: String,
         new_state: AgentLifecycleState,
     },
     /// AKP-0008 §4.5 / D3 — `ak.agent.key.authorize` projected: the key is
@@ -235,14 +230,14 @@ pub enum ProjectionEffect {
     /// the flag cleared (the grants are now in their normal effective
     /// window). `cleared_grant_ids` enumerates the grants that flipped.
     AgentKeyAuthorizeProjected {
-        agent_principal_id: String,
+        agent_id: String,
         key_id: String,
         cleared_grant_ids: Vec<String>,
     },
     /// AKP-0008 §4.11 — `ak.agent.key.revoke` projected: the key was removed
     /// from `agent_authorized_keys`.
     AgentKeyRevokeProjected {
-        agent_principal_id: String,
+        agent_id: String,
         key_id: String,
     },
     /// REDU-2 — `actor_private_event` accepted (reducer_input=false).

@@ -87,7 +87,7 @@ pub(super) async fn enqueue_outbound_for(
     };
     let payload = json!({
         "schema": format!("ak.federation.outbound.{resource_kind}.v1"),
-        "origin": state.config.service_did,
+        "origin": state.config.service_id,
         "destination": peer.did.as_str(),
         "resource_kind": resource_kind,
         "resource_id": resource_id,
@@ -107,7 +107,7 @@ pub(super) async fn enqueue_outbound_for(
     // against. Restart-time re-broadcast hits the UNIQUE INDEX and
     // collapses to the existing outbox row.
     let mut hasher = Sha256::new();
-    hasher.update(state.config.service_did.as_bytes());
+    hasher.update(state.config.service_id.as_bytes());
     hasher.update(b"|");
     hasher.update(peer.did.as_bytes());
     hasher.update(b"|");
@@ -164,7 +164,7 @@ pub(super) async fn record_outbound_fanout_attempt(
     };
     let intent = json!({
         "schema": "ak.federation.outbound_fanout.intent.v1",
-        "origin": state.config.service_did,
+        "origin": state.config.service_id,
         "destination": peer,
         "resource_kind": resource_kind,
         "resource_id": resource_id,
@@ -180,7 +180,7 @@ pub(super) async fn record_outbound_fanout_attempt(
         "resource_id": resource_id,
         "peer": peer,
         "target_path": target_path,
-        "origin": state.config.service_did,
+        "origin": state.config.service_id,
         "attempt": attempt,
         "state": "retry_scheduled",
         "intent": intent,
@@ -218,7 +218,7 @@ pub(super) async fn record_outbound_fanout_attempt(
             "status": "persisted_before_dispatch",
             "store": "federation_transactions",
             "record_key": {
-                "origin": state.config.service_did,
+                "origin": state.config.service_id,
                 "txn_id": txn_id
             },
             "content_digest_scope": "transcript_json"
@@ -239,7 +239,7 @@ pub(super) async fn record_outbound_fanout_attempt(
     );
     let now = now();
     let record = FederationTransactionRecord {
-        origin: state.config.service_did.clone(),
+        origin: state.config.service_id.clone(),
         txn_id,
         destination: peer.to_owned(),
         realm_id: None,
@@ -293,7 +293,7 @@ fn signed_fanout_intent_evidence(
     json!({
         "status": "intent_signed",
         "scheme": "ed25519-detached-jws",
-        "verification_method": format!("{}#federation-fanout-key", state.config.service_did),
+        "verification_method": format!("{}#federation-fanout-key", state.config.service_id),
         "payload_digest": payload_digest,
         "jws": jws,
         "key_origin": key_origin,
@@ -320,7 +320,7 @@ fn http_message_signature_evidence(
 ) -> Value {
     let created = attempted_at.timestamp();
     let content_digest = content_digest_header(body_bytes);
-    let keyid = format!("{}#federation-fanout-key", state.config.service_did);
+    let keyid = format!("{}#federation-fanout-key", state.config.service_id);
     let signature_params = format!(
         "(\"@method\" \"@path\" \"content-digest\" \"x-arkret-fanout-digest\");created={created};keyid=\"{keyid}\";alg=\"ed25519\""
     );
@@ -393,7 +393,7 @@ pub(super) async fn run_outbound_fanout_retry_pass_at(
         .await?;
     for record in records {
         report.scanned += 1;
-        if record.origin != state.config.service_did || !record.txn_id.starts_with("outbound_") {
+        if record.origin != state.config.service_id || !record.txn_id.starts_with("outbound_") {
             report.skipped += 1;
             continue;
         }
@@ -560,7 +560,7 @@ pub(crate) fn test_app_state_with_peers(
 
     let cfg = AppConfig {
         public_base_url: "http://test".to_owned(),
-        service_did: "did:web:test.local".to_owned(),
+        service_id: "did:web:test.local".to_owned(),
         object_storage: crate::config::ObjectStorageConfig::local(std::env::temp_dir()),
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned()],

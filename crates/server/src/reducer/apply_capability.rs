@@ -885,14 +885,14 @@ impl ProjectionState {
     /// inactive provisioning grants). Idempotent: a re-authorization of the
     /// same key id converges, and grants already cleared stay cleared.
     pub(crate) fn apply_agent_key_authorize(&mut self, operation: &Operation) -> ProjectionEffect {
-        let Some(agent_principal_id) = operation
+        let Some(agent_id) = operation
             .payload
-            .get("agent_principal_id")
+            .get("agent_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "agent_key_authorize_missing_agent_principal_id".to_owned(),
+                reason: "agent_key_authorize_missing_agent_id".to_owned(),
             };
         };
         let Some(key_id) = operation
@@ -906,12 +906,12 @@ impl ProjectionState {
             };
         };
         self.agent_authorized_keys
-            .entry(agent_principal_id.clone())
+            .entry(agent_id.clone())
             .or_default()
             .insert(key_id.clone());
-        let cleared_grant_ids = self.clear_pending_grant_flags_for(&agent_principal_id);
+        let cleared_grant_ids = self.clear_pending_grant_flags_for(&agent_id);
         ProjectionEffect::AgentKeyAuthorizeProjected {
-            agent_principal_id,
+            agent_id,
             key_id,
             cleared_grant_ids,
         }
@@ -920,14 +920,14 @@ impl ProjectionState {
     /// AKP-0008 §4.11 — project `ak.agent.key.revoke`: remove the key from
     /// the agent's authorized-key set (idempotent).
     pub(crate) fn apply_agent_key_revoke(&mut self, operation: &Operation) -> ProjectionEffect {
-        let Some(agent_principal_id) = operation
+        let Some(agent_id) = operation
             .payload
-            .get("agent_principal_id")
+            .get("agent_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "agent_key_revoke_missing_agent_principal_id".to_owned(),
+                reason: "agent_key_revoke_missing_agent_id".to_owned(),
             };
         };
         let Some(key_id) = operation
@@ -940,16 +940,13 @@ impl ProjectionState {
                 reason: "agent_key_revoke_missing_key_id".to_owned(),
             };
         };
-        if let Some(keys) = self.agent_authorized_keys.get_mut(&agent_principal_id) {
+        if let Some(keys) = self.agent_authorized_keys.get_mut(&agent_id) {
             keys.remove(&key_id);
             if keys.is_empty() {
-                self.agent_authorized_keys.remove(&agent_principal_id);
+                self.agent_authorized_keys.remove(&agent_id);
             }
         }
-        ProjectionEffect::AgentKeyRevokeProjected {
-            agent_principal_id,
-            key_id,
-        }
+        ProjectionEffect::AgentKeyRevokeProjected { agent_id, key_id }
     }
 
     /// AKP-0008 §4.11 — every grant id whose subject is `subject_did`
@@ -1042,9 +1039,9 @@ impl ProjectionState {
 
     /// AKP-0008 §4.11 — the authorized key ids the agent currently holds
     /// (for the deactivate `ak.agent.key.revoke` fan-out).
-    pub fn authorized_key_ids_for(&self, agent_principal_id: &str) -> Vec<String> {
+    pub fn authorized_key_ids_for(&self, agent_id: &str) -> Vec<String> {
         self.agent_authorized_keys
-            .get(agent_principal_id)
+            .get(agent_id)
             .map(|keys| keys.iter().cloned().collect())
             .unwrap_or_default()
     }
@@ -1052,17 +1049,17 @@ impl ProjectionState {
     /// True when the agent principal has at least one accepted, non-revoked
     /// agent key authorization. The capability evaluator fail-closes
     /// `effective_after_first_authorized_key` grants until this is true.
-    pub fn agent_has_authorized_key(&self, agent_principal_id: &str) -> bool {
+    pub fn agent_has_authorized_key(&self, agent_id: &str) -> bool {
         self.agent_authorized_keys
-            .get(agent_principal_id)
+            .get(agent_id)
             .map(|keys| !keys.is_empty())
             .unwrap_or(false)
     }
 
     /// Clear `effective_after_first_authorized_key` on every capability grant
-    /// cell whose subject is `agent_principal_id`. Returns the grant ids that
+    /// cell whose subject is `agent_id`. Returns the grant ids that
     /// were flipped from inactive to active.
-    fn clear_pending_grant_flags_for(&mut self, agent_principal_id: &str) -> Vec<String> {
+    fn clear_pending_grant_flags_for(&mut self, agent_id: &str) -> Vec<String> {
         let mut cleared = Vec::new();
         let cell_prefix = "ak:cell:ak.component.capability.grant.v1:";
         let target_refs: Vec<CellRef> = self
@@ -1090,7 +1087,7 @@ impl ProjectionState {
                         let subject_matches = map
                             .get("subject")
                             .and_then(Value::as_str)
-                            .map(|subject| subject == agent_principal_id)
+                            .map(|subject| subject == agent_id)
                             .unwrap_or(false);
                         if subject_matches {
                             grant_id_for_cell = map
@@ -1235,7 +1232,7 @@ mod agent_key_flag_tests {
         // Pairing: ak.agent.key.authorize clears the flag for the agent.
         let effect = state.apply_agent_key_authorize(&op(
             "agent_key_authorize",
-            json!({ "agent_principal_id": AGENT, "key_id": "ak:agent_key:dev1" }),
+            json!({ "agent_id": AGENT, "key_id": "ak:agent_key:dev1" }),
         ));
         match effect {
             crate::reducer::ProjectionEffect::AgentKeyAuthorizeProjected {
@@ -1254,7 +1251,7 @@ mod agent_key_flag_tests {
         // Revoking the key removes the authorized-key marker.
         state.apply_agent_key_revoke(&op(
             "agent_key_revoke",
-            json!({ "agent_principal_id": AGENT, "key_id": "ak:agent_key:dev1" }),
+            json!({ "agent_id": AGENT, "key_id": "ak:agent_key:dev1" }),
         ));
         assert!(!state.agent_has_authorized_key(AGENT));
     }
@@ -1621,7 +1618,7 @@ mod federation_revoke_fanout_tests {
     const REALM: &str = "ak:realm:01970000-0000-7000-8000-000000000000";
     const OTHER_REALM: &str = "ak:realm:01970000-0000-7000-8000-000000000001";
     const OWNER: &str = "did:web:alice.example";
-    const PEER_SERVICE_DID: &str = "did:web:beta.example";
+    const PEER_SERVICE_ID: &str = "did:web:beta.example";
     const GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000d1";
 
     fn capability_op(operation_id: &str, kind: &str, payload: serde_json::Value) -> Operation {
@@ -1664,7 +1661,7 @@ mod federation_revoke_fanout_tests {
                 "schema": "ak.schema.capability_grant.v1",
                 "realm_id": REALM,
                 "issuer": OWNER,
-                "subject": PEER_SERVICE_DID,
+                "subject": PEER_SERVICE_ID,
                 // The realm-level admin capability governs the delivery-binding
                 // policy. `ak.realm.delivery_binding_policy` is an event kind,
                 // not a registered capability action, so the grant carries the
@@ -1710,7 +1707,7 @@ mod federation_revoke_fanout_tests {
         );
         let revoked = state.federation_delivery_revoked_peers(REALM);
         assert!(
-            revoked.contains(PEER_SERVICE_DID),
+            revoked.contains(PEER_SERVICE_ID),
             "revoked service delegation peer MUST be reported"
         );
 

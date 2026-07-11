@@ -24,7 +24,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             // under the deployment domain and update if the canonical alias is
             // free (first-writer-wins, disjoint from the handle namespace).
             if let Some(canonical) = operation_realm_alias_input(operation).and_then(|raw| {
-                crate::realm_alias::canonical_realm_alias(&state.config.service_did, raw)
+                crate::realm_alias::canonical_realm_alias(&state.config.service_id, raw)
             }) {
                 let taken = realms.entries_iter().any(|(rid, existing)| {
                     rid != &realm_id && existing.alias.as_deref() == Some(canonical.as_str())
@@ -43,7 +43,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             // canonical alias is already taken by a different realm (first writer
             // wins). Disjoint from the handle namespace — no cross-namespace check.
             if let Some(alias) = operation_realm_alias_input(operation).and_then(|raw| {
-                crate::realm_alias::canonical_realm_alias(&state.config.service_did, raw)
+                crate::realm_alias::canonical_realm_alias(&state.config.service_id, raw)
             }) {
                 let taken = realms.entries_iter().any(|(rid, existing)| {
                     rid != &realm_id && existing.alias.as_deref() == Some(alias.as_str())

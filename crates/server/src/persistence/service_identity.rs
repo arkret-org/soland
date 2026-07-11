@@ -5,13 +5,13 @@ use super::*;
 /// The deployment's own authoritative service identity (identity-did.md §3.7).
 ///
 /// Singleton: at most one row, keyed by the fixed id [`SINGLETON_ID`]. This row
-/// is the fail-closed source of truth for `service_did`; a configured
-/// `SOLAND_SERVICE_DID` that disagrees with it MUST reject startup (I-2).
+/// is the fail-closed source of truth for `service_id`; a configured
+/// `SOLAND_SERVICE_ID` that disagrees with it MUST reject startup (I-2).
 #[derive(Debug, Clone)]
 pub struct ServiceIdentityRecord {
-    pub service_did: String,
+    pub service_id: String,
     /// `"bootstrapped_local"` — soland self-minted its `did:webvh` and hosts the
-    /// log — or `"adopted_config"` — a pre-existing / external `service_did`
+    /// log — or `"adopted_config"` — a pre-existing / external `service_id`
     /// recorded from config on first boot.
     pub provenance: String,
     /// The minted DID document for a locally bootstrapped identity; `{}` for an
@@ -65,7 +65,7 @@ pub(crate) struct PgServiceIdentityStore {
 #[derive(QueryableByName)]
 struct ServiceIdentityRow {
     #[diesel(sql_type = Text)]
-    service_did: String,
+    service_id: String,
     #[diesel(sql_type = Text)]
     provenance: String,
     #[diesel(sql_type = Jsonb)]
@@ -79,7 +79,7 @@ struct ServiceIdentityRow {
 impl From<ServiceIdentityRow> for ServiceIdentityRecord {
     fn from(row: ServiceIdentityRow) -> Self {
         Self {
-            service_did: row.service_did,
+            service_id: row.service_id,
             provenance: row.provenance,
             did_document: row.did_document,
             update_key_seed_multibase: row.update_key_seed_multibase,
@@ -93,7 +93,7 @@ impl ServiceIdentityStore for PgServiceIdentityStore {
     async fn get(&self) -> PersistenceResult<Option<ServiceIdentityRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT service_did, provenance, did_document, update_key_seed_multibase, created_at \
+            "SELECT service_id, provenance, did_document, update_key_seed_multibase, created_at \
              FROM service_identity WHERE id = $1",
         )
         .bind::<Text, _>(SINGLETON_ID)
@@ -108,17 +108,17 @@ impl ServiceIdentityStore for PgServiceIdentityStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO service_identity \
-             (id, service_did, provenance, did_document, update_key_seed_multibase, created_at) \
+             (id, service_id, provenance, did_document, update_key_seed_multibase, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6) \
              ON CONFLICT (id) DO UPDATE SET \
-                service_did = EXCLUDED.service_did, \
+                service_id = EXCLUDED.service_id, \
                 provenance = EXCLUDED.provenance, \
                 did_document = EXCLUDED.did_document, \
                 update_key_seed_multibase = EXCLUDED.update_key_seed_multibase, \
                 created_at = EXCLUDED.created_at",
         )
         .bind::<Text, _>(SINGLETON_ID)
-        .bind::<Text, _>(&record.service_did)
+        .bind::<Text, _>(&record.service_id)
         .bind::<Text, _>(&record.provenance)
         .bind::<Jsonb, _>(&record.did_document)
         .bind::<Nullable<Text>, _>(&record.update_key_seed_multibase)

@@ -13,7 +13,7 @@ const FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST: &str = "federation request authe
 fn config_with_policy(topology: FederationFanoutTopology, peers: Vec<String>) -> AppConfig {
     AppConfig {
         public_base_url: "http://test".to_owned(),
-        service_did: "did:web:test.local".to_owned(),
+        service_id: "did:web:test.local".to_owned(),
         object_storage: crate::config::ObjectStorageConfig::local(std::env::temp_dir()),
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned()],
@@ -246,7 +246,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
             "invite_id": "ak:invite:01904100-0000-7000-8000-000000000056",
             "invitee": "did:web:carol.example",
             "invite_delivery_target": {
-                "recipient_service_did": "did:web:test.local",
+                "recipient_service_id": "did:web:test.local",
                 "recipient_service_type": "principal_server"
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -290,7 +290,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
         projected_invite
             .invite_delivery_target
             .as_ref()
-            .and_then(|target| target.get("recipient_service_did"))
+            .and_then(|target| target.get("recipient_service_id"))
             .and_then(Value::as_str),
         Some("did:web:test.local")
     );

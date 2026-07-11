@@ -105,13 +105,13 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.ping"))]
 async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_did = Did::new(state.config.service_did.clone()).map_err(|error| {
-        AppError::internal(format!("configured service_did is invalid: {error}"))
+    let service_id = Did::new(state.config.service_id.clone()).map_err(|error| {
+        AppError::internal(format!("configured service_id is invalid: {error}"))
     })?;
     json_ok(AppletPingOutcome {
         ok: true,
         applet_id: SOLAND_EDGE_APPLET_ID.to_owned(),
-        service_did,
+        service_id,
         protocol_version: "1.0".to_owned(),
     })
 }
@@ -139,8 +139,8 @@ async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcom
                 "Signature",
                 "Signature-Input",
                 "Content-Digest",
-                "Source-Service-DID",
-                "Destination-Service-DID",
+                "Source-Service-ID",
+                "Destination-Service-ID",
                 "Idempotency-Key"
             ],
             "covered_components": [
@@ -287,10 +287,10 @@ async fn revoke_install_endpoint(
     // realm-scoped registration; require `ak.realm.admin` over the install's
     // realm. fail-closed.
     require_realm_admin(state, &session.actor, &revoke.effective_scope).await?;
-    let service_did = record
+    let service_id = record
         .package
         .as_ref()
-        .map(|package| package.service_did.to_string());
+        .map(|package| package.service_id.to_string());
     let grant_refs = record
         .install_response
         .as_ref()
@@ -328,7 +328,7 @@ async fn revoke_install_endpoint(
             revoke_delegated_sessions_for_applet(
                 state,
                 &applet_id,
-                service_did.as_deref(),
+                service_id.as_deref(),
                 &grant_refs,
             )
             .await
@@ -464,7 +464,7 @@ fn session_revoke_body_for_applet(
         applet_id: Some(record.applet_id.clone()),
         effective_scope: Some(effective_scope),
         registration_epoch: Some(package.registration_epoch.clone()),
-        service_did: Some(package.service_did.clone()),
+        service_id: Some(package.service_id.clone()),
         capability_grant_refs: grant_refs.to_vec(),
         proof: Some(proof),
     })
@@ -492,7 +492,7 @@ async fn provision_ghost_actor_endpoint(
 
     // Wire ids are validated at deserialization (typed AppletId/Did/RealmId).
     let applet_id = provision.applet_id.clone();
-    let service_did = provision.service_did.clone();
+    let service_id = provision.service_id.clone();
     let ghost_actor_id = provision.ghost_actor_id.clone();
     // G3.S9 — ghost actor DID recorded against the applet MUST be a
     // well-formed bare DID scalar (no DID URL fragment).
@@ -510,7 +510,7 @@ async fn provision_ghost_actor_endpoint(
         state,
         &record,
         &provision,
-        &service_did,
+        &service_id,
         &ghost_actor_id,
         &realm_id,
         now,
@@ -523,7 +523,7 @@ async fn provision_ghost_actor_endpoint(
         &record,
         &provision,
         applet_id,
-        &service_did,
+        &service_id,
         &ghost_actor_id,
         &realm_id,
         &authorization_ref,
@@ -544,11 +544,11 @@ async fn provision_ghost_actor_endpoint(
 
     crate::routing::append_audit_log(
         state,
-        Some(service_did.as_ref()),
+        Some(service_id.as_ref()),
         "applet.ghost_actor.provision",
         json!({
             "applet_id": provision.applet_id,
-            "service_did": service_did,
+            "service_id": service_id,
             "ghost_actor_id": ghost_actor_id,
             "realm_id": realm_id,
             "profile_event_ref": profile_event.event_id,
@@ -624,7 +624,7 @@ async fn transaction_endpoint(
     // inbound direction MUST carry a per-delivery RFC 9421 source signature and
     // the receiver MUST verify it before processing any event / side effect.
     // Plain `Authorization: Bearer` (no `Signature`) MUST be rejected. The
-    // signing key anchor is the Applet registration `source_service_did`'s
+    // signing key anchor is the Applet registration `source_service_id`'s
     // current active verification method, and that service DID MUST hit an
     // active effective install (§4b.1).
     let verified =
@@ -744,10 +744,10 @@ async fn protocol_metadata_endpoint(
                     "external_id": record.applet_id.clone(),
                     "instance_id": record.install_id.clone(),
                 },
-                "service_did": record
+                "service_id": record
                     .package
                     .as_ref()
-                    .map(|package| package.service_did.to_string()),
+                    .map(|package| package.service_id.to_string()),
                 "status": record.status.clone(),
             })
         })
@@ -758,7 +758,7 @@ async fn protocol_metadata_endpoint(
         icon_blob_ref: None,
         field_types: json!({
             "applet_id": {"type": "string", "required": true},
-            "service_did": {"type": "string"},
+            "service_id": {"type": "string"},
             "status": {"type": "string"},
         }),
         instances,

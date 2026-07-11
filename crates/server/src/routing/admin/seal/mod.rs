@@ -71,14 +71,14 @@ pub(super) use notary::{admin_get_notary, admin_reconfigure_notary};
 /// `Ed25519MoveSigner` here gives the admin path a SDK-canonical signer
 /// with no key duplication.
 ///
-/// The verification_method id is `<service_did>#notary-key`, matching
+/// The verification_method id is `<service_id>#notary-key`, matching
 /// the JWS the NotaryWorker emits — so a single DID-document publication
 /// covers both the worker and the admin endpoints.
 pub(super) fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError> {
-    let service_did = state.config.service_did.as_str();
-    let did = Did::new(service_did.to_owned())
-        .map_err(|e| app_error!(InternalError, "invalid service DID `{service_did}`: {e}"))?;
-    let kid = format!("{service_did}#notary-key");
+    let service_id = state.config.service_id.as_str();
+    let did = Did::new(service_id.to_owned())
+        .map_err(|e| app_error!(InternalError, "invalid service DID `{service_id}`: {e}"))?;
+    let kid = format!("{service_id}#notary-key");
     // `state.notary_signing_key()` returns `Arc<SigningKey>` (lock-free
     // `ArcSwap` snapshot). `Ed25519MoveSigner::new` takes a `SigningKey`
     // by value, so dereference + clone.

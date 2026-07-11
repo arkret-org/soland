@@ -20,7 +20,7 @@ pub struct CapabilityFanoutBody {
     /// The coauth-side operation this fanout materializes (e.g. grant /
     /// revoke), echoed back in the response.
     pub operation: String,
-    pub issuer_service_did: String,
+    pub issuer_service_id: String,
     /// Durable event kind the fanout projects (grant / revoke event kind).
     pub event_kind: String,
     pub event_id: String,

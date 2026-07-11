@@ -462,8 +462,8 @@ pub(super) async fn recovery_session_proof_submit(
                 .get("verification_method")
                 .cloned()
                 .unwrap_or(Value::Null),
-            "service_did": proof
-                .get("service_did")
+            "service_id": proof
+                .get("service_id")
                 .cloned()
                 .unwrap_or(Value::Null),
             "proof_summary": proof_summary,
@@ -565,16 +565,16 @@ pub(super) async fn verify_trusted_recovery_service_proof(
             "proof.alg `{alg}` not in {{EdDSA, Ed25519}}",
         )));
     }
-    let service_did = required_proof_string(proof, "service_did")?;
+    let service_id = required_proof_string(proof, "service_id")?;
     let audience = required_proof_string(proof, "audience")?;
-    if audience != state.config.service_did {
+    if audience != state.config.service_id {
         return Err(recovery_proof_authority_error(format!(
             "proof.audience `{audience}` does not match this service"
         )));
     }
     let verification_method = required_proof_string(proof, "verification_method")?;
-    let _service_did = Did::new(service_did.to_owned()).map_err(|error| {
-        recovery_proof_authority_error(format!("proof.service_did is invalid: {error}"))
+    let _service_id = Did::new(service_id.to_owned()).map_err(|error| {
+        recovery_proof_authority_error(format!("proof.service_id is invalid: {error}"))
     })?;
     if !recovery_policy_mentions_identifier(
         &record.policy_payload,
@@ -584,10 +584,10 @@ pub(super) async fn verify_trusted_recovery_service_proof(
             "trusted_services",
             "recovery_services",
         ],
-        service_did,
+        service_id,
     ) {
         return Err(recovery_proof_authority_error(format!(
-            "proof.service_did `{service_did}` is not trusted by the bound recovery policy"
+            "proof.service_id `{service_id}` is not trusted by the bound recovery policy"
         )));
     }
     if recovery_policy_requires_trusted_service_attestation(&record.policy_payload)
@@ -602,7 +602,7 @@ pub(super) async fn verify_trusted_recovery_service_proof(
             "trusted recovery service proof is missing attestation_ref",
         ));
     }
-    crate::jws_verify::validate_verification_method_controller(service_did, verification_method)
+    crate::jws_verify::validate_verification_method_controller(service_id, verification_method)
         .map_err(|error| {
             recovery_proof_authority_error(format!(
                 "proof.verification_method authority invalid: {error}"
@@ -840,7 +840,7 @@ fn trusted_recovery_service_proof_body(proof: &Map<String, Value>) -> Result<Val
     let mut body = json!({
         "kind": "trusted_recovery_service",
         "challenge": required_proof_string(proof, "challenge")?,
-        "service_did": required_proof_string(proof, "service_did")?,
+        "service_id": required_proof_string(proof, "service_id")?,
         "audience": required_proof_string(proof, "audience")?,
         "verification_method": required_proof_string(proof, "verification_method")?,
         "alg": required_proof_string(proof, "alg")?,

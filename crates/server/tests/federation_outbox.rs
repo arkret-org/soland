@@ -79,7 +79,7 @@ fn spawn_mock_peer_with_status(
 
 fn outbox_test_config() -> AppConfig {
     AppConfig {
-        service_did: "did:web:soland-outbox.local".to_owned(),
+        service_id: "did:web:soland-outbox.local".to_owned(),
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-outbox-test")),
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
@@ -110,12 +110,12 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
     );
     assert!(
         lower.contains("source-service-did: did:web:soland-outbox.local"),
-        "captured request missing Source-Service-DID binding; got: {}",
+        "captured request missing Source-Service-ID binding; got: {}",
         captured.captured
     );
     assert!(
         lower.contains("destination-service-did: did:web:peer.example"),
-        "captured request missing Destination-Service-DID binding; got: {}",
+        "captured request missing Destination-Service-ID binding; got: {}",
         captured.captured
     );
     assert!(
@@ -425,8 +425,8 @@ fn http_signature_verifies_with_headers(
 
     let (
         Some(content_digest),
-        Some(source_service_did),
-        Some(destination_service_did),
+        Some(source_service_id),
+        Some(destination_service_id),
         Some(source_trust_domain),
         Some(destination_trust_domain),
         Some(request_canonical_digest),
@@ -448,8 +448,8 @@ fn http_signature_verifies_with_headers(
          \"@target-uri\": {target_uri}\n\
          \"@authority\": {authority}\n\
          \"content-digest\": {content_digest}\n\
-         \"source-service-did\": {source_service_did}\n\
-         \"destination-service-did\": {destination_service_did}\n\
+         \"source-service-did\": {source_service_id}\n\
+         \"destination-service-did\": {destination_service_id}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}\n\
          \"request-canonical-digest\": {request_canonical_digest}\n\

@@ -55,7 +55,7 @@ pub(super) async fn register_package_install(
                 let mut recovered = existing.clone();
                 if recovered.install_execution.is_none() {
                     recovered.install_execution = Some(build_install_execution_record(
-                        &state.config.service_did,
+                        &state.config.service_id,
                         owner_actor_id,
                         &idempotency_key,
                         &body_digest,
@@ -131,7 +131,7 @@ pub(super) async fn register_package_install(
         applet_id: package.applet_id.clone(),
         namespace,
         owner_actor_id: owner_actor_id.to_owned(),
-        registry_did: package.controller_did.to_string(),
+        registry_did: package.controller_id.to_string(),
         bot_actor_id: package.bot_actor_id.to_string(),
         portal_realm_id: realm_id,
         capabilities: approved_actions,
@@ -150,7 +150,7 @@ pub(super) async fn register_package_install(
         ghosts: Vec::new(),
     };
     record.install_execution = Some(build_install_execution_record(
-        &state.config.service_did,
+        &state.config.service_id,
         owner_actor_id,
         record.idempotency_key.as_deref().unwrap_or_default(),
         record.install_body_digest.as_deref().unwrap_or_default(),
@@ -168,7 +168,7 @@ pub(super) async fn register_package_install(
         json!({
             "applet_id": record.applet_id,
             "namespace": record.namespace,
-            "service_did": package.service_did,
+            "service_id": package.service_id,
             "bot_actor_id": record.bot_actor_id,
             "registration_event_ref": registration_event_ref,
             "registration_epoch": package.registration_epoch,
@@ -205,7 +205,7 @@ async fn recover_applet_install_fanout(
             .unwrap_or_default()
             .to_owned();
         record.install_execution = Some(build_install_execution_record(
-            &state.config.service_did,
+            &state.config.service_id,
             &record.owner_actor_id,
             record.idempotency_key.as_deref().unwrap_or_default(),
             record.install_body_digest.as_deref().unwrap_or_default(),
@@ -295,7 +295,7 @@ fn applet_install_grant(
         grant_id: grant_id.to_owned(),
         realm_id: record.portal_realm_id.clone(),
         issuer: record.owner_actor_id.clone(),
-        subject: package.service_did.to_string(),
+        subject: package.service_id.to_string(),
         resource: record.portal_realm_id.clone(),
         actions: vec![action.to_owned()],
         constraints: applet_delegation_constraints(record, package),
@@ -312,7 +312,7 @@ fn applet_delegation_constraints(
 ) -> Vec<crate::authz::Constraint> {
     vec![crate::authz::Constraint::AppletDelegationBinding {
         applet_id: record.applet_id.clone(),
-        executed_by: package.service_did.to_string(),
+        executed_by: package.service_id.to_string(),
         registration_epoch: package.registration_epoch.to_string(),
     }]
 }
@@ -408,7 +408,7 @@ fn install_execution_steps(
             accepted,
             Some(json!({
                 "applet_id": record.applet_id.as_str(),
-                "executed_by": package.service_did.to_string(),
+                "executed_by": package.service_id.to_string(),
                 "registration_epoch": package.registration_epoch.to_string(),
             })),
         ));
@@ -505,7 +505,7 @@ pub(super) fn update_applet_projection(state: &AppState, record: &AppletRecord) 
     };
     let now = chrono::Utc::now();
     let projection = AppletProjection {
-        service_did: package.service_did.to_string(),
+        service_id: package.service_id.to_string(),
         namespace: record.namespace.clone(),
         manifest: Some(package.manifest_snapshot()),
         capabilities: Some(json!(record.capabilities)),
@@ -515,7 +515,7 @@ pub(super) fn update_applet_projection(state: &AppState, record: &AppletRecord) 
     let mut guard = state.projection.lock();
     guard
         .applets
-        .insert(package.service_did.to_string(), projection.clone());
+        .insert(package.service_id.to_string(), projection.clone());
     guard.applets.insert(record.applet_id.clone(), projection);
 }
 
@@ -810,10 +810,10 @@ pub(super) fn validate_applet_package(
         );
     }
     // applet-integration.md §4.1 line 193/199 + §4b line 229: the controller
-    // detached proof MUST be a real signature by `controller_did` covering the
+    // detached proof MUST be a real signature by `controller_id` covering the
     // canonical package body. Digest equality alone is forgeable — anyone can
     // recompute `event_digest` over `unsigned` and sign it with an arbitrary
-    // key. Anchor the proof's verification_method to `controller_did` and run
+    // key. Anchor the proof's verification_method to `controller_id` and run
     // the same detached-JWS verifier every other soland proof path uses
     // (dev: shape-only; production: DID-resolved Ed25519). Preview/commit MUST
     // fail closed (`proof_invalid`) when the controller proof is invalid or its
@@ -833,9 +833,9 @@ pub(super) fn validate_applet_package(
 /// controller DID document and runs the Ed25519 verify against the
 /// verification method's public key.
 ///
-/// `controller_did` is anchored two ways: the proof's `verification_method`
-/// MUST be a DID URL under `controller_did`, and the resolved public key MUST
-/// come from `controller_did`'s DID document (production). A proof signed by any
+/// `controller_id` is anchored two ways: the proof's `verification_method`
+/// MUST be a DID URL under `controller_id`, and the resolved public key MUST
+/// come from `controller_id`'s DID document (production). A proof signed by any
 /// other key — even with a correctly recomputed `event_digest` — fails here.
 fn validate_controller_proof(
     state: &AppState,
@@ -846,13 +846,13 @@ fn validate_controller_proof(
         .proof
         .as_ref()
         .ok_or_else(|| AppError::invalid_param("applet package proof is required"))?;
-    let controller_did = package.controller_did.as_str();
+    let controller_id = package.controller_id.as_str();
     crate::jws_verify::validate_verification_method_controller(
-        controller_did,
+        controller_id,
         &proof.verification_method,
     )
     .map_err(|reason| {
-        AppError::invalid_param("applet package proof is not anchored to controller_did")
+        AppError::invalid_param("applet package proof is not anchored to controller_id")
             .with_wire_code("proof_invalid")
             .with_reason_detail(reason)
     })?;
@@ -861,14 +861,14 @@ fn validate_controller_proof(
             unsigned_canonical_bytes,
             &proof.jws,
             &proof.verification_method,
-            controller_did,
+            controller_id,
         )
     } else {
         crate::jws_verify::verify_jws_ed25519(
             unsigned_canonical_bytes,
             &proof.jws,
             &proof.verification_method,
-            controller_did,
+            controller_id,
             state,
         )
     };
@@ -891,7 +891,7 @@ fn validate_registration_epoch_evidence(
                 .with_wire_code("applet_registration_epoch_evidence_missing")
         })?;
     let document =
-        crate::jws_verify::resolve_did_document(state, &package.service_did).map_err(|reason| {
+        crate::jws_verify::resolve_did_document(state, &package.service_id).map_err(|reason| {
             AppError::invalid_param("applet service DID document could not be resolved")
                 .with_wire_code("applet_registration_epoch_evidence_mismatch")
                 .with_reason_detail(reason)
@@ -1030,8 +1030,8 @@ pub(super) fn registration_payload_from_package(
 ) -> Result<Value, AppError> {
     Ok(json!({
         "applet_id": package.applet_id,
-        "service_did": package.service_did,
-        "controller_did": package.controller_did,
+        "service_id": package.service_id,
+        "controller_id": package.controller_id,
         "base_url": package.base_url,
         "bot_actor_id": package.bot_actor_id,
         "protocols": package.protocols,
@@ -1113,7 +1113,7 @@ fn applet_e2ee_authorization_payload(record: &AppletRecord, package: &AppletPack
             "authorization_gate": "applet_e2ee_join",
             "authorized_by": record.owner_actor_id.as_str(),
             "registration_epoch": package.registration_epoch.to_string(),
-            "service_did": package.service_did.to_string(),
+            "service_id": package.service_id.to_string(),
             "reason_code": "applet_e2ee_join_unauthorized",
         },
         "created_at": record.registered_at,
@@ -1294,7 +1294,7 @@ pub(super) fn manifest_from_package(package: &AppletPackage) -> AppletManifest {
     AppletManifest {
         id: package.applet_id.clone(),
         version: "1.0.0".to_owned(),
-        signer_did: package.controller_did.to_string(),
+        signer_did: package.controller_id.to_string(),
         signature: package
             .proof
             .as_ref()
@@ -1379,23 +1379,23 @@ mod tests {
         (Did::new(did_str).unwrap(), vm)
     }
 
-    /// Build a sealed package whose `controller_did` is a `did:key` and whose
+    /// Build a sealed package whose `controller_id` is a `did:key` and whose
     /// `registration_epoch_evidence` is consistent with a non-empty service
     /// DID document, then sign it with the signer/verification_method chosen
-    /// by the caller. When the signer key differs from `controller_did`'s key
+    /// by the caller. When the signer key differs from `controller_id`'s key
     /// the resulting controller proof MUST fail verification.
     fn signed_did_key_package(
         controller_seed: [u8; 32],
         signer_seed: [u8; 32],
         verification_method: &str,
     ) -> AppletPackage {
-        let (controller_did, _) = did_key_for_seed(controller_seed);
+        let (controller_id, _) = did_key_for_seed(controller_seed);
         let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
         let mut package = AppletPackage::new(
             "package:ak:applet:test".to_owned(),
             "ak:applet:01974100-0000-7000-8000-000000000001".to_owned(),
             Did::new("did:web:test-applet.example".to_owned()).unwrap(),
-            controller_did.clone(),
+            controller_id.clone(),
             "https://test-applet.example".to_owned(),
             Did::new("did:web:bot-test-applet.soland.local".to_owned()).unwrap(),
             vec!["arkret.portal".to_owned()],
@@ -1408,7 +1408,7 @@ mod tests {
         package.requested_scopes = vec!["ak.message.create".to_owned()];
         package.registration_epoch_evidence =
             Some(arkret_sdk::applet::AppletRegistrationEpochEvidence::new(
-                package.service_did.clone(),
+                package.service_id.clone(),
                 Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
                 vec![arkret_sdk::applet::AppletAcceptedSigningKeyEvidence {
                     key_ref: package.webhook_auth.key_ref.clone(),
@@ -1418,7 +1418,7 @@ mod tests {
         package.seal().unwrap();
         let signer = Ed25519MoveSigner::from_did_key_seed(
             signer_seed,
-            controller_did,
+            controller_id,
             verification_method.to_owned(),
         );
         package.sign(&signer, verification_method).unwrap();
@@ -1428,8 +1428,8 @@ mod tests {
     #[test]
     fn validate_controller_proof_rejects_wrong_key_signature() {
         let state = production_test_state();
-        // controller_did is keyed by `controller_seed`, but the proof is signed
-        // with `signer_seed` while still naming controller_did's verification
+        // controller_id is keyed by `controller_seed`, but the proof is signed
+        // with `signer_seed` while still naming controller_id's verification
         // method. The forged proof recomputes the correct payload digest yet
         // the Ed25519 signature is made by the wrong key — verification MUST
         // fail closed with `proof_invalid`.
@@ -1450,8 +1450,8 @@ mod tests {
     fn validate_controller_proof_rejects_unanchored_verification_method() {
         let state = production_test_state();
         // Sign with a verification_method belonging to a *different* DID than
-        // controller_did. The anchoring gate MUST reject before any crypto,
-        // because the proof is not attributable to controller_did.
+        // controller_id. The anchoring gate MUST reject before any crypto,
+        // because the proof is not attributable to controller_id.
         let controller_seed = [1u8; 32];
         let other_seed = [2u8; 32];
         let (_, other_vm) = did_key_for_seed(other_seed);
@@ -1461,14 +1461,14 @@ mod tests {
         unsigned.proof = None;
         let bytes = arkret_sdk::canonical::canonical_json_bytes(&unsigned).unwrap();
         let error = validate_controller_proof(&state, &package, &bytes)
-            .expect_err("controller proof not anchored to controller_did must be rejected");
+            .expect_err("controller proof not anchored to controller_id must be rejected");
         assert_eq!(error.wire_code(), "proof_invalid");
     }
 
     #[test]
     fn validate_controller_proof_accepts_correct_controller_signature() {
         let state = production_test_state();
-        // Same key for controller_did and signer: a genuine controller proof
+        // Same key for controller_id and signer: a genuine controller proof
         // verifies against the resolved did:key public key.
         let seed = [1u8; 32];
         let (_, vm) = did_key_for_seed(seed);
@@ -1554,7 +1554,7 @@ mod tests {
             applet_id: package.applet_id.clone(),
             namespace: "bridge.test".to_owned(),
             owner_actor_id: "did:web:alice.example".to_owned(),
-            registry_did: package.controller_did.to_string(),
+            registry_did: package.controller_id.to_string(),
             bot_actor_id: package.bot_actor_id.to_string(),
             portal_realm_id: "ak:realm:01974100-0000-7000-8000-000000000001".to_owned(),
             capabilities: vec![

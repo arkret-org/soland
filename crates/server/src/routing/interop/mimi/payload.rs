@@ -34,7 +34,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         "hlc": state.hlc.now(),
         "prev_refs": [],
         "payload": payload,
-        "executed_by": state.config.service_did,
+        "executed_by": state.config.service_id,
     });
     let canonical_source = mimi_event_canonical_source(&envelope);
     let canonical_bytes = canonical::canonical_json_bytes(&canonical_source).map_err(|error| {
@@ -82,7 +82,7 @@ pub(super) fn mimi_event_proof(
     event_digest: &str,
     created_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Proof, AppError> {
-    let verification_method = format!("{}#mimi-provider-facade-key", state.config.service_did);
+    let verification_method = format!("{}#mimi-provider-facade-key", state.config.service_id);
     let binding = json!({
         "kind": "mimi_provider_service_proof",
         "event_digest": event_digest,
@@ -206,7 +206,7 @@ pub(super) fn decode_mimi_opaque_bytes(
 pub(super) fn mimi_provider_directory_value(state: &AppState) -> Value {
     json!({
         "schema": "ak.schema.mimi_interop.v1",
-        "service_did": state.config.service_did.clone(),
+        "service_id": state.config.service_id.clone(),
         "service_type": "mimi_provider_facade",
         "supported_profiles": ["ak.profile.mimi_interop.v1"],
         "mimi": {
@@ -245,9 +245,9 @@ pub(super) fn mimi_provider_directory_value(state: &AppState) -> Value {
         },
         "proof": {
             "type": "dev_service_digest",
-            "kid": format!("{}#mimi-provider", state.config.service_did),
+            "kid": format!("{}#mimi-provider", state.config.service_id),
             "alg": "sha256-dev",
-            "sig": sha256_hex(format!("{}:ak.profile.mimi_interop.v1", state.config.service_did).as_bytes())
+            "sig": sha256_hex(format!("{}:ak.profile.mimi_interop.v1", state.config.service_id).as_bytes())
         }
     })
 }
@@ -260,14 +260,14 @@ pub(super) fn mimi_base_url(state: &AppState) -> String {
 }
 
 pub(super) fn mimi_provider_id(state: &AppState) -> String {
-    service_did_mimi_provider_id(&state.config.service_did)
+    service_id_mimi_provider_id(&state.config.service_id)
 }
 
-pub(super) fn service_did_mimi_provider_id(service_did: &str) -> String {
-    if let Some(domain) = service_did.strip_prefix("did:web:") {
+pub(super) fn service_id_mimi_provider_id(service_id: &str) -> String {
+    if let Some(domain) = service_id.strip_prefix("did:web:") {
         return format!("mimi://{}", domain.replace(':', "/"));
     }
-    if let Some(rest) = service_did.strip_prefix("did:webvh:") {
+    if let Some(rest) = service_id.strip_prefix("did:webvh:") {
         let mut parts = rest.splitn(2, ':');
         if parts.next().is_some_and(|scid| !scid.is_empty())
             && let Some(authority_and_path) = parts.next()
@@ -276,7 +276,7 @@ pub(super) fn service_did_mimi_provider_id(service_did: &str) -> String {
             return format!("mimi://{}", authority_and_path.replace(':', "/"));
         }
     }
-    format!("mimi://{}", service_did.replace(':', "."))
+    format!("mimi://{}", service_id.replace(':', "."))
 }
 
 pub(super) fn mimi_room_uri(state: &AppState, room_id: &str) -> String {
@@ -292,7 +292,7 @@ pub(super) fn mimi_receipt(
     json!({
         "profile": "ak.profile.mimi_interop.v1",
         "operation_id": operation_id,
-        "service_did": state.config.service_did,
+        "service_id": state.config.service_id,
         "provider_id": mimi_provider_id(state),
         "request_hash": arkret_sdk::canonical::sha256_digest(body.to_string().as_bytes()),
         "accepted_at": now(),

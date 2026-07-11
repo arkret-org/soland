@@ -53,9 +53,9 @@ pub(crate) fn test_config() -> AppConfig {
     }
 }
 
-pub(crate) fn test_config_with_service_did(service_did: &str) -> AppConfig {
+pub(crate) fn test_config_with_service_id(service_id: &str) -> AppConfig {
     AppConfig {
-        service_did: service_did.to_owned(),
+        service_id: service_id.to_owned(),
         ..test_config()
     }
 }
@@ -126,8 +126,8 @@ pub(crate) fn signed_federation_get_headers(
     destination: &str,
     target_uri: &str,
 ) -> Vec<(&'static str, String)> {
-    let source_trust_domain = trust_domain_from_service_did(origin);
-    let destination_trust_domain = trust_domain_from_service_did(destination);
+    let source_trust_domain = trust_domain_from_service_id(origin);
+    let destination_trust_domain = trust_domain_from_service_id(destination);
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
     let keyid = format!("{origin}#federation-fanout-key");
@@ -169,8 +169,8 @@ fn signed_federation_request_headers(
     let body_bytes = arkret_sdk::canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let request_digest = format!("sha256:{}", hex::encode(Sha256::digest(&body_bytes)));
-    let source_trust_domain = trust_domain_from_service_did(origin);
-    let destination_trust_domain = trust_domain_from_service_did(destination);
+    let source_trust_domain = trust_domain_from_service_id(origin);
+    let destination_trust_domain = trust_domain_from_service_id(destination);
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
     let keyid = format!("{origin}#federation-fanout-key");
@@ -218,20 +218,20 @@ pub(crate) fn authority_from_target_uri(target_uri: &str) -> String {
         .unwrap_or_else(|| host.to_owned())
 }
 
-pub(crate) fn development_service_signing_key(service_did: &str) -> SigningKey {
+pub(crate) fn development_service_signing_key(service_id: &str) -> SigningKey {
     let mut hasher = Sha256::new();
     hasher.update(b"soland:notary-ephemeral:");
-    hasher.update(service_did.as_bytes());
+    hasher.update(service_id.as_bytes());
     let seed: [u8; 32] = hasher.finalize().into();
     SigningKey::from_bytes(&seed)
 }
 
-pub(crate) fn trust_domain_from_service_did(service_did: &str) -> String {
-    let scope = service_did
+pub(crate) fn trust_domain_from_service_id(service_id: &str) -> String {
+    let scope = service_id
         .strip_prefix("did:web:")
-        .or_else(|| service_did.strip_prefix("did:key:"))
-        .or_else(|| service_did.strip_prefix("did:webvh:"))
-        .unwrap_or(service_did)
+        .or_else(|| service_id.strip_prefix("did:key:"))
+        .or_else(|| service_id.strip_prefix("did:webvh:"))
+        .unwrap_or(service_id)
         .to_ascii_lowercase()
         .replace(':', ".");
     format!("ak:trust_domain:{scope}")
@@ -381,7 +381,7 @@ pub(crate) async fn seed_test_realm(
                 inviter: owner.to_owned(),
                 invitee: Some((*invitee).to_owned()),
                 invite_delivery_target: Some(serde_json::json!({
-                    "recipient_service_did": state.config.service_did.clone(),
+                    "recipient_service_id": state.config.service_id.clone(),
                     "recipient_service_type": "principal_server"
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
@@ -425,7 +425,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
                 state: "join".to_owned(),
                 role: "member".to_owned(),
                 delivery_status: None,
-                recipient_service_did: None,
+                recipient_service_id: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,
                 invited_at: None,

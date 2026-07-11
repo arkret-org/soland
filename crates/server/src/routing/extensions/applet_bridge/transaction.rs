@@ -18,12 +18,12 @@ pub(super) async fn process_verified_transaction(
     idempotency_key: &str,
     verified: VerifiedInboundTransactionSignature,
 ) -> Result<AppletTransactionOutcome, AppError> {
-    let source_service_did = transaction.source_service_did.to_string();
+    let source_service_id = transaction.source_service_id.to_string();
     let begin = state
         .persistence
         .applets()
         .begin_transaction_replay(AppletTransactionReplayRecord {
-            source_service_did: source_service_did.clone(),
+            source_service_id: source_service_id.clone(),
             idempotency_key: idempotency_key.to_owned(),
             source_signature_anchor: verified.source_signature_anchor.clone(),
             request_digest: verified.request_digest.clone(),
@@ -47,7 +47,7 @@ pub(super) async fn process_verified_transaction(
     for event in transaction.events {
         let event_id = event.event_id.to_string();
         if let Err(reason_code) =
-            validate_transaction_event_binding(&verified.install, &source_service_did, &event)
+            validate_transaction_event_binding(&verified.install, &source_service_id, &event)
         {
             rejected.push(rejected_event(&event_id, reason_code));
             continue;
@@ -96,7 +96,7 @@ pub(super) async fn process_verified_transaction(
     state
         .persistence
         .applets()
-        .complete_transaction_replay(&source_service_did, idempotency_key, outcome_value)
+        .complete_transaction_replay(&source_service_id, idempotency_key, outcome_value)
         .await
         .map_err(|error| {
             tracing::error!(%error, "failed to complete applet transaction replay record");
@@ -137,7 +137,7 @@ fn applet_event_session(state: &AppState, event: &Event) -> SessionRecord {
         token_hash: "applet-transaction-source-signature".to_owned(),
         actor: event.actor_id.to_string(),
         device_id: "applet-transaction".to_owned(),
-        audience: state.config.service_did.clone(),
+        audience: state.config.service_id.clone(),
         session_public_key: None,
         agent_session: None,
         expires_at: now + chrono::Duration::minutes(5),
@@ -148,11 +148,11 @@ fn applet_event_session(state: &AppState, event: &Event) -> SessionRecord {
 
 fn validate_transaction_event_binding(
     install: &AppletRecord,
-    source_service_did: &str,
+    source_service_id: &str,
     event: &Event,
 ) -> Result<(), &'static str> {
     let package = install.package.as_ref().ok_or("applet_install_required")?;
-    if package.service_did.as_str() != source_service_did {
+    if package.service_id.as_str() != source_service_id {
         return Err("applet_registration_unauthorized");
     }
     if install.revoked_at.is_some()

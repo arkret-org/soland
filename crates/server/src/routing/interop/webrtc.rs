@@ -143,7 +143,7 @@ impl SolandIceConfigOutcome {
             force_turn: unsigned.force_turn,
             signature: IceConfigSignature {
                 alg: "EdDSA".to_owned(),
-                kid: format!("{}#notary-key", state.config.service_did),
+                kid: format!("{}#notary-key", state.config.service_id),
                 signature_input: ICE_CONFIG_SIGNING_LABEL.to_owned(),
                 payload_digest,
                 sig,
@@ -1125,7 +1125,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
     let config = value.get("media_service").unwrap_or(value);
     let service_id = config
         .get("service_id")
-        .or_else(|| config.get("service_did"))
+        .or_else(|| config.get("service_id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())

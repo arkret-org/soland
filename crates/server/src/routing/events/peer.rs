@@ -19,14 +19,14 @@ use crate::persistence::PeerEventsPageQuery;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, CanonicalEventRecord, RealmMetaRecord};
 
-const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
-const HEADER_DESTINATION_SERVICE_DID: &str = "destination-service-did";
+const HEADER_SOURCE_SERVICE_ID: &str = "source-service-did";
+const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-did";
 const MAX_PEER_EVENTS_QUERY_LIMIT: usize = 100;
 const MAX_PEER_EVENTS_RESOLVE: usize = 100;
 
 #[derive(Debug, Serialize, ToSchema)]
 struct PeerEventsDescribeOutcome {
-    service_did: Did,
+    service_id: Did,
     protocol_version: String,
     primary_write_path: String,
     supported_operations: Vec<String>,
@@ -67,10 +67,10 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.describe"))]
 async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_did = Did::new(state.config.service_did.clone())
-        .map_err(|_| AppError::internal("service_did is invalid"))?;
+    let service_id = Did::new(state.config.service_id.clone())
+        .map_err(|_| AppError::internal("service_id is invalid"))?;
     json_ok(PeerEventsDescribeOutcome {
-        service_did,
+        service_id,
         protocol_version: "1.0".to_owned(),
         primary_write_path: "/_arkret/peer/events".to_owned(),
         supported_operations: vec![
@@ -131,9 +131,9 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
 async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<EventsQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, None).await?;
-    let source_service_did = source_service_did_from_request(req)?;
+    let source_service_id = source_service_id_from_request(req)?;
     let parts = PeerEventsQueryParts::from_query(req)?;
-    peer_events_query_response(state, source_service_did, parts).await
+    peer_events_query_response(state, source_service_id, parts).await
 }
 
 #[endpoint(
@@ -156,9 +156,9 @@ async fn peer_events_query_post(
         AppError::internal(format!("peer events query request serialize: {error}"))
     })?;
     validate_peer_request(state, req, Some(&body)).await?;
-    let source_service_did = source_service_did_from_request(req)?;
+    let source_service_id = source_service_id_from_request(req)?;
     let parts = PeerEventsQueryParts::from_body(request)?;
-    peer_events_query_response(state, source_service_did, parts).await
+    peer_events_query_response(state, source_service_id, parts).await
 }
 
 #[endpoint(
@@ -181,7 +181,7 @@ async fn peer_events_resolve(
         AppError::internal(format!("peer events resolve request serialize: {error}"))
     })?;
     validate_peer_request(state, req, Some(&body)).await?;
-    let source_service_did = source_service_did_from_request(req)?;
+    let source_service_id = source_service_id_from_request(req)?;
     if request.event_ids.len() + request.event_digests.len() > MAX_PEER_EVENTS_RESOLVE {
         return Err(AppError::new(
             crate::error::ErrorCode::PayloadTooLarge,
@@ -214,7 +214,7 @@ async fn peer_events_resolve(
         .snapshot_all()
         .await
         .map_err(|error| AppError::internal(format!("peer events resolve: {error}")))?;
-    let authz = PeerReadAuthz::build(state, &source_service_did, &records).await?;
+    let authz = PeerReadAuthz::build(state, &source_service_id, &records).await?;
     let mut events = Vec::new();
     let mut found_ids = BTreeSet::new();
     let mut found_digests = BTreeSet::new();
@@ -265,7 +265,7 @@ async fn peer_events_frontier(
 ) -> JsonResult<EventsFrontierFederationPeerState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, None).await?;
-    let source_service_did = source_service_did_from_request(req)?;
+    let source_service_id = source_service_id_from_request(req)?;
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
     let realm_id =
@@ -279,7 +279,7 @@ async fn peer_events_frontier(
         .snapshot_all()
         .await
         .map_err(|error| AppError::internal(format!("peer frontier: {error}")))?;
-    let authz = PeerReadAuthz::build(state, &source_service_did, &records).await?;
+    let authz = PeerReadAuthz::build(state, &source_service_id, &records).await?;
     if !authz.frontier_visible_for_realm(realm_id.as_str()) {
         return Err(AppError::not_found("not found"));
     }
@@ -338,11 +338,11 @@ async fn peer_events_frontier(
     let typed_actor_bounds = super::frontier::typed_actor_upper_bounds(actor_frontier.clone());
     let frontier_root = super::frontier::frontier_root(&typed_realm_frontier, &typed_actor_bounds)
         .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
-    let service_did = Did::new(state.config.service_did.clone())
-        .map_err(|_| AppError::internal("service_did is invalid"))?;
+    let service_id = Did::new(state.config.service_id.clone())
+        .map_err(|_| AppError::internal("service_id is invalid"))?;
     let observed_at = now();
     let signature = super::frontier::sign_frontier_root(
-        &service_did,
+        &service_id,
         Some(&realm_id),
         observed_at,
         &frontier_root,
@@ -356,7 +356,7 @@ async fn peer_events_frontier(
         actor_seq_upper_bounds: typed_actor_frontier,
         witness_receipts: Vec::new(),
         observed_at: observed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        issuer: service_did,
+        issuer: service_id,
         signature,
         max_hlc,
     })
@@ -537,7 +537,7 @@ impl PeerEventsQueryParts {
 
 #[derive(Clone, Debug)]
 struct PeerReadAuthz {
-    source_service_did: String,
+    source_service_id: String,
     realm_meta: BTreeMap<String, RealmMetaRecord>,
     realm_endpoints: BTreeMap<String, Vec<PeerRealmEndpoint>>,
     realm_members: BTreeMap<String, BTreeMap<String, PeerMembership>>,
@@ -577,7 +577,7 @@ struct PeerCircleState {
 impl PeerReadAuthz {
     async fn build(
         state: &AppState,
-        source_service_did: &str,
+        source_service_id: &str,
         records: &[CanonicalEventRecord],
     ) -> Result<Self, AppError> {
         let realm_meta = state
@@ -605,7 +605,7 @@ impl PeerReadAuthz {
             })
             .collect::<BTreeMap<_, _>>();
         let mut authz = Self {
-            source_service_did: source_service_did.to_owned(),
+            source_service_id: source_service_id.to_owned(),
             realm_meta,
             realm_endpoints: BTreeMap::new(),
             realm_members: BTreeMap::new(),
@@ -752,7 +752,7 @@ impl PeerReadAuthz {
         }
         if !meta
             .plaintext_visible_services
-            .contains(self.source_service_did.as_str())
+            .contains(self.source_service_id.as_str())
         {
             return false;
         }
@@ -797,9 +797,9 @@ impl PeerReadAuthz {
                     return;
                 };
                 let source_matches = binding
-                    .get("recipient_service_did")
+                    .get("recipient_service_id")
                     .and_then(Value::as_str)
-                    .is_some_and(|did| did == self.source_service_did);
+                    .is_some_and(|did| did == self.source_service_id);
                 let routable = payload
                     .get("delivery_status")
                     .and_then(Value::as_str)
@@ -930,7 +930,7 @@ impl PeerReadAuthz {
             let Some(object) = endpoint.as_object() else {
                 continue;
             };
-            if object.get("did").and_then(Value::as_str) != Some(self.source_service_did.as_str()) {
+            if object.get("did").and_then(Value::as_str) != Some(self.source_service_id.as_str()) {
                 continue;
             }
             let Some(role) = object.get("role").and_then(Value::as_str) else {
@@ -1134,7 +1134,7 @@ fn binding_expiry_allows(value: Option<&Value>) -> bool {
 
 async fn peer_events_query_response(
     state: &AppState,
-    source_service_did: String,
+    source_service_id: String,
     parts: PeerEventsQueryParts,
 ) -> JsonResult<EventsQueryOutcome> {
     let realms_set = parts
@@ -1147,7 +1147,7 @@ async fn peer_events_query_response(
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    let filter_digest = peer_events_query_scope_digest(&source_service_did, &parts);
+    let filter_digest = peer_events_query_scope_digest(&source_service_id, &parts);
     let cursor_event_id =
         peer_events_query_cursor_event_id(state, parts.active_cursor(), &filter_digest).await?;
     let authz_records = state
@@ -1156,7 +1156,7 @@ async fn peer_events_query_response(
         .peer_authz_state_records()
         .await
         .map_err(|error| AppError::internal(format!("peer events query: {error}")))?;
-    let authz = PeerReadAuthz::build(state, &source_service_did, &authz_records).await?;
+    let authz = PeerReadAuthz::build(state, &source_service_id, &authz_records).await?;
     let backward = parts.backward();
     let query_realms = if parts.realms.is_empty() {
         authz.source_scoped_realms()
@@ -1252,10 +1252,7 @@ fn peer_events_candidate_limit(page_limit: usize) -> usize {
         .clamp(MAX_PEER_EVENTS_QUERY_LIMIT, MAX_PEER_EVENTS_QUERY_LIMIT * 5)
 }
 
-fn peer_events_query_scope_digest(
-    source_service_did: &str,
-    parts: &PeerEventsQueryParts,
-) -> String {
+fn peer_events_query_scope_digest(source_service_id: &str, parts: &PeerEventsQueryParts) -> String {
     let realms = parts
         .realms
         .iter()
@@ -1272,7 +1269,7 @@ fn peer_events_query_scope_digest(
         .collect::<Vec<_>>();
     let binding = json!({
         "operation_id": "ak.peer.events.query.scan",
-        "source_service_did": source_service_did,
+        "source_service_id": source_service_id,
         "realms": realms,
         "actors": actors,
         "filters": parts.filters_for_digest(),
@@ -1433,15 +1430,15 @@ pub(in crate::routing) async fn validate_peer_request(
         arkret_sdk::TypedTrustDomainId::new(source_trust_domain)
             .map_err(|_| schema_violation("source-trust-domain must be a trust domain"))?;
     }
-    let source_service_did = required_header(req, HEADER_SOURCE_SERVICE_DID)?;
-    if validate_did(&source_service_did).is_err() {
+    let source_service_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;
+    if validate_did(&source_service_id).is_err() {
         return Err(schema_violation("source-service-did must be a DID"));
     }
-    let destination_service_did = required_header(req, HEADER_DESTINATION_SERVICE_DID)?;
-    if validate_did(&destination_service_did).is_err() {
+    let destination_service_id = required_header(req, HEADER_DESTINATION_SERVICE_ID)?;
+    if validate_did(&destination_service_id).is_err() {
         return Err(schema_violation("destination-service-did must be a DID"));
     }
-    if destination_service_did != state.config.service_did {
+    if destination_service_id != state.config.service_id {
         return Err(cross_domain_replay(
             "destination-service-did header does not match this service",
         ));
@@ -1457,8 +1454,8 @@ pub(in crate::routing) async fn validate_peer_request(
     Ok(())
 }
 
-fn source_service_did_from_request(req: &Request) -> Result<String, AppError> {
-    required_header(req, HEADER_SOURCE_SERVICE_DID)
+fn source_service_id_from_request(req: &Request) -> Result<String, AppError> {
+    required_header(req, HEADER_SOURCE_SERVICE_ID)
 }
 
 fn required_header(req: &Request, name: &'static str) -> Result<String, AppError> {

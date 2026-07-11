@@ -31,7 +31,7 @@ fn third_party_invite(expires_at: &str) -> Value {
                 "token_commitment": TOKEN_COMMITMENT,
                 "token_salt_id": "salt-1",
                 "token_entropy_bits": 128,
-                "verification_service_did": SERVICE,
+                "verification_service_id": SERVICE,
                 "verification_public_key": VERIFICATION_METHOD,
                 "max_claims": 1
             }
@@ -39,9 +39,9 @@ fn third_party_invite(expires_at: &str) -> Value {
     })
 }
 
-fn claim_payload(nonce: &str, token_commitment: &str, service_did: &str) -> Value {
+fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value {
     let binding_proof = json!({
-        "verification_service_did": service_did,
+        "verification_service_id": service_id,
         "verification_method": VERIFICATION_METHOD,
         "subject_id": SUBJECT,
         "realm_id": REALM,
@@ -57,7 +57,7 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_did: &str) -> Valu
         REALM,
         token_commitment,
         nonce,
-        service_did,
+        service_id,
         binding_digest.as_str(),
     )
     .unwrap();

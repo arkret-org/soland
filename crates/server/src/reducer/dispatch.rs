@@ -466,13 +466,6 @@ fn apply_applet_discovery_dispatch(
 ) -> ProjectionEffect {
     s.apply_applet_discovery(op, op.created_at)
 }
-fn apply_agent_endpoint_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_agent_endpoint(op, op.created_at)
-}
 
 // REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — FSM-lattice
 // dispatch for `ak.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
@@ -1118,10 +1111,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         arkret_sdk::events::kinds::APPLET_DISCOVERY,
         apply_applet_discovery_dispatch,
-    );
-    m.insert(
-        arkret_sdk::events::kinds::AGENT_ENDPOINT,
-        apply_agent_endpoint_dispatch,
     );
     // REDU-1 (R3 spec-sync) — agent lifecycle FSM dispatch. bottom=reject,
     // deactivate is terminal.

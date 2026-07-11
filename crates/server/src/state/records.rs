@@ -440,9 +440,9 @@ pub struct ContactRecord {
     /// when learned from a cross-Principal-Server contact delivery
     /// (`ak.peer.contacts.command.submit`, `source-service-did` header). `None` for
     /// same-Principal-Server contacts. In-memory projection only — surfaced on
-    /// `contact_list_row.peer_service_did` so the holder can address
+    /// `contact_list_row.peer_service_id` so the holder can address
     /// responses/invites back to the peer's home server.
-    pub peer_service_did: Option<String>,
+    pub peer_service_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -565,17 +565,17 @@ pub struct RealmMetaRecord {
 impl RealmMetaRecord {
     pub fn allows_plaintext_data_class(
         &self,
-        service_did: &str,
+        service_id: &str,
         data_class: PlaintextDataClassKind,
     ) -> bool {
         self.plaintext_visible_service_classes
-            .get(service_did)
+            .get(service_id)
             .is_some_and(|classes| classes.contains(&data_class))
     }
 
-    pub fn allows_any_plaintext_data_class(&self, service_did: &str) -> bool {
+    pub fn allows_any_plaintext_data_class(&self, service_id: &str) -> bool {
         self.plaintext_visible_service_classes
-            .get(service_did)
+            .get(service_id)
             .is_some_and(|classes| !classes.is_empty())
     }
 }
@@ -680,7 +680,7 @@ pub struct FederationTransactionRecord {
 pub struct FederationOutboxRecord {
     /// ULID/UUID — primary key.
     pub id: String,
-    /// Peer service DID from the `base_url|service_did` federation peer entry.
+    /// Peer service DID from the `base_url|service_id` federation peer entry.
     pub peer_did: String,
     /// Fully-qualified peer base URL (no trailing slash) the dispatcher
     /// concatenates with `endpoint` to form the POST target.
@@ -729,7 +729,7 @@ pub struct FederationOutboxDeadLetterRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FederationFrontierExchangeRecord {
     pub realm_id: String,
-    pub peer_service_did: String,
+    pub peer_service_id: String,
     pub status: String,
     pub consecutive_failures: i32,
     pub last_success_at: Option<i64>,

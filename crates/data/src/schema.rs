@@ -159,8 +159,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    applet_transactions (source_service_did, idempotency_key) {
-        source_service_did -> Text,
+    applet_transactions (source_service_id, idempotency_key) {
+        source_service_id -> Text,
         idempotency_key -> Text,
         source_signature_anchor -> Text,
         request_digest -> Text,

@@ -11,7 +11,7 @@ pub trait AppletStore: Send + Sync {
     ) -> PersistenceResult<AppletTransactionReplayBegin>;
     async fn complete_transaction_replay(
         &self,
-        source_service_did: &str,
+        source_service_id: &str,
         idempotency_key: &str,
         outcome: Value,
     ) -> PersistenceResult<()>;
@@ -19,7 +19,7 @@ pub trait AppletStore: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct AppletTransactionReplayRecord {
-    pub source_service_did: String,
+    pub source_service_id: String,
     pub idempotency_key: String,
     pub source_signature_anchor: String,
     pub request_digest: String,
@@ -68,7 +68,7 @@ impl AppletStore for MemoryAppletStore {
         record: AppletTransactionReplayRecord,
     ) -> PersistenceResult<AppletTransactionReplayBegin> {
         let key = (
-            record.source_service_did.clone(),
+            record.source_service_id.clone(),
             record.idempotency_key.clone(),
         );
         let mut transactions = self.transactions.lock();
@@ -81,15 +81,15 @@ impl AppletStore for MemoryAppletStore {
 
     async fn complete_transaction_replay(
         &self,
-        source_service_did: &str,
+        source_service_id: &str,
         idempotency_key: &str,
         outcome: Value,
     ) -> PersistenceResult<()> {
-        let key = (source_service_did.to_owned(), idempotency_key.to_owned());
+        let key = (source_service_id.to_owned(), idempotency_key.to_owned());
         let mut transactions = self.transactions.lock();
         let Some(record) = transactions.get_mut(&key) else {
             return Err(PersistenceError::NotFound(format!(
-                "applet transaction replay missing for {source_service_did}/{idempotency_key}"
+                "applet transaction replay missing for {source_service_id}/{idempotency_key}"
             )));
         };
         record.outcome = Some(outcome);
@@ -145,7 +145,7 @@ struct AppletRegistrationRow {
 #[derive(QueryableByName)]
 struct AppletTransactionReplayRow {
     #[diesel(sql_type = Text)]
-    source_service_did: String,
+    source_service_id: String,
     #[diesel(sql_type = Text)]
     idempotency_key: String,
     #[diesel(sql_type = Text)]
@@ -190,7 +190,7 @@ impl From<AppletRegistrationRow> for Value {
 impl From<AppletTransactionReplayRow> for AppletTransactionReplayRecord {
     fn from(row: AppletTransactionReplayRow) -> Self {
         Self {
-            source_service_did: row.source_service_did,
+            source_service_id: row.source_service_id,
             idempotency_key: row.idempotency_key,
             source_signature_anchor: row.source_signature_anchor,
             request_digest: row.request_digest,
@@ -323,12 +323,12 @@ impl AppletStore for PgAppletStore {
         let mut conn = pg_conn(&self.pool).await?;
         let inserted = sql_query(
             "INSERT INTO applet_transactions \
-             (source_service_did, idempotency_key, source_signature_anchor, request_digest, \
+             (source_service_id, idempotency_key, source_signature_anchor, request_digest, \
               outcome, received_at, completed_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (source_service_did, idempotency_key) DO NOTHING",
+             ON CONFLICT (source_service_id, idempotency_key) DO NOTHING",
         )
-        .bind::<Text, _>(&record.source_service_did)
+        .bind::<Text, _>(&record.source_service_id)
         .bind::<Text, _>(&record.idempotency_key)
         .bind::<Text, _>(&record.source_signature_anchor)
         .bind::<Text, _>(&record.request_digest)
@@ -342,7 +342,7 @@ impl AppletStore for PgAppletStore {
             return Ok(AppletTransactionReplayBegin::Fresh);
         }
         sql_query(applet_transaction_replay_select_sql())
-            .bind::<Text, _>(&record.source_service_did)
+            .bind::<Text, _>(&record.source_service_id)
             .bind::<Text, _>(&record.idempotency_key)
             .get_result::<AppletTransactionReplayRow>(&mut *conn)
             .await
@@ -359,7 +359,7 @@ impl AppletStore for PgAppletStore {
 
     async fn complete_transaction_replay(
         &self,
-        source_service_did: &str,
+        source_service_id: &str,
         idempotency_key: &str,
         outcome: Value,
     ) -> PersistenceResult<()> {
@@ -367,9 +367,9 @@ impl AppletStore for PgAppletStore {
         sql_query(
             "UPDATE applet_transactions \
              SET outcome = $3, completed_at = NOW() \
-             WHERE source_service_did = $1 AND idempotency_key = $2",
+             WHERE source_service_id = $1 AND idempotency_key = $2",
         )
-        .bind::<Text, _>(source_service_did)
+        .bind::<Text, _>(source_service_id)
         .bind::<Text, _>(idempotency_key)
         .bind::<Jsonb, _>(&outcome)
         .execute(&mut *conn)
@@ -378,7 +378,7 @@ impl AppletStore for PgAppletStore {
         .and_then(|updated| {
             if updated == 0 {
                 Err(PersistenceError::NotFound(format!(
-                    "applet transaction replay missing for {source_service_did}/{idempotency_key}"
+                    "applet transaction replay missing for {source_service_id}/{idempotency_key}"
                 )))
             } else {
                 Ok(())
@@ -397,10 +397,10 @@ fn applet_registration_select_sql(suffix: &str) -> String {
 }
 
 fn applet_transaction_replay_select_sql() -> &'static str {
-    "SELECT source_service_did, idempotency_key, source_signature_anchor, request_digest, \
+    "SELECT source_service_id, idempotency_key, source_signature_anchor, request_digest, \
      outcome, received_at, completed_at \
      FROM applet_transactions \
-     WHERE source_service_did = $1 AND idempotency_key = $2"
+     WHERE source_service_id = $1 AND idempotency_key = $2"
 }
 
 fn required_record_str(record: &Value, key: &str) -> PersistenceResult<String> {

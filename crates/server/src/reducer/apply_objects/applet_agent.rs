@@ -26,7 +26,7 @@ fn applet_projection_namespace(payload: &serde_json::Value) -> String {
 
 impl ProjectionState {
     /// Apply `ak.applet.registration`. Upserts the
-    /// AppletProjection keyed by `service_did`. Re-registration with
+    /// AppletProjection keyed by `service_id`. Re-registration with
     /// the same DID is allowed (replace capabilities + bump
     /// updated_at), matching the spec convention that registration is
     /// idempotent for the same identity.
@@ -35,14 +35,14 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(service_did) = operation
+        let Some(service_id) = operation
             .payload
-            .get("service_did")
+            .get("service_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "applet_registration_missing_service_did".to_owned(),
+                reason: "applet_registration_missing_service_id".to_owned(),
             };
         };
         let namespace = applet_projection_namespace(&operation.payload);
@@ -53,23 +53,23 @@ impl ProjectionState {
             .or_else(|| operation.payload.get("capabilities").cloned());
         let existing_manifest = self
             .applets
-            .get(&service_did)
+            .get(&service_id)
             .and_then(|p| p.manifest.clone());
         let registered_at = self
             .applets
-            .get(&service_did)
+            .get(&service_id)
             .map(|p| p.registered_at)
             .unwrap_or(now);
         let projection = AppletProjection {
-            service_did: service_did.clone(),
+            service_id: service_id.clone(),
             namespace,
             manifest: existing_manifest,
             capabilities,
             registered_at,
             updated_at: now,
         };
-        self.applets.insert(service_did.clone(), projection);
-        ProjectionEffect::AppletProjectionUpdated { service_did }
+        self.applets.insert(service_id.clone(), projection);
+        ProjectionEffect::AppletProjectionUpdated { service_id }
     }
 
     /// Apply `ak.applet.discovery`. Updates the manifest
@@ -82,22 +82,22 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(service_did) = operation
+        let Some(service_id) = operation
             .payload
-            .get("service_did")
+            .get("service_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "applet_discovery_missing_service_did".to_owned(),
+                reason: "applet_discovery_missing_service_id".to_owned(),
             };
         };
         let manifest = operation.payload.get("manifest").cloned();
         let entry = self
             .applets
-            .entry(service_did.clone())
+            .entry(service_id.clone())
             .or_insert_with(|| AppletProjection {
-                service_did: service_did.clone(),
+                service_id: service_id.clone(),
                 namespace: String::new(),
                 manifest: None,
                 capabilities: None,
@@ -106,133 +106,7 @@ impl ProjectionState {
             });
         entry.manifest = manifest;
         entry.updated_at = now;
-        ProjectionEffect::AppletProjectionUpdated { service_did }
-    }
-
-    /// Apply `ak.agent.endpoint`. Upserts the SolandAgentProjection keyed by
-    /// `agent_id`. If the payload carries an endpoint URL field it
-    /// is captured into the projection so the bridge can echo it back
-    /// on `interop_session.result`.
-    pub(crate) fn apply_agent_endpoint(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> ProjectionEffect {
-        let Some(agent_id) = operation
-            .payload
-            .get("agent_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "agent_endpoint_missing_agent_id".to_owned(),
-            };
-        };
-        match self
-            .agent_lifecycles
-            .get(&agent_id)
-            .copied()
-            .unwrap_or_default()
-        {
-            AgentLifecycleState::Active => {}
-            AgentLifecycleState::Paused => {
-                return ProjectionEffect::Rejected {
-                    reason: "agent_paused".to_owned(),
-                };
-            }
-            AgentLifecycleState::Deactivated => {
-                return ProjectionEffect::Rejected {
-                    reason: "agent_deactivated".to_owned(),
-                };
-            }
-        }
-        let first_endpoint = operation
-            .payload
-            .get("endpoints")
-            .and_then(|v| v.as_array())
-            .and_then(|items| items.first());
-        let protocol = operation
-            .payload
-            .get("protocol")
-            .and_then(|v| v.as_str())
-            .or_else(|| {
-                first_endpoint
-                    .and_then(|v| v.get("protocol"))
-                    .and_then(|v| v.as_str())
-            })
-            .unwrap_or("")
-            .to_owned();
-        let endpoint_url = operation
-            .payload
-            .get("endpoint_url")
-            .and_then(|v| v.as_str())
-            .or_else(|| {
-                first_endpoint
-                    .and_then(|v| v.get("endpoint_url"))
-                    .and_then(|v| v.as_str())
-            })
-            .or_else(|| {
-                first_endpoint
-                    .and_then(|v| v.get("url"))
-                    .and_then(|v| v.as_str())
-            })
-            .map(ToOwned::to_owned);
-        // Collect the adapter-registry protocol ids declared across the
-        // whole `endpoints[]` array (spec §5.1 / §11). Falls back to the
-        // single `protocol` field when no `endpoints[]` array is present.
-        let endpoint_entries = operation
-            .payload
-            .get("endpoints")
-            .and_then(|v| v.as_array());
-        let mut supported_protocols: Vec<String> = Vec::new();
-        let mut agent_card_url: Option<String> = None;
-        let mut metadata_url: Option<String> = None;
-        if let Some(entries) = endpoint_entries {
-            for entry in entries {
-                if let Some(entry_protocol) = entry
-                    .get("protocol")
-                    .and_then(|v| v.as_str())
-                    .filter(|value| !value.is_empty())
-                    && !supported_protocols
-                        .iter()
-                        .any(|p| p.as_str() == entry_protocol)
-                {
-                    supported_protocols.push(entry_protocol.to_owned());
-                }
-                if agent_card_url.is_none() {
-                    agent_card_url = entry
-                        .get("agent_card_url")
-                        .and_then(|v| v.as_str())
-                        .map(ToOwned::to_owned);
-                }
-                if metadata_url.is_none() {
-                    metadata_url = entry
-                        .get("metadata_url")
-                        .and_then(|v| v.as_str())
-                        .map(ToOwned::to_owned);
-                }
-            }
-        }
-        if supported_protocols.is_empty() && !protocol.is_empty() {
-            supported_protocols.push(protocol.clone());
-        }
-        let registered_at = self
-            .agents
-            .get(&agent_id)
-            .map(|p| p.registered_at)
-            .unwrap_or(now);
-        let projection = SolandAgentProjection {
-            agent_id: agent_id.clone(),
-            protocol,
-            endpoint_url,
-            supported_protocols,
-            agent_card_url,
-            metadata_url,
-            registered_at,
-            updated_at: now,
-        };
-        self.agents.insert(agent_id.clone(), projection);
-        ProjectionEffect::AgentProjectionUpdated { agent_id }
+        ProjectionEffect::AppletProjectionUpdated { service_id }
     }
 
     /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — apply
@@ -249,19 +123,19 @@ impl ProjectionState {
         operation: &Operation,
         target: AgentLifecycleState,
     ) -> ProjectionEffect {
-        let Some(agent_principal_id) = operation
+        let Some(agent_id) = operation
             .payload
-            .get("agent_principal_id")
+            .get("agent_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "agent_lifecycle_missing_agent_principal_id".to_owned(),
+                reason: "agent_lifecycle_missing_agent_id".to_owned(),
             };
         };
         let current = self
             .agent_lifecycles
-            .get(&agent_principal_id)
+            .get(&agent_id)
             .copied()
             .unwrap_or_default();
         // FSM guard. Terminal `Deactivated` rejects any transition.
@@ -288,29 +162,28 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        self.agent_lifecycles
-            .insert(agent_principal_id.clone(), target);
+        self.agent_lifecycles.insert(agent_id.clone(), target);
         if matches!(
             target,
             AgentLifecycleState::Paused | AgentLifecycleState::Deactivated
         ) {
-            self.revoke_agent_runtime_bindings(&agent_principal_id, target, operation);
+            self.revoke_agent_runtime_bindings(&agent_id, target, operation);
         }
         ProjectionEffect::AgentLifecycleProjected {
-            agent_principal_id,
+            agent_id,
             new_state: target,
         }
     }
 
     pub(crate) fn apply_agent_action_request(&mut self, operation: &Operation) -> ProjectionEffect {
-        let Some(agent_principal_id) = operation
+        let Some(agent_id) = operation
             .payload
-            .get("agent_principal_id")
+            .get("agent_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "agent_action_request_missing_agent_principal_id".to_owned(),
+                reason: "agent_action_request_missing_agent_id".to_owned(),
             };
         };
         let Some(request_id) = operation
@@ -325,7 +198,7 @@ impl ProjectionState {
         };
         match self
             .agent_lifecycles
-            .get(&agent_principal_id)
+            .get(&agent_id)
             .copied()
             .unwrap_or_default()
         {
@@ -351,7 +224,7 @@ impl ProjectionState {
                 request_id.clone(),
                 AgentActionRequestProjection {
                     request_id,
-                    agent_principal_id,
+                    agent_id,
                     status: AgentActionRequestStatus::Pending,
                     requested_at: operation.created_at,
                     resolved_at: None,
@@ -478,20 +351,17 @@ impl ProjectionState {
 
     fn revoke_agent_runtime_bindings(
         &mut self,
-        agent_principal_id: &str,
+        agent_id: &str,
         target: AgentLifecycleState,
         operation: &Operation,
     ) {
-        self.agents.remove(agent_principal_id);
         let reason = match target {
             AgentLifecycleState::Paused => "agent_paused",
             AgentLifecycleState::Deactivated => "agent_deactivated",
             AgentLifecycleState::Active => return,
         };
         for request in self.agent_action_requests.values_mut() {
-            if request.agent_principal_id == agent_principal_id
-                && request.status == AgentActionRequestStatus::Pending
-            {
+            if request.agent_id == agent_id && request.status == AgentActionRequestStatus::Pending {
                 request.status = AgentActionRequestStatus::Cancelled;
                 request.resolved_at = Some(operation.created_at);
                 request.resolution_event_id = Some(operation.operation_id.to_string());

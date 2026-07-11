@@ -22,7 +22,7 @@ S1、S2 都需要服务端"主动"写入 durable event(controller 调 `participa
 
 ```rust
 // routing/events/server_emit.rs (新文件)
-/// 服务端编排发射一条 durable event:构造 envelope(service_did 作为 actor / proof),
+/// 服务端编排发射一条 durable event:构造 envelope(service_id 作为 actor / proof),
 /// 持久化到 event store,并投影。复用 submit_event_value 的 store.put + project 两步,
 /// 但跳过 client actor_seq 单调与 actor proof 校验(由服务端信任边界保证)。
 pub(crate) async fn emit_server_event(
@@ -34,8 +34,8 @@ pub(crate) async fn emit_server_event(
 ```
 
 要点:
-- envelope `actor_id = state.config.service_did`,`actor_kind="service"`,`event_id = ids::generate("event")`,`created_at = now()`,proof 为 service 签名(复用 notary/signer 已有 service key)。
-- 写入走 `state.persistence.events().put(CanonicalEventRecord{..})`,再 `projection::project_accepted_operations_from_device(state, service_did, service_device, &[operation])`。
+- envelope `actor_id = state.config.service_id`,`actor_kind="service"`,`event_id = ids::generate("event")`,`created_at = now()`,proof 为 service 签名(复用 notary/signer 已有 service key)。
+- 写入走 `state.persistence.events().put(CanonicalEventRecord{..})`,再 `projection::project_accepted_operations_from_device(state, service_id, service_device, &[operation])`。
 - 幂等:server-emit 的 event_id 由内容确定性派生(对 grant:`hash(subject, scope_key, actions)`)以避免重复编排产生孤儿。
 - 该 helper 是 S1/S2 唯一被允许绕过 client 提交校验的入口;其它路径不得直接 `store.put`。
 
@@ -71,7 +71,7 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 1. 由 effective(已算)推导目标 grant:
    - `reply=true` → actions `["ak.message.create","ak.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `arkret_sdk::authz::ResourceSelector`)。
    - `act_on_behalf=true` → 追加 AKP-0008 §4.10 act-on-behalf grant(constraints:`approval_required`/`controller_approval_required`)。
-2. capability_id 确定性派生:`ak:capability:` + `hash(agent_principal_id, scope_key, "reply"|"aob")` → 同 scope 同 bit 复用一条 grant,幂等。
+2. capability_id 确定性派生:`ak:capability:` + `hash(agent_id, scope_key, "reply"|"aob")` → 同 scope 同 bit 复用一条 grant,幂等。
 3. effective bit=true 且 grant 不存在/已 revoked → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_GRANT, payload)`;bit=false 且 grant active → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_REVOKE, {capability_id})`。
 4. 与 `put_selection` 同一 handler 内顺序执行;任一步失败返回 `AppError::internal`,不留半物化(grant 发射放在 selection 落库之后,失败时记录 audit 供重试)。
 

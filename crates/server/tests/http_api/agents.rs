@@ -17,10 +17,10 @@ async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
         .persistence
         .sessions()
         .put(&soland::state::SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.config.service_did),
+            token_hash: test_session_credential_hash(token, &state.config.service_id),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
-            audience: state.config.service_did.clone(),
+            audience: state.config.service_id.clone(),
             session_public_key: None,
             agent_session: None,
             expires_at: now + chrono::Duration::minutes(5),
@@ -74,7 +74,7 @@ async fn production_agent_provision_fails_closed_without_durable_fanout() {
                 ],
                 "resources": [{
                     "kind": "service",
-                    "service_did": "did:web:soland.local"
+                    "service_id": "did:web:soland.local"
                 }]
             }
         }))
@@ -146,7 +146,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
 
     assert_eq!(created.status_code.unwrap(), StatusCode::CREATED);
     let created_body: Value = created.take_json().await.unwrap();
-    let agent_principal_id = created_body["agent_principal_id"]
+    let agent_id = created_body["agent_id"]
         .as_str()
         .expect("created agent principal id")
         .to_owned();
@@ -161,7 +161,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     assert_eq!(list_body["has_more"], false, "{list_body}");
     let agents = list_body["agents"].as_array().expect("agents list shape");
     assert_eq!(agents.len(), 1, "{list_body}");
-    assert_eq!(agents[0]["agent_principal_id"], agent_principal_id);
+    assert_eq!(agents[0]["agent_id"], agent_id);
     assert_eq!(agents[0]["display_name"], "Summary Assistant");
     assert_eq!(agents[0]["agent_slug"], "summary");
     assert_eq!(agents[0]["status"], "pending_runtime_key");

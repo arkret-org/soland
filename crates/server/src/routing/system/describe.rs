@@ -267,7 +267,7 @@ fn unsupported_profiles_from_limits(limits: &Value) -> Vec<UnsupportedProfileDes
 
 fn build_server_description(state: &AppState) -> ServerDescription {
     let mut description = describe(
-        &state.config.service_did,
+        &state.config.service_id,
         &state.config.public_base_url,
         state.db.mode(),
         state.config.development_mode,
@@ -373,15 +373,6 @@ pub(crate) fn apply_claim_level_partition(
                     .to_owned(),
             ),
             ..arkret_sdk::ClaimedProfileEntry::self_claimed("ak.profile.mimi_interop.v1")
-        },
-        arkret_sdk::ClaimedProfileEntry {
-            notes: Some(
-                "Agent protocol interop extension profile: ak.agent.endpoint registry, \
-                 /_arkret/self/agents/discover, ak.agent.interop_session.* lifecycle + \
-                 Ed25519 audit_binding. See zh/extensions/agent-protocol-interop.md."
-                    .to_owned(),
-            ),
-            ..arkret_sdk::ClaimedProfileEntry::self_claimed("ak.profile.agent_runtime.v1")
         },
     ];
     // G3.S9 — when the sovereign enclave profile is enabled, claim it

@@ -127,15 +127,15 @@ pub(super) fn notary_value_object_from_body(
 ///
 /// When the value is `None` we return a `single_did` placeholder pointed
 /// at the service DID — that matches the genesis-Space "implicit notary is
-/// service_did" rule the in-process notary worker already implements (see
+/// service_id" rule the in-process notary worker already implements (see
 /// `crate::notary::is_authorized_for`).
 pub(super) fn notary_value_from_cell(
     value: Option<&Value>,
-    service_did: &str,
+    service_id: &str,
 ) -> Result<AdminNotaryValue, AppError> {
     let Some(value) = value else {
-        let did = Did::new(service_did.to_owned())
-            .map_err(|e| app_error!(InternalError, "invalid service DID `{service_did}`: {e}"))?;
+        let did = Did::new(service_id.to_owned())
+            .map_err(|e| app_error!(InternalError, "invalid service DID `{service_id}`: {e}"))?;
         return Ok(admin_notary_value_from_sdk(
             SdkNotaryValue::single_did(did),
             None,
@@ -238,7 +238,7 @@ pub(crate) async fn admin_get_notary(
     };
     json_ok(notary_value_from_cell(
         value.as_ref(),
-        &state.config.service_did,
+        &state.config.service_id,
     )?)
 }
 
@@ -302,7 +302,7 @@ pub(crate) async fn admin_reconfigure_notary(
     // notary set; landing either inside the set is a self-authentication
     // primitive. Once per-admin signing keys land (KeyStore-backed) the
     // signer DID and operator DID converge for that admin.
-    let service_signer_did = state.config.service_did.clone();
+    let service_signer_did = state.config.service_id.clone();
     let operator_did = admin_session.actor.clone();
     let proposed_members: Vec<&str> = match &proposed_notary {
         SdkNotaryValue::SingleDid { did, .. } => vec![did.as_str()],

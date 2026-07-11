@@ -386,7 +386,7 @@ async fn admin_rotate_signing_key_publishes_a_fresh_key() {
 
     assert_eq!(
         resp["did"], "did:web:soland.local",
-        "rotate response did mirrors service_did (got {resp:?})"
+        "rotate response did mirrors service_id (got {resp:?})"
     );
     assert_eq!(
         resp["kid"], "did:web:soland.local#notary-key",

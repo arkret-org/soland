@@ -76,7 +76,7 @@ async fn submit_fanout(
     if !duplicate {
         crate::routing::events::projection::project_accepted_operations_from_device(
             state,
-            draft.operation.payload["issuer_service_did"]
+            draft.operation.payload["issuer_service_id"]
                 .as_str()
                 .unwrap_or_default(),
             SOURCE_DEVICE_ID,
@@ -159,7 +159,7 @@ fn build_projectable_operation(
     body: CapabilityFanoutBody,
 ) -> Result<CapabilityFanoutDraft, AppError> {
     let operation_name = body.operation;
-    let issuer_service_did = body.issuer_service_did;
+    let issuer_service_id = body.issuer_service_id;
     let event_kind = body.event_kind;
     let event_id = body.event_id;
     let capability_grant_id = body.capability_grant_id;
@@ -169,8 +169,8 @@ fn build_projectable_operation(
             "unsupported capability fanout kind",
         ));
     }
-    Did::new(issuer_service_did.clone())
-        .map_err(|_| AppError::invalid_param("issuer_service_did must be a DID"))?;
+    Did::new(issuer_service_id.clone())
+        .map_err(|_| AppError::invalid_param("issuer_service_id must be a DID"))?;
     EventId::new(event_id.clone())
         .map_err(|_| AppError::invalid_param("event_id must be a ak:event id"))?;
     GrantId::new(capability_grant_id.clone())
@@ -207,13 +207,13 @@ fn build_projectable_operation(
         }
     }
     payload_object.insert(
-        "issuer_service_did".to_owned(),
-        Value::String(issuer_service_did.clone()),
+        "issuer_service_id".to_owned(),
+        Value::String(issuer_service_id.clone()),
     );
 
     let (realm_id, subject) = match operation_name.as_str() {
         "grant" => {
-            validate_grant_payload(payload_object, &capability_grant_id, &issuer_service_did)?
+            validate_grant_payload(payload_object, &capability_grant_id, &issuer_service_id)?
         }
         "revoke" => validate_revoke_payload(payload_object)?,
         _ => unreachable!("operation checked above"),
@@ -265,7 +265,7 @@ fn require_payload_grant_id(
 fn validate_grant_payload(
     payload: &serde_json::Map<String, Value>,
     capability_grant_id: &str,
-    issuer_service_did: &str,
+    issuer_service_id: &str,
 ) -> Result<(String, Option<String>), AppError> {
     let grant = payload
         .get("grant")
@@ -282,10 +282,10 @@ fn validate_grant_payload(
         ));
     }
     match grant.get("issuer").and_then(Value::as_str) {
-        Some(issuer) if issuer == issuer_service_did => {}
+        Some(issuer) if issuer == issuer_service_id => {}
         Some(_) => {
             return Err(AppError::invalid_param(
-                "payload.grant.issuer does not match issuer_service_did",
+                "payload.grant.issuer does not match issuer_service_id",
             ));
         }
         None => return Err(AppError::invalid_param("payload.grant.issuer is required")),
@@ -466,7 +466,7 @@ mod tests {
         CapabilityFanoutBody {
             kind: FANOUT_KIND.to_owned(),
             operation: "grant".to_owned(),
-            issuer_service_did: ISSUER.to_owned(),
+            issuer_service_id: ISSUER.to_owned(),
             event_kind: arkret_sdk::events::kinds::CAPABILITY_GRANT.to_owned(),
             event_id: EVENT.to_owned(),
             capability_grant_id: GRANT.to_owned(),

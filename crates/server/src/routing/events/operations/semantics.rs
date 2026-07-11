@@ -779,23 +779,6 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 requirements: APPLET_BRIDGE_ERROR_REQUIREMENTS,
                 validate: None,
             },
-            // Agent protocol family.
-            arkret_sdk::events::kinds::AGENT_ENDPOINT => OperationPayloadSchema {
-                requirements: AGENT_ENDPOINT_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START => OperationPayloadSchema {
-                requirements: AGENT_SESSION_START_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS => OperationPayloadSchema {
-                requirements: AGENT_SESSION_STATUS_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT => OperationPayloadSchema {
-                requirements: AGENT_SESSION_RESULT_REQUIREMENTS,
-                validate: None,
-            },
             // R3 spec-sync — agent lifecycle FSM kinds.
             arkret_sdk::events::kinds::AGENT_PAUSE => OperationPayloadSchema {
                 requirements: AGENT_PAUSE_REQUIREMENTS,

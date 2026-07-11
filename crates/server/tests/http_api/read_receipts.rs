@@ -38,10 +38,10 @@ async fn set_demo_realm_visibility(
             encryption_profile: Some("none".to_owned()),
             plaintext_visible_services: std::collections::BTreeSet::from([state
                 .config
-                .service_did
+                .service_id
                 .clone()]),
             plaintext_visible_service_classes: std::collections::BTreeMap::from([(
-                state.config.service_did.clone(),
+                state.config.service_id.clone(),
                 std::collections::BTreeSet::from([
                     arkret_sdk::PlaintextDataClassKind::MessageContent,
                 ]),
@@ -54,9 +54,9 @@ async fn set_demo_realm_visibility(
     meta.history_visibility = history_visibility.to_owned();
     meta.encryption_profile = Some("none".to_owned());
     meta.plaintext_visible_services =
-        std::collections::BTreeSet::from([state.config.service_did.clone()]);
+        std::collections::BTreeSet::from([state.config.service_id.clone()]);
     meta.plaintext_visible_service_classes.insert(
-        state.config.service_did.clone(),
+        state.config.service_id.clone(),
         std::collections::BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = now;

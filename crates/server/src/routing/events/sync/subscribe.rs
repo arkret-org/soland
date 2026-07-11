@@ -22,11 +22,11 @@ pub(super) async fn account_describe(
         "offline_queue_flush".to_owned(),
         "bottom_cell_repair".to_owned(),
     ];
-    let service_did = validate_did(&state.config.service_did).map_err(|_| {
-        crate::error::AppError::internal("configured service_did is not a valid DID")
+    let service_id = validate_did(&state.config.service_id).map_err(|_| {
+        crate::error::AppError::internal("configured service_id is not a valid DID")
     })?;
     crate::result::json_ok(SyncDescription {
-        service_did,
+        service_id,
         supported_sync_profiles,
         limits: json!({
             "max_realms": 50,

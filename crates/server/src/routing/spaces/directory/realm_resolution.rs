@@ -87,7 +87,7 @@ pub(super) async fn resolve_realm(
     let alias_query = body
         .alias
         .as_deref()
-        .and_then(|raw| crate::realm_alias::canonical_realm_alias(&state.config.service_did, raw));
+        .and_then(|raw| crate::realm_alias::canonical_realm_alias(&state.config.service_id, raw));
     let mut matched_realm = None;
     for entry in candidates {
         let matches_query = body
@@ -360,7 +360,7 @@ pub(super) fn organization_preview_from_value(
     let organization_did = organization
         .get("organization_did")
         .and_then(Value::as_str)
-        .unwrap_or(state.config.service_did.as_str());
+        .unwrap_or(state.config.service_id.as_str());
     let as_of = organization_timestamp(organization).unwrap_or_else(now);
     let realms = organization
         .get("realms")
@@ -543,7 +543,7 @@ pub(super) async fn realm_preview_for_policy(
         preview.insert(
             "server_hints".to_owned(),
             json!({
-                "service_did": state.config.service_did.clone(),
+                "service_id": state.config.service_id.clone(),
                 "endpoint": state.config.public_base_url.clone(),
             }),
         );
@@ -655,7 +655,7 @@ pub(super) fn join_candidates_for_resolved_realm(
     };
     vec![RealmJoinCandidate {
         realm_id: realm_id_typed,
-        service_did: Did::new(state.config.service_did.clone()).expect("service DID is validated"),
+        service_id: Did::new(state.config.service_id.clone()).expect("service DID is validated"),
         service_type: RealmJoinCandidateServiceType::PrincipalServer,
         role: RealmJoinCandidateRole::Primary,
         endpoint: Some(state.config.public_base_url.clone()),

@@ -231,11 +231,11 @@ pub async fn resolve_ed25519_verification_key_for_did(
 }
 
 pub fn validate_verification_method_controller(
-    controller_did: &str,
+    controller_id: &str,
     verification_method: &str,
 ) -> Result<(), String> {
     let Some(fragment) = verification_method
-        .strip_prefix(controller_did)
+        .strip_prefix(controller_id)
         .and_then(|rest| rest.strip_prefix('#'))
     else {
         return Err("verification method controller does not match DID".to_owned());

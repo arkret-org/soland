@@ -9,7 +9,7 @@ pub(super) struct HandleLookup {
 
 pub(super) fn service_handle_domain(state: &AppState) -> String {
     handle_domain_from_public_base_url(&state.config.public_base_url)
-        .or_else(|| service_did_handle_domain(&state.config.service_did))
+        .or_else(|| service_id_handle_domain(&state.config.service_id))
         .unwrap_or_else(|| "soland.local".to_owned())
 }
 
@@ -18,15 +18,15 @@ fn handle_domain_from_public_base_url(public_base_url: &str) -> Option<String> {
     valid_handle_domain_candidate(url.host_str()?)
 }
 
-fn service_did_handle_domain(service_did: &str) -> Option<String> {
-    if let Some(value) = service_did.strip_prefix("did:web:") {
+fn service_id_handle_domain(service_id: &str) -> Option<String> {
+    if let Some(value) = service_id.strip_prefix("did:web:") {
         return value
             .split(':')
             .next()
             .map(did_method_host_without_encoded_port)
             .and_then(valid_handle_domain_candidate);
     }
-    if let Some(value) = service_did.strip_prefix("did:webvh:") {
+    if let Some(value) = service_id.strip_prefix("did:webvh:") {
         return did_webvh_method_authority(value)
             .map(did_method_host_without_encoded_port)
             .and_then(valid_handle_domain_candidate);
@@ -285,7 +285,7 @@ fn peer_matches_handle_authority(peer_url: &str, peer_did: &str, authority: &str
             })
         })
         .is_some_and(|host| host == authority)
-        || service_did_handle_domain(peer_did).as_deref() == Some(authority.as_str())
+        || service_id_handle_domain(peer_did).as_deref() == Some(authority.as_str())
 }
 
 async fn fetch_remote_handle_from_peer(
@@ -300,7 +300,7 @@ async fn fetch_remote_handle_from_peer(
     if remote_body.audience.is_none() {
         remote_body.audience = Some(resolve_handle_audience(
             &remote_body,
-            state.config.service_did.as_str(),
+            state.config.service_id.as_str(),
         ));
     }
     let endpoint = format!(
@@ -399,7 +399,7 @@ async fn validate_remote_handle_resolution(
         return Err("remote handle claim subject mismatch".to_owned());
     }
     if claim
-        .issuer_service_did
+        .issuer_service_id
         .as_ref()
         .map(Did::as_str)
         .unwrap_or_default()
@@ -410,7 +410,7 @@ async fn validate_remote_handle_resolution(
     if claim
         .member_delivery_binding
         .as_ref()
-        .map(|binding| binding.recipient_service_did.as_str())
+        .map(|binding| binding.recipient_service_id.as_str())
         != Some(peer_did)
     {
         return Err("remote handle claim delivery binding service mismatch".to_owned());
@@ -418,11 +418,11 @@ async fn validate_remote_handle_resolution(
     if outcome
         .member_delivery_binding
         .as_ref()
-        .map(|binding| &binding.recipient_service_did)
+        .map(|binding| &binding.recipient_service_id)
         != claim
             .member_delivery_binding
             .as_ref()
-            .map(|binding| &binding.recipient_service_did)
+            .map(|binding| &binding.recipient_service_id)
     {
         return Err("remote handle top-level delivery binding mismatch".to_owned());
     }
@@ -539,23 +539,23 @@ pub(super) async fn resolve_handle(
             // bind the claim to the requester's invocation context. We
             // default to the explicit `audience` param, falling back to
             // `realm_id` for membership-builder resolves, then `requester`.
-            let audience = resolve_handle_audience(&body, &state.config.service_did);
+            let audience = resolve_handle_audience(&body, &state.config.service_id);
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
             let handle_claim =
                 signed_handle_claim(state, &lookup.canonical, &did, &audience, true).await?;
-            let recipient_service_did = handle_claim
+            let recipient_service_id = handle_claim
                 .member_delivery_binding
                 .as_ref()
-                .map(|binding| binding.recipient_service_did.as_str())
-                .unwrap_or(state.config.service_did.as_str());
-            let resolved_by = Did::new(state.config.service_did.clone()).ok();
+                .map(|binding| binding.recipient_service_id.as_str())
+                .unwrap_or(state.config.service_id.as_str());
+            let resolved_by = Did::new(state.config.service_id.clone()).ok();
             if !crate::routing::invites::directory_handle_claim_resolve_allowed(
                 state,
                 body.intent,
                 body.requester.as_ref(),
                 &did,
-                recipient_service_did,
-                state.config.service_did.as_str(),
+                recipient_service_id,
+                state.config.service_id.as_str(),
                 &handle_claim,
                 resolved_by,
             ) {
@@ -631,7 +631,7 @@ pub(super) async fn signed_handle_claim(
             rejection.message,
         ));
     }
-    let service_did = state.config.service_did.clone();
+    let service_id = state.config.service_id.clone();
     let default_domain = service_handle_domain(state);
     let lookup = handle_lookup(handle, &default_domain)
         .ok_or_else(|| AppError::invalid_param("handle must be canonicalizable"))?;
@@ -648,13 +648,13 @@ pub(super) async fn signed_handle_claim(
     let subject = Did::new(did.to_owned()).map_err(|err| {
         AppError::internal(format!("invalid subject DID for handle claim: {err}"))
     })?;
-    let signer_did = Did::new(service_did.clone()).map_err(|err| {
+    let signer_did = Did::new(service_id.clone()).map_err(|err| {
         AppError::internal(format!("invalid service DID for handle claim: {err}"))
     })?;
     let created_at = now();
     let expires_at = created_at + chrono::Duration::hours(24);
     let member_delivery_binding = DeliveryBindingHint {
-        recipient_service_did: signer_did.clone(),
+        recipient_service_id: signer_did.clone(),
         recipient_service_type: RecipientServiceType::PrincipalServer,
         binding_source: HandleHintBindingSource::Explicit,
         delivery_modes: BTreeSet::from([
@@ -672,8 +672,8 @@ pub(super) async fn signed_handle_claim(
         handle: Some(handle),
         handle_aliases: vec![format!("acct:{localpart}@{handle_domain}")],
         subject: Some(subject),
-        issuer: Some(service_did.clone()),
-        issuer_service_did: Some(signer_did.clone()),
+        issuer: Some(service_id.clone()),
+        issuer_service_id: Some(signer_did.clone()),
         binding_state: Some(HandleBindingState::Verified),
         claim_kind: Some(HandleClaimKind::HandleBinding),
         visibility: Some(HandleVisibility::Public),
@@ -694,7 +694,7 @@ pub(super) async fn signed_handle_claim(
     let signer = Ed25519MoveSigner::new(
         (*state.notary_signing_key()).clone(),
         signer_did,
-        format!("{service_did}#directory-handle-claim"),
+        format!("{service_id}#directory-handle-claim"),
     );
     let signature = MoveSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("handle claim signing failed: {err}")))?;
@@ -770,7 +770,7 @@ pub(super) async fn list_handles_for_subject(
                 .as_ref()
                 .map(RealmId::as_str)
                 .or_else(|| body.requester.as_ref().map(Did::as_str))
-                .unwrap_or(state.config.service_did.as_str());
+                .unwrap_or(state.config.service_id.as_str());
             generated_claim =
                 Some(signed_handle_claim(state, handle, &subject, audience, false).await?);
         }
@@ -797,7 +797,7 @@ pub(super) async fn list_handles_for_subject(
                 .as_ref()
                 .map(RealmId::as_str)
                 .or_else(|| body.requester.as_ref().map(Did::as_str))
-                .unwrap_or(state.config.service_did.as_str());
+                .unwrap_or(state.config.service_id.as_str());
             crate::routing::identity::account::local_account_primary_handle_claim(
                 state, &subject, audience,
             )
@@ -936,9 +936,9 @@ pub(super) fn subject_handle_claim_visible(
         return false;
     }
     let issuer = claim.get("issuer").and_then(Value::as_str);
-    let issuer_service_did = claim.get("issuer_service_did").and_then(Value::as_str);
-    if issuer != Some(state.config.service_did.as_str())
-        && issuer_service_did != Some(state.config.service_did.as_str())
+    let issuer_service_id = claim.get("issuer_service_id").and_then(Value::as_str);
+    if issuer != Some(state.config.service_id.as_str())
+        && issuer_service_id != Some(state.config.service_id.as_str())
     {
         return false;
     }
@@ -946,7 +946,7 @@ pub(super) fn subject_handle_claim_visible(
         return true;
     };
     let mut allowed_audiences = BTreeSet::new();
-    allowed_audiences.insert(state.config.service_did.as_str());
+    allowed_audiences.insert(state.config.service_id.as_str());
     if let Some(realm_id) = request.realm_id.as_ref() {
         allowed_audiences.insert(realm_id.as_str());
     }
@@ -1049,20 +1049,20 @@ mod tests {
     }
 
     #[test]
-    fn service_did_handle_domain_uses_webvh_method_authority() {
-        let service_did = concat!(
+    fn service_id_handle_domain_uses_webvh_method_authority() {
+        let service_id = concat!(
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:",
             "Remote.Example:webvh:service"
         );
         assert_eq!(
-            service_did_handle_domain(service_did).as_deref(),
+            service_id_handle_domain(service_id).as_deref(),
             Some("remote.example")
         );
     }
 
     #[test]
-    fn service_did_handle_domain_rejects_webvh_without_host() {
-        assert!(service_did_handle_domain("did:webvh:zqmsolandlocal").is_none());
+    fn service_id_handle_domain_rejects_webvh_without_host() {
+        assert!(service_id_handle_domain("did:webvh:zqmsolandlocal").is_none());
     }
 
     #[test]

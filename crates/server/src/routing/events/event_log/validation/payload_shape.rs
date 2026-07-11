@@ -175,7 +175,7 @@ pub(super) fn validate_event_audience_fields(
     session: &SessionRecord,
 ) -> Result<(), EventValidationError> {
     if let Some(audience) = event_string_field(object, &["audience"])
-        && audience != state.config.service_did
+        && audience != state.config.service_id
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -184,7 +184,7 @@ pub(super) fn validate_event_audience_fields(
         ));
     }
     if let Some(domain) = event_string_field(object, &["domain"])
-        && domain != state.config.service_did
+        && domain != state.config.service_id
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,

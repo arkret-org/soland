@@ -28,10 +28,10 @@ pub(super) struct VerifiedInboundTransactionSignature {
 /// `created` / `expires` signature params. Failure codes (all 401 with the
 /// discriminating `reason`, `error.code` stays generic `unauthenticated`):
 /// - missing `Signature` / bearer-only → `http_signature_required`
-/// - bad signature / `content-digest` mismatch / `source_service_did` header↔body mismatch →
+/// - bad signature / `content-digest` mismatch / `source_service_id` header↔body mismatch →
 ///   `http_signature_invalid`
 /// - `created` / `expires` outside the freshness window → `signature_window_invalid`
-/// - `Source-Service-DID` with no active effective install / not matching the registration service
+/// - `Source-Service-ID` with no active effective install / not matching the registration service
 ///   DID → 403 `applet_registration_unauthorized`.
 pub(super) async fn verify_inbound_transaction_signature(
     state: &AppState,
@@ -39,7 +39,7 @@ pub(super) async fn verify_inbound_transaction_signature(
     transaction: &AppletTransactionRequestBody,
     idempotency_key: &str,
 ) -> Result<VerifiedInboundTransactionSignature, AppError> {
-    let source_service_did = transaction.source_service_did.as_str();
+    let source_service_id = transaction.source_service_id.as_str();
 
     // §7.3.1 ordering: a transaction push carrying only `Authorization: Bearer`
     // (no `Signature` / `Signature-Input`) MUST be rejected before any other
@@ -79,9 +79,9 @@ pub(super) async fn verify_inbound_transaction_signature(
     // Bound trust headers MUST be consistent with the body / this service
     // (`http_signature_invalid`).
     let header_source = applet_required_header(req, "source-service-did")?;
-    if header_source != source_service_did {
+    if header_source != source_service_id {
         return Err(applet_signature_error_invalid(
-            "Source-Service-DID header does not match the transaction source_service_did",
+            "Source-Service-ID header does not match the transaction source_service_id",
         ));
     }
     let header_idempotency = applet_required_header(req, "idempotency-key")?;
@@ -90,23 +90,23 @@ pub(super) async fn verify_inbound_transaction_signature(
             "Idempotency-Key header does not match the signed transcript binding",
         ));
     }
-    let destination_service_did = applet_required_header(req, "destination-service-did")?;
-    if destination_service_did != state.config.service_did {
+    let destination_service_id = applet_required_header(req, "destination-service-did")?;
+    if destination_service_id != state.config.service_id {
         return Err(applet_signature_error_invalid(
-            "Destination-Service-DID does not match this edge service",
+            "Destination-Service-ID does not match this edge service",
         ));
     }
 
     // §7.3.1 anchor: when an active install exists, the signing key must be
-    // the installed package webhook key controlled by `source_service_did`.
+    // the installed package webhook key controlled by `source_service_id`.
     // The no-install branch keeps authentication failure ordering stable; the
     // request still fails the active-install gate below.
-    let install = active_install_for_service_did(state, source_service_did).await?;
+    let install = active_install_for_service_id(state, source_service_id).await?;
     let verification_method = install
         .as_ref()
-        .map(|install| applet_registration_verification_method(install, source_service_did))
+        .map(|install| applet_registration_verification_method(install, source_service_id))
         .transpose()?
-        .unwrap_or_else(|| format!("{source_service_did}#applet-service-key"));
+        .unwrap_or_else(|| format!("{source_service_id}#applet-service-key"));
 
     // Validate signature params (keyid / alg / freshness window). Window
     // violations surface as `signature_window_invalid`.
@@ -121,19 +121,19 @@ pub(super) async fn verify_inbound_transaction_signature(
         &target_uri,
         &authority,
         &content_digest,
-        source_service_did,
-        &destination_service_did,
+        source_service_id,
+        &destination_service_id,
         idempotency_key,
         &signature_params,
     );
     applet_verify_signature_header(state, req, &verification_method, &signature_base)?;
 
     // §7.3.1: a verified signature is not yet authorisation — the
-    // `Source-Service-DID` MUST also hit an active effective install whose
+    // `Source-Service-ID` MUST also hit an active effective install whose
     // registration service DID equals it (§4b.1). fail closed otherwise.
     let Some(install) = install else {
         return Err(AppError::capability_denied(
-            "Source-Service-DID has no active effective install on this edge",
+            "Source-Service-ID has no active effective install on this edge",
         )
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("applet_registration_unauthorized")
@@ -146,8 +146,8 @@ pub(super) async fn verify_inbound_transaction_signature(
     let signature_header = applet_required_header(req, "signature")?;
     let signature_alg = applet_signature_param_value(&signature_params, "alg").unwrap_or_default();
     let source_signature_anchor = applet_source_signature_anchor(
-        source_service_did,
-        &destination_service_did,
+        source_service_id,
+        &destination_service_id,
         idempotency_key,
         &content_digest,
         &request_digest,
@@ -166,12 +166,12 @@ pub(super) async fn verify_inbound_transaction_signature(
 }
 
 /// Find an active (non-revoked) effective install whose registration service
-/// DID equals `source_service_did`. The registration carries the service DID in
+/// DID equals `source_service_id`. The registration carries the service DID in
 /// its installed package; manifest-only registrations (no package) are not an
 /// install for §7.3.1 purposes and are skipped.
-pub(super) async fn active_install_for_service_did(
+pub(super) async fn active_install_for_service_id(
     state: &AppState,
-    source_service_did: &str,
+    source_service_id: &str,
 ) -> Result<Option<AppletRecord>, AppError> {
     Ok(applet_records(state).await?.into_iter().find(|record| {
         record.revoked_at.is_none()
@@ -179,30 +179,30 @@ pub(super) async fn active_install_for_service_did(
             && record
                 .package
                 .as_ref()
-                .map(|package| package.service_did.as_str() == source_service_did)
+                .map(|package| package.service_id.as_str() == source_service_id)
                 .unwrap_or(false)
     }))
 }
 
 /// Resolve the verification method to verify the inbound signature against.
 ///
-/// §7.3.1 anchor: the Applet registration `service_did`'s installed
+/// §7.3.1 anchor: the Applet registration `service_id`'s installed
 /// `webhook_auth.key_ref` must name the source service DID's method and the
 /// installed auth metadata must accept the algorithm this verifier implements.
 pub(super) fn applet_registration_verification_method(
     install: &AppletRecord,
-    source_service_did: &str,
+    source_service_id: &str,
 ) -> Result<String, AppError> {
     let package = install.package.as_ref().ok_or_else(|| {
         applet_signature_error_invalid("active applet install is missing package webhook auth")
     })?;
     let key_ref = package.webhook_auth.key_ref.trim();
-    let expected_fragment_prefix = format!("{source_service_did}#");
+    let expected_fragment_prefix = format!("{source_service_id}#");
     if key_ref.is_empty()
-        || (key_ref != source_service_did && !key_ref.starts_with(&expected_fragment_prefix))
+        || (key_ref != source_service_id && !key_ref.starts_with(&expected_fragment_prefix))
     {
         return Err(applet_signature_error_invalid(
-            "Applet webhook_auth.key_ref must be controlled by Source-Service-DID",
+            "Applet webhook_auth.key_ref must be controlled by Source-Service-ID",
         ));
     }
     if !package
@@ -223,8 +223,8 @@ pub(super) fn applet_content_digest_header(bytes: &[u8]) -> String {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn applet_source_signature_anchor(
-    source_service_did: &str,
-    destination_service_did: &str,
+    source_service_id: &str,
+    destination_service_id: &str,
     idempotency_key: &str,
     content_digest: &str,
     request_digest: &str,
@@ -239,8 +239,8 @@ pub(super) fn applet_source_signature_anchor(
         "profile": "ak.applet.source_signature_anchor.v1",
         "operation_id": "ak.edge.applet.command.transaction",
         "direction": "applet_to_arkret_inbound",
-        "source_service_did": source_service_did,
-        "destination_service_did": destination_service_did,
+        "source_service_id": source_service_id,
+        "destination_service_id": destination_service_id,
         "idempotency_key": idempotency_key,
         "content_digest": content_digest,
         "request_digest": request_digest,
@@ -323,8 +323,8 @@ pub(super) fn applet_http_signature_base(
     target_uri: &str,
     authority: &str,
     content_digest: &str,
-    source_service_did: &str,
-    destination_service_did: &str,
+    source_service_id: &str,
+    destination_service_id: &str,
     idempotency_key: &str,
     signature_params: &str,
 ) -> String {
@@ -334,8 +334,8 @@ pub(super) fn applet_http_signature_base(
             SignatureBaseComponent::required("@target-uri", target_uri),
             SignatureBaseComponent::required("@authority", authority),
             SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("source-service-did", source_service_did),
-            SignatureBaseComponent::required("destination-service-did", destination_service_did),
+            SignatureBaseComponent::required("source-service-did", source_service_id),
+            SignatureBaseComponent::required("destination-service-did", destination_service_id),
             SignatureBaseComponent::required("idempotency-key", idempotency_key),
         ],
         signature_params,

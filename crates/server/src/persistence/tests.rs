@@ -87,7 +87,7 @@ async fn memory_contact_store_filtering() {
             response_event_ref: None,
             tombstone_event_ref: None,
             message: None,
-            peer_service_did: None,
+            peer_service_id: None,
             created_at: now,
             updated_at: now,
         })
@@ -104,7 +104,7 @@ async fn memory_contact_store_filtering() {
             response_event_ref: None,
             tombstone_event_ref: None,
             message: None,
-            peer_service_did: None,
+            peer_service_id: None,
             created_at: now,
             updated_at: now,
         })
@@ -1055,7 +1055,7 @@ async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
         inviter: "did:web:alice.example".to_owned(),
         invitee: Some("did:web:bob.example".to_owned()),
         invite_delivery_target: Some(serde_json::json!({
-            "recipient_service_did": "did:web:soland.local",
+            "recipient_service_id": "did:web:soland.local",
             "recipient_service_type": "principal_server"
         })),
         introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
@@ -1078,7 +1078,7 @@ async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
         fetched
             .invite_delivery_target
             .as_ref()
-            .and_then(|target| target.get("recipient_service_did"))
+            .and_then(|target| target.get("recipient_service_id"))
             .and_then(Value::as_str),
         Some("did:web:soland.local")
     );
@@ -1203,7 +1203,7 @@ async fn memory_contact_store_put_get_roundtrip() {
         response_event_ref: Some("ak:event:0196419b-0000-7000-8000-000000000103".to_owned()),
         tombstone_event_ref: None,
         message: Some("hi".to_owned()),
-        peer_service_did: Some("did:web:bob-ps.example".to_owned()),
+        peer_service_id: Some("did:web:bob-ps.example".to_owned()),
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
@@ -1224,7 +1224,7 @@ async fn memory_contact_store_put_get_roundtrip() {
         Some("ak:event:0196419b-0000-7000-8000-000000000103")
     );
     assert_eq!(
-        scoped.peer_service_did.as_deref(),
+        scoped.peer_service_id.as_deref(),
         Some("did:web:bob-ps.example")
     );
 
@@ -1406,7 +1406,7 @@ async fn pg_contact_consent_policy_and_direct_binding_survive_store_restart() {
         )),
         tombstone_event_ref: None,
         message: Some("postgres round trip".to_owned()),
-        peer_service_did: Some(format!("did:web:pg-peer-service-{suffix}.example")),
+        peer_service_id: Some(format!("did:web:pg-peer-service-{suffix}.example")),
         created_at: now,
         updated_at: now,
     };

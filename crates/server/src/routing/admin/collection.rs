@@ -154,7 +154,6 @@ pub(super) async fn admin_collection(
         "spaces" => ("spaces", admin_space_container_items(state)),
         "federation" => ("federation", admin_federation_items(state).await),
         "applets" => ("applets", admin_applet_items(state)),
-        "agents" => ("agents", admin_agent_items(state)),
         "reports" => (
             "reports",
             crate::routing::interop::moderation::visible_reports_for_actor(
@@ -575,7 +574,7 @@ async fn admin_federation_items(state: &AppState) -> Vec<Value> {
 
 /// Snapshot of the in-memory applet registry maintained
 /// by `reducer::ProjectionState::applets`. Each row is one applet
-/// identified by `service_did`, with the latest registration metadata
+/// identified by `service_id`, with the latest registration metadata
 /// (namespace, capabilities) and the most recent manifest (from
 /// `ak.applet.discovery`). Empty until a `ak.applet.registration` or
 /// `ak.applet.discovery` event has been accepted.
@@ -585,31 +584,12 @@ fn admin_applet_items(state: &AppState) -> Vec<Value> {
         .values()
         .map(|applet| {
             json!({
-                "service_did": applet.service_did,
+                "service_id": applet.service_id,
                 "namespace": applet.namespace,
                 "manifest": applet.manifest,
                 "capabilities": applet.capabilities,
                 "registered_at": applet.registered_at.to_rfc3339(),
                 "updated_at": applet.updated_at.to_rfc3339(),
-            })
-        })
-        .collect()
-}
-
-/// Snapshot of the in-memory agent registry maintained
-/// by `reducer::ProjectionState::agents`. One row per agent_id, with
-/// the latest `ak.agent.endpoint` metadata.
-fn admin_agent_items(state: &AppState) -> Vec<Value> {
-    let proj = state.projection.lock();
-    proj.agents
-        .values()
-        .map(|agent| {
-            json!({
-                "agent_id": agent.agent_id,
-                "protocol": agent.protocol,
-                "endpoint_url": agent.endpoint_url,
-                "registered_at": agent.registered_at.to_rfc3339(),
-                "updated_at": agent.updated_at.to_rfc3339(),
             })
         })
         .collect()

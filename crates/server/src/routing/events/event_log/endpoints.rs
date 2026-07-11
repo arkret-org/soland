@@ -20,7 +20,7 @@ pub(in crate::routing::events) fn router() -> Router {
 async fn events_describe(depot: &mut Depot) -> JsonResult<arkret_sdk::ServerDescription> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut description = describe(
-        &state.config.service_did,
+        &state.config.service_id,
         &state.config.public_base_url,
         state.db.mode(),
         state.config.development_mode,
@@ -283,7 +283,7 @@ async fn persist_idempotency_first_response(
     let record = crate::persistence::IdempotencyRecord {
         principal_id: principal_id.to_owned(),
         idempotency_key: idempotency_key.to_owned(),
-        service_id: state.config.service_did.clone(),
+        service_id: state.config.service_id.clone(),
         request_hash: request_hash.to_owned(),
         response_status: status.as_u16() as i32,
         response_body: body.clone(),

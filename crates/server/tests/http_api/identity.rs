@@ -24,12 +24,12 @@ async fn identity_surface_works() {
         .as_array()
         .expect("resolver trust roots");
     // Trust roots carry a stable slug `id`; the service DID moved to the
-    // dedicated `service_did` field.
+    // dedicated `service_id` field.
     assert!(
         trust_roots
             .iter()
             .any(|root| root["id"] == "soland.local_identity_store"
-                && root["service_did"] == "did:web:soland.local"
+                && root["service_id"] == "did:web:soland.local"
                 && root["kind"] == "local_identity_store"
                 && root["proof_verification"]["webvh_witness_quorum"]
                     == "required_when_policy_present"),

@@ -5,7 +5,7 @@ pub(crate) async fn projected_media_plaintext_service_present(
     realm_id: &str,
     payload: &Value,
 ) -> bool {
-    payload_declares_media_plaintext_service(payload, &state.config.service_did)
+    payload_declares_media_plaintext_service(payload, &state.config.service_id)
         || realm_allows_plaintext_service_for_data_class(
             state,
             realm_id,
@@ -14,21 +14,21 @@ pub(crate) async fn projected_media_plaintext_service_present(
         .await
 }
 
-pub(crate) fn payload_declares_media_plaintext_service(payload: &Value, service_did: &str) -> bool {
+pub(crate) fn payload_declares_media_plaintext_service(payload: &Value, service_id: &str) -> bool {
     payload
         .pointer("/plaintext_visible_services")
         .and_then(Value::as_array)
         .is_some_and(|services| {
             services.iter().any(|service| match service {
-                Value::String(value) => value == service_did || value == "media_plaintext",
+                Value::String(value) => value == service_id || value == "media_plaintext",
                 Value::Object(object) => {
                     let purpose_matches =
                         object.get("purpose").and_then(Value::as_str) == Some("media_plaintext");
                     let service_matches = object
-                        .get("service_did")
+                        .get("service_id")
                         .or_else(|| object.get("did"))
                         .and_then(Value::as_str)
-                        .is_none_or(|value| value == service_did);
+                        .is_none_or(|value| value == service_id);
                     purpose_matches && service_matches
                 }
                 _ => false,

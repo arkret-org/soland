@@ -175,7 +175,7 @@ pub(crate) fn empty_push_route_cell() -> PushRouteCellValue {
 
 pub(crate) fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef> {
     let cell_subject = arkret_sdk::composite_subject(&[
-        subject.recipient_service_did.as_str(),
+        subject.recipient_service_id.as_str(),
         subject.principal_id.as_str(),
         subject.device_id.as_str(),
         subject.push_route.as_str(),

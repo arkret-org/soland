@@ -1,7 +1,6 @@
 use super::*;
 
 mod accountability;
-mod agent_interop;
 mod agent_participation;
 mod governance;
 mod message_rules;
@@ -10,7 +9,6 @@ mod realm_circle;
 #[cfg(test)]
 pub(super) use accountability::minimal_metadata_aad_visibility;
 use accountability::*;
-use agent_interop::*;
 pub(crate) use agent_participation::{
     agent_participation_ceiling_record, validate_agent_participation_ceiling,
     validate_agent_reply_participation,
@@ -60,11 +58,6 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
             crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING,
-        )
-    } else if message == "interop_session_writer_unauthorized" {
-        (
-            salvo::http::StatusCode::FORBIDDEN,
-            "interop_session_writer_unauthorized",
         )
     } else if message == arkret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
         (
@@ -157,7 +150,6 @@ pub async fn validate_operation_policy(
         }
         validate_principal_control_realm_binding(operation)?;
         validate_accountability_profile_policy(state, operations, operation).await?;
-        validate_agent_interop_session_writer_policy(state, operations, operation).await?;
         if kinds::canonical_kind_string(operation) == "ak.cross_signing.publish" {
             crate::routing::identity::cross_signing::validate_cross_signing_publish(
                 state,
@@ -251,7 +243,7 @@ mod tests {
                 "history_visibility": "joined",
                 "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
                 "created_by": actor,
-                "controller_principal_id": actor,
+                "controller_id": actor,
                 "controller_agent_circle_key": key,
             },
         });

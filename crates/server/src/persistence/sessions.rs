@@ -205,7 +205,7 @@ mod tests {
                     "ak.self.events.query.scan".to_owned(),
                 ],
                 scope_details: serde_json::json!({
-                    "agent_principal_id": "did:web:agent.example",
+                    "agent_id": "did:web:agent.example",
                     "applet_id": "ak:applet:01904100-0000-7000-8000-000000000001"
                 }),
                 freshness_state: FreshnessState::Fresh,

@@ -43,14 +43,6 @@ pub use routing::{
     router, router_with_rate_limiter_and_request_size_config, router_with_rate_limiter_config,
 };
 
-/// Re-export the reference Ed25519 signing seed + key_id so
-/// out-of-crate verifiers can recompute the signer's public key
-/// without recompiling soland.
-pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] =
-    routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_ED25519_SEED;
-pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str =
-    routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_ED25519_KEY_ID;
-
 /// Canonical-JSON digest of a value: SHA-256 over the SDK canonical byte
 /// encoding. Single soland-side entry point, delegating to the SDK's
 /// `canonical_sha256`, so the `canonical_json_bytes` + `sha256_digest`

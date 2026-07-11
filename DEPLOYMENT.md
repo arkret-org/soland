@@ -35,7 +35,7 @@ SOLAND_PUBLIC_BASE_URL=https://soland.example
 SOLAND_TLS_CERT_PATH=/etc/soland/tls/fullchain.pem
 SOLAND_TLS_KEY_PATH=/etc/soland/tls/privkey.pem
 SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified
-SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service
+SOLAND_SERVICE_ID=did:webvh:<scid>:soland.example:webvh:service
 SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED=true
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # Optional: use a standalone webvh provider instead of, or alongside, the embedded provider.
@@ -85,7 +85,7 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` | `50` | Maximum pruning candidates examined per realm walk. |
 | `SOLAND_DID_RESOLVER_ALLOW_METHODS` | `web,key,uuid` | Comma-separated DID methods accepted by outbound DID resolution. |
 | `SOLAND_ERASURE_PROPAGATION_WINDOW_MS` | `604800000` | Erasure receipt propagation window. |
-| `SOLAND_EXTERNAL_WEBVH_PROVIDER_SERVICE_DID` | unset | Expected service DID when probing `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL`. |
+| `SOLAND_EXTERNAL_WEBVH_PROVIDER_SERVICE_ID` | unset | Expected service DID when probing `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL`. |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN` | derived trust domain | Expected trust domain for the external webvh provider probe. |
 | `SOLAND_FEDERATION_POLICY` | `mesh` | Federation policy mode (`mesh` or `hub`). |
 | `SOLAND_HEALTHCHECK_URL` | derived from `SOLAND_BIND` | URL used by the built-in healthcheck command. |
@@ -97,7 +97,7 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN` | unset | Optional S3 session token for temporary credentials. |
 | `SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE` | `false` | Skip S3 request signing for test-only object stores; do not enable for production S3. |
 | `SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS` | `900` | TTL for push bridge trust/cache entries. |
-| `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS` | empty | Comma-separated service DIDs trusted for push bridge elevation. |
+| `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS` | empty | Comma-separated service DIDs trusted for push bridge elevation. |
 | `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR` | `false` | Trust `X-Forwarded-For` for rate limiting when behind a trusted proxy. |
 | `SOLAND_TRUST_X_FORWARDED_FOR` | `false` | Backward-compatible alias for `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR`. |
 | `SOLAND_TURN_URLS` | `turn:turn.soland.local:3478?transport=udp` | Comma-separated TURN URLs advertised in signed ICE configs. |
@@ -158,7 +158,7 @@ docker run --name soland --restart=always -d \
   -p 127.0.0.1:8698:8698 \
   -e SOLAND_BIND=0.0.0.0:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
-  -e SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
+  -e SOLAND_SERVICE_ID=did:webvh:<scid>:soland.example:webvh:service \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
@@ -185,7 +185,7 @@ helm template soland ./deploy/helm/soland \
   --namespace arkret \
   --set image.tag=<tag> \
   --set env.SOLAND_PUBLIC_BASE_URL=https://soland.example \
-  --set env.SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
+  --set env.SOLAND_SERVICE_ID=did:webvh:<scid>:soland.example:webvh:service \
   --set env.SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   --set secretEnv.DATABASE_URL='postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full' \
   --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
@@ -279,7 +279,7 @@ external webvh provider has passed the startup `/describe` probe.
 | --- | --- | --- |
 | PostgreSQL | All tables | `pg_dump` daily, plus continuous WAL archiving for point-in-time recovery |
 | Object storage bucket/volume | Uploaded media | enable bucket versioning or snapshot the local volume on the same cadence as the database; align so blob references in the DB stay resolvable |
-| `SOLAND_SERVICE_DID` material | DID rotation history | Out of scope — manage via the DID method (`did:web` vs `did:plc`) |
+| `SOLAND_SERVICE_ID` material | DID rotation history | Out of scope — manage via the DID method (`did:web` vs `did:plc`) |
 
 Restore order: stop soland → restore DB → restore object storage bucket/volume → start soland.
 The startup migrations are idempotent.
@@ -654,7 +654,7 @@ deployments don't carry that cell. Migration
    `migration:r3`.
 3. Sets `lattice = fsm, bottom = reject` on the cell metadata.
 
-Migration is safe to re-run: it uses `ON CONFLICT (agent_principal_id) DO
+Migration is safe to re-run: it uses `ON CONFLICT (agent_id) DO
 NOTHING`. Verify:
 
 ```sql

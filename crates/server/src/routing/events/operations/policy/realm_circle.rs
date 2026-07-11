@@ -295,7 +295,7 @@ pub(super) fn sidecar_circle_create_shape_is_constrained(
     };
     let realm_id = operation.realm_id.as_str();
     let controller = object
-        .get("controller_principal_id")
+        .get("controller_id")
         .and_then(Value::as_str)
         .unwrap_or(actor);
     if controller != actor {

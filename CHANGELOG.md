@@ -118,7 +118,7 @@ on the reducer / federation / state-machine surfaces. See
   cached body with diagnostic `reason_code=historical_only` (no side
   effects); cache hits re-run capability checks.
 - **Added** delivery-binding handover error codes: stale binding emits
-  `delivery_binding_stale` + `new_recipient_service_did` +
+  `delivery_binding_stale` + `new_recipient_service_id` +
   `handover_frontier`; post-handover replays emit
   `delivery_binding_handed_over`.
 - **BREAKING** `ak.cross_signing.publish` reducer enforces CAS
@@ -156,7 +156,7 @@ below. Producers on the old wire MUST upgrade.
 - **`crate::round23` module** — consolidated reducer/validation helpers
   for every Round R2/R3 normative requirement (T01–T23).
 - **`AppConfig.trust_domain`** field plumbed from `SOLAND_TRUST_DOMAIN`
-  env var (default derived from `service_did`). Required by the
+  env var (default derived from `service_id`). Required by the
   `ak.cross_signing.reset` cross-domain replay defence (T08).
 - **15 new `ErrorCode` variants** mirroring the new spec registry:
   `RelaxedWindowExceedsCeiling`, `E2eeRelaxedDisallowedInComplianceProfile`,
@@ -230,7 +230,7 @@ below. Producers on the old wire MUST upgrade.
 #### Migration
 
 - Operators MUST set `SOLAND_TRUST_DOMAIN` (or rely on the
-  `service_did`-derived default) before processing `ak.cross_signing.reset`
+  `service_id`-derived default) before processing `ak.cross_signing.reset`
   events. The boot path validates the value via the SDK
   `TypedTrustDomainId` regex.
 - Producers MUST move ephemeral kinds off `ak.self.events.command.submit`; the

@@ -398,7 +398,7 @@ async fn policy_check(
         .await;
     }
 
-    let policy_server_id = Did::new(state.config.service_did.clone())
+    let policy_server_id = Did::new(state.config.service_id.clone())
         .map_err(|error| AppError::internal(format!("invalid service DID: {error}")))?;
     let expires_at = now() + chrono::Duration::minutes(5);
     let bound_to = PolicyCheckBoundTo {
@@ -419,7 +419,7 @@ async fn policy_check(
         policy_frontier_digest,
         membership_frontier_digest,
         signature: PolicyCheckSignature {
-            kid: format!("{}#policy-binding-key", state.config.service_did),
+            kid: format!("{}#policy-binding-key", state.config.service_id),
             sig: String::new(),
         },
         next_retry_at,
@@ -694,12 +694,12 @@ fn policy_check_has_service_delegation(
         proof,
         &[
             "executed_by",
-            "service_did",
-            "delegated_service_did",
-            "source_service_did",
+            "service_id",
+            "delegated_service_id",
+            "source_service_id",
         ],
         session_actor,
-    ) && request.source.service_did.as_str() == session_actor;
+    ) && request.source.service_id.as_str() == session_actor;
     let proof_ref_ok = any_nonempty_string_field(
         proof,
         &[
@@ -796,7 +796,7 @@ mod tests {
             action: "ak.message.create".to_owned(),
             request_canonical_digest: test_hash(),
             source: arkret_sdk::PolicyCheckSource {
-                service_did: Did::new(source_service.to_owned()).unwrap(),
+                service_id: Did::new(source_service.to_owned()).unwrap(),
                 service_type: "soland".to_owned(),
                 source_ip_digest: Some(test_hash()),
                 signed_transport: true,

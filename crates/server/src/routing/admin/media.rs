@@ -91,7 +91,7 @@ fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMedia
     let config = value.get("media_service").unwrap_or(value);
     let service_id = config
         .get("service_id")
-        .or_else(|| config.get("service_did"))
+        .or_else(|| config.get("service_id"))
         .and_then(Value::as_str)
         .map(str::to_owned);
     let e2ee_key_sources_allowed = config

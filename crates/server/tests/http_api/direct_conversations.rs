@@ -133,7 +133,7 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
             response_event_ref: Some("ak:event:0196419b-0000-7000-8000-000000000212".to_owned()),
             tombstone_event_ref: None,
             message: None,
-            peer_service_did: None,
+            peer_service_id: None,
             created_at: now,
             updated_at: now,
         })
@@ -168,7 +168,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
             response_event_ref: Some("ak:event:0196419b-0000-7000-8000-000000000232".to_owned()),
             tombstone_event_ref: None,
             message: None,
-            peer_service_did: None,
+            peer_service_id: None,
             created_at: now,
             updated_at: now,
         })
@@ -231,7 +231,7 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
             response_event_ref: None,
             tombstone_event_ref: None,
             message: None,
-            peer_service_did: None,
+            peer_service_id: None,
             created_at: now,
             updated_at: now,
         })

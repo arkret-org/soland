@@ -12,8 +12,8 @@
 
 /// Derive this deployment's authority domain from its service DID. Mirrors the
 /// handle `service_handle_domain` derivation (`did:web:<host>` → `<host>`).
-pub fn deployment_domain(service_did: &str) -> String {
-    service_did
+pub fn deployment_domain(service_id: &str) -> String {
+    service_id
         .strip_prefix("did:web:")
         .map(|value| value.replace(':', "."))
         .unwrap_or_else(|| "soland.local".to_owned())
@@ -27,13 +27,13 @@ pub fn deployment_domain(service_did: &str) -> String {
 /// A full form whose domain is NOT this deployment's authority domain is
 /// rejected: under the deployment-authority model soland only issues aliases
 /// beneath its own domain (object-addressing.md §3.3).
-pub fn canonical_realm_alias(service_did: &str, input: &str) -> Option<String> {
+pub fn canonical_realm_alias(service_id: &str, input: &str) -> Option<String> {
     let trimmed = input.trim();
     let body = trimmed.strip_prefix('#').unwrap_or(trimmed).trim();
     if body.is_empty() {
         return None;
     }
-    let domain = deployment_domain(service_did);
+    let domain = deployment_domain(service_id);
     let canonical_input = if body.contains(':') {
         body.to_owned()
     } else {

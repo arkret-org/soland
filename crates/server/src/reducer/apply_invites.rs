@@ -245,7 +245,7 @@ impl ProjectionState {
                 state: "invite".to_owned(),
                 role: role_from_join_rule_snapshot(&invite.join_rule_snapshot),
                 delivery_status: None,
-                recipient_service_did: None,
+                recipient_service_id: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,
                 invited_at: Some(now),
@@ -334,16 +334,16 @@ fn validate_third_party_id(third_party_id: &Value) -> Result<(), &'static str> {
             return Err("third_party_id_contains_plaintext_secret");
         }
     }
-    let Some(service_did) = object
-        .get("verification_service_did")
+    let Some(service_id) = object
+        .get("verification_service_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Err("verification_service_did_required");
+        return Err("verification_service_id_required");
     };
-    if arkret_sdk::Did::new(service_did.to_owned()).is_err() {
-        return Err("verification_service_did_invalid");
+    if arkret_sdk::Did::new(service_id.to_owned()).is_err() {
+        return Err("verification_service_id_invalid");
     }
     if object
         .get("verification_public_key")
@@ -405,20 +405,20 @@ fn validate_binding_proof(
     let Some(object) = binding_proof.as_object() else {
         return Err("binding_proof_not_object");
     };
-    let Some(service_did) = proof_string(object, "verification_service_did") else {
-        return Err("binding_proof_service_did_required");
+    let Some(service_id) = proof_string(object, "verification_service_id") else {
+        return Err("binding_proof_service_id_required");
     };
-    if arkret_sdk::Did::new(service_did.clone()).is_err() {
-        return Err("binding_proof_service_did_invalid");
+    if arkret_sdk::Did::new(service_id.clone()).is_err() {
+        return Err("binding_proof_service_id_invalid");
     }
-    let expected_service_did = third_party_id
-        .get("verification_service_did")
+    let expected_service_id = third_party_id
+        .get("verification_service_id")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if service_did != expected_service_did {
+    if service_id != expected_service_id {
         return Err("verification_service_not_authorized");
     }
-    if !realm_policy_components.is_some_and(|value| value_allowlists_service(value, &service_did)) {
+    if !realm_policy_components.is_some_and(|value| value_allowlists_service(value, &service_id)) {
         return Err("verification_service_not_authorized");
     }
     let Some(proof_subject) = proof_string(object, "subject_id") else {
@@ -508,7 +508,7 @@ fn validate_subject_proof(
         token_commitment,
         claim_nonce,
         third_party_id
-            .get("verification_service_did")
+            .get("verification_service_id")
             .and_then(Value::as_str)
             .unwrap_or_default(),
         binding_digest.as_str(),
@@ -529,25 +529,25 @@ fn proof_string(object: &serde_json::Map<String, Value>, field: &str) -> Option<
         .map(ToOwned::to_owned)
 }
 
-fn value_allowlists_service(value: &Value, service_did: &str) -> bool {
+fn value_allowlists_service(value: &Value, service_id: &str) -> bool {
     match value {
         Value::Array(items) => items
             .iter()
-            .any(|item| item.is_object() && value_allowlists_service(item, service_did)),
+            .any(|item| item.is_object() && value_allowlists_service(item, service_id)),
         Value::Object(object) => object.iter().any(|(key, item)| {
             let key_matches = matches!(
                 key.as_str(),
-                "allowed_verification_service_dids"
-                    | "verification_service_dids"
-                    | "third_party_verification_service_dids"
+                "allowed_verification_service_ids"
+                    | "verification_service_ids"
+                    | "third_party_verification_service_ids"
                     | "third_party_invite_verification_services"
             );
             if key_matches {
-                item.as_array().is_some_and(|items| {
-                    items.iter().any(|item| item.as_str() == Some(service_did))
-                }) || item.as_str() == Some(service_did)
+                item.as_array()
+                    .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(service_id)))
+                    || item.as_str() == Some(service_id)
             } else {
-                value_allowlists_service(item, service_did)
+                value_allowlists_service(item, service_id)
             }
         }),
         _ => false,

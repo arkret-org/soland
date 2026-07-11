@@ -41,7 +41,7 @@ pub(super) async fn resolve_agent_pairing(
         .ok_or_else(agent_pairing_not_found)?;
     let record = lookup_pairing_record(state, pairing_request_id, pairing_code, None).await?;
     ensure_pairing_request_open(&record).map_err(|_| agent_pairing_not_found())?;
-    let agent_principal_id = pairing_record_string(&record, "agent_principal_id")?;
+    let agent_id = pairing_record_string(&record, "agent_id")?;
     let pairing_expires_at = pairing_record_timestamp(&record, "pairing_expires_at")?;
     let bootstrap = AgentPairingBootstrap {
         arkret_base_url: state
@@ -49,10 +49,10 @@ pub(super) async fn resolve_agent_pairing(
             .public_base_url
             .trim_end_matches('/')
             .to_owned(),
-        service_did: Did::new(state.config.service_did.clone()).map_err(|error| {
-            AppError::internal(format!("configured service_did invalid: {error}"))
+        service_id: Did::new(state.config.service_id.clone()).map_err(|error| {
+            AppError::internal(format!("configured service_id invalid: {error}"))
         })?,
-        agent_principal_id: Did::new(agent_principal_id)
+        agent_id: Did::new(agent_id)
             .map_err(|error| AppError::internal(format!("agent principal DID invalid: {error}")))?,
         pairing_request_id: pairing_request_id.to_owned(),
         pairing_code: pairing_code.to_owned(),
@@ -80,21 +80,21 @@ pub(super) async fn submit_agent_runtime_key_request(
     if pairing_code.is_empty() {
         return Err(AppError::invalid_param("pairing_code is required"));
     }
-    let agent_principal_id = body.agent_principal_id.as_str();
-    validate_agent_principal_id(agent_principal_id)?;
+    let agent_id = body.agent_id.as_str();
+    validate_agent_id(agent_id)?;
     if body.verification_method.trim().is_empty() {
         return Err(AppError::invalid_param("verification_method is required"));
     }
-    if verification_method_principal(&body.verification_method) != agent_principal_id {
+    if verification_method_principal(&body.verification_method) != agent_id {
         return Err(AppError::invalid_param(
-            "verification_method DID must match agent_principal_id",
+            "verification_method DID must match agent_id",
         ));
     }
     let mut agent_record = lookup_pairing_record(
         state,
         &body.pairing_request_id,
         pairing_code,
-        Some(agent_principal_id),
+        Some(agent_id),
     )
     .await?;
     ensure_pairing_request_open(&agent_record)?;
@@ -102,8 +102,8 @@ pub(super) async fn submit_agent_runtime_key_request(
     let key_pair_body = agent_key_pair_body_from_runtime_approval(&body);
     verify_runtime_key_pair_proof_of_possession(
         &key_pair_body,
-        agent_principal_id,
-        &state.config.service_did,
+        agent_id,
+        &state.config.service_id,
     )?;
     if let Some(attestation) = body.runtime_attestation.as_ref() {
         let kind = attestation
@@ -162,7 +162,7 @@ pub(super) async fn agent_runtime_key_request_status(
         state,
         &body.pairing_request_id,
         &body.pairing_code,
-        Some(body.agent_principal_id.as_str()),
+        Some(body.agent_id.as_str()),
     )
     .await?;
     json_ok(agent_runtime_key_request_status_outcome(
@@ -178,7 +178,7 @@ async fn lookup_pairing_record(
     state: &AppState,
     pairing_request_id: &str,
     pairing_code: &str,
-    agent_principal_id: Option<&str>,
+    agent_id: Option<&str>,
 ) -> Result<Value, AppError> {
     if pairing_request_id.trim().is_empty() || pairing_code.trim().is_empty() {
         return Err(agent_pairing_not_found());
@@ -191,8 +191,8 @@ async fn lookup_pairing_record(
         .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
         .ok_or_else(agent_pairing_not_found)?;
     if record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code)
-        || agent_principal_id.is_some_and(|expected| {
-            record.get("agent_principal_id").and_then(Value::as_str) != Some(expected)
+        || agent_id.is_some_and(|expected| {
+            record.get("agent_id").and_then(Value::as_str) != Some(expected)
         })
     {
         return Err(agent_pairing_not_found());
@@ -203,7 +203,7 @@ async fn lookup_pairing_record(
 /// Pure decision core for the open runtime-key-request status poll.
 ///
 /// Anti-enumeration: a record miss and a `pairing_code` /
-/// `agent_principal_id` mismatch are indistinguishable — every mismatch maps
+/// `agent_id` mismatch are indistinguishable — every mismatch maps
 /// to the same not_found as an unknown `pairing_request_id`. An open pairing
 /// whose `pairing_expires_at` has passed is reported as `pairing_expired`
 /// without waiting for the lazy-expiry write.
@@ -219,11 +219,7 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     if agent_record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code) {
         return Err(agent_pairing_not_found());
     }
-    if agent_record
-        .get("agent_principal_id")
-        .and_then(Value::as_str)
-        != Some(body.agent_principal_id.as_str())
-    {
+    if agent_record.get("agent_id").and_then(Value::as_str) != Some(body.agent_id.as_str()) {
         return Err(agent_pairing_not_found());
     }
     let status = match agent_record.get("state").and_then(Value::as_str) {
@@ -289,26 +285,22 @@ pub(super) async fn agent_key_pair(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let agent_principal_id = body.agent_principal_id.as_str();
-    validate_agent_principal_id(agent_principal_id)?;
+    let agent_id = body.agent_id.as_str();
+    validate_agent_id(agent_id)?;
     if body.verification_method.trim().is_empty() {
         return Err(AppError::invalid_param("verification_method is required"));
     }
-    if verification_method_principal(&body.verification_method) != agent_principal_id {
+    if verification_method_principal(&body.verification_method) != agent_id {
         return Err(AppError::invalid_param(
-            "verification_method DID must match agent_principal_id",
+            "verification_method DID must match agent_id",
         ));
     }
-    let agent_record = require_agent_controller(state, &session, agent_principal_id).await?;
+    let agent_record = require_agent_controller(state, &session, agent_id).await?;
     ensure_pairing_request_open(&agent_record)?;
     ensure_pairing_request_id_matches(&agent_record, &body.pairing_request_id)?;
     let runtime_public_key_digest =
         runtime_public_key_digest(&body.public_key, &body.verification_method)?;
-    verify_runtime_key_pair_proof_of_possession(
-        &body,
-        agent_principal_id,
-        &state.config.service_did,
-    )?;
+    verify_runtime_key_pair_proof_of_possession(&body, agent_id, &state.config.service_id)?;
     // The runtime-attestation verifier is not wired yet. Refuse every
     // supplied attestation fail-closed instead of accepting a shape-only
     // `self_asserted` placeholder as if it were a verified binding.
@@ -330,12 +322,12 @@ pub(super) async fn agent_key_pair(
     let event_id = if state.config.development_mode {
         let controller_session = controller_dev_session(&session.actor, state);
         let realm = ensure_self_realm(state, &controller_session).await?;
-        let key_id = dev_fanout::default_agent_key_id(agent_principal_id);
+        let key_id = dev_fanout::default_agent_key_id(agent_id);
         submit_durable_key_authorize(
             state,
             &controller_session,
             &realm,
-            agent_principal_id,
+            agent_id,
             &body.verification_method,
             &key_id,
         )
@@ -346,7 +338,7 @@ pub(super) async fn agent_key_pair(
             &session,
             &body.authorize_event,
             &agent_record,
-            agent_principal_id,
+            agent_id,
             &body.verification_method,
             &runtime_public_key_digest,
         )
@@ -399,7 +391,7 @@ pub(super) async fn submit_production_key_authorize_event(
     session: &SessionRecord,
     envelope: &Value,
     agent_record: &Value,
-    agent_principal_id: &str,
+    agent_id: &str,
     verification_method: &str,
     runtime_public_key_digest: &str,
 ) -> Result<String, AppError> {
@@ -407,10 +399,10 @@ pub(super) async fn submit_production_key_authorize_event(
         envelope,
         &session.actor,
         agent_record,
-        agent_principal_id,
+        agent_id,
         verification_method,
         runtime_public_key_digest,
-        &state.config.service_did,
+        &state.config.service_id,
     )?;
     let outcome = submit_event_value(state, session, envelope.clone())
         .await
@@ -429,10 +421,10 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     envelope: &Value,
     controller: &str,
     agent_record: &Value,
-    agent_principal_id: &str,
+    agent_id: &str,
     verification_method: &str,
     runtime_public_key_digest: &str,
-    service_did: &str,
+    service_id: &str,
 ) -> Result<(), AppError> {
     if envelope.get("kind").and_then(Value::as_str) != Some("ak.agent.key.authorize") {
         return Err(AppError::invalid_param(
@@ -447,9 +439,9 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     let payload = envelope
         .get("payload")
         .ok_or_else(|| AppError::invalid_param("authorize_event.payload is required"))?;
-    if payload.get("agent_principal_id").and_then(Value::as_str) != Some(agent_principal_id) {
+    if payload.get("agent_id").and_then(Value::as_str) != Some(agent_id) {
         return Err(AppError::invalid_param(
-            "authorize_event.payload.agent_principal_id must match the pairing request",
+            "authorize_event.payload.agent_id must match the pairing request",
         ));
     }
     if payload.get("verification_method").and_then(Value::as_str) != Some(verification_method) {
@@ -473,7 +465,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
         .ok_or_else(|| AppError::invalid_param("authorize_event.payload.audience is required"))?;
     if !audience
         .iter()
-        .any(|value| value.as_str() == Some(service_did))
+        .any(|value| value.as_str() == Some(service_id))
     {
         return Err(AppError::invalid_param(
             "authorize_event.payload.audience must include this principal server",
@@ -499,10 +491,10 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     let expected_digest = pairing_request_binding_digest(
         agent_record,
         controller,
-        agent_principal_id,
+        agent_id,
         verification_method,
         runtime_public_key_digest,
-        service_did,
+        service_id,
     )?;
     if payload
         .get("approval_evidence")
@@ -581,7 +573,7 @@ pub(super) fn agent_key_pair_body_from_runtime_approval(
 ) -> AgentKeyPairRequestBody {
     AgentKeyPairRequestBody {
         pairing_request_id: body.pairing_request_id.clone(),
-        agent_principal_id: body.agent_principal_id.clone(),
+        agent_id: body.agent_id.clone(),
         verification_method: body.verification_method.clone(),
         public_key: body.public_key.clone(),
         proof_of_possession: body.proof_of_possession.clone(),
@@ -593,7 +585,7 @@ pub(super) fn agent_key_pair_body_from_runtime_approval(
 pub(super) fn runtime_key_request_for_controller(body: &AgentRuntimeApprovalRequestBody) -> Value {
     json!({
         "pairing_request_id": body.pairing_request_id.clone(),
-        "agent_principal_id": body.agent_principal_id.clone(),
+        "agent_id": body.agent_id.clone(),
         "verification_method": body.verification_method.clone(),
         "public_key": body.public_key.clone(),
         "proof_of_possession": body.proof_of_possession.clone(),
@@ -639,17 +631,17 @@ pub(super) fn runtime_ed25519_public_key(
 
 pub(super) fn verify_runtime_key_pair_proof_of_possession(
     body: &AgentKeyPairRequestBody,
-    agent_principal_id: &str,
-    service_did: &str,
+    agent_id: &str,
+    service_id: &str,
 ) -> Result<(), AppError> {
-    let agent_id = Did::new(agent_principal_id.to_owned())
-        .map_err(|error| AppError::invalid_param(format!("agent_principal_id invalid: {error}")))?;
+    let agent_id = Did::new(agent_id.to_owned())
+        .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
     let public_key_bytes = runtime_ed25519_public_key(&body.public_key, &body.verification_method)?;
     let proof: AgentKeyPairProofOfPossession =
         serde_json::from_value(body.proof_of_possession.clone()).map_err(|error| {
             AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
         })?;
-    if proof.audience != service_did {
+    if proof.audience != service_id {
         return Err(AppError::invalid_param(
             "proof_of_possession.audience must match this principal server",
         ));
@@ -776,29 +768,29 @@ pub(super) fn ensure_authorize_event_scope_matches_requested(
 pub(super) fn pairing_request_binding_digest(
     agent_record: &Value,
     controller: &str,
-    agent_principal_id: &str,
+    agent_id: &str,
     verification_method: &str,
     runtime_public_key_digest: &str,
-    service_did: &str,
+    service_id: &str,
 ) -> Result<String, AppError> {
     let pairing_request_id = pairing_record_string(agent_record, "pairing_request_id")?;
     let pairing_code = pairing_record_string(agent_record, "pairing_code")?;
     let expires_at = pairing_record_string(agent_record, "pairing_expires_at")?;
     let controller = Did::new(controller.to_owned())
         .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;
-    let agent_principal_id = Did::new(agent_principal_id.to_owned())
+    let agent_id = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent DID invalid: {error}")))?;
     let runtime_public_key_digest = Hash::new(runtime_public_key_digest.to_owned())
         .map_err(|_| AppError::invalid_param("runtime_public_key_digest is invalid"))?;
     arkret_sdk::agent_key_pairing_request_binding_digest(
         &controller,
-        &agent_principal_id,
+        &agent_id,
         verification_method,
         &runtime_public_key_digest,
         pairing_request_id,
         pairing_code,
         expires_at,
-        service_did,
+        service_id,
     )
     .map(|digest| digest.as_str().to_owned())
     .map_err(|error| {

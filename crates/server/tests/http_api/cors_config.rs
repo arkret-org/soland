@@ -310,9 +310,9 @@ async fn server_describe_advertises_account_authority_and_oidc_method_when_confi
 }
 
 #[tokio::test]
-async fn service_did_is_config_driven_across_public_metadata() {
-    let service_did = "did:web:configured.example";
-    let state = AppState::new(test_config_with_service_did(service_did), Db { pool: None });
+async fn service_id_is_config_driven_across_public_metadata() {
+    let service_id = "did:web:configured.example";
+    let state = AppState::new(test_config_with_service_id(service_id), Db { pool: None });
     let resolved_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
@@ -333,7 +333,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(server["service_did"], service_did);
+    assert_eq!(server["service_id"], service_id);
 
     let identity: Value = TestClient::get("http://server/_arkret/root/identity/describe")
         .send(&service)
@@ -341,7 +341,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(identity["service_did"], service_did);
+    assert_eq!(identity["service_id"], service_id);
 
     let sync: Value = TestClient::get("http://server/_arkret/self/account/describe")
         .send(&service)
@@ -349,7 +349,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(sync["service_did"], service_did);
+    assert_eq!(sync["service_id"], service_id);
 
     let events: Value = TestClient::get("http://server/_arkret/self/events/describe")
         .send(&service)
@@ -357,7 +357,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(events["service_did"], service_did);
+    assert_eq!(events["service_id"], service_id);
 
     let directory: Value = TestClient::get("http://server/_arkret/find/directory/describe")
         .send(&service)
@@ -365,7 +365,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(directory["service_did"], service_did);
+    assert_eq!(directory["service_id"], service_id);
 
     let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": resolved_realm_id}))
@@ -375,7 +375,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .await
         .unwrap();
     assert_eq!(
-        resolved["join_candidates"][0]["service_did"], service_did,
+        resolved["join_candidates"][0]["service_id"], service_id,
         "resolve-realm response: {resolved}"
     );
     assert_eq!(
@@ -389,7 +389,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(index["service_did"], service_did);
+    assert_eq!(index["service_id"], service_id);
 
     let ice: Value = TestClient::post("http://server/_arkret/self/rtc/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -404,7 +404,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(ice["signature"]["kid"], format!("{service_did}#media-ice"));
+    assert_eq!(ice["signature"]["kid"], format!("{service_id}#media-ice"));
     assert!(
         ice["signature"]["sig"]
             .as_str()
@@ -434,11 +434,11 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .unwrap();
     let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
     let mut signing_input = Vec::with_capacity(
-        b"soland-media-ice-config-v1".len() + service_did.len() + payload_bytes.len() + 2,
+        b"soland-media-ice-config-v1".len() + service_id.len() + payload_bytes.len() + 2,
     );
     signing_input.extend_from_slice(b"soland-media-ice-config-v1");
     signing_input.push(0);
-    signing_input.extend_from_slice(service_did.as_bytes());
+    signing_input.extend_from_slice(service_id.as_bytes());
     signing_input.push(0);
     signing_input.extend_from_slice(&payload_bytes);
     state

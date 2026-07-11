@@ -148,8 +148,8 @@ pub(crate) fn protocol_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "directory_describe"))]
 async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescription> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_did = Did::new(state.config.service_did.clone())
-        .map_err(|error| AppError::internal(format!("invalid configured service_did: {error}")))?;
+    let service_id = Did::new(state.config.service_id.clone())
+        .map_err(|error| AppError::internal(format!("invalid configured service_id: {error}")))?;
     let trust_domain = arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|error| AppError::internal(format!("invalid configured trust_domain: {error}")))?;
     let supported_profiles: Vec<String> = DIRECTORY_DISCOVERY_PROFILES
@@ -162,7 +162,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescriptio
         "directory.ingest_push".to_owned(),
     ];
     let description = DirectoryDescription {
-        service_did,
+        service_id,
         trust_domain,
         service_type: "directory_service".to_owned(),
         protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),

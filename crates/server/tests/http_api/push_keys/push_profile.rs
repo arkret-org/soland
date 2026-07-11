@@ -1183,7 +1183,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "fetched_at": stale_at,
             "remote_contract": {
                 "contract": "ak.push.bridge.describe",
-                "service_did": "did:web:push.example",
+                "service_id": "did:web:push.example",
                 "delivery": {"notify_path": "/_arkret/edge/push/notify", "operation_id": "ak.edge.push.command.notify"}
             },
             "trust_level": "trusted",
@@ -1246,7 +1246,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "fetched_at": now,
             "remote_contract": {
                 "contract": "ak.push.bridge.describe",
-                "service_did": "did:web:push.example",
+                "service_id": "did:web:push.example",
                 "delivery": {"notify_path": "/_arkret/edge/push/notify", "operation_id": "ak.edge.push.command.notify"}
             },
             "trust_level": "trusted",

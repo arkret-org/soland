@@ -144,7 +144,7 @@ pub struct MemberRoutabilityRowOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub recipient_service_did: Option<String>,
+    pub recipient_service_id: Option<String>,
     pub in_allowed_list: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery_status: Option<String>,
@@ -219,9 +219,9 @@ pub(super) async fn admin_list_member_routability(
             // routes only register if no live route was seen.
             let entry = routes_by_actor
                 .entry(subject.principal_id.clone())
-                .or_insert_with(|| (subject.recipient_service_did.clone(), false));
+                .or_insert_with(|| (subject.recipient_service_id.clone(), false));
             if !cell.revoked {
-                *entry = (subject.recipient_service_did.clone(), true);
+                *entry = (subject.recipient_service_id.clone(), true);
             }
         }
         (allowed, routes_by_actor)
@@ -231,11 +231,11 @@ pub(super) async fn admin_list_member_routability(
         .into_iter()
         .map(|actor_id| {
             let route = routes_by_actor.get(&actor_id);
-            let recipient_service_did = route.map(|(did, _)| did.clone());
+            let recipient_service_id = route.map(|(did, _)| did.clone());
             // Empty allow-list means unrestricted (matches the reducer's
             // delivery-binding gate semantics), so every known recipient
             // is in-list when the allow-list is empty.
-            let in_allowed_list = match &recipient_service_did {
+            let in_allowed_list = match &recipient_service_id {
                 Some(did) => allowed.is_empty() || allowed.contains(did),
                 None => false,
             };
@@ -248,7 +248,7 @@ pub(super) async fn admin_list_member_routability(
             MemberRoutabilityRowOutcome {
                 actor_id,
                 display_name: None,
-                recipient_service_did,
+                recipient_service_id,
                 in_allowed_list,
                 delivery_status,
             }
@@ -273,9 +273,9 @@ pub struct DeliveryBindingHandoverRowOutcome {
     pub realm_id: String,
     pub actor_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_recipient_service_did: Option<String>,
+    pub previous_recipient_service_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub new_recipient_service_did: Option<String>,
+    pub new_recipient_service_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handover_frontier: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -384,8 +384,8 @@ fn handover_row_from_audit(realm_id: &str, entry: Value) -> DeliveryBindingHando
                     .map(str::to_owned)
             })
             .unwrap_or_default(),
-        previous_recipient_service_did: str_field("previous_recipient_service_did"),
-        new_recipient_service_did: str_field("new_recipient_service_did"),
+        previous_recipient_service_id: str_field("previous_recipient_service_id"),
+        new_recipient_service_id: str_field("new_recipient_service_id"),
         handover_frontier: frontier,
         reason_code: str_field("reason_code"),
         observed_at: entry

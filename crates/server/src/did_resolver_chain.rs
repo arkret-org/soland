@@ -182,7 +182,7 @@ pub const CANONICAL_DESCRIBE_PATH: &str = "/_arkret/describe";
 pub async fn probe_webvh_provider_describe(
     url: &str,
     timeout: Duration,
-    expected_service_did: Option<&str>,
+    expected_service_id: Option<&str>,
     expected_trust_domain: Option<&str>,
     development_mode: bool,
 ) -> Result<(), String> {
@@ -211,16 +211,16 @@ pub async fn probe_webvh_provider_describe(
         .json::<Value>()
         .await
         .map_err(|e| format!("webvh provider describe JSON decode failed: {e}"))?;
-    validate_webvh_provider_describe(&body, expected_service_did, expected_trust_domain)?;
+    validate_webvh_provider_describe(&body, expected_service_id, expected_trust_domain)?;
     Ok(())
 }
 
 /// Validate a canonical ServiceDescribe body for use as a webvh resolver trust
 /// root. The four `service-describe.schema.json` required fields are checked:
-/// `service_type`, `service_did`, `trust_domain`, `supported_operations`.
+/// `service_type`, `service_id`, `trust_domain`, `supported_operations`.
 fn validate_webvh_provider_describe(
     body: &Value,
-    expected_service_did: Option<&str>,
+    expected_service_id: Option<&str>,
     expected_trust_domain: Option<&str>,
 ) -> Result<(), String> {
     let service_type = body
@@ -232,17 +232,17 @@ fn validate_webvh_provider_describe(
             "webvh provider service_type must be an identity registry, got {service_type:?}"
         ));
     }
-    let service_did = body
-        .get("service_did")
+    let service_id = body
+        .get("service_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| "webvh provider describe missing service_did".to_owned())?;
-    Did::new(service_did.to_owned())
-        .map_err(|error| format!("webvh provider service_did is invalid: {error}"))?;
-    if let Some(expected) = expected_service_did
-        && service_did != expected
+        .ok_or_else(|| "webvh provider describe missing service_id".to_owned())?;
+    Did::new(service_id.to_owned())
+        .map_err(|error| format!("webvh provider service_id is invalid: {error}"))?;
+    if let Some(expected) = expected_service_id
+        && service_id != expected
     {
         return Err(format!(
-            "webvh provider service_did mismatch: expected {expected}, got {service_did}"
+            "webvh provider service_id mismatch: expected {expected}, got {service_id}"
         ));
     }
     let trust_domain = body
@@ -316,7 +316,7 @@ mod tests {
     fn base_config() -> AppConfig {
         AppConfig {
             public_base_url: "http://127.0.0.1:0".to_owned(),
-            service_did: "did:web:soland.test".to_owned(),
+            service_id: "did:web:soland.test".to_owned(),
             object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-blobs")),
             did_resolver_allow_methods: vec![
                 "web".to_owned(),
@@ -492,10 +492,10 @@ mod tests {
     #[test]
     fn provider_describe_trust_handshake_accepts_canonical_identity_registry() {
         // STA-07-002 — canonical ServiceDescribe shape: service_type +
-        // service_did + trust_domain + supported_operations.
+        // service_id + trust_domain + supported_operations.
         let describe = json!({
             "service_type": "identity_registry",
-            "service_did": "did:web:starid.example",
+            "service_id": "did:web:starid.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
             "supported_operations": ["ak.server.query.describe"]
@@ -512,7 +512,7 @@ mod tests {
     fn provider_describe_trust_handshake_rejects_mismatch_and_dev() {
         let mut describe = json!({
             "service_type": "identity_registry",
-            "service_did": "did:web:starid.example",
+            "service_id": "did:web:starid.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
             "supported_operations": ["ak.server.query.describe"]

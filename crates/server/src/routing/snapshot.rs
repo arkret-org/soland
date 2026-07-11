@@ -68,15 +68,15 @@ pub(crate) async fn snapshot_manifest_for_realm(
     .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
     let created_at = now();
     let timeline_hlc = snapshot_timeline_hlc(state, &events, created_at)?;
-    let service_did = arkret_sdk::Did::new(state.config.service_did.clone())
+    let service_id = arkret_sdk::Did::new(state.config.service_id.clone())
         .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
     let auth_state_digest = snapshot_auth_state_digest(
-        &state.config.service_did,
+        &state.config.service_id,
         realm_id,
         &frontier_event_ids,
         created_at,
     )?;
-    let verification_method = format!("{}#snapshot-key-1", state.config.service_did);
+    let verification_method = format!("{}#snapshot-key-1", state.config.service_id);
     let mut manifest = arkret_sdk::SnapshotManifest {
         id: snapshot_id,
         realm_id: realm_id_value,
@@ -102,10 +102,10 @@ pub(crate) async fn snapshot_manifest_for_realm(
             soft_failed_digest: None,
             quarantined_digest: None,
         }),
-        created_by: service_did.clone(),
+        created_by: service_id.clone(),
         created_at,
         authority_binding: arkret_sdk::AuthorityBinding {
-            issuer: service_did,
+            issuer: service_id,
             authority_kind: arkret_sdk::SnapshotAuthorityKind::RealmPolicySnapshotIssuer,
             auth_state_digest,
             auth_frontier: frontier_event_ids,
@@ -160,7 +160,7 @@ async fn persist_snapshot_chunk_blobs(
             legal_hold: false,
             redacted: false,
             visibility: arkret_sdk::BlobVisibility::RealmBound,
-            uploaded_by: state.config.service_did.clone(),
+            uploaded_by: state.config.service_id.clone(),
             created_at: now(),
         };
         state
@@ -267,21 +267,21 @@ fn received_at_hlc(
     state: &AppState,
     at: chrono::DateTime<chrono::Utc>,
 ) -> Result<arkret_sdk::Hlc, crate::error::AppError> {
-    let node_hash = sha256_hex(state.config.service_did.as_bytes());
+    let node_hash = sha256_hex(state.config.service_id.as_bytes());
     let node = &node_hash[..8];
     arkret_sdk::Hlc::new(format!("{:012x}-0000-{node}", at.timestamp_millis()))
         .map_err(|error| crate::error::AppError::internal(error.to_string()))
 }
 
 fn snapshot_auth_state_digest(
-    service_did: &str,
+    service_id: &str,
     realm_id: &str,
     frontier_event_ids: &[arkret_sdk::EventId],
     checked_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<arkret_sdk::Hash, crate::error::AppError> {
     let commitment = json!({
         "profile": "ak.snapshot.auth_state.issuer_local.v1",
-        "issuer": service_did,
+        "issuer": service_id,
         "realm_id": realm_id,
         "frontier_event_ids": frontier_event_ids,
         "checked_at": checked_at,

@@ -14,7 +14,7 @@
 #
 # Honours the existing SOLAND_* env conventions:
 #   - `SOLAND_DATABASE_URL` or `DATABASE_URL`
-#   - `SOLAND_SERVICE_DID` — used to scope the keystore lookup
+#   - `SOLAND_SERVICE_ID` — used to scope the keystore lookup
 #   - `SOLAND_USE_KEYSTORE` — when "true", export the platform keystore seed
 #   - `SOLAND_BACKUP_DIR`  — where the output tarball is written
 #                             (defaults to ./backups/soland-<ts>.tar.gz)
@@ -29,7 +29,7 @@ WORKDIR="$(mktemp -d -t soland-backup-XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 DATABASE_URL="${SOLAND_DATABASE_URL:-${DATABASE_URL:-${PASION_DATABASE_URL:-}}}"
-SERVICE_DID="${SOLAND_SERVICE_DID:-did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service}"
+SERVICE_ID="${SOLAND_SERVICE_ID:-did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service}"
 USE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"
 BACKUP_DIR="${SOLAND_BACKUP_DIR:-./backups}"
 mkdir -p "$BACKUP_DIR"
@@ -47,7 +47,7 @@ for cmd in pg_dump psql sha256sum tar jq; do
     fi
 done
 
-echo "[backup-drill] timestamp=$DRILL_TS service_did=$SERVICE_DID workdir=$WORKDIR"
+echo "[backup-drill] timestamp=$DRILL_TS service_id=$SERVICE_ID workdir=$WORKDIR"
 
 # ── 1. pg_dump ───────────────────────────────────────────────────────────
 DUMP_PATH="${WORKDIR}/soland-database.dump"
@@ -62,7 +62,7 @@ if [ "$USE_KEYSTORE" = "true" ]; then
     echo "[backup-drill] step 2/3: keystore export via soland-rotate-drill --export-only"
     cargo run --quiet --bin soland-rotate-drill -- \
         --export-only \
-        --service-did "$SERVICE_DID" \
+        --service-did "$SERVICE_ID" \
         --output "$KEYSTORE_PATH"
 else
     echo "[backup-drill] step 2/3: keystore export skipped (SOLAND_USE_KEYSTORE != true)"
@@ -108,7 +108,7 @@ echo "[backup-drill]   rows=$MULTISIG_ROW_COUNT sha256=$MULTISIG_SHA"
 MANIFEST_PATH="${WORKDIR}/manifest.json"
 jq -n \
     --arg ts "$DRILL_TS" \
-    --arg did "$SERVICE_DID" \
+    --arg did "$SERVICE_ID" \
     --arg use_ks "$USE_KEYSTORE" \
     --arg dump_sha "$DUMP_SHA" \
     --arg ks_sha "$KEYSTORE_SHA" \
@@ -118,7 +118,7 @@ jq -n \
         manifest_version: "1",
         produced_by: "soland/scripts/backup-drill.sh",
         timestamp: $ts,
-        service_did: $did,
+        service_id: $did,
         use_keystore: $use_ks,
         artifacts: {
             "soland-database.dump":  { sha256: $dump_sha, kind: "pg_dump_custom" },

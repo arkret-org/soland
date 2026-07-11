@@ -84,19 +84,19 @@ pub trait FederationFrontierExchangeStore: Send + Sync {
     async fn get(
         &self,
         realm_id: &str,
-        peer_service_did: &str,
+        peer_service_id: &str,
     ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>>;
     async fn record_success(
         &self,
         realm_id: &str,
-        peer_service_did: &str,
+        peer_service_id: &str,
         frontier_root: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord>;
     async fn record_failure(
         &self,
         realm_id: &str,
-        peer_service_did: &str,
+        peer_service_id: &str,
         reason: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord>;
@@ -106,13 +106,13 @@ pub trait FederationFrontierExchangeStore: Send + Sync {
 fn frontier_exchange_success_record(
     existing: Option<FederationFrontierExchangeRecord>,
     realm_id: &str,
-    peer_service_did: &str,
+    peer_service_id: &str,
     frontier_root: &str,
     observed_at: i64,
 ) -> FederationFrontierExchangeRecord {
     FederationFrontierExchangeRecord {
         realm_id: realm_id.to_owned(),
-        peer_service_did: peer_service_did.to_owned(),
+        peer_service_id: peer_service_id.to_owned(),
         status: FEDERATION_FRONTIER_STATUS_HEALTHY.to_owned(),
         consecutive_failures: 0,
         last_success_at: Some(observed_at),
@@ -126,7 +126,7 @@ fn frontier_exchange_success_record(
 fn frontier_exchange_failure_record(
     existing: Option<FederationFrontierExchangeRecord>,
     realm_id: &str,
-    peer_service_did: &str,
+    peer_service_id: &str,
     reason: &str,
     observed_at: i64,
 ) -> FederationFrontierExchangeRecord {
@@ -141,7 +141,7 @@ fn frontier_exchange_failure_record(
     };
     FederationFrontierExchangeRecord {
         realm_id: realm_id.to_owned(),
-        peer_service_did: peer_service_did.to_owned(),
+        peer_service_id: peer_service_id.to_owned(),
         status: status.to_owned(),
         consecutive_failures: failures,
         last_success_at: existing.as_ref().and_then(|record| record.last_success_at),
@@ -321,27 +321,27 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
     async fn get(
         &self,
         realm_id: &str,
-        peer_service_did: &str,
+        peer_service_id: &str,
     ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>> {
         let data = self.data.lock();
         Ok(data
-            .get(&(realm_id.to_owned(), peer_service_did.to_owned()))
+            .get(&(realm_id.to_owned(), peer_service_id.to_owned()))
             .cloned())
     }
 
     async fn record_success(
         &self,
         realm_id: &str,
-        peer_service_did: &str,
+        peer_service_id: &str,
         frontier_root: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
         let mut data = self.data.lock();
-        let key = (realm_id.to_owned(), peer_service_did.to_owned());
+        let key = (realm_id.to_owned(), peer_service_id.to_owned());
         let record = frontier_exchange_success_record(
             data.get(&key).cloned(),
             realm_id,
-            peer_service_did,
+            peer_service_id,
             frontier_root,
             observed_at,
         );
@@ -352,16 +352,16 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
     async fn record_failure(
         &self,
         realm_id: &str,
-        peer_service_did: &str,
+        peer_service_id: &str,
         reason: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
         let mut data = self.data.lock();
-        let key = (realm_id.to_owned(), peer_service_did.to_owned());
+        let key = (realm_id.to_owned(), peer_service_id.to_owned());
         let record = frontier_exchange_failure_record(
             data.get(&key).cloned(),
             realm_id,
-            peer_service_did,
+            peer_service_id,
             reason,
             observed_at,
         );
@@ -704,18 +704,18 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
     async fn get(
         &self,
         realm_id: &str,
-        peer_service_did: &str,
+        peer_service_id: &str,
     ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         sql_query(
-            "SELECT realm_id, peer_service_did, status, consecutive_failures, \
+            "SELECT realm_id, peer_service_id, status, consecutive_failures, \
              last_success_at, last_failure_at, last_frontier_root, last_error, updated_at \
              FROM federation_frontier_exchange \
-             WHERE realm_id = $1 AND peer_service_did = $2",
+             WHERE realm_id = $1 AND peer_service_id = $2",
         )
         .bind::<SqlUuid, _>(realm_id_uuid)
-        .bind::<Text, _>(peer_service_did)
+        .bind::<Text, _>(peer_service_id)
         .get_result::<FederationFrontierExchangeRow>(&mut *conn)
         .await
         .optional()
@@ -726,15 +726,15 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
     async fn record_success(
         &self,
         realm_id: &str,
-        peer_service_did: &str,
+        peer_service_id: &str,
         frontier_root: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
-        let existing = self.get(realm_id, peer_service_did).await?;
+        let existing = self.get(realm_id, peer_service_id).await?;
         let record = frontier_exchange_success_record(
             existing,
             realm_id,
-            peer_service_did,
+            peer_service_id,
             frontier_root,
             observed_at,
         );
@@ -745,15 +745,15 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
     async fn record_failure(
         &self,
         realm_id: &str,
-        peer_service_did: &str,
+        peer_service_id: &str,
         reason: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
-        let existing = self.get(realm_id, peer_service_did).await?;
+        let existing = self.get(realm_id, peer_service_id).await?;
         let record = frontier_exchange_failure_record(
             existing,
             realm_id,
-            peer_service_did,
+            peer_service_id,
             reason,
             observed_at,
         );
@@ -764,9 +764,9 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationFrontierExchangeRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT realm_id, peer_service_did, status, consecutive_failures, \
+            "SELECT realm_id, peer_service_id, status, consecutive_failures, \
              last_success_at, last_failure_at, last_frontier_root, last_error, updated_at \
-             FROM federation_frontier_exchange ORDER BY updated_at ASC, realm_id ASC, peer_service_did ASC",
+             FROM federation_frontier_exchange ORDER BY updated_at ASC, realm_id ASC, peer_service_id ASC",
         )
         .load::<FederationFrontierExchangeRow>(&mut *conn)
         .await
@@ -784,10 +784,10 @@ impl PgFederationFrontierExchangeStore {
         let realm_id_uuid = ids::typed_uuid_part_expect_internal(&record.realm_id);
         sql_query(
             "INSERT INTO federation_frontier_exchange \
-             (realm_id, peer_service_did, status, consecutive_failures, last_success_at, \
+             (realm_id, peer_service_id, status, consecutive_failures, last_success_at, \
               last_failure_at, last_frontier_root, last_error, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (realm_id, peer_service_did) DO UPDATE SET \
+             ON CONFLICT (realm_id, peer_service_id) DO UPDATE SET \
              status = EXCLUDED.status, \
              consecutive_failures = EXCLUDED.consecutive_failures, \
              last_success_at = EXCLUDED.last_success_at, \
@@ -797,7 +797,7 @@ impl PgFederationFrontierExchangeStore {
              updated_at = EXCLUDED.updated_at",
         )
         .bind::<SqlUuid, _>(realm_id_uuid)
-        .bind::<Text, _>(&record.peer_service_did)
+        .bind::<Text, _>(&record.peer_service_id)
         .bind::<Text, _>(&record.status)
         .bind::<Integer, _>(record.consecutive_failures)
         .bind::<Nullable<BigInt>, _>(record.last_success_at)
@@ -913,7 +913,7 @@ struct FederationFrontierExchangeRow {
     #[diesel(sql_type = SqlUuid)]
     realm_id: Uuid,
     #[diesel(sql_type = Text)]
-    peer_service_did: String,
+    peer_service_id: String,
     #[diesel(sql_type = Text)]
     status: String,
     #[diesel(sql_type = Integer)]
@@ -934,7 +934,7 @@ impl From<FederationFrontierExchangeRow> for FederationFrontierExchangeRecord {
     fn from(row: FederationFrontierExchangeRow) -> Self {
         Self {
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
-            peer_service_did: row.peer_service_did,
+            peer_service_id: row.peer_service_id,
             status: row.status,
             consecutive_failures: row.consecutive_failures,
             last_success_at: row.last_success_at,

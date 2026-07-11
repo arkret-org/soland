@@ -72,7 +72,7 @@ pub struct HandleClaimEvidenceRecord {
     pub digest: String,
     pub subject_id: String,
     pub issuer: String,
-    pub issuer_service_did: Option<String>,
+    pub issuer_service_id: Option<String>,
     pub audience: Option<String>,
     pub binding_state: String,
     pub visibility: Option<String>,
@@ -186,8 +186,8 @@ impl MemberIdentityRegistry {
             .get("audience")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let issuer_service_did = envelope
-            .get("issuer_service_did")
+        let issuer_service_id = envelope
+            .get("issuer_service_id")
             .and_then(Value::as_str)
             .map(str::to_owned);
         let visibility = envelope
@@ -209,7 +209,7 @@ impl MemberIdentityRegistry {
             digest: digest.clone(),
             subject_id: subject_id.clone(),
             issuer,
-            issuer_service_did,
+            issuer_service_id,
             audience,
             binding_state,
             visibility,

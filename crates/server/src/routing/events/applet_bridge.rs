@@ -11,8 +11,7 @@
 //! 1. **Outbound HTTP** — if the AppletProjection's `manifest` carries a `bridge_url` (or top-level
 //!    `endpoint_url`), the bridge POSTs the invocation to that URL and emits a `*.status` /
 //!    `*.bridge_error` event with the upstream's response. This is the production path. The POST
-//!    body shape is the same as the agent bridge — `{ session_id, applet_id, params }` — so an
-//!    applet service that already implements the agent bridge wire can be reused.
+//!    body shape is `{ session_id, applet_id, params }`.
 //!
 //! 2. **In-process echo** — fallback used when the applet has no registered bridge URL. Mirrors
 //!    `params` back as `detail.echo` with `status="completed"`. Exists so dev fixtures keep working
@@ -20,15 +19,13 @@
 //!
 //! The bridge dispatches asynchronously: `project_accepted_operations`
 //! returns immediately and the spawned task appends the resulting
-//! event when the upstream responds (or fails). This matches the
-//! agent bridge's pattern (see `agent_bridge.rs`).
+//! event when the upstream responds (or fails).
 
 use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
-use super::agent_bridge::read_json_body_limited;
 use super::projection::persist_and_publish_projection_event;
 use crate::state::{AppState, ProjectionEventRecord};
 use crate::{ids, kinds};
@@ -43,6 +40,31 @@ const MAX_CONCURRENT_APPLET_BRIDGE_TASKS: usize = 64;
 /// Maximum bytes read from an upstream applet-bridge response body, to bound
 /// memory against a malicious endpoint returning an unbounded body.
 const MAX_APPLET_BRIDGE_RESPONSE_BYTES: usize = 1024 * 1024;
+
+async fn read_json_body_limited(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Value, String> {
+    if let Some(len) = response.content_length()
+        && len as usize > max_bytes
+    {
+        return Err(format!(
+            "response body Content-Length {len} exceeds {max_bytes} byte limit"
+        ));
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("response body read: {error}"))?
+    {
+        if buf.len() + chunk.len() > max_bytes {
+            return Err(format!("response body exceeds {max_bytes} byte limit"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&buf).map_err(|error| format!("response body parse: {error}"))
+}
 
 /// Process-level concurrency gate for outbound applet-bridge tasks.
 fn applet_bridge_semaphore() -> &'static Arc<Semaphore> {
@@ -128,8 +150,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
                 return;
             }
         };
-        // Outbound HTTP path. Same async-spawn pattern as
-        // agent_bridge.rs — `project_accepted_operations` returns
+        // Outbound HTTP path: `project_accepted_operations` returns
         // immediately while the spawned task awaits the upstream.
         let state_clone = state.clone();
         let session_clone = session_id.clone();

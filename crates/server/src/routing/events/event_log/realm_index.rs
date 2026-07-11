@@ -334,7 +334,7 @@ pub(super) async fn bootstrap_realm_member_index(
     }
     // Maintain the `plaintext_visible_services ⊇ keys(plaintext_visible_service_classes)`
     // invariant the dedicated `ak.realm.plaintext_visible_services` projection
-    // upholds: spec-canonical declarations carry structured `{service_did,
+    // upholds: spec-canonical declarations carry structured `{service_id,
     // data_classes, …}` entries (event-payload.schema.json
     // `plaintext_visible_services_payload`) with no bare-string form, so the
     // service-DID set must be derived from the typed map, not only from

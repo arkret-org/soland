@@ -166,7 +166,7 @@ pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
 /// response carries the new recipient service DID and a frontier the sender
 /// should replay from after re-binding.
 pub(crate) fn delivery_binding_stale_response(
-    new_recipient_service_did: &Did,
+    new_recipient_service_id: &Did,
     actor_id: &Did,
     handover_frontier: &[arkret_sdk::EventId],
     witness: Value,
@@ -182,11 +182,11 @@ pub(crate) fn delivery_binding_stale_response(
         other => BTreeMap::from([("value".to_owned(), other)]),
     };
     let details = arkret_sdk::DeliveryBindingStale {
-        new_recipient_service_did: Value::String(new_recipient_service_did.as_str().to_owned()),
+        new_recipient_service_id: Value::String(new_recipient_service_id.as_str().to_owned()),
         handover_frontier: handover_frontier.clone(),
         handover_proof: arkret_sdk::DeliveryBindingStaleHandoverProof {
             frontier: handover_frontier,
-            recipient_service_did: Value::String(new_recipient_service_did.as_str().to_owned()),
+            recipient_service_id: Value::String(new_recipient_service_id.as_str().to_owned()),
             actor_id: Value::String(actor_id.as_str().to_owned()),
             witness,
             extra: BTreeMap::new(),
@@ -203,12 +203,12 @@ pub(crate) fn delivery_binding_stale_response(
 /// Spec B1.9 — emit-shape for `delivery_binding_handed_over` (409).
 /// Returned when the inbound delivery is a duplicate of a binding that has
 /// already been handed over to the new recipient.
-pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_did: &Did) -> Value {
+pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_id: &Did) -> Value {
     error_envelope_with_details(
         arkret_sdk::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
         "delivery binding has already been handed over to the new recipient",
         json!({
-            "new_recipient_service_did": new_recipient_service_did.as_str(),
+            "new_recipient_service_id": new_recipient_service_id.as_str(),
         }),
     )
 }

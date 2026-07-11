@@ -1059,7 +1059,7 @@ fn roster_membership_is_visible(membership: &str) -> bool {
 }
 
 struct RosterDisclosureContext<'a> {
-    service_did: &'a str,
+    service_id: &'a str,
     realm_public: bool,
     caller: Option<&'a str>,
     caller_is_realm_member: bool,
@@ -1077,7 +1077,7 @@ impl<'a> RosterDisclosureContext<'a> {
     ) -> Self {
         let caller = session.map(|session| session.actor.as_str());
         Self {
-            service_did: &state.config.service_did,
+            service_id: &state.config.service_id,
             realm_public: realm_entry.public,
             caller,
             caller_is_realm_member: caller.is_some_and(|actor_id| {
@@ -1112,7 +1112,7 @@ fn roster_handle_claim_audience(
         .and_then(Value::as_str)
         .map(str::to_owned)
         .or_else(|| session.map(|session| session.audience.clone()))
-        .unwrap_or_else(|| state.config.service_did.clone())
+        .unwrap_or_else(|| state.config.service_id.clone())
 }
 
 /// ROST-SOL-2/3 — subject and companion fields disclose only when the Realm
@@ -1159,8 +1159,8 @@ fn trusted_handle_claim_issuer(
     context: &RosterDisclosureContext<'_>,
     claim: &HandleClaimEvidenceRecord,
 ) -> bool {
-    claim.issuer == context.service_did
-        || claim.issuer_service_did.as_deref() == Some(context.service_did)
+    claim.issuer == context.service_id
+        || claim.issuer_service_id.as_deref() == Some(context.service_id)
 }
 
 fn inline_handle_claims(claims: &[HandleClaimEvidenceRecord]) -> (Vec<Value>, bool) {

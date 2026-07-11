@@ -172,8 +172,8 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
                 canonical_uri: format!("ak:handle:{handle}"),
                 aliases: vec![handle],
                 issuer_did: primary_claim
-                    .and_then(|record| record.issuer_service_did.clone())
-                    .or_else(|| Some(state.config.service_did.clone())),
+                    .and_then(|record| record.issuer_service_id.clone())
+                    .or_else(|| Some(state.config.service_id.clone())),
                 subject_id: Some(account.did.clone()),
                 assigned_at: Some(localpart.created_at.to_rfc3339()),
                 expires_at: primary_claim

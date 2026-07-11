@@ -128,8 +128,8 @@ pub const CONFLICT_REPAIR: &str = "ak.conflict.repair";
 //
 // `ak.device.push_route` (device / actor_private_event / reducer_input):
 //   per-device push route binding for the composite tuple
-//   `(recipient_service_did, principal, device, push_route)`. MUST NOT be
-//   replicated outside the binding's recipient_service_did context. Stored
+//   `(recipient_service_id, principal, device, push_route)`. MUST NOT be
+//   replicated outside the binding's recipient_service_id context. Stored
 //   as actor-private state on the recipient Principal Server only.
 // `ak.realm.inheritance_policy` (realm / reducer_input): declares which
 // realm-scoped policies a child Realm inherits from its parent boundary.

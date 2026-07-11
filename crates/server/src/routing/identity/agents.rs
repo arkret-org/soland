@@ -22,7 +22,7 @@
 //! - `POST   /_arkret/self/agent-sidecar-threads:ensure`       —
 //!   `ak.self.agent.sidecar_thread.command.ensure`
 //!
-//! Controller operations enforce the persisted `agent_principals.controller_did`
+//! Controller operations enforce the persisted `agent_principals.controller_id`
 //! binding before they mutate state or emit fan-out. Each handler appends an
 //! audit-log row matching the canonical event-kind name so the existing admin /
 //! federation projections stay in sync ahead of the reducer rewrite.
@@ -36,8 +36,7 @@ use arkret_sdk::models::{
     AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
-    AgentProjection, AgentProtocolDiscoverOutcome, AgentProtocolDiscoverRequestBody,
-    AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
+    AgentProjection, AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
     AgentRotateKeyOutcome, AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome,
     AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
     AgentRuntimeApprovalStatusRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
@@ -90,19 +89,18 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("agents")
                 .post(provision_agent)
                 .get(list_agents)
-                .push(Router::with_path("discover").post(discover_agent_endpoint))
-                .push(Router::with_path("{agent_principal_id}").get(get_agent))
-                .push(Router::with_path("{agent_principal_id}/pause").post(pause_agent))
-                .push(Router::with_path("{agent_principal_id}/resume").post(resume_agent))
-                .push(Router::with_path("{agent_principal_id}/deactivate").post(deactivate_agent))
-                .push(Router::with_path("{agent_principal_id}/rotate-key").post(rotate_agent_key))
+                .push(Router::with_path("{agent_id}").get(get_agent))
+                .push(Router::with_path("{agent_id}/pause").post(pause_agent))
+                .push(Router::with_path("{agent_id}/resume").post(resume_agent))
+                .push(Router::with_path("{agent_id}/deactivate").post(deactivate_agent))
+                .push(Router::with_path("{agent_id}/rotate-key").post(rotate_agent_key))
                 .push(
-                    Router::with_path("{agent_principal_id}/grants")
+                    Router::with_path("{agent_id}/grants")
                         .post(attach_agent_grant)
                         .push(Router::with_path("{grant_id}").delete(detach_agent_grant)),
                 )
                 .push(
-                    Router::with_path("{agent_principal_id}/participation")
+                    Router::with_path("{agent_id}/participation")
                         .get(get_agent_participation)
                         .put(set_agent_participation),
                 ),
@@ -146,27 +144,25 @@ mod tests {
         }
     }
 
-    fn agent_record(agent_principal_id: &str, controller_did: &str) -> Value {
+    fn agent_record(agent_id: &str, controller_id: &str) -> Value {
         json!({
-            "agent_principal_id": agent_principal_id,
-            "controller_did": controller_did,
-            "agent_id": agent_principal_id,
+            "agent_id": agent_id,
+            "controller_id": controller_id,
             "display_name": "Test Agent",
             "state": "active",
         })
     }
 
     fn pending_pairing_record(
-        agent_principal_id: &str,
-        controller_did: &str,
+        agent_id: &str,
+        controller_id: &str,
         requested_scope: Value,
         pairing_code: &str,
         pairing_expires_at: &str,
     ) -> Value {
         json!({
-            "agent_principal_id": agent_principal_id,
-            "controller_did": controller_did,
-            "agent_id": agent_principal_id,
+            "agent_id": agent_id,
+            "controller_id": controller_id,
             "display_name": "Test Agent",
             "state": "pending_runtime_key",
             "requested_scope": requested_scope,
@@ -185,39 +181,39 @@ mod tests {
                 "ak.event.read",
                 "ak.message.create"
             ],
-            "resources": [{ "kind": "service", "service_did": "did:web:soland.local" }]
+            "resources": [{ "kind": "service", "service_id": "did:web:soland.local" }]
         })
     }
 
     fn key_authorize_envelope(
         record: &Value,
         controller: &str,
-        agent_principal_id: &str,
+        agent_id: &str,
         verification_method: &str,
         public_key_digest: &str,
-        service_did: &str,
+        service_id: &str,
         scope: Value,
     ) -> Value {
         let request_canonical_digest = pairing_request_binding_digest(
             record,
             controller,
-            agent_principal_id,
+            agent_id,
             verification_method,
             public_key_digest,
-            service_did,
+            service_id,
         )
         .expect("pairing binding digest");
         json!({
             "kind": "ak.agent.key.authorize",
             "actor_id": controller,
             "payload": {
-                "agent_principal_id": agent_principal_id,
+                "agent_id": agent_id,
                 "key_id": "ak:agent_key:01999999000070008000000000000001",
                 "verification_method": verification_method,
                 "public_key_digest": public_key_digest,
                 "accountable_principal_id": controller,
                 "agent_key_scope": scope,
-                "audience": [service_did],
+                "audience": [service_id],
                 "issued_at": "2026-07-06T00:00:00Z",
                 "expires_at": "2999-01-01T00:00:00Z",
                 "approval_evidence": {
@@ -233,7 +229,7 @@ mod tests {
     fn key_pair_request_body(
         agent: &str,
         verification_method: &str,
-        service_did: &str,
+        service_id: &str,
     ) -> AgentKeyPairRequestBody {
         use base64::Engine as _;
         use ed25519_dalek::{Signer as _, SigningKey};
@@ -262,7 +258,7 @@ mod tests {
         let signing_input = arkret_sdk::agent::agent_key_pair_proof_signing_input(
             verification_method.to_owned(),
             pairing_request_id,
-            service_did.to_owned(),
+            service_id.to_owned(),
             expires_at,
             request_digest.clone(),
         );
@@ -273,12 +269,12 @@ mod tests {
         );
         AgentKeyPairRequestBody {
             pairing_request_id: pairing_request_id.to_owned(),
-            agent_principal_id: agent_id,
+            agent_id,
             verification_method: verification_method.to_owned(),
             public_key,
             proof_of_possession: json!({
                 "challenge": pairing_request_id,
-                "audience": service_did,
+                "audience": service_id,
                 "request_canonical_digest": request_digest.as_str(),
                 "expires_at": expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
                 "signature": base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -290,11 +286,10 @@ mod tests {
     }
 
     #[test]
-    fn agent_principal_id_is_did_not_typed_id() {
-        validate_agent_principal_id("did:web:agent.example").expect("DID-as-id must be accepted");
+    fn agent_id_is_did_not_typed_id() {
+        validate_agent_id("did:web:agent.example").expect("DID-as-id must be accepted");
         assert!(
-            validate_agent_principal_id("ak:agent_principal:01999999-0000-7000-8000-00000000a001")
-                .is_err()
+            validate_agent_id("ak:agent_principal:01999999-0000-7000-8000-00000000a001").is_err()
         );
     }
 
@@ -319,9 +314,8 @@ mod tests {
     #[test]
     fn agent_view_projects_spec_shape_dropping_internal_columns() {
         let view = agent_view_from_record(&json!({
-            "agent_principal_id": "did:webvh:z6mkfixture:agent.example",
-            "controller_did": "did:webvh:example.com:users:alice",
             "agent_id": "did:webvh:z6mkfixture:agent.example",
+            "controller_id": "did:webvh:example.com:users:alice",
             "display_name": "Summary Assistant",
             "agent_slug": "summary",
             "state": "active",
@@ -331,15 +325,14 @@ mod tests {
         // spec `agent_view` = `{agent: <agent_projection>, status, ...}`.
         assert_eq!(view.status, "active");
         let agent = serde_json::to_value(&view).expect("view serializes");
-        assert_eq!(agent["agent"]["agent_slug"], "summary");
+        assert_eq!(agent["agent"]["slug"], "summary");
         assert_eq!(agent["agent"]["status"], "active");
         assert_eq!(
-            agent["agent"]["agent_principal_id"],
+            agent["agent"]["agent_id"],
             "did:webvh:z6mkfixture:agent.example"
         );
         // soland-internal columns MUST NOT leak into the protocol projection.
-        assert!(agent["agent"].get("controller_did").is_none());
-        assert!(agent["agent"].get("agent_id").is_none());
+        assert!(agent["agent"].get("controller_id").is_none());
     }
 
     #[test]
@@ -453,7 +446,7 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_did = "did:web:soland.local";
+        let service_id = "did:web:soland.local";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
@@ -470,7 +463,7 @@ mod tests {
             agent,
             verification_method,
             public_key_digest,
-            service_did,
+            service_id,
             scope,
         );
 
@@ -482,7 +475,7 @@ mod tests {
             agent,
             verification_method,
             public_key_digest,
-            service_did,
+            service_id,
         )
         .expect("matching authorize_event should pass");
     }
@@ -491,10 +484,10 @@ mod tests {
     fn key_pair_proof_of_possession_verifies_runtime_key() {
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_did = "did:web:soland.local";
-        let body = key_pair_request_body(agent, verification_method, service_did);
+        let service_id = "did:web:soland.local";
+        let body = key_pair_request_body(agent, verification_method, service_id);
 
-        verify_runtime_key_pair_proof_of_possession(&body, agent, service_did)
+        verify_runtime_key_pair_proof_of_possession(&body, agent, service_id)
             .expect("runtime PoP must verify");
     }
 
@@ -502,12 +495,12 @@ mod tests {
     fn runtime_approval_request_for_controller_omits_pairing_code() {
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_did = "did:web:soland.local";
-        let key_pair = key_pair_request_body(agent, verification_method, service_did);
+        let service_id = "did:web:soland.local";
+        let key_pair = key_pair_request_body(agent, verification_method, service_id);
         let request = AgentRuntimeApprovalRequestBody {
             pairing_code: "12345678".to_owned(),
             pairing_request_id: key_pair.pairing_request_id.clone(),
-            agent_principal_id: key_pair.agent_principal_id.clone(),
+            agent_id: key_pair.agent_id.clone(),
             verification_method: key_pair.verification_method.clone(),
             public_key: key_pair.public_key.clone(),
             proof_of_possession: key_pair.proof_of_possession.clone(),
@@ -540,7 +533,7 @@ mod tests {
         record["approval_requested_at"] = json!("2026-07-08T00:00:00.000Z");
         record["runtime_key_request"] = json!({
             "pairing_request_id": "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
-            "agent_principal_id": "did:web:agent.example",
+            "agent_id": "did:web:agent.example",
             "verification_method": "did:web:agent.example#runtime-key-1",
             "public_key": {
                 "kty": "OKP",
@@ -569,13 +562,13 @@ mod tests {
 
     fn status_request_body(
         pairing_code: &str,
-        agent_principal_id: &str,
+        agent_id: &str,
     ) -> AgentRuntimeApprovalStatusRequestBody {
         AgentRuntimeApprovalStatusRequestBody {
             pairing_request_id: "agent_pairing_request:01999999-0000-7000-8000-00000000feed"
                 .to_owned(),
             pairing_code: pairing_code.to_owned(),
-            agent_principal_id: Did::new(agent_principal_id.to_owned()).unwrap(),
+            agent_id: Did::new(agent_id.to_owned()).unwrap(),
         }
     }
 
@@ -727,7 +720,7 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_did = "did:web:soland.local";
+        let service_id = "did:web:soland.local";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
@@ -746,7 +739,7 @@ mod tests {
             agent,
             verification_method,
             public_key_digest,
-            service_did,
+            service_id,
             scope,
         );
 
@@ -757,7 +750,7 @@ mod tests {
             agent,
             verification_method,
             public_key_digest,
-            service_did,
+            service_id,
         )
         .expect_err("wrong pairing code must change the expected digest");
 
@@ -770,7 +763,7 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_did = "did:web:soland.local";
+        let service_id = "did:web:soland.local";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
@@ -787,7 +780,7 @@ mod tests {
             agent,
             verification_method,
             public_key_digest,
-            service_did,
+            service_id,
             scope,
         );
 
@@ -798,7 +791,7 @@ mod tests {
             agent,
             verification_method,
             public_key_digest,
-            service_did,
+            service_id,
         )
         .expect_err("authorize_event actor must match authenticated controller");
 
@@ -831,7 +824,7 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_did = "did:web:soland.local";
+        let service_id = "did:web:soland.local";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let expected_scope = requested_agent_scope();
@@ -844,7 +837,7 @@ mod tests {
         );
         let weaker_scope = json!({
             "actions": ["ak.self.events.stream.subscribe"],
-            "resources": [{ "kind": "service", "service_did": service_did }]
+            "resources": [{ "kind": "service", "service_id": service_id }]
         });
         let envelope = key_authorize_envelope(
             &record,
@@ -852,7 +845,7 @@ mod tests {
             agent,
             verification_method,
             public_key_digest,
-            service_did,
+            service_id,
             weaker_scope,
         );
 
@@ -863,7 +856,7 @@ mod tests {
             agent,
             verification_method,
             public_key_digest,
-            service_did,
+            service_id,
         )
         .expect_err("agent_key_scope must match provisioned requested_scope");
 
@@ -876,7 +869,7 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_did = "did:web:soland.local";
+        let service_id = "did:web:soland.local";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
@@ -893,7 +886,7 @@ mod tests {
             agent,
             verification_method,
             public_key_digest,
-            service_did,
+            service_id,
             scope,
         );
 
@@ -904,7 +897,7 @@ mod tests {
             agent,
             verification_method,
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            service_did,
+            service_id,
         )
         .expect_err("authorize_event public key digest must bind request public_key");
 
@@ -916,8 +909,8 @@ mod tests {
     fn sidecar_request_rejects_body_controller_mismatch() {
         let session = test_session("did:web:controller.example");
         let body = AgentSidecarThreadEnsureRequestBody {
-            controller_principal_id: Did::new("did:web:mallory.example").expect("controller did"),
-            addressed_agent_principal_ids: Vec::new(),
+            controller_id: Did::new("did:web:mallory.example").expect("controller did"),
+            addressed_agent_ids: Vec::new(),
             context_ref: AgentSidecarContextRef::strand(
                 RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000001").expect("realm id"),
                 StrandId::new("ak:strand:0196419b-0000-7000-8000-000000000002").expect("strand id"),
@@ -948,8 +941,8 @@ mod tests {
     fn sidecar_addressed_agents_rejects_controller() {
         let controller = Did::new("did:web:example.com:users:alice").unwrap();
         let body = AgentSidecarThreadEnsureRequestBody {
-            controller_principal_id: controller.clone(),
-            addressed_agent_principal_ids: vec![controller.clone()],
+            controller_id: controller.clone(),
+            addressed_agent_ids: vec![controller.clone()],
             context_ref: AgentSidecarContextRef::strand(
                 RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
                 StrandId::new("ak:strand:01964137-0000-7000-8000-000000000031").unwrap(),

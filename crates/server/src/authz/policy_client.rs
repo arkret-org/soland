@@ -87,7 +87,7 @@ pub struct PolicyCheckRequestInput {
     pub realm_id: RealmId,
     pub actor_id: Did,
     pub action: String,
-    pub source_service_did: Did,
+    pub source_service_id: Did,
     pub source_service_type: String,
     pub source_ip_digest: Hash,
     pub signed_transport: bool,
@@ -110,7 +110,7 @@ impl PolicyCheckRequestInput {
             "actor_id": self.actor_id.as_str(),
             "action": self.action,
             "source": {
-                "service_did": self.source_service_did.as_str(),
+                "service_id": self.source_service_id.as_str(),
                 "service_type": self.source_service_type,
                 "source_ip_digest": self.source_ip_digest.as_str(),
                 "signed_transport": self.signed_transport,
@@ -139,7 +139,7 @@ impl PolicyCheckRequestInput {
             action: self.action,
             request_canonical_digest,
             source: PolicyCheckSource {
-                service_did: self.source_service_did,
+                service_id: self.source_service_id,
                 service_type: self.source_service_type,
                 source_ip_digest: Some(self.source_ip_digest),
                 signed_transport: self.signed_transport,
@@ -292,17 +292,17 @@ pub struct PolicyClient {
     /// Local soland service DID. Used to mint the "proxy" signature on
     /// timeout-fail-closed responses so audit logs can attribute the
     /// synthesised deny.
-    local_service_did: String,
+    local_service_id: String,
     verification_key_resolver: Option<VerificationKeyResolver>,
     allow_private_network_egress: bool,
 }
 
 impl PolicyClient {
-    pub fn new(http: reqwest::Client, local_service_did: impl Into<String>) -> Self {
+    pub fn new(http: reqwest::Client, local_service_id: impl Into<String>) -> Self {
         Self {
             _http: http,
             cache: PolicyCache::new(),
-            local_service_did: local_service_did.into(),
+            local_service_id: local_service_id.into(),
             verification_key_resolver: None,
             allow_private_network_egress: false,
         }
@@ -439,7 +439,7 @@ impl PolicyClient {
         reason_code: &str,
     ) -> PolicyCheckOutcome {
         let policy_server_id =
-            Did::new(self.local_service_did.clone()).unwrap_or_else(|_| request.actor_id.clone());
+            Did::new(self.local_service_id.clone()).unwrap_or_else(|_| request.actor_id.clone());
         let bound_to = PolicyCheckBoundTo {
             realm_id: request.realm_id.clone(),
             actor_id: request.actor_id.clone(),
@@ -449,7 +449,7 @@ impl PolicyClient {
         };
         let now = chrono::Utc::now();
         let signature = PolicyCheckSignature {
-            kid: format!("{}#proxy-{}", self.local_service_did, reason_code),
+            kid: format!("{}#proxy-{}", self.local_service_id, reason_code),
             sig: "proxy".to_owned(),
         };
         PolicyCheckOutcome {
@@ -513,7 +513,7 @@ impl PolicyClient {
         reason_code: &str,
     ) -> PolicyCheckOutcome {
         let policy_server_id =
-            Did::new(self.local_service_did.clone()).unwrap_or_else(|_| request.actor_id.clone());
+            Did::new(self.local_service_id.clone()).unwrap_or_else(|_| request.actor_id.clone());
         let bound_to = PolicyCheckBoundTo {
             realm_id: request.realm_id.clone(),
             actor_id: request.actor_id.clone(),
@@ -524,7 +524,7 @@ impl PolicyClient {
         let zero_hash =
             Hash::new(format!("sha256:{}", "0".repeat(64))).expect("zero hash valid shape");
         let signature = PolicyCheckSignature {
-            kid: format!("{}#proxy-{}", self.local_service_did, reason_code),
+            kid: format!("{}#proxy-{}", self.local_service_id, reason_code),
             sig: "proxy".to_owned(),
         };
         PolicyCheckOutcome {
@@ -814,7 +814,7 @@ mod tests {
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
             actor_id: Did::new("did:web:alice.example").unwrap(),
             action: "ak.message.create".to_owned(),
-            source_service_did: Did::new("did:web:soland.local").unwrap(),
+            source_service_id: Did::new("did:web:soland.local").unwrap(),
             source_service_type: "principal_server".to_owned(),
             source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
             signed_transport: true,

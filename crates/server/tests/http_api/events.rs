@@ -21,15 +21,15 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
         .persistence
         .sessions()
         .put(&soland::state::SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.config.service_did),
+            token_hash: test_session_credential_hash(token, &state.config.service_id),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
-            audience: state.config.service_did.clone(),
+            audience: state.config.service_id.clone(),
             session_public_key: Some("{}".to_owned()),
             agent_session: Some(soland::state::AgentSessionRecord {
                 granted_scope: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
                 scope_details: serde_json::json!({
-                    "controller_did": "did:web:alice.example",
+                    "controller_id": "did:web:alice.example",
                     "resources": {
                         "realm_refs": [DEMO_REALM_ID],
                         "strand_refs": [],
@@ -650,7 +650,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         "invite_id": invite_id,
         "invitee": "did:web:carol.example",
         "invite_delivery_target": {
-            "recipient_service_did": "did:web:soland.local",
+            "recipient_service_id": "did:web:soland.local",
             "recipient_service_type": "principal_server"
         },
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -1250,7 +1250,7 @@ async fn account_subscribe_long_poll_wakes_on_new_invite_for_inaccessible_realm(
                 inviter: "did:web:alice.example".to_owned(),
                 invitee: Some("did:web:bob.example".to_owned()),
                 invite_delivery_target: Some(serde_json::json!({
-                    "recipient_service_did": waker_state.config.service_did.clone(),
+                    "recipient_service_id": waker_state.config.service_id.clone(),
                     "recipient_service_type": "principal_server"
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "2".repeat(64))),

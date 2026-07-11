@@ -64,8 +64,8 @@ pub(crate) fn enforce_delivery_binding_policy(
         .get("binding_source")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let recipient_service_did = binding
-        .get("recipient_service_did")
+    let recipient_service_id = binding
+        .get("recipient_service_id")
         .and_then(Value::as_str)
         .unwrap_or("");
 
@@ -102,7 +102,7 @@ pub(crate) fn enforce_delivery_binding_policy(
         .map(|arr| arr.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
     let unrestricted_sentinel = allowed_recipients == ["*"];
-    if !unrestricted_sentinel && !allowed_recipients.contains(&recipient_service_did) {
+    if !unrestricted_sentinel && !allowed_recipients.contains(&recipient_service_id) {
         return Err("recipient_service_not_allowed");
     }
 
@@ -191,9 +191,9 @@ pub(crate) fn validate_realm_search_policy_payload(policy: &Value) -> Result<(),
     )?;
     required_string_array(
         policy,
-        "allowed_service_dids",
+        "allowed_service_ids",
         None,
-        "search_policy_allowed_service_dids_invalid",
+        "search_policy_allowed_service_ids_invalid",
     )?;
     let data_classes = required_string_array(
         policy,

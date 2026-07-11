@@ -160,7 +160,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(handle["handle_claim"]["handle"], "alice:soland.local");
     assert!(handle["handle_claim"].get("handle_uri").is_none());
     assert_eq!(
-        handle["handle_claim"]["member_delivery_binding"]["recipient_service_did"],
+        handle["handle_claim"]["member_delivery_binding"]["recipient_service_id"],
         "did:web:soland.local"
     );
     assert_eq!(handle["handle_claim"]["proofs"][0]["kind"], "detached_jws");
@@ -219,11 +219,11 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
 }
 
 #[tokio::test]
-async fn account_primary_handle_claim_is_listed_for_webvh_service_did() {
+async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
     let mut config = test_config();
     config.public_base_url = "https://local.host".to_owned();
-    config.service_did = "did:webvh:zqmsolandlocal".to_owned();
-    config.trust_domain = trust_domain_from_service_did(&config.service_did);
+    config.service_id = "did:webvh:zqmsolandlocal".to_owned();
+    config.trust_domain = trust_domain_from_service_id(&config.service_id);
     let state = AppState::new(config, Db { pool: None });
     let did = "did:web:registered-handle.example";
     let device = "ak:device:01904100-0000-7000-8000-00000000a11c";
@@ -281,7 +281,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_did() {
 #[tokio::test]
 async fn directory_resolve_handle_invite_accepts_canonical_handles_without_contact() {
     let state = AppState::new(
-        test_config_with_service_did("did:web:local.host"),
+        test_config_with_service_id("did:web:local.host"),
         Db { pool: None },
     );
     let alice = dev_token(state.clone()).await;
@@ -338,7 +338,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     assert_eq!(body["handle"], "bob-example:local.host");
     assert_eq!(body["audience"], realm_id);
     assert_eq!(
-        body["member_delivery_binding"]["recipient_service_did"],
+        body["member_delivery_binding"]["recipient_service_id"],
         "did:web:local.host"
     );
 
@@ -639,7 +639,7 @@ fn preview_token_for_address(
     descriptor.link_type = arkret_sdk::LinkType::Preview;
     let target_digest = arkret_sdk::target_digest(&descriptor).unwrap();
     let mut claim = serde_json::json!({
-        "iss": state.config.service_did.clone(),
+        "iss": state.config.service_id.clone(),
         "aud": "anonymous",
         "exp": (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
         "nonce": new_prefixed_uuid7("ak:nonce:"),
@@ -654,7 +654,7 @@ fn preview_token_for_address(
     claim["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",
-        "verification_method": format!("{}#preview-token", state.config.service_did),
+        "verification_method": format!("{}#preview-token", state.config.service_id),
         "payload_digest": payload_digest,
         "jws": jws,
     });
@@ -749,7 +749,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(directory_describe["service_did"], "did:web:soland.local");
+    assert_eq!(directory_describe["service_id"], "did:web:soland.local");
 
     let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))

@@ -154,16 +154,16 @@ pub(super) async fn enqueue_peer_event_fanout(
             None => {
                 tracing::warn!(
                     event_id,
-                    peer_did = %peer.service_did,
+                    peer_did = %peer.service_id,
                     "failed to build typed dynamic ak.peer.events.command.submit service binding"
                 );
                 continue;
             }
         };
         let mut hasher_input = Vec::new();
-        hasher_input.extend_from_slice(state.config.service_did.as_bytes());
+        hasher_input.extend_from_slice(state.config.service_id.as_bytes());
         hasher_input.extend_from_slice(b"|");
-        hasher_input.extend_from_slice(peer.service_did.as_bytes());
+        hasher_input.extend_from_slice(peer.service_id.as_bytes());
         hasher_input.extend_from_slice(b"|");
         hasher_input.extend_from_slice(event_id.as_bytes());
         hasher_input.extend_from_slice(b"|");
@@ -186,19 +186,19 @@ pub(super) async fn enqueue_peer_event_fanout(
             None => {
                 tracing::warn!(
                     event_id,
-                    peer_did = %peer.service_did,
+                    peer_did = %peer.service_id,
                     "failed to encode dynamic ak.peer.events.command.submit body"
                 );
                 continue;
             }
         };
-        if peer.service_did == state.config.service_did {
+        if peer.service_id == state.config.service_id {
             continue;
         }
         if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
             state,
             peer.url.as_str(),
-            peer.service_did.as_str(),
+            peer.service_id.as_str(),
             "/_arkret/peer/events",
             &idempotency_key,
             &payload,
@@ -209,7 +209,7 @@ pub(super) async fn enqueue_peer_event_fanout(
                 %error,
                 event_id,
                 peer = %peer.url,
-                peer_did = %peer.service_did,
+                peer_did = %peer.service_id,
                 "failed to enqueue dynamic ak.peer.events.command.submit fanout"
             );
         }
@@ -218,7 +218,7 @@ pub(super) async fn enqueue_peer_event_fanout(
 
 struct DynamicPeerEventTarget {
     url: String,
-    service_did: String,
+    service_id: String,
     membership_frontier: Vec<String>,
     delivery_binding_frontier: Vec<String>,
 }
@@ -253,22 +253,22 @@ fn dynamic_peer_event_targets(
             if member.delivery_status.as_deref() != Some("routable") {
                 continue;
             }
-            let Some(service_did) = member.recipient_service_did.as_deref() else {
+            let Some(service_id) = member.recipient_service_id.as_deref() else {
                 continue;
             };
-            if service_did == state.config.service_did {
+            if service_id == state.config.service_id {
                 continue;
             }
-            if revoked_peers.contains(service_did) {
+            if revoked_peers.contains(service_id) {
                 tracing::info!(
                     event_id = %parsed.event_id,
                     realm_id = %parsed.realm_id,
-                    revoked_peer_service_did = %service_did,
+                    revoked_peer_service_id = %service_id,
                     "skipping outbound federation push to peer with revoked service delegation (federation.md §4.4)"
                 );
                 continue;
             }
-            let entry = service_frontiers.entry(service_did.to_owned()).or_default();
+            let entry = service_frontiers.entry(service_id.to_owned()).or_default();
             if let Some(frontier) = member.membership_event_ref.as_deref() {
                 entry.0.insert(frontier.to_owned());
             }
@@ -288,19 +288,19 @@ fn dynamic_peer_event_targets(
         // the service-binding precondition typed while allowing the recipient
         // Principal Server to project the pending invite.
         if parsed.kind == "ak.invite.create"
-            && let Some(service_did) = envelope
+            && let Some(service_id) = envelope
                 .get("payload")
                 .and_then(Value::as_object)
                 .and_then(|payload| payload.get("invite_delivery_target"))
                 .and_then(Value::as_object)
-                .and_then(|target| target.get("recipient_service_did"))
+                .and_then(|target| target.get("recipient_service_id"))
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|did| !did.is_empty())
-            && service_did != state.config.service_did
-            && !revoked_peers.contains(service_did)
+            && service_id != state.config.service_id
+            && !revoked_peers.contains(service_id)
         {
-            service_frontiers.entry(service_did.to_owned()).or_default();
+            service_frontiers.entry(service_id.to_owned()).or_default();
         }
         service_frontiers
     };
@@ -308,17 +308,17 @@ fn dynamic_peer_event_targets(
     service_frontiers
         .into_iter()
         .filter_map(
-            |(service_did, (membership_frontier, delivery_binding_frontier))| {
-                let url = match crate::routing::federation::federation::peer_url_for_service_did(
+            |(service_id, (membership_frontier, delivery_binding_frontier))| {
+                let url = match crate::routing::federation::federation::peer_url_for_service_id(
                     state,
-                    &service_did,
+                    &service_id,
                 ) {
                     Some(url) => url,
                     None => {
                         tracing::warn!(
                             event_id = %parsed.event_id,
                             realm_id = %parsed.realm_id,
-                            destination_service_did = %service_did,
+                            destination_service_id = %service_id,
                             "dynamic peer event fanout target has no configured service URL"
                         );
                         return None;
@@ -326,7 +326,7 @@ fn dynamic_peer_event_targets(
                 };
                 Some(DynamicPeerEventTarget {
                     url,
-                    service_did,
+                    service_id,
                     membership_frontier: membership_frontier.into_iter().collect(),
                     delivery_binding_frontier: delivery_binding_frontier.into_iter().collect(),
                 })

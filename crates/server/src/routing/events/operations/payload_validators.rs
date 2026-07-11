@@ -19,12 +19,12 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
         .get("invite_delivery_target")
         .and_then(Value::as_object)
         .ok_or("invite_delivery_target must be an object")?;
-    let recipient_service_did = target
-        .get("recipient_service_did")
+    let recipient_service_id = target
+        .get("recipient_service_id")
         .and_then(Value::as_str)
-        .ok_or("invite_delivery_target.recipient_service_did is required")?;
-    if arkret_sdk::Did::new(recipient_service_did.to_owned()).is_err() {
-        return Err("invite_delivery_target.recipient_service_did must be a DID");
+        .ok_or("invite_delivery_target.recipient_service_id is required")?;
+    if arkret_sdk::Did::new(recipient_service_id.to_owned()).is_err() {
+        return Err("invite_delivery_target.recipient_service_id must be a DID");
     }
     if let Some(service_type) = target.get("recipient_service_type").and_then(Value::as_str)
         && service_type != "principal_server"
@@ -140,12 +140,12 @@ pub(crate) fn validate_invite_third_party_payload(
             return Err("ak.invite.third_party must not carry plaintext token or 3PID");
         }
     }
-    let service_did = third_party_id
-        .get("verification_service_did")
+    let service_id = third_party_id
+        .get("verification_service_id")
         .and_then(Value::as_str)
-        .ok_or("third_party_id.verification_service_did is required")?;
-    if arkret_sdk::Did::new(service_did.to_owned()).is_err() {
-        return Err("third_party_id.verification_service_did must be a DID");
+        .ok_or("third_party_id.verification_service_id is required")?;
+    if arkret_sdk::Did::new(service_id.to_owned()).is_err() {
+        return Err("third_party_id.verification_service_id must be a DID");
     }
     if third_party_id
         .get("verification_public_key")
@@ -216,12 +216,12 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
     if binding.get("claim_nonce").and_then(Value::as_str) != Some(claim_nonce.as_str()) {
         return Err("binding_proof.claim_nonce must match claim_nonce");
     }
-    let service_did = binding
-        .get("verification_service_did")
+    let service_id = binding
+        .get("verification_service_id")
         .and_then(Value::as_str)
-        .ok_or("binding_proof.verification_service_did is required")?;
-    if arkret_sdk::Did::new(service_did.to_owned()).is_err() {
-        return Err("binding_proof.verification_service_did must be a DID");
+        .ok_or("binding_proof.verification_service_id is required")?;
+    if arkret_sdk::Did::new(service_id.to_owned()).is_err() {
+        return Err("binding_proof.verification_service_id must be a DID");
     }
     if binding
         .get("verification_method")

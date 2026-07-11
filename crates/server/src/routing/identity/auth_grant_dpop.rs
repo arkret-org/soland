@@ -15,7 +15,7 @@
 //!      from the introspection result.
 //!   3. DPoP `htm` == request method, `htu` == request URL, `ath` == base64url(sha256(grant)).
 //!   4. DPoP `jti` + `iat` freshness window for replay defense.
-//!   5. grant audience == this service's `service_did`.
+//!   5. grant audience == this service's `service_id`.
 //!   6. human/device grants contain `session.bind` plus a device scope; agent grants carry fresh
 //!      `agent_key_proof` resource-scope metadata. Grant not expired.
 //!
@@ -147,7 +147,7 @@ fn prune_introspection_cache_locked(
 /// next introspection of that grant goes to coauth and observes `active=false`
 /// (account-lifecycle.md §4.1 step 3 — the local-side invalidation).
 pub(crate) fn invalidate_cached_grant(state: &AppState, grant_jwt: &str) {
-    let key = introspection_cache_key(grant_jwt, &state.config.service_did);
+    let key = introspection_cache_key(grant_jwt, &state.config.service_id);
     {
         let mut cache = INTROSPECTION_CACHE.lock();
         cache.remove(&key);
@@ -166,7 +166,7 @@ pub(crate) async fn introspect_session_grant_cached(
     grant_jwt: &str,
     force_fresh: bool,
 ) -> Result<SessionGrantIntrospectGrant, AuthError> {
-    let key = introspection_cache_key(grant_jwt, &state.config.service_did);
+    let key = introspection_cache_key(grant_jwt, &state.config.service_id);
     if !force_fresh && let Some(grant) = cache_lookup(&key) {
         // Cached grants can still expire between introspection and use.
         if grant.expires_at <= crate::wire::now() {
@@ -207,7 +207,7 @@ async fn introspect_session_grant_remote(
     let request = SessionGrantIntrospectRequestBody {
         id: None,
         grant_jwt: Some(grant_jwt.to_owned()),
-        audience: Some(state.config.service_did.clone()),
+        audience: Some(state.config.service_id.clone()),
         // The Account Authority returns non-secret grant metadata over this
         // authenticated S2S channel; holder possession is verified below by the
         // request's DPoP proof against the returned `cnf_jkt`.
@@ -516,15 +516,15 @@ fn validate_agent_session_scope_details(
     if Did::new(grant.subject.clone()).is_err() {
         return Err(agent_scope_metadata_error());
     }
-    let Some(controller_did) = details
-        .get("controller_did")
+    let Some(controller_id) = details
+        .get("controller_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
         return Err(agent_scope_metadata_error());
     };
-    if Did::new(controller_did.to_owned()).is_err() {
+    if Did::new(controller_id.to_owned()).is_err() {
         return Err(agent_scope_metadata_error());
     }
     let Some(resources) = details.get("resources").and_then(Value::as_object) else {
@@ -568,7 +568,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
     grant_jwt: &str,
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<SessionRecord, AuthError> {
-    if grant.audience != state.config.service_did {
+    if grant.audience != state.config.service_id {
         return Err(unauthenticated(
             "session grant audience does not match this principal server",
         ));
@@ -576,13 +576,13 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
     let (device_id, agent_session) = session_binding_from_introspection(grant)?;
     let token_hash = crate::routing::identity::auth::session_credential_hash(
         grant_jwt,
-        &state.config.service_did,
+        &state.config.service_id,
     );
     Ok(SessionRecord {
         token_hash,
         actor: grant.subject.clone(),
         device_id,
-        audience: state.config.service_did.clone(),
+        audience: state.config.service_id.clone(),
         session_public_key: Some(grant.session_public_key.clone()),
         agent_session,
         expires_at: grant.expires_at,
@@ -668,8 +668,8 @@ pub(crate) async fn grant_dpop_session(
     //    scopes, subject, device_id, expiry.
     let grant = introspect_session_grant_cached(state, grant_jwt, force_fresh).await?;
 
-    // 5. audience == this service's service_did.
-    if grant.audience != state.config.service_did {
+    // 5. audience == this service's service_id.
+    if grant.audience != state.config.service_id {
         return Err(unauthenticated(
             "session grant audience does not match this principal server",
         ));
@@ -697,13 +697,13 @@ pub(crate) async fn grant_dpop_session(
     // a persisted local bearer.
     let token_hash = crate::routing::identity::auth::session_credential_hash(
         grant_jwt,
-        &state.config.service_did,
+        &state.config.service_id,
     );
     Ok(SessionRecord {
         token_hash,
         actor: grant.subject,
         device_id,
-        audience: state.config.service_did.clone(),
+        audience: state.config.service_id.clone(),
         session_public_key: Some(grant.session_public_key),
         agent_session,
         expires_at: grant.expires_at,
@@ -941,7 +941,7 @@ mod tests {
         grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
         grant.scope_details = serde_json::json!({
-            "controller_did": "did:web:alice.example",
+            "controller_id": "did:web:alice.example",
             "resources": {
                 "realm_refs": ["ak:realm:team"],
                 "strand_refs": [],
@@ -969,7 +969,7 @@ mod tests {
             vec!["ak.agent.action:message.send"]
         );
         assert_eq!(
-            agent_session.scope_details["controller_did"],
+            agent_session.scope_details["controller_id"],
             "did:web:alice.example"
         );
     }
@@ -1008,7 +1008,7 @@ mod tests {
         grant.subject = "did:web:agent.example".to_owned();
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
         grant.scope_details = serde_json::json!({
-            "controller_did": "did:web:alice.example",
+            "controller_id": "did:web:alice.example",
             "resources": {
                 "realm_refs": [],
                 "strand_refs": [],

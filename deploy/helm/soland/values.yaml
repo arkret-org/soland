@@ -39,7 +39,7 @@ ingress:
 env:
   SOLAND_BIND: 0.0.0.0:8698
   SOLAND_PUBLIC_BASE_URL: https://soland.example
-  SOLAND_SERVICE_DID: did:webvh:<scid>:soland.example:webvh:service
+  SOLAND_SERVICE_ID: did:webvh:<scid>:soland.example:webvh:service
   SOLAND_ACCOUNT_AUTHORITY_URL: https://coauth.example
   SOLAND_OBJECT_STORAGE_BACKEND: s3-compatible
   SOLAND_OBJECT_STORAGE_S3_BUCKET: soland

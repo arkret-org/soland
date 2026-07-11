@@ -151,8 +151,8 @@ pub struct OutboundPushGatewayContractDescriptor {
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushDeliveryDescriptor {
     pub operation_id: String,
-    pub origin_service_did_header: String,
-    pub destination_service_did_header: String,
+    pub origin_service_id_header: String,
+    pub destination_service_id_header: String,
     pub request_id_header: String,
     pub idempotency_key_header: String,
     pub payload_mode: String,
@@ -266,8 +266,8 @@ pub struct OutboundPushResolvedContract {
     pub contract: String,
     pub expected_notify_path: String,
     pub expected_operation_id: String,
-    pub expected_origin_service_did_header: String,
-    pub expected_destination_service_did_header: String,
+    pub expected_origin_service_id_header: String,
+    pub expected_destination_service_id_header: String,
     pub expected_request_id_header: String,
     pub expected_idempotency_key_header: String,
     /// Upstream-advertised authentication modes (`bearer`, `signed_request`,
@@ -282,9 +282,9 @@ pub struct OutboundPushResolvedContract {
     pub privacy_mode: String,
     /// The upstream service DID. Required for trust-level promotion: imports
     /// only land at `trust_level=trusted` if this DID is in the operator's
-    /// `push_bridge_trusted_service_dids` allowlist.
+    /// `push_bridge_trusted_service_ids` allowlist.
     #[serde(default)]
-    pub service_did: String,
+    pub service_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -352,7 +352,7 @@ pub use arkret_sdk::models::SyncDescription;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexDescribeOutcome {
-    pub service_did: String,
+    pub service_id: String,
     pub reducer_profiles: Vec<String>,
     pub schema_profiles: Vec<String>,
     pub query_features: Vec<String>,
@@ -769,7 +769,7 @@ fn full_principal_server_gap_summary() -> Vec<Value> {
 
 #[allow(clippy::too_many_arguments)] // mirrors AppConfig fields; callers pass them positionally once
 pub fn describe(
-    service_did: &str,
+    service_id: &str,
     public_base_url: &str,
     storage: &'static str,
     development_mode: bool,
@@ -920,7 +920,7 @@ pub fn describe(
     };
 
     ServerDescription {
-        service_did: service_did.parse().expect("valid service DID"),
+        service_id: service_id.parse().expect("valid service DID"),
         trust_domain: trust_domain
             .parse()
             .expect("trust_domain must be ak:trust_domain:<scope>"),
@@ -1093,7 +1093,7 @@ pub fn describe(
             "registries": artifacts::registry_summary(),
             "plaintext_visible_service_capability": {
                 "supported": true,
-                "service_did": service_did,
+                "service_id": service_id,
                 "enforced_on": [
                     "self.events.message_content",
                     "federation.push_operations",
@@ -1476,7 +1476,7 @@ mod tests {
         assert_eq!(
             value["privacy_derivation"]["push_target_id"]["input_binding"],
             json!([
-                "recipient_service_did",
+                "recipient_service_id",
                 "principal_id",
                 "device_id",
                 "push_route_id",

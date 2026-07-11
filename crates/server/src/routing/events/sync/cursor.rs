@@ -84,7 +84,7 @@ pub async fn sync_token_for_client_sync(
     let binding = stream_cursor_handle_binding(
         &principal_id,
         &device_id,
-        &state.config.service_did,
+        &state.config.service_id,
         &filter_digest,
         &realms_positions,
         &account_realms_positions,
@@ -98,7 +98,7 @@ pub async fn sync_token_for_client_sync(
             handle: handle.clone(),
             principal_id: Some(principal_id),
             device_id: Some(device_id),
-            service_id: state.config.service_did.clone(),
+            service_id: state.config.service_id.clone(),
             filter_digest: Some(filter_digest),
             purpose: STREAM_CURSOR_PURPOSE.to_owned(),
             positions: Some(positions),
@@ -133,7 +133,7 @@ pub(crate) async fn sync_token_for_events_query(
     let binding = events_query_cursor_handle_binding(
         &principal_id,
         &device_id,
-        &state.config.service_did,
+        &state.config.service_id,
         filter_digest,
         &target,
     );
@@ -144,7 +144,7 @@ pub(crate) async fn sync_token_for_events_query(
             handle: handle.clone(),
             principal_id: Some(principal_id),
             device_id: Some(device_id),
-            service_id: state.config.service_did.clone(),
+            service_id: state.config.service_id.clone(),
             filter_digest: Some(filter_digest.to_owned()),
             purpose: STREAM_CURSOR_PURPOSE.to_owned(),
             positions: None,
@@ -175,7 +175,7 @@ async fn sync_token_for_state_positions(
     let expires_at = issued_at + ChronoDuration::hours(1);
     let issued_at_ms = issued_at.timestamp_millis();
     let expires_at_ms = expires_at.timestamp_millis();
-    let binding = service_cursor_handle_binding(&state.config.service_did, &realms_positions);
+    let binding = service_cursor_handle_binding(&state.config.service_id, &realms_positions);
     let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, &binding);
     upsert_sync_cursor_record(
         state,
@@ -183,7 +183,7 @@ async fn sync_token_for_state_positions(
             handle: handle.clone(),
             principal_id: None,
             device_id: None,
-            service_id: state.config.service_did.clone(),
+            service_id: state.config.service_id.clone(),
             filter_digest: None,
             purpose: STREAM_CURSOR_PURPOSE.to_owned(),
             positions: Some(json!({
@@ -568,7 +568,7 @@ pub async fn parse_and_validate_sync_cursor(
     if ctx
         .get("service_id")
         .and_then(|service| service.as_str())
-        .is_none_or(|service| service != state.config.service_did)
+        .is_none_or(|service| service != state.config.service_id)
     {
         return Err(SyncCursorError::Mismatch(
             "cursor service does not match this service DID",
@@ -691,7 +691,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
             "cursor device does not match request device",
         ));
     }
-    if record.service_id.as_str() != state.config.service_did.as_str() {
+    if record.service_id.as_str() != state.config.service_id.as_str() {
         return Err(SyncCursorError::Mismatch(
             "cursor service does not match this service DID",
         ));

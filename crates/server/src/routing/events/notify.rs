@@ -338,7 +338,7 @@ pub(crate) async fn dispatch_message_notifications(
         // AKP-0016 §9.4.5 — agent third-party mention gate.
         if let Ok(Some(agent_record)) = state.persistence.agents().get(&subject).await {
             let controller = agent_record
-                .get("controller_did")
+                .get("controller_id")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             if sender != controller
@@ -587,8 +587,8 @@ mod tests {
             .persistence
             .agents()
             .put(json!({
-                "agent_principal_id": agent,
-                "controller_did": controller,
+                "agent_id": agent,
+                "controller_id": controller,
                 "agent_id": "summary",
                 "display_name": "Summary",
                 "state": "active",
@@ -607,7 +607,7 @@ mod tests {
             .persistence
             .agent_participation()
             .put_selection(json!({
-                "agent_principal_id": agent,
+                "agent_id": agent,
                 "scope_kind": "realm",
                 "scope_key": format!("realm:{}", uuid_tail(realm_id)),
                 "realm_id": realm_id,
@@ -631,7 +631,7 @@ mod tests {
             .persistence
             .agent_participation()
             .put_selection(json!({
-                "agent_principal_id": agent,
+                "agent_id": agent,
                 "scope_kind": "circle",
                 "scope_key": crate::routing::agent_participation::circle_scope_key(
                     realm_id,

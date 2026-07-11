@@ -134,7 +134,7 @@ fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> A
 /// to-device), mirroring the production principal-side effects without an Auth
 /// Server round-trip.
 async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOutcome, AppError> {
-    let token_hash = session_credential_hash(token, &state.config.service_did);
+    let token_hash = session_credential_hash(token, &state.config.service_id);
     let revoked_session = match state
         .persistence
         .sessions()
@@ -200,7 +200,7 @@ async fn introspect_session_grant_for_logout(
     let request = SessionGrantIntrospectRequestBody {
         id: None,
         grant_jwt: Some(grant_jwt.to_owned()),
-        audience: Some(state.config.service_did.clone()),
+        audience: Some(state.config.service_id.clone()),
         proof: None,
     };
     let (introspection_url, client) =
@@ -382,7 +382,7 @@ pub(super) async fn session_revoke(
             applet_id: None,
             effective_scope: None,
             registration_epoch: None,
-            service_did: None,
+            service_id: None,
             capability_grant_refs: Vec::new(),
             proof: None,
         },
@@ -507,7 +507,7 @@ async fn verify_cross_session_revoke_proof(
             "unsupported session revoke lifecycle proof kind",
         ));
     }
-    if proof.audience != state.config.service_did {
+    if proof.audience != state.config.service_id {
         return Err(session_revoke_proof_invalid(
             "session revoke lifecycle proof audience does not match this service",
         ));
@@ -530,16 +530,14 @@ async fn verify_cross_session_revoke_proof(
 
     let actor = arkret_sdk::Did::new(session.actor.clone())
         .map_err(|_| AppError::invalid_param("session actor is not a valid DID"))?;
-    let service_did = arkret_sdk::Did::new(state.config.service_did.clone()).map_err(|error| {
-        AppError::internal(format!(
-            "configured service_did is not a valid DID: {error}"
-        ))
+    let service_id = arkret_sdk::Did::new(state.config.service_id.clone()).map_err(|error| {
+        AppError::internal(format!("configured service_id is not a valid DID: {error}"))
     })?;
     let session_device = DeviceId::new(session.device_id.clone())
         .map_err(|_| AppError::invalid_param("session device_id is not a valid DeviceId"))?;
     let expected_digest = arkret_sdk::AccountLifecycleProof::session_revoke_request_digest(
         &actor,
-        &service_did,
+        &service_id,
         &session_device,
         body.target_grant_id.as_ref(),
         body.target_device_id.as_ref(),
@@ -594,7 +592,7 @@ fn session_revoke_has_applet_selector(body: &SessionRevokeRequestBody) -> bool {
     body.applet_id.is_some()
         || body.effective_scope.is_some()
         || body.registration_epoch.is_some()
-        || body.service_did.is_some()
+        || body.service_id.is_some()
         || !body.capability_grant_refs.is_empty()
 }
 

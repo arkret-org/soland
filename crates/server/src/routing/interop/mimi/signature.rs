@@ -32,16 +32,16 @@ pub(super) fn verify_mimi_write_service_proof(
         ));
     }
 
-    let source_service_did = mimi_required_header(req, "source-service-did")?;
-    if !source_service_did.starts_with("did:") {
+    let source_service_id = mimi_required_header(req, "source-service-did")?;
+    if !source_service_id.starts_with("did:") {
         return Err(mimi_signature_error_invalid(
-            "Source-Service-DID must be a DID",
+            "Source-Service-ID must be a DID",
         ));
     }
-    let destination_service_did = mimi_required_header(req, "destination-service-did")?;
-    if destination_service_did != state.config.service_did {
+    let destination_service_id = mimi_required_header(req, "destination-service-did")?;
+    if destination_service_id != state.config.service_id {
         return Err(mimi_signature_error_invalid(
-            "Destination-Service-DID does not match this service",
+            "Destination-Service-ID does not match this service",
         ));
     }
     let provider_id = mimi_required_header(req, "provider-id")?;
@@ -65,7 +65,7 @@ pub(super) fn verify_mimi_write_service_proof(
 
     let signature_params = mimi_signature_params(req)?;
     let verification_method =
-        mimi_validate_signature_params(&signature_params, &source_service_did, room_uri.is_some())?;
+        mimi_validate_signature_params(&signature_params, &source_service_id, room_uri.is_some())?;
     let method = req.method().as_str().to_ascii_uppercase();
     let target_uri = crate::routing::federation::signature_target_uri(req, state);
     let authority = crate::routing::federation::signature_authority(req, state);
@@ -75,8 +75,8 @@ pub(super) fn verify_mimi_write_service_proof(
         &authority,
         &content_digest,
         &request_digest,
-        &source_service_did,
-        &destination_service_did,
+        &source_service_id,
+        &destination_service_id,
         &provider_id,
         signed_room_uri.as_deref(),
         &signature_params,
@@ -105,7 +105,7 @@ pub(super) fn mimi_signature_param_value(signature_params: &str, key: &str) -> O
 
 pub(super) fn mimi_validate_signature_params(
     signature_params: &str,
-    source_service_did: &str,
+    source_service_id: &str,
     room_scoped: bool,
 ) -> Result<String, AppError> {
     for component in [
@@ -133,10 +133,10 @@ pub(super) fn mimi_validate_signature_params(
 
     let verification_method = mimi_signature_param_value(signature_params, "keyid")
         .ok_or_else(|| mimi_signature_error_invalid("Signature-Input missing keyid"))?;
-    let expected_prefix = format!("{source_service_did}#");
+    let expected_prefix = format!("{source_service_id}#");
     if !verification_method.starts_with(&expected_prefix) {
         return Err(mimi_signature_error_invalid(
-            "Signature-Input keyid must be controlled by Source-Service-DID",
+            "Signature-Input keyid must be controlled by Source-Service-ID",
         ));
     }
     if mimi_signature_param_value(signature_params, "alg").as_deref() != Some("ed25519") {
@@ -173,8 +173,8 @@ pub(super) fn mimi_http_signature_base(
     authority: &str,
     content_digest: &str,
     request_digest: &str,
-    source_service_did: &str,
-    destination_service_did: &str,
+    source_service_id: &str,
+    destination_service_id: &str,
     provider_id: &str,
     room_uri: Option<&str>,
     signature_params: &str,
@@ -186,8 +186,8 @@ pub(super) fn mimi_http_signature_base(
             SignatureBaseComponent::required("@authority", authority),
             SignatureBaseComponent::required("content-digest", content_digest),
             SignatureBaseComponent::required("request-canonical-digest", request_digest),
-            SignatureBaseComponent::required("source-service-did", source_service_did),
-            SignatureBaseComponent::required("destination-service-did", destination_service_did),
+            SignatureBaseComponent::required("source-service-did", source_service_id),
+            SignatureBaseComponent::required("destination-service-did", destination_service_id),
             SignatureBaseComponent::required("provider-id", provider_id),
             SignatureBaseComponent::optional("mimi-room-uri", room_uri),
         ],

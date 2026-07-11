@@ -138,11 +138,11 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
         MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
     };
 
-    let service_did = "did:web:sfu.example";
+    let service_id = "did:web:sfu.example";
     let payload = json!({
         "media_service_decrypts": true,
         "plaintext_visible_services": [
-            {"purpose": "media_plaintext", "service_did": service_did}
+            {"purpose": "media_plaintext", "service_id": service_id}
         ]
     });
 
@@ -150,7 +150,7 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
     let honest = derive_media_decrypt_metadata_digest(&MediaDecryptPolicyValue {
         media_service_decrypts: true,
         plaintext_visible_services: vec![MediaPlaintextService {
-            service_did: arkret_sdk::Did::new(service_did.to_owned()).unwrap(),
+            service_id: arkret_sdk::Did::new(service_id.to_owned()).unwrap(),
         }],
     })
     .unwrap();

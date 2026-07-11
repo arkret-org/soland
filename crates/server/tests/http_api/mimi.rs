@@ -5,8 +5,8 @@ use serde_json::json;
 
 use super::common::*;
 
-const MIMI_SOURCE_SERVICE_DID: &str = "did:web:remote-mimi.example";
-const MIMI_DESTINATION_SERVICE_DID: &str = "did:web:soland.local";
+const MIMI_SOURCE_SERVICE_ID: &str = "did:web:remote-mimi.example";
+const MIMI_DESTINATION_SERVICE_ID: &str = "did:web:soland.local";
 const MIMI_PROVIDER_ID: &str = "mimi://remote-mimi.example/provider";
 const MIMI_TEST_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const MIMI_TEST_STRAND_ID: &str = "ak:strand:01964180-0000-7000-8000-000000000000";
@@ -36,7 +36,7 @@ fn signed_mimi_headers(
     let request_digest = arkret_sdk::canonical::sha256_digest(&body_bytes);
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
-    let verification_method = format!("{MIMI_SOURCE_SERVICE_DID}#mimi-provider-test-key");
+    let verification_method = format!("{MIMI_SOURCE_SERVICE_ID}#mimi-provider-test-key");
     let components = if room_uri.is_some() {
         "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"request-canonical-digest\" \"source-service-did\" \"destination-service-did\" \"provider-id\" \"mimi-room-uri\")"
     } else {
@@ -55,8 +55,8 @@ fn signed_mimi_headers(
          \"@authority\": {authority}\n\
          \"content-digest\": {content_digest}\n\
          \"request-canonical-digest\": {request_digest}\n\
-         \"source-service-did\": {MIMI_SOURCE_SERVICE_DID}\n\
-         \"destination-service-did\": {MIMI_DESTINATION_SERVICE_DID}\n\
+         \"source-service-did\": {MIMI_SOURCE_SERVICE_ID}\n\
+         \"destination-service-did\": {MIMI_DESTINATION_SERVICE_ID}\n\
          \"provider-id\": {MIMI_PROVIDER_ID}\n\
          {room_component}\
          \"@signature-params\": {signature_params}",
@@ -66,10 +66,10 @@ fn signed_mimi_headers(
     let mut headers = vec![
         ("content-digest", content_digest),
         ("request-canonical-digest", request_digest),
-        ("source-service-did", MIMI_SOURCE_SERVICE_DID.to_owned()),
+        ("source-service-did", MIMI_SOURCE_SERVICE_ID.to_owned()),
         (
             "destination-service-did",
-            MIMI_DESTINATION_SERVICE_DID.to_owned(),
+            MIMI_DESTINATION_SERVICE_ID.to_owned(),
         ),
         ("provider-id", MIMI_PROVIDER_ID.to_owned()),
     ];
@@ -136,7 +136,7 @@ fn mimi_room_update_body(
     json!({
         "mls_group_id": group_id,
         "epoch": 1,
-        "sender_actor_id": MIMI_SOURCE_SERVICE_DID,
+        "sender_actor_id": MIMI_SOURCE_SERVICE_ID,
         "update": {
             "payload": mimi_opaque_payload(binding, "payload_digest")
         }

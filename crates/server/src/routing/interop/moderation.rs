@@ -457,7 +457,7 @@ async fn validate_franking_event_time_anchor(
         RealmId::new(record_realm_id.to_owned()).map_err(|error| {
             franking_proof_invalid(format!("invalid event anchor realm_id: {error}"))
         })?,
-        Did::new(state.config.service_did.clone()).map_err(|error| {
+        Did::new(state.config.service_id.clone()).map_err(|error| {
             franking_proof_invalid(format!("invalid local franking service DID: {error}"))
         })?,
         record.received_at,
@@ -630,7 +630,7 @@ async fn moderation_report(
     let report_id = ids::generate_report_id();
     // Internal assignment keeps the `<did>#moderation` role form; the wire
     // `routed_to` carries bare DIDs only (spec pattern forbids fragments).
-    let moderation_role = format!("{}#moderation", state.config.service_did);
+    let moderation_role = format!("{}#moderation", state.config.service_id);
     let audit_policy = audit_disclosure_policy_for_realm(state, body.realm_id.as_str()).await;
     let mut report_fields = serde_json::Map::new();
     report_fields.insert("report_id".to_owned(), json!(report_id));
@@ -709,25 +709,25 @@ async fn moderation_report(
         "submitted",
     )
     .await;
-    let audit_agent_principal_id =
+    let audit_agent_id =
         notify_audit_agent_for_report(state, audit_policy.as_ref(), &report_payload).await;
     let mut routed_to = Vec::new();
     if moderation_routing_visible_to_actor(state, &realm_id, &session.actor).await {
-        match validate_did(&state.config.service_did) {
+        match validate_did(&state.config.service_id) {
             Ok(did) => routed_to.push(did),
             Err(()) => tracing::warn!(
-                service_did = %state.config.service_did,
-                "service_did is not a valid bare DID; omitted from routed_to"
+                service_id = %state.config.service_id,
+                "service_id is not a valid bare DID; omitted from routed_to"
             ),
         }
-        if let Some(audit_agent_principal_id) = audit_agent_principal_id {
+        if let Some(audit_agent_id) = audit_agent_id {
             // `routed_to` is spec-constrained to bare DIDs; the audit-agent
             // principal id may come from an external identity response, so it
             // only rides the wire when it parses as a DID.
-            match validate_did(&audit_agent_principal_id) {
+            match validate_did(&audit_agent_id) {
                 Ok(did) => routed_to.push(did),
                 Err(()) => tracing::warn!(
-                    %audit_agent_principal_id,
+                    %audit_agent_id,
                     "audit agent principal id is not a bare DID; omitted from routed_to"
                 ),
             }
@@ -917,12 +917,12 @@ async fn notify_audit_agent_for_report(
         }
         _ => Value::Null,
     };
-    let audit_agent_principal_id = identity
+    let audit_agent_id = identity
         .get("did")
         .and_then(Value::as_str)
         .or_else(|| {
             policy
-                .get("audit_agent_principal_id")
+                .get("audit_agent_id")
                 .and_then(Value::as_str)
         })
         .or_else(|| policy.get("agent_id").and_then(Value::as_str))
@@ -938,13 +938,8 @@ async fn notify_audit_agent_for_report(
         .get("report_id")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    audit_plaintext_release_withheld_for_report(
-        state,
-        policy,
-        report_payload,
-        &audit_agent_principal_id,
-    )
-    .await;
+    audit_plaintext_release_withheld_for_report(state, policy, report_payload, &audit_agent_id)
+        .await;
 
     let event_body = json!({
         "kind": "org.arkret.soland.audit.report",
@@ -965,18 +960,13 @@ async fn notify_audit_agent_for_report(
                     json!({
                         "realm_id": realm_id,
                         "report_id": report_id,
-                        "audit_agent_principal_id": audit_agent_principal_id,
+                        "audit_agent_id": audit_agent_id,
                     }),
                     "accepted",
                 )
                 .await;
-                append_agent_accessed_if_present(
-                    state,
-                    &audit_agent_principal_id,
-                    report_payload,
-                    &body,
-                )
-                .await;
+                append_agent_accessed_if_present(state, &audit_agent_id, report_payload, &body)
+                    .await;
             }
         }
         Ok(response) => {
@@ -987,7 +977,7 @@ async fn notify_audit_agent_for_report(
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
-                    "audit_agent_principal_id": audit_agent_principal_id,
+                    "audit_agent_id": audit_agent_id,
                     "status": response.status().as_u16(),
                 }),
                 "failed",
@@ -1002,7 +992,7 @@ async fn notify_audit_agent_for_report(
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
-                    "audit_agent_principal_id": audit_agent_principal_id,
+                    "audit_agent_id": audit_agent_id,
                     "error": error.to_string(),
                 }),
                 "failed",
@@ -1010,14 +1000,14 @@ async fn notify_audit_agent_for_report(
             .await
         }
     }
-    Some(audit_agent_principal_id)
+    Some(audit_agent_id)
 }
 
 async fn audit_plaintext_release_withheld_for_report(
     state: &AppState,
     policy: &Value,
     report_payload: &Value,
-    audit_agent_principal_id: &str,
+    audit_agent_id: &str,
 ) {
     let requested = policy
         .get("release_plaintext_on_report")
@@ -1043,7 +1033,7 @@ async fn audit_plaintext_release_withheld_for_report(
             "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
-            "audit_agent_principal_id": audit_agent_principal_id,
+            "audit_agent_id": audit_agent_id,
             "reason_code": "sealed_decision_required",
         }),
         "withheld",
@@ -1053,7 +1043,7 @@ async fn audit_plaintext_release_withheld_for_report(
 
 async fn append_agent_accessed_if_present(
     state: &AppState,
-    audit_agent_principal_id: &str,
+    audit_agent_id: &str,
     report_payload: &Value,
     response_body: &Value,
 ) {
@@ -1073,7 +1063,7 @@ async fn append_agent_accessed_if_present(
                 "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
                 "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
                 "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
-                "audit_agent_principal_id": audit_agent_principal_id,
+                "audit_agent_id": audit_agent_id,
                 "reason_code": "sealed_decision_required",
             }),
             "failed_closed",
@@ -1083,14 +1073,14 @@ async fn append_agent_accessed_if_present(
     }
     append_audit_log(
         state,
-        Some(audit_agent_principal_id),
+        Some(audit_agent_id),
         "ak.audit.accessed",
         json!({
             "kind": "ak.audit.accessed",
             "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
-            "audit_agent_principal_id": audit_agent_principal_id,
+            "audit_agent_id": audit_agent_id,
             "access_kind": "e2ee_plaintext_release",
             "purpose": "moderation_report",
             "accessed_at": emitted.get("occurred_at").cloned().unwrap_or_else(|| json!(now())),

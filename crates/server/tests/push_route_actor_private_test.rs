@@ -2,7 +2,7 @@
 //! event projection (T4.2 / Round C46).
 //!
 //! Spec: `event-kind-registry.json` entry for `ak.device.push_route`
-//! (composite cell_subject `(recipient_service_did, principal_id,
+//! (composite cell_subject `(recipient_service_id, principal_id,
 //! device_id, push_route)`) plus `device-lifecycle.md §5a.2`. The reducer
 //! lives at `soland::reducer::ProjectionState::apply_push_route` and is
 //! reached through the canonical `apply` dispatcher.
@@ -18,8 +18,8 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState, PushRouteSubject};
 
-const SERVICE_DID_LOCAL: &str = "did:web:principal.acme.example";
-const SERVICE_DID_OTHER: &str = "did:web:principal.rogue.example";
+const SERVICE_ID_LOCAL: &str = "did:web:principal.acme.example";
+const SERVICE_ID_OTHER: &str = "did:web:principal.rogue.example";
 // Actor-private operations still carry a Realm in the Operation envelope.
 // For control-stream actor-private use the convention is the actor's
 // principal control Realm, but a placeholder is fine for reducer-level
@@ -46,7 +46,7 @@ fn op(payload: Value) -> Operation {
 
 fn state_pinned() -> ProjectionState {
     let mut s = ProjectionState::new();
-    s.set_local_service_did(SERVICE_DID_LOCAL);
+    s.set_local_service_id(SERVICE_ID_LOCAL);
     s
 }
 
@@ -58,7 +58,7 @@ fn active_payload(
     pseudonym: &str,
 ) -> Value {
     json!({
-        "recipient_service_did": recipient,
+        "recipient_service_id": recipient,
         "principal_id": principal,
         "device_id": device,
         "push_route": route,
@@ -70,7 +70,7 @@ fn active_payload(
 
 fn subject(recipient: &str, principal: &str, device: &str, route: &str) -> PushRouteSubject {
     PushRouteSubject {
-        recipient_service_did: recipient.to_owned(),
+        recipient_service_id: recipient.to_owned(),
         principal_id: principal.to_owned(),
         device_id: device.to_owned(),
         push_route: route.to_owned(),
@@ -86,7 +86,7 @@ fn push_route_active_writes_cell_value() {
     let hlc = ServerHlc::new("test");
 
     let payload = active_payload(
-        SERVICE_DID_LOCAL,
+        SERVICE_ID_LOCAL,
         PRINCIPAL_A,
         DEVICE_A,
         ROUTE_APNS,
@@ -98,7 +98,7 @@ fn push_route_active_writes_cell_value() {
             ref subject,
             action,
         } => {
-            assert_eq!(subject.recipient_service_did, SERVICE_DID_LOCAL);
+            assert_eq!(subject.recipient_service_id, SERVICE_ID_LOCAL);
             assert_eq!(subject.principal_id, PRINCIPAL_A);
             assert_eq!(subject.device_id, DEVICE_A);
             assert_eq!(subject.push_route, ROUTE_APNS);
@@ -109,7 +109,7 @@ fn push_route_active_writes_cell_value() {
 
     let cell = state
         .push_route_cell_value(&subject(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -122,15 +122,15 @@ fn push_route_active_writes_cell_value() {
     assert_eq!(cell.capabilities, vec!["chat".to_owned()]);
 }
 
-// ── 2. recipient_service_did mismatch → reject. ────────────────────────
+// ── 2. recipient_service_id mismatch → reject. ────────────────────────
 
 #[test]
-fn push_route_rejects_recipient_service_did_mismatch() {
+fn push_route_rejects_recipient_service_id_mismatch() {
     let mut state = state_pinned();
     let hlc = ServerHlc::new("test");
 
     let payload = active_payload(
-        SERVICE_DID_OTHER,
+        SERVICE_ID_OTHER,
         PRINCIPAL_A,
         DEVICE_A,
         ROUTE_APNS,
@@ -138,15 +138,15 @@ fn push_route_rejects_recipient_service_did_mismatch() {
     );
     match state.apply(&op(payload), &hlc) {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "recipient_service_did_mismatch");
+            assert_eq!(reason, "recipient_service_id_mismatch");
         }
-        other => panic!("expected Rejected(recipient_service_did_mismatch), got {other:?}"),
+        other => panic!("expected Rejected(recipient_service_id_mismatch), got {other:?}"),
     }
     // No cell stored on rejection.
     assert!(
         state
             .push_route_cell_value(&subject(
-                SERVICE_DID_OTHER,
+                SERVICE_ID_OTHER,
                 PRINCIPAL_A,
                 DEVICE_A,
                 ROUTE_APNS
@@ -159,15 +159,15 @@ fn push_route_rejects_recipient_service_did_mismatch() {
 //        live in different cells. ─────────────────────────────────────
 
 #[test]
-fn push_route_cell_subject_isolated_by_recipient_service_did() {
+fn push_route_cell_subject_isolated_by_recipient_service_id() {
     let hlc = ServerHlc::new("test");
 
     // Principal Server A accepts a route for (alice, device-a, apns).
     let mut state_a = ProjectionState::new();
-    state_a.set_local_service_did(SERVICE_DID_LOCAL);
+    state_a.set_local_service_id(SERVICE_ID_LOCAL);
     let effect_a = state_a.apply(
         &op(active_payload(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -183,10 +183,10 @@ fn push_route_cell_subject_isolated_by_recipient_service_did() {
     // Principal Server B accepts a route for (alice, device-a, apns) with
     // a different `push_target_id`.
     let mut state_b = ProjectionState::new();
-    state_b.set_local_service_did(SERVICE_DID_OTHER);
+    state_b.set_local_service_id(SERVICE_ID_OTHER);
     let effect_b = state_b.apply(
         &op(active_payload(
-            SERVICE_DID_OTHER,
+            SERVICE_ID_OTHER,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -200,11 +200,11 @@ fn push_route_cell_subject_isolated_by_recipient_service_did() {
     ));
 
     // Each Principal Server's projection only carries its own cell —
-    // the subjects differ on `recipient_service_did`, so they are
+    // the subjects differ on `recipient_service_id`, so they are
     // distinct rows.
     let cell_a = state_a
         .push_route_cell_value(&subject(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -217,7 +217,7 @@ fn push_route_cell_subject_isolated_by_recipient_service_did() {
     assert!(
         state_a
             .push_route_cell_value(&subject(
-                SERVICE_DID_OTHER,
+                SERVICE_ID_OTHER,
                 PRINCIPAL_A,
                 DEVICE_A,
                 ROUTE_APNS
@@ -236,7 +236,7 @@ fn push_route_revoke_keeps_subject_and_appends_revoked_target() {
     // Activate.
     let _ = state.apply(
         &op(active_payload(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -247,7 +247,7 @@ fn push_route_revoke_keeps_subject_and_appends_revoked_target() {
 
     // Revoke (no push_target_id / push_gateway_did needed for revoked).
     let revoke = op(json!({
-        "recipient_service_did": SERVICE_DID_LOCAL,
+        "recipient_service_id": SERVICE_ID_LOCAL,
         "principal_id": PRINCIPAL_A,
         "device_id": DEVICE_A,
         "push_route": ROUTE_APNS,
@@ -260,7 +260,7 @@ fn push_route_revoke_keeps_subject_and_appends_revoked_target() {
         } => {
             // Same subject as the activation — confirms the cell_subject
             // contract.
-            assert_eq!(subject.recipient_service_did, SERVICE_DID_LOCAL);
+            assert_eq!(subject.recipient_service_id, SERVICE_ID_LOCAL);
             assert_eq!(subject.principal_id, PRINCIPAL_A);
             assert_eq!(subject.device_id, DEVICE_A);
             assert_eq!(subject.push_route, ROUTE_APNS);
@@ -271,7 +271,7 @@ fn push_route_revoke_keeps_subject_and_appends_revoked_target() {
 
     let cell = state
         .push_route_cell_value(&subject(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -295,7 +295,7 @@ fn push_route_rotation_appends_old_target_to_revoked_targets() {
 
     let _ = state.apply(
         &op(active_payload(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -306,7 +306,7 @@ fn push_route_rotation_appends_old_target_to_revoked_targets() {
     // Same subject, NEW pseudonym → rotation.
     let effect = state.apply(
         &op(active_payload(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -323,7 +323,7 @@ fn push_route_rotation_appends_old_target_to_revoked_targets() {
 
     let cell = state
         .push_route_cell_value(&subject(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -336,7 +336,7 @@ fn push_route_rotation_appends_old_target_to_revoked_targets() {
     // A third rotation retires PSEUDONYM_2 too.
     let _ = state.apply(
         &op(active_payload(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -346,7 +346,7 @@ fn push_route_rotation_appends_old_target_to_revoked_targets() {
     );
     let cell = state
         .push_route_cell_value(&subject(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -368,7 +368,7 @@ fn push_route_active_missing_push_target_id_rejected() {
     let hlc = ServerHlc::new("test");
 
     let payload = json!({
-        "recipient_service_did": SERVICE_DID_LOCAL,
+        "recipient_service_id": SERVICE_ID_LOCAL,
         "principal_id": PRINCIPAL_A,
         "device_id": DEVICE_A,
         "push_route": ROUTE_APNS,
@@ -390,7 +390,7 @@ fn push_route_active_missing_push_gateway_did_rejected() {
     let hlc = ServerHlc::new("test");
 
     let payload = json!({
-        "recipient_service_did": SERVICE_DID_LOCAL,
+        "recipient_service_id": SERVICE_ID_LOCAL,
         "principal_id": PRINCIPAL_A,
         "device_id": DEVICE_A,
         "push_route": ROUTE_APNS,
@@ -415,7 +415,7 @@ fn push_route_rejects_missing_principal_id() {
     let hlc = ServerHlc::new("test");
 
     let payload = json!({
-        "recipient_service_did": SERVICE_DID_LOCAL,
+        "recipient_service_id": SERVICE_ID_LOCAL,
         // principal_id omitted
         "device_id": DEVICE_A,
         "push_route": ROUTE_APNS,
@@ -436,7 +436,7 @@ fn push_route_rejects_missing_device_id() {
     let hlc = ServerHlc::new("test");
 
     let payload = json!({
-        "recipient_service_did": SERVICE_DID_LOCAL,
+        "recipient_service_id": SERVICE_ID_LOCAL,
         "principal_id": PRINCIPAL_A,
         // device_id omitted
         "push_route": ROUTE_APNS,
@@ -453,7 +453,7 @@ fn push_route_rejects_missing_device_id() {
 
 // ── 8. Distinct (principal, device, route) combinations live in
 //        distinct cells. Sanity that the subject is honoured beyond
-//        the recipient_service_did test above. ─────────────────────
+//        the recipient_service_id test above. ─────────────────────
 
 #[test]
 fn push_route_distinct_routes_for_same_device_are_isolated() {
@@ -462,7 +462,7 @@ fn push_route_distinct_routes_for_same_device_are_isolated() {
 
     let _ = state.apply(
         &op(active_payload(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -472,7 +472,7 @@ fn push_route_distinct_routes_for_same_device_are_isolated() {
     );
     let _ = state.apply(
         &op(active_payload(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_FCM,
@@ -483,7 +483,7 @@ fn push_route_distinct_routes_for_same_device_are_isolated() {
 
     let apns = state
         .push_route_cell_value(&subject(
-            SERVICE_DID_LOCAL,
+            SERVICE_ID_LOCAL,
             PRINCIPAL_A,
             DEVICE_A,
             ROUTE_APNS,
@@ -491,28 +491,23 @@ fn push_route_distinct_routes_for_same_device_are_isolated() {
         .unwrap();
     assert_eq!(apns.push_target_id.as_deref(), Some(PSEUDONYM_1));
     let fcm = state
-        .push_route_cell_value(&subject(
-            SERVICE_DID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_FCM,
-        ))
+        .push_route_cell_value(&subject(SERVICE_ID_LOCAL, PRINCIPAL_A, DEVICE_A, ROUTE_FCM))
         .unwrap();
     assert_eq!(fcm.push_target_id.as_deref(), Some(PSEUDONYM_2));
 }
 
-// ── 9. Without a pinned local_service_did, the dispatcher accepts any
+// ── 9. Without a pinned local_service_id, the dispatcher accepts any
 //        recipient (used by isolated reducer tests / cold-boot fixtures). ─
 
 #[test]
-fn push_route_without_local_service_did_skips_recipient_check() {
+fn push_route_without_local_service_id_skips_recipient_check() {
     let mut state = ProjectionState::new();
-    // No `set_local_service_did` — the recipient gate is bypassed.
+    // No `set_local_service_id` — the recipient gate is bypassed.
     let hlc = ServerHlc::new("test");
 
     let effect = state.apply(
         &op(active_payload(
-            SERVICE_DID_OTHER,
+            SERVICE_ID_OTHER,
             PRINCIPAL_B,
             DEVICE_A,
             ROUTE_APNS,
@@ -524,7 +519,7 @@ fn push_route_without_local_service_did_skips_recipient_check() {
     assert!(
         state
             .push_route_cell_value(&subject(
-                SERVICE_DID_OTHER,
+                SERVICE_ID_OTHER,
                 PRINCIPAL_B,
                 DEVICE_A,
                 ROUTE_APNS

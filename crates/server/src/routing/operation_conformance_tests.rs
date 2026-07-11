@@ -371,8 +371,8 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // exact def exists in the current spec.
             payload: json!({
                 "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
-                "service_did": "did:web:applet.example",
-                "controller_did": "did:web:applet.example",
+                "service_id": "did:web:applet.example",
+                "controller_id": "did:web:applet.example",
                 "base_url": "https://applet.example/runtime",
                 "bot_actor_id": "did:web:applet.bot.example",
                 "protocols": ["http_custom"],
@@ -394,8 +394,8 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // Same closed class, but omits the required `namespaces` field.
             payload: json!({
                 "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
-                "service_did": "did:web:applet.example",
-                "controller_did": "did:web:applet.example",
+                "service_id": "did:web:applet.example",
+                "controller_id": "did:web:applet.example",
                 "base_url": "https://applet.example/runtime",
                 "bot_actor_id": "did:web:applet.bot.example",
                 "protocols": ["http_custom"],
@@ -414,7 +414,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "applet discovery",
             kind: arkret_sdk::events::kinds::APPLET_DISCOVERY,
             payload: json!({
-                "service_did": "did:web:applet.example",
+                "service_id": "did:web:applet.example",
                 "manifest": {"version": 1},
             }),
             valid: true,
@@ -459,81 +459,6 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "message": "no upstream",
             }),
             valid: true,
-        },
-        // Agent protocol family conformance vectors.
-        OperationVector {
-            name: "agent endpoint",
-            kind: arkret_sdk::events::kinds::AGENT_ENDPOINT,
-            payload: json!({
-                "agent_id": "did:web:agent.example",
-                "endpoints": [{"protocol": "http_custom", "url": "https://agent.example/runtime"}],
-            }),
-            valid: true,
-        },
-        OperationVector {
-            name: "agent endpoint missing endpoints",
-            kind: arkret_sdk::events::kinds::AGENT_ENDPOINT,
-            payload: json!({"agent_id": "did:web:agent.example"}),
-            valid: false,
-        },
-        OperationVector {
-            name: "agent session start",
-            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
-            // agent_interop_session_start_payload: required {session_id, counterparty_agent,
-            // protocol, capability_grant}; session_id is a
-            // ak:agent_interop_session:<uuidv7>; additionalProperties=false.
-            payload: json!({
-                "session_id": "ak:agent_interop_session:01904100-0000-7000-8000-bb66bb66bb66",
-                "counterparty_agent": "did:web:agent.example",
-                "protocol": "http_custom",
-                "capability_grant": "ak:grant:01904100-0000-7000-8000-000000000099",
-            }),
-            valid: true,
-        },
-        OperationVector {
-            name: "agent session start missing capability_grant",
-            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
-            // Omits the required capability_grant.
-            payload: json!({
-                "session_id": "ak:agent_interop_session:01904100-0000-7000-8000-bb66bb66bb66",
-                "counterparty_agent": "did:web:agent.example",
-                "protocol": "http_custom",
-            }),
-            valid: false,
-        },
-        OperationVector {
-            name: "agent session status",
-            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
-            // agent_interop_session_status_payload: required {session_id, status}; status enum
-            // includes "working"; additionalProperties=false (no `detail` field).
-            payload: json!({
-                "session_id": "ak:agent_interop_session:01904100-0000-7000-8000-bb66bb66bb66",
-                "status": "working",
-            }),
-            valid: true,
-        },
-        OperationVector {
-            name: "agent session result",
-            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT,
-            // agent_interop_session_result_payload: required {session_id, status} + anyOf
-            // {result_objects | artifacts | reason_code}; additionalProperties=false.
-            payload: json!({
-                "session_id": "ak:agent_interop_session:01904100-0000-7000-8000-bb66bb66bb66",
-                "status": "completed",
-                "result_objects": [{"summary": "ok"}],
-            }),
-            valid: true,
-        },
-        OperationVector {
-            name: "agent session result missing result content",
-            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_RESULT,
-            // Satisfies the top-level required fields but none of the anyOf
-            // {result_objects | artifacts | reason_code} completion carriers, so it is invalid.
-            payload: json!({
-                "session_id": "ak:agent_interop_session:01904100-0000-7000-8000-bb66bb66bb66",
-                "status": "completed",
-            }),
-            valid: false,
         },
         OperationVector {
             name: "unknown kind",

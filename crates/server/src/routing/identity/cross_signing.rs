@@ -223,7 +223,7 @@ pub async fn validate_cross_signing_reset(
             .await
         }
         CrossSigningResetProof::TrustedRecoveryService {
-            service_did,
+            service_id,
             verification_method,
             alg,
             signature,
@@ -240,7 +240,7 @@ pub async fn validate_cross_signing_reset(
                     "trusted_services",
                     "recovery_services",
                 ],
-                service_did.as_str(),
+                service_id.as_str(),
             ) {
                 return Err("cross_signing_reset_recovery_service_unknown");
             }
@@ -248,7 +248,7 @@ pub async fn validate_cross_signing_reset(
                 return Err("cross_signing_reset_attestation_missing");
             }
             crate::jws_verify::validate_verification_method_controller(
-                service_did.as_str(),
+                service_id.as_str(),
                 verification_method,
             )
             .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;

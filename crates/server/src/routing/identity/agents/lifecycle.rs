@@ -17,64 +17,38 @@ pub(super) async fn provision_agent(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    // Spec `agent_provision_request_body` carries no controller_did —
+    // Spec `agent_provision_request_body` carries no controller_id —
     // the controller is ALWAYS the authenticated principal.
-    let controller_did = session.actor.clone();
+    let controller_id = session.actor.clone();
     let display_name = body
         .display_name
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let agent_slug = body
-        .agent_slug
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    let agent_slug = body.slug.trim().to_owned();
     let now_utc = chrono::Utc::now();
-    if let Some(slug) = agent_slug.as_deref() {
-        validate_agent_slug(slug)
-            .map_err(|err| AppError::invalid_param(format!("agent_slug is invalid: {err}")))?;
-        let existing = state
-            .persistence
-            .agents()
-            .list_for_controller(&controller_did)
-            .await
-            .map_err(|err| {
-                AppError::internal(format!("agent slug conflict check failed: {err}"))
-            })?;
-        let mut existing = existing;
-        for record in existing.iter_mut() {
-            *record = lazily_expire_pairing(state, &session, record.clone()).await;
-        }
-        if existing.iter().any(|record| {
-            record.get("agent_slug").and_then(Value::as_str) == Some(slug)
-                && agent_record_reserves_selector_slug(record, &now_utc)
-        }) {
-            return Err(AppError::invalid_param(
-                "agent_slug is already bound to an active or open agent for this controller",
-            ));
-        }
+    validate_agent_slug(&agent_slug)
+        .map_err(|err| AppError::invalid_param(format!("slug is invalid: {err}")))?;
+    let existing = state
+        .persistence
+        .agents()
+        .list_for_controller(&controller_id)
+        .await
+        .map_err(|err| AppError::internal(format!("agent slug conflict check failed: {err}")))?;
+    let mut existing = existing;
+    for record in existing.iter_mut() {
+        *record = lazily_expire_pairing(state, &session, record.clone()).await;
     }
-    // The agent's actor DID is server-generated (the spec body carries no
-    // client-supplied agent_id). did:webvh-only red line: derive it on the
-    // deployment service host with a self-certifying SCID, never did:web.
-    let agent_id = {
-        let host = crate::config::did_host_from_service_did(&state.config.service_did)
-            .unwrap_or_else(|| "soland.local".to_owned());
-        let controller_slug = session.actor.replace([':', '/', '.'], "-");
-        let skeleton = serde_json::json!({
-            "scid": "{SCID}",
-            "host": host,
-            "path": format!("webvh:agent-actor:{controller_slug}"),
-        });
-        let scid =
-            crate::routing::identity::webvh_validation::derive_webvh_scid_from_skeleton(&skeleton)
-                .unwrap_or_else(|_| controller_slug.clone());
-        format!("did:webvh:{scid}:{host}:webvh:agent-actor:{controller_slug}")
-    };
-    let agent_principal_id = generate_agent_principal_did(&state.config.service_did);
+    if existing.iter().any(|record| {
+        record.get("agent_slug").and_then(Value::as_str) == Some(agent_slug.as_str())
+            && agent_record_reserves_selector_slug(record, &now_utc)
+    }) {
+        return Err(AppError::invalid_param(
+            "slug is already bound to an active or open agent for this controller",
+        ));
+    }
+    let agent_id = generate_agent_principal_did(&state.config.service_id);
     let timestamp = now_utc.to_rfc3339_opts(SecondsFormat::Millis, true);
     let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
     let pairing_code = generate_pairing_code();
@@ -106,7 +80,7 @@ pub(super) async fn provision_agent(
         state,
         &session,
         &realm,
-        &agent_principal_id,
+        &agent_id,
         display_name.as_deref(),
         &requested_scope,
     )
@@ -121,9 +95,8 @@ pub(super) async fn provision_agent(
         .persistence
         .agents()
         .put(json!({
-            "agent_principal_id": agent_principal_id,
-            "controller_did": controller_did,
             "agent_id": agent_id,
+            "controller_id": controller_id,
             "display_name": display_name,
             "agent_slug": agent_slug.clone(),
             "requested_scope": requested_scope,
@@ -144,22 +117,21 @@ pub(super) async fn provision_agent(
         Some(&session.actor),
         "ak.self.agent.command.provision",
         json!({
-            "agent_principal_id": agent_principal_id,
-            "controller_did": controller_did,
             "agent_id": agent_id,
+            "controller_id": controller_id,
             "display_name": display_name,
-            "agent_slug": agent_slug,
+            "slug": agent_slug,
             "pairing_request_id": pairing_request_id,
         }),
         "accepted",
     )
     .await;
     res.status_code(StatusCode::CREATED);
-    let agent_principal_did = arkret_sdk::Did::new(agent_principal_id).map_err(|err| {
+    let agent_principal_did = arkret_sdk::Did::new(agent_id).map_err(|err| {
         AppError::internal(format!("generated agent principal DID invalid: {err}"))
     })?;
     json_ok(AgentProvisionOutcome {
-        agent_principal_id: agent_principal_did,
+        agent_id: agent_principal_did,
         pairing_request_id,
         pairing_code: Some(pairing_code),
         expires_at,
@@ -202,61 +174,6 @@ pub(super) async fn list_agents(
     })
 }
 
-/// Spec §11 adapter registry ids. `supported_protocols` returned by
-/// discover MUST be a subset of this set; a registered endpoint that
-/// declares a protocol outside the registry is dropped from the
-/// discover projection rather than surfaced verbatim.
-pub(super) const AGENT_ADAPTER_REGISTRY_IDS: [&str; 4] =
-    ["a2a", "acp", "mcp_bridge", "http_custom"];
-
-#[endpoint(
-    operation_id = "ak.self.agent.protocol.query.discover",
-    tags("agents"),
-    summary = "Discover an agent runtime's declared external protocol endpoints",
-    status_codes(200, 400, 401, 404, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.protocol.query.discover"))]
-pub(super) async fn discover_agent_endpoint(
-    aa: AuthArgs,
-    body: JsonBody<AgentProtocolDiscoverRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AgentProtocolDiscoverOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    // Any authenticated principal may probe the public agent endpoint
-    // registry; the discover surface returns only the projection of an
-    // accepted `ak.agent.endpoint` event (no controller-private fields).
-    let _session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    let agent_id = body.agent_id.as_str().to_owned();
-    let snapshot = {
-        let proj = state.projection.lock();
-        proj.agents.get(&agent_id).cloned()
-    };
-    let Some(projection) = snapshot else {
-        // Fail closed: an agent with no accepted `ak.agent.endpoint`
-        // cannot be discovered (spec §12 `discovery_failed`).
-        return Err(
-            AppError::not_found("agent endpoint not registered").with_wire_code("discovery_failed")
-        );
-    };
-    // Constrain to the §11 adapter registry so callers can rely on the
-    // returned ids being valid adapter selectors.
-    let supported_protocols: Vec<String> = projection
-        .supported_protocols
-        .iter()
-        .filter(|p| AGENT_ADAPTER_REGISTRY_IDS.contains(&p.as_str()))
-        .cloned()
-        .collect();
-    json_ok(AgentProtocolDiscoverOutcome {
-        agent_id: body.agent_id,
-        supported_protocols,
-        agent_card_url: projection.agent_card_url,
-        metadata_url: projection.metadata_url,
-        endpoint_url: projection.endpoint_url,
-    })
-}
-
 #[endpoint(
     operation_id = "ak.self.agent.resource.get",
     tags("agents"),
@@ -266,14 +183,14 @@ pub(super) async fn discover_agent_endpoint(
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.resource.get"))]
 pub(super) async fn get_agent(
     aa: AuthArgs,
-    agent_principal_id: PathParam<String>,
+    agent_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_principal_id.into_inner();
-    validate_agent_principal_id(&agent_id)?;
+    let agent_id = agent_id.into_inner();
+    validate_agent_id(&agent_id)?;
     let record = state
         .persistence
         .agents()
@@ -282,7 +199,7 @@ pub(super) async fn get_agent(
         .map_err(|err| AppError::internal(format!("agent get failed: {err}")))?
         .ok_or_else(|| AppError::not_found("agent not found"))?;
     // Controller-self only: hide others' agents behind 404 to avoid enumeration.
-    if record.get("controller_did").and_then(Value::as_str) != Some(session.actor.as_str()) {
+    if record.get("controller_id").and_then(Value::as_str) != Some(session.actor.as_str()) {
         return Err(AppError::not_found("agent not found"));
     }
     let record = lazily_expire_pairing(state, &session, record).await;
@@ -322,8 +239,8 @@ pub(super) async fn lazily_expire_pairing(
     if !expired {
         return record;
     }
-    let Some(agent_principal_id) = record
-        .get("agent_principal_id")
+    let Some(agent_id) = record
+        .get("agent_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
     else {
@@ -333,14 +250,14 @@ pub(super) async fn lazily_expire_pairing(
     let _ = state
         .persistence
         .agents()
-        .set_state(&agent_principal_id, "pairing_expired", &changed_at)
+        .set_state(&agent_id, "pairing_expired", &changed_at)
         .await;
     if state.config.development_mode
         && let Ok(realm) = ensure_self_realm(state, session).await
     {
         let grant_ids = {
             let proj = state.projection.lock();
-            Some(proj.grant_ids_for_subject(&agent_principal_id))
+            Some(proj.grant_ids_for_subject(&agent_id))
         }
         .unwrap_or_default();
         let _ = submit_revoke_agent_grants(state, session, &realm, &grant_ids).await;
@@ -410,8 +327,8 @@ pub(super) async fn lifecycle_transition(
         }
     } else {
         let mut payload = json!({
-            "agent_principal_id": agent_id,
-            "controller_principal_id": session.actor.clone(),
+            "agent_id": agent_id,
+            "controller_id": session.actor.clone(),
             "transition": match event_kind {
                 "ak.self.agent.pause" => "pause",
                 "ak.self.agent.resume" => "resume",
@@ -470,7 +387,7 @@ pub(super) async fn lifecycle_transition(
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.pause"))]
 pub(super) async fn pause_agent(
     aa: AuthArgs,
-    agent_principal_id: PathParam<String>,
+    agent_id: PathParam<String>,
     body: JsonBody<AgentPauseRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
@@ -482,7 +399,7 @@ pub(super) async fn pause_agent(
             state,
             &aa,
             req,
-            agent_principal_id.into_inner(),
+            agent_id.into_inner(),
             AgentLifecycleState::Paused,
             "ak.self.agent.pause",
             body.reason,
@@ -501,7 +418,7 @@ pub(super) async fn pause_agent(
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.resume"))]
 pub(super) async fn resume_agent(
     aa: AuthArgs,
-    agent_principal_id: PathParam<String>,
+    agent_id: PathParam<String>,
     body: JsonBody<AgentResumeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
@@ -513,7 +430,7 @@ pub(super) async fn resume_agent(
             state,
             &aa,
             req,
-            agent_principal_id.into_inner(),
+            agent_id.into_inner(),
             AgentLifecycleState::Active,
             "ak.self.agent.resume",
             None,
@@ -532,7 +449,7 @@ pub(super) async fn resume_agent(
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.deactivate"))]
 pub(super) async fn deactivate_agent(
     aa: AuthArgs,
-    agent_principal_id: PathParam<String>,
+    agent_id: PathParam<String>,
     body: JsonBody<AgentDeactivateRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
@@ -544,7 +461,7 @@ pub(super) async fn deactivate_agent(
             state,
             &aa,
             req,
-            agent_principal_id.into_inner(),
+            agent_id.into_inner(),
             AgentLifecycleState::Deactivated,
             "ak.self.agent.deactivate",
             body.reason,
@@ -563,14 +480,14 @@ pub(super) async fn deactivate_agent(
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.rotate_key"))]
 pub(super) async fn rotate_agent_key(
     aa: AuthArgs,
-    agent_principal_id: PathParam<String>,
+    agent_id: PathParam<String>,
     body: JsonBody<AgentRotateKeyRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentRotateKeyOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_principal_id.into_inner();
+    let agent_id = agent_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     let _replacement_kid = body
@@ -593,7 +510,7 @@ pub(super) async fn rotate_agent_key(
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.command.attach"))]
 pub(super) async fn attach_agent_grant(
     aa: AuthArgs,
-    agent_principal_id: PathParam<String>,
+    agent_id: PathParam<String>,
     body: JsonBody<AgentGrantAttachRequestBody>,
     depot: &mut Depot,
     res: &mut Response,
@@ -601,7 +518,7 @@ pub(super) async fn attach_agent_grant(
 ) -> JsonResult<AgentGrantAttachOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_principal_id.into_inner();
+    let agent_id = agent_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     // spec `agent_grant_attach_request_body` = `{grant: object}`.
@@ -631,7 +548,7 @@ pub(super) async fn attach_agent_grant(
             Some(&session.actor),
             "ak.self.agent.grant.command.attach",
             json!({
-                "agent_principal_id": agent_id,
+                "agent_id": agent_id,
                 "grant_id": grant_id,
                 "grant": body.grant,
             }),
@@ -653,14 +570,14 @@ pub(super) async fn attach_agent_grant(
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.resource.delete"))]
 pub(super) async fn detach_agent_grant(
     aa: AuthArgs,
-    agent_principal_id: PathParam<String>,
+    agent_id: PathParam<String>,
     grant_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentGrantDetachOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_principal_id.into_inner();
+    let agent_id = agent_id.into_inner();
     let grant_id = grant_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     if !grant_id.starts_with("ak:accountability_grant:") && !grant_id.starts_with("ak:grant:") {
@@ -674,7 +591,7 @@ pub(super) async fn detach_agent_grant(
         Some(&session.actor),
         "ak.self.agent.grant.resource.delete",
         json!({
-            "agent_principal_id": agent_id,
+            "agent_id": agent_id,
             "grant_id": grant_id,
         }),
         "accepted",

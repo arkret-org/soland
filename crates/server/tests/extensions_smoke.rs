@@ -100,7 +100,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     let applet_id = arkret_sdk::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.install.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
-    ingest_applet_service_did_document(&state, &package).await;
+    ingest_applet_service_id_document(&state, &package).await;
 
     let install = install_applet_package(
         &app,
@@ -175,7 +175,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     let applet_id = arkret_sdk::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.provision.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
-    ingest_applet_service_did_document(&state, &package).await;
+    ingest_applet_service_id_document(&state, &package).await;
     let realm_id = DEMO_REALM_ID;
     let install = install_applet_package(
         &app,
@@ -198,7 +198,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     .json(&json!({
         "schema": "ak.applet.ghost_actor.provision_request.v1",
         "applet_id": applet_id,
-        "service_did": package.service_did.to_string(),
+        "service_id": package.service_id.to_string(),
         "ghost_actor_id": ghost_actor_id,
         "protocol": "slack",
         "tenant": "T123",
@@ -234,7 +234,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     assert_eq!(profile_event.actor_id, ghost_actor_id);
     assert_eq!(
         profile_event.envelope["executed_by"],
-        json!(package.service_did.to_string())
+        json!(package.service_id.to_string())
     );
     assert_eq!(
         profile_event.envelope["authorization_ref"],
@@ -258,7 +258,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
             .as_array()
             .unwrap()
             .iter()
-            .any(|did| did == &json!(package.service_did.to_string()))
+            .any(|did| did == &json!(package.service_id.to_string()))
     );
     assert_eq!(
         profile_event.envelope["proofs"][0]["kind"],
@@ -273,10 +273,10 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         .unwrap()
         .expect("accountability grant event is durable");
     assert_eq!(grant_event.kind, "ak.identity.accountability_grant");
-    assert_eq!(grant_event.actor_id, package.service_did.to_string());
+    assert_eq!(grant_event.actor_id, package.service_id.to_string());
     assert_eq!(
         grant_event.envelope["payload"]["issuer"],
-        json!(package.service_did.to_string())
+        json!(package.service_id.to_string())
     );
     assert_eq!(
         grant_event.envelope["payload"]["subject"],
@@ -311,7 +311,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     let applet_id = arkret_sdk::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.no-ghost-scope.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
-    ingest_applet_service_did_document(&state, &package).await;
+    ingest_applet_service_id_document(&state, &package).await;
     let realm_id = DEMO_REALM_ID;
     let install = install_applet_package_with_approved_actions(
         &app,
@@ -335,7 +335,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     .json(&json!({
         "schema": "ak.applet.ghost_actor.provision_request.v1",
         "applet_id": applet_id,
-        "service_did": package.service_did.to_string(),
+        "service_id": package.service_id.to_string(),
         "ghost_actor_id": ghost_actor_id,
         "protocol": "slack",
         "tenant": "T123",
@@ -360,7 +360,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     let applet_id = arkret_sdk::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.namespace.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
-    ingest_applet_service_did_document(&state, &package).await;
+    ingest_applet_service_id_document(&state, &package).await;
     let realm_id = DEMO_REALM_ID;
     let install = install_applet_package(
         &app,
@@ -379,7 +379,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     .json(&json!({
         "schema": "ak.applet.ghost_actor.provision_request.v1",
         "applet_id": applet_id,
-        "service_did": package.service_did.to_string(),
+        "service_id": package.service_id.to_string(),
         "ghost_actor_id": "did:web:other.applet.example:ghost:u123",
         "protocol": "slack",
         "tenant": "T123",
@@ -434,12 +434,12 @@ async fn post_signed_applet_message_transaction(
         text,
     );
     let body = json!({
-        "source_service_did": package.service_did.to_string(),
+        "source_service_id": package.service_id.to_string(),
         "events": [event],
     });
     let body_bytes = arkret_sdk::canonical::canonical_json_bytes(&body).unwrap();
     let content_digest = content_digest_header(&body_bytes);
-    let verification_method = format!("{}#applet-service-key", package.service_did);
+    let verification_method = format!("{}#applet-service-key", package.service_id);
     let created = chrono::Utc::now().timestamp();
     let signature_params = format!(
         "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \
@@ -449,7 +449,7 @@ async fn post_signed_applet_message_transaction(
     );
     let signature_base = applet_signature_base(
         &content_digest,
-        package.service_did.as_str(),
+        package.service_id.as_str(),
         "did:web:soland.local",
         idempotency_key,
         &signature_params,
@@ -462,8 +462,8 @@ async fn post_signed_applet_message_transaction(
     );
     TestClient::post("http://server/_arkret/edge/applet/transactions")
         .add_header("Content-Digest", content_digest, true)
-        .add_header("Source-Service-DID", package.service_did.to_string(), true)
-        .add_header("Destination-Service-DID", "did:web:soland.local", true)
+        .add_header("Source-Service-ID", package.service_id.to_string(), true)
+        .add_header("Destination-Service-ID", "did:web:soland.local", true)
         .add_header("Idempotency-Key", idempotency_key.to_owned(), true)
         .add_header("Signature-Input", format!("sig1={signature_params}"), true)
         .add_header("Signature", signature_header, true)
@@ -504,7 +504,7 @@ fn applet_message_event(
         "prev_refs": [],
         "refs": [],
         "payload": payload,
-        "executed_by": package.service_did.to_string(),
+        "executed_by": package.service_id.to_string(),
         "authorization_ref": authorization_ref,
         "applet_id": applet_id,
         "external_ref": {
@@ -517,7 +517,7 @@ fn applet_message_event(
     event["proofs"] = json!([{
         "kind": "detached_jws",
         "alg": "EdDSA",
-        "verification_method": format!("{}#applet-service-key", package.service_did),
+        "verification_method": format!("{}#applet-service-key", package.service_id),
         "event_digest": event_digest,
         "created_at": created_at,
         "jws": "dev-mode-fixture"
@@ -547,8 +547,8 @@ fn content_digest_header(bytes: &[u8]) -> String {
 
 fn applet_signature_base(
     content_digest: &str,
-    source_service_did: &str,
-    destination_service_did: &str,
+    source_service_id: &str,
+    destination_service_id: &str,
     idempotency_key: &str,
     signature_params: &str,
 ) -> String {
@@ -557,8 +557,8 @@ fn applet_signature_base(
          \"@target-uri\": http://server/_arkret/edge/applet/transactions\n\
          \"@authority\": server\n\
          \"content-digest\": {content_digest}\n\
-         \"source-service-did\": {source_service_did}\n\
-         \"destination-service-did\": {destination_service_did}\n\
+         \"source-service-did\": {source_service_id}\n\
+         \"destination-service-did\": {destination_service_id}\n\
          \"idempotency-key\": {idempotency_key}\n\
          \"@signature-params\": {signature_params}",
     )
@@ -588,7 +588,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let applet_id = arkret_sdk::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.smoke.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
-    ingest_applet_service_did_document(&state, &package).await;
+    ingest_applet_service_id_document(&state, &package).await;
     let realm_id = DEMO_REALM_ID;
     let install = install_applet_package(
         &app,
@@ -614,7 +614,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .json(&json!({
         "schema": "ak.applet.ghost_actor.provision_request.v1",
         "applet_id": applet_id,
-        "service_did": package.service_did.to_string(),
+        "service_id": package.service_id.to_string(),
         "ghost_actor_id": ghost_actor_id,
         "protocol": "smoke",
         "tenant": "T-smoke",
@@ -667,7 +667,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
             .unwrap()
             .iter()
             .any(|entry| entry["kind"] == "applet_registry"
-                && entry["did"] == package.controller_did.to_string())
+                && entry["did"] == package.controller_id.to_string())
     );
 
     let revoke: Value = TestClient::post(format!(
@@ -748,8 +748,8 @@ async fn tsp_local_stub_routes_are_not_mounted() {
 }
 
 fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
-    let controller_did = Did::new("did:web:registry.example".to_owned()).unwrap();
-    let service_did = Did::new(format!(
+    let controller_id = Did::new("did:web:registry.example".to_owned()).unwrap();
+    let service_id = Did::new(format!(
         "did:web:{}.applet.example",
         safe_did_token(namespace)
     ))
@@ -763,8 +763,8 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
     let mut package = AppletPackage::new(
         format!("package:{applet_id}"),
         applet_id.to_owned(),
-        service_did,
-        controller_did.clone(),
+        service_id,
+        controller_id.clone(),
         format!("https://{}.applet.example", safe_did_token(namespace)),
         bot_actor_id,
         vec!["arkret.portal".to_owned()],
@@ -779,10 +779,10 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         registration_epoch,
     );
     package.webhook_auth = WebhookAuth::http_message_signature(
-        format!("{}#applet-service-key", package.service_did),
+        format!("{}#applet-service-key", package.service_id),
         vec![WebhookSignatureAlg::EdDsa],
     );
-    let service_document = applet_service_did_document(&package);
+    let service_document = applet_service_id_document(&package);
     package.registration_epoch_evidence = Some(
         arkret_sdk::AppletRegistrationEpochEvidence::from_did_document(&service_document, None)
             .unwrap(),
@@ -816,16 +816,16 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
     package.receive_events = true;
     package.receive_ephemeral = true;
     package.seal().unwrap();
-    let verification_method = format!("{controller_did}#applet-package");
+    let verification_method = format!("{controller_id}#applet-package");
     let signer =
-        Ed25519MoveSigner::from_did_key_seed([13u8; 32], controller_did, &verification_method);
+        Ed25519MoveSigner::from_did_key_seed([13u8; 32], controller_id, &verification_method);
     package.sign(&signer, &verification_method).unwrap();
     package
 }
 
-fn applet_service_did_document(package: &AppletPackage) -> arkret_sdk::identity::DidDocument {
+fn applet_service_id_document(package: &AppletPackage) -> arkret_sdk::identity::DidDocument {
     arkret_sdk::identity::DidDocument {
-        id: package.service_did.clone(),
+        id: package.service_id.clone(),
         verification_methods: BTreeMap::from([(
             package.webhook_auth.key_ref.clone(),
             "dev-applet-service-key-material".to_owned(),
@@ -835,14 +835,14 @@ fn applet_service_did_document(package: &AppletPackage) -> arkret_sdk::identity:
     }
 }
 
-async fn ingest_applet_service_did_document(state: &AppState, package: &AppletPackage) {
+async fn ingest_applet_service_id_document(state: &AppState, package: &AppletPackage) {
     let now = chrono::Utc::now();
-    let document = applet_service_did_document(package);
+    let document = applet_service_id_document(package);
     state
         .persistence
         .webvh()
         .put_document(soland::state::WebvhDocumentRecord {
-            did: package.service_did.to_string(),
+            did: package.service_id.to_string(),
             did_document: serde_json::to_value(document).unwrap(),
             key_log_head: Some(package.registration_epoch.to_string()),
             seq: 1,

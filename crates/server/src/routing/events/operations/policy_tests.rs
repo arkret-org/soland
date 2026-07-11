@@ -510,7 +510,7 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
 async fn register_agent_selection(
     state: &AppState,
     realm_id: &arkret_sdk::RealmId,
-    agent_principal_id: &str,
+    agent_id: &str,
     reply: bool,
     act_on_behalf: bool,
 ) {
@@ -519,8 +519,8 @@ async fn register_agent_selection(
         .persistence
         .agents()
         .put(json!({
-            "agent_principal_id": agent_principal_id,
-            "controller_did": "did:web:alice.example",
+            "agent_id": agent_id,
+            "controller_id": "did:web:alice.example",
             "agent_id": "summary",
             "display_name": "Summary",
             "agent_slug": "summary",
@@ -538,7 +538,7 @@ async fn register_agent_selection(
         .persistence
         .agent_participation()
         .put_selection(json!({
-            "agent_principal_id": agent_principal_id,
+            "agent_id": agent_id,
             "scope_kind": "realm",
             "scope_key": format!("realm:{realm_uuid}"),
             "realm_id": realm_id.as_str(),
@@ -551,9 +551,9 @@ async fn register_agent_selection(
         .expect("agent participation selection");
 }
 
-fn agent_context(agent_principal_id: &str, authorization_ref: &str) -> serde_json::Value {
+fn agent_context(agent_id: &str, authorization_ref: &str) -> serde_json::Value {
     json!({
-        "agent_id": agent_principal_id,
+        "agent_id": agent_id,
         "operator_or_controller": "did:web:alice.example",
         "authorization_ref": authorization_ref,
         "execution_purpose": "test_action",
@@ -563,7 +563,7 @@ fn agent_context(agent_principal_id: &str, authorization_ref: &str) -> serde_jso
 fn reply_message(
     realm_id: arkret_sdk::RealmId,
     seed: &str,
-    agent_principal_id: &str,
+    agent_id: &str,
     authorization_ref: &str,
 ) -> Operation {
     op(
@@ -571,9 +571,9 @@ fn reply_message(
         seed,
         arkret_sdk::events::kinds::MESSAGE_CREATE,
         json!({
-            "sender": agent_principal_id,
+            "sender": agent_id,
             "content": [{"type": "text", "text": "agent reply"}],
-            "agent_context": agent_context(agent_principal_id, authorization_ref),
+            "agent_context": agent_context(agent_id, authorization_ref),
         }),
     )
 }
@@ -581,13 +581,13 @@ fn reply_message(
 fn act_on_behalf_message(
     realm_id: arkret_sdk::RealmId,
     seed: &str,
-    agent_principal_id: &str,
+    agent_id: &str,
     authorization_ref: Option<&str>,
     approval: Option<(&str, &str)>,
 ) -> Operation {
     let mut payload = json!({
         "sender": "did:web:alice.example",
-        "executed_by": agent_principal_id,
+        "executed_by": agent_id,
         "content": [{"type": "text", "text": "approved"}],
     });
     if let Some(authorization_ref) = authorization_ref {
@@ -595,7 +595,7 @@ fn act_on_behalf_message(
         object.insert("authorization_ref".to_owned(), json!(authorization_ref));
         object.insert(
             "agent_context".to_owned(),
-            agent_context(agent_principal_id, authorization_ref),
+            agent_context(agent_id, authorization_ref),
         );
     }
     if let Some((request_id, approval_nonce)) = approval {
@@ -615,7 +615,7 @@ fn insert_approved_agent_action(
     state: &AppState,
     message: &Operation,
     request_id: &str,
-    agent_principal_id: &str,
+    agent_id: &str,
     approval_nonce: &str,
 ) {
     let payload_digest = arkret_sdk::canonical::canonical_sha256(&message.payload).unwrap();
@@ -623,7 +623,7 @@ fn insert_approved_agent_action(
         request_id.to_owned(),
         crate::reducer::AgentActionRequestProjection {
             request_id: request_id.to_owned(),
-            agent_principal_id: agent_principal_id.to_owned(),
+            agent_id: agent_id.to_owned(),
             status: crate::reducer::AgentActionRequestStatus::Approved,
             requested_at: message.created_at - chrono::Duration::minutes(1),
             resolved_at: Some(message.created_at),
@@ -644,43 +644,6 @@ fn insert_approved_agent_action(
     );
 }
 
-async fn insert_agent_interop_session_start(
-    state: &AppState,
-    realm_id: &arkret_sdk::RealmId,
-    seed: &str,
-    actor: &str,
-    session_id: &str,
-) {
-    state
-        .persistence
-        .events()
-        .put(CanonicalEventRecord {
-            event_id: format!("ak:event:01904100-0000-7000-8000-{seed}"),
-            actor_id: actor.to_owned(),
-            actor_seq: 1,
-            realm_id: Some(realm_id.to_string()),
-            kind: arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START.to_owned(),
-            schema_id: "ak.schema.event.v1".to_owned(),
-            canonical_digest: "sha256:test".to_owned(),
-            canonical_bytes: Vec::new(),
-            envelope: json!({
-                "actor_id": actor,
-                "kind": arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
-                "realm_id": realm_id.to_string(),
-                "payload": {
-                    "sender": actor,
-                    "session_id": session_id,
-                    "counterparty_agent": "did:web:remote-agent.example",
-                    "protocol": "mcp",
-                    "capability_grant": "ak:grant:01904100-0000-7000-8000-0000000000ff"
-                }
-            }),
-            received_at: chrono::Utc::now(),
-        })
-        .await
-        .expect("store agent interop session start");
-}
-
 #[tokio::test]
 async fn active_direct_conversation_rejects_invite_space_and_third_party_member() {
     let (state, realm_id) = state_with_direct_binding();
@@ -694,7 +657,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
             "inviter": "did:web:alice.example",
             "invitee": "did:web:charlie.example",
             "invite_delivery_target": {
-                "recipient_service_did": "did:web:soland.local",
+                "recipient_service_id": "did:web:soland.local",
                 "recipient_service_type": "principal_server"
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
@@ -1379,167 +1342,6 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
     validate_operation_policy(&state, &[tombstone])
         .await
         .expect("circle-scoped manage grant authorizes lifecycle");
-}
-
-#[tokio::test]
-async fn agent_interop_session_status_allows_start_actor_in_batch() {
-    let state = test_state();
-    let realm_id =
-        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
-            .unwrap();
-    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b1";
-    let start = op(
-        realm_id.clone(),
-        "0000000007b1",
-        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_START,
-        json!({
-            "sender": "did:web:alice.example",
-            "session_id": session_id,
-            "counterparty_agent": "did:web:remote-agent.example",
-            "protocol": "mcp",
-            "capability_grant": "ak:grant:01904100-0000-7000-8000-0000000007b1"
-        }),
-    );
-    let status = op(
-        realm_id,
-        "0000000007b2",
-        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
-        json!({
-            "sender": "did:web:alice.example",
-            "session_id": session_id,
-            "status": "working"
-        }),
-    );
-
-    validate_operation_policy(&state, &[start, status])
-        .await
-        .expect("start actor can write status for its own session");
-}
-
-#[tokio::test]
-async fn agent_interop_session_status_rejects_other_actor() {
-    let state = test_state();
-    let realm_id =
-        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b3".to_owned())
-            .unwrap();
-    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b3";
-    insert_agent_interop_session_start(
-        &state,
-        &realm_id,
-        "0000000007b3",
-        "did:web:alice.example",
-        session_id,
-    )
-    .await;
-    let status = op(
-        realm_id,
-        "0000000007b4",
-        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
-        json!({
-            "sender": "did:web:bob.example",
-            "session_id": session_id,
-            "status": "working"
-        }),
-    );
-
-    assert_eq!(
-        validate_operation_policy(&state, &[status])
-            .await
-            .unwrap_err(),
-        "interop_session_writer_unauthorized"
-    );
-    assert_eq!(
-        operation_policy_reason_code("interop_session_writer_unauthorized"),
-        (
-            salvo::http::StatusCode::FORBIDDEN,
-            "interop_session_writer_unauthorized"
-        )
-    );
-}
-
-#[tokio::test]
-async fn agent_interop_session_status_rejects_realm_grant_without_session_scope() {
-    let state = test_state();
-    let realm_id =
-        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b5".to_owned())
-            .unwrap();
-    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b5";
-    insert_agent_interop_session_start(
-        &state,
-        &realm_id,
-        "0000000007b5",
-        "did:web:alice.example",
-        session_id,
-    )
-    .await;
-    state.authz.create_grant(
-        realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
-        "did:web:bob.example".to_owned(),
-        realm_id.to_string(),
-        vec!["ak.agent.interop_session.stream_status".to_owned()],
-        Vec::new(),
-    );
-    let status = op(
-        realm_id,
-        "0000000007b6",
-        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
-        json!({
-            "sender": "did:web:bob.example",
-            "session_id": session_id,
-            "status": "working"
-        }),
-    );
-
-    assert_eq!(
-        validate_operation_policy(&state, &[status])
-            .await
-            .unwrap_err(),
-        "interop_session_writer_unauthorized"
-    );
-}
-
-#[tokio::test]
-async fn agent_interop_session_status_allows_session_scoped_delegate() {
-    let state = test_state();
-    let realm_id =
-        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b7".to_owned())
-            .unwrap();
-    let session_id = "ak:agent_interop_session:01904100-0000-7000-8000-0000000007b7";
-    insert_agent_interop_session_start(
-        &state,
-        &realm_id,
-        "0000000007b7",
-        "did:web:alice.example",
-        session_id,
-    )
-    .await;
-    let session = arkret_sdk::AgentInteropSessionId::new(session_id.to_owned())
-        .expect("valid agent interop session id");
-    state.authz.create_grant(
-        realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
-        "did:web:bob.example".to_owned(),
-        realm_id.to_string(),
-        vec!["ak.agent.interop_session.stream_status".to_owned()],
-        vec![crate::authz::Constraint::AllowedSessionIds {
-            allowed_session_ids: std::collections::BTreeSet::from([session]),
-        }],
-    );
-    let status = op(
-        realm_id,
-        "0000000007b8",
-        arkret_sdk::events::kinds::AGENT_INTEROP_SESSION_STATUS,
-        json!({
-            "sender": "did:web:bob.example",
-            "session_id": session_id,
-            "status": "working"
-        }),
-    );
-
-    validate_operation_policy(&state, &[status])
-        .await
-        .expect("session-scoped delegate can write status for listed session");
 }
 
 #[tokio::test]
@@ -2269,7 +2071,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
                 state: "join".to_owned(),
                 role: "member".to_owned(),
                 delivery_status: Some("routable".to_owned()),
-                recipient_service_did: Some("did:web:local.host".to_owned()),
+                recipient_service_id: Some("did:web:local.host".to_owned()),
                 membership_event_ref: Some(
                     "ak:event:01904100-0000-7000-8000-00000000d3aa".to_owned(),
                 ),

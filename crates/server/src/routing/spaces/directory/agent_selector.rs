@@ -58,8 +58,8 @@ pub(super) fn signed_agent_selector_claim(
     subject: &str,
     request: &DirectoryResolveAgentSelectorRequestBody,
 ) -> Result<AgentSelectorClaim, AppError> {
-    let service_did = state.config.service_did.clone();
-    let issuer = Did::new(service_did.clone())
+    let service_id = state.config.service_id.clone();
+    let issuer = Did::new(service_id.clone())
         .map_err(|err| AppError::internal(format!("invalid service DID: {err}")))?;
     let controller_subject = Did::new(controller_subject.to_owned())
         .map_err(|err| AppError::internal(format!("invalid controller DID: {err}")))?;
@@ -79,7 +79,7 @@ pub(super) fn signed_agent_selector_claim(
         "agent_slug": agent_slug,
         "subject": subject.as_str(),
         "issuer": issuer.as_str(),
-        "issuer_service_did": service_did.as_str(),
+        "issuer_service_id": service_id.as_str(),
         "binding_state": "verified",
         "visibility": "restricted",
         "audience": audience,
@@ -96,7 +96,7 @@ pub(super) fn signed_agent_selector_claim(
     let signer = Ed25519MoveSigner::new(
         (*state.notary_signing_key()).clone(),
         issuer.clone(),
-        format!("{service_did}#directory-agent-selector-claim"),
+        format!("{service_id}#directory-agent-selector-claim"),
     );
     let signature = MoveSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("agent selector claim signing failed: {err}")))?;
@@ -114,8 +114,8 @@ pub(super) fn signed_agent_selector_claim(
         agent_slug: agent_slug.to_owned(),
         subject,
         issuer,
-        issuer_service_did: Some(
-            Did::new(state.config.service_did.clone())
+        issuer_service_id: Some(
+            Did::new(state.config.service_id.clone())
                 .map_err(|err| AppError::internal(format!("invalid issuer service DID: {err}")))?,
         ),
         binding_state: HandleBindingState::Verified,
@@ -187,7 +187,7 @@ pub(super) async fn resolve_agent_selector(
         return Err(selector_not_found());
     }
     let subject = matches[0]
-        .get("agent_principal_id")
+        .get("agent_id")
         .and_then(Value::as_str)
         .ok_or_else(selector_not_found)?;
     if body

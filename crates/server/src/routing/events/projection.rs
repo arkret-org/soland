@@ -136,7 +136,7 @@ mod tests {
                     "id": REALM_ID,
                     "title": "Private Room",
                     "services": [{
-                        "service_did": service,
+                        "service_id": service,
                         "service_type": "principal_server",
                         "data_classes": ["message_content", "notification_summary"],
                         "purposes": ["projection"],

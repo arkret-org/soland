@@ -133,13 +133,13 @@ fn selection_for_scope_keys<'a>(
 
 pub(crate) async fn resolve_agent_participation_for_scope_keys(
     state: &AppState,
-    agent_principal_id: &str,
+    agent_id: &str,
     scope_keys: &[String],
 ) -> Option<ResolvedAgentParticipation> {
     let selections = state
         .persistence
         .agent_participation()
-        .list_selections(agent_principal_id)
+        .list_selections(agent_id)
         .await
         .unwrap_or_default();
     let selection = participation_from_value(selection_for_scope_keys(&selections, scope_keys)?);

@@ -33,8 +33,8 @@ const ACTION_REACTION_ADD: &str = "ak.reaction.add";
 /// UUIDv7-shaped value and `realm_has_member_by_id` already treats the
 /// controller as a member (no separate account -> self_realm mapping
 /// table is required).
-pub(super) fn self_realm_for_controller(controller_did: &str) -> String {
-    crate::routing::identity::recovery::principal_control_realm_for_did(controller_did)
+pub(super) fn self_realm_for_controller(controller_id: &str) -> String {
+    crate::routing::identity::recovery::principal_control_realm_for_did(controller_id)
 }
 
 /// Build a server-authored envelope for `session.actor` and submit it via the
@@ -107,7 +107,7 @@ pub(super) async fn ensure_self_realm(
     if crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
         return Ok(realm_id);
     }
-    let payload = self_realm_create_payload(&session.actor, &state.config.service_did, &realm_id);
+    let payload = self_realm_create_payload(&session.actor, &state.config.service_id, &realm_id);
     submit_agent_fanout_event(state, session, &realm_id, "ak.realm.create", payload).await?;
     Ok(realm_id)
 }
@@ -116,28 +116,28 @@ pub(super) async fn ensure_self_realm(
 /// `ak.schema.realm.v1` object the conformance harness submits; the realm
 /// is private (invite join) since it only ever hosts the controller and
 /// the agent identity sub-events.
-fn self_realm_create_payload(controller_did: &str, service_did: &str, realm_id: &str) -> Value {
+fn self_realm_create_payload(controller_id: &str, service_id: &str, realm_id: &str) -> Value {
     json!({
         "object": {
             "id": realm_id,
             "schema": "ak.schema.realm.v1",
             "title": "Personal Agent Control",
             "summary": "Controller self realm hosting personal agent identity events.",
-            "created_by": controller_did,
+            "created_by": controller_id,
             "trust_domain": "ak:trust_domain:soland.local",
             "schema_refs": ["ak.schema.realm.v1"],
             "default_discoverability": "listed",
             "default_join_rule": "invite",
             "history_visibility": "shared",
             "encryption_profile": "none",
-            "plaintext_visible_services": [service_did],
+            "plaintext_visible_services": [service_id],
             "security_class": "standard",
             "federation_policy": "restricted",
             "notary_profile": "single_did",
             "digest_algorithm": "sha256",
             "notary": {
                 "type": "single_did",
-                "did": controller_did,
+                "did": controller_id,
                 "recovery_members": ["did:web:recovery.soland.local"],
                 "controller_organization": "did:web:organization.primary.soland.local",
                 "recovery_controller_organizations": [
@@ -158,7 +158,7 @@ pub(super) async fn fanout_provision_subevents(
     state: &AppState,
     session: &SessionRecord,
     realm_id: &str,
-    agent_principal_id: &str,
+    agent_id: &str,
     display_name: Option<&str>,
     requested_scope: &Value,
 ) -> Result<(String, String, Vec<String>), AppError> {
@@ -169,9 +169,9 @@ pub(super) async fn fanout_provision_subevents(
     //    is not wired; list/get read the agent_principals table).
     let profile_payload = json!({
         "value": {
-            "id": format!("ak:actor_profile:{agent_principal_id}"),
+            "id": format!("ak:actor_profile:{agent_id}"),
             "schema": "ak.schema.actor_profile.v1",
-            "actor_id": agent_principal_id,
+            "actor_id": agent_id,
             "actor_kind": "agent",
             "display_name": display_name.unwrap_or("Agent"),
             "status": "active",
@@ -192,7 +192,7 @@ pub(super) async fn fanout_provision_subevents(
     let accountability_payload = json!({
         "value": {
             "issuer": controller,
-            "subject": agent_principal_id,
+            "subject": agent_id,
             "accountability_scope": controller,
             "not_before": now_utc.to_rfc3339_opts(SecondsFormat::Secs, true),
             "expires_at": (now_utc + Duration::days(365))
@@ -215,14 +215,8 @@ pub(super) async fn fanout_provision_subevents(
     let mut grant_ids = Vec::new();
     if !actions.is_empty() {
         let grant_id = ids::generate_grant_id();
-        let grant_payload = capability_grant_payload(
-            &grant_id,
-            realm_id,
-            &controller,
-            agent_principal_id,
-            &actions,
-            true,
-        );
+        let grant_payload =
+            capability_grant_payload(&grant_id, realm_id, &controller, agent_id, &actions, true);
         materialize_grant(state, session, realm_id, grant_payload).await?;
         grant_ids.push(grant_id);
     }
@@ -335,7 +329,7 @@ pub(super) async fn attach_agent_grant_event(
     state: &AppState,
     session: &SessionRecord,
     realm_id: &str,
-    agent_principal_id: &str,
+    agent_id: &str,
     grant_id: &str,
     supplied_grant: &Value,
 ) -> Result<String, AppError> {
@@ -351,7 +345,7 @@ pub(super) async fn attach_agent_grant_event(
     obj.entry("issuer".to_owned())
         .or_insert_with(|| Value::String(session.actor.clone()));
     obj.entry("subject".to_owned())
-        .or_insert_with(|| Value::String(agent_principal_id.to_owned()));
+        .or_insert_with(|| Value::String(agent_id.to_owned()));
     obj.entry("actions".to_owned())
         .or_insert_with(|| json!(["ak.event.read"]));
     obj.entry("resources".to_owned())
@@ -381,14 +375,14 @@ pub(super) async fn submit_durable_key_authorize(
     state: &AppState,
     session: &SessionRecord,
     realm_id: &str,
-    agent_principal_id: &str,
+    agent_id: &str,
     verification_method: &str,
     key_id: &str,
 ) -> Result<String, AppError> {
     let controller = session.actor.clone();
     let now_utc = Utc::now();
     let payload = json!({
-        "agent_principal_id": agent_principal_id,
+        "agent_id": agent_id,
         "key_id": key_id,
         "verification_method": verification_method,
         "accountable_principal_id": controller,
@@ -403,7 +397,7 @@ pub(super) async fn submit_durable_key_authorize(
             ],
             "resources": [{ "kind": "realm", "realm_id": realm_id }],
         },
-        "audience": [state.config.service_did.clone()],
+        "audience": [state.config.service_id.clone()],
         "issued_at": now_utc.to_rfc3339_opts(SecondsFormat::Secs, true),
         "expires_at": (now_utc + Duration::days(90))
             .to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -423,7 +417,7 @@ pub(super) async fn materialize_capability_grant(
     state: &AppState,
     session: &SessionRecord,
     realm_id: &str,
-    agent_principal_id: &str,
+    agent_id: &str,
     resource: Value,
     grant_id: &str,
 ) -> Result<String, AppError> {
@@ -433,7 +427,7 @@ pub(super) async fn materialize_capability_grant(
         "schema": "ak.schema.capability.v1",
         "realm_id": realm_id,
         "issuer": session.actor.clone(),
-        "subject": agent_principal_id,
+        "subject": agent_id,
         "actions": ["ak.message.create", "ak.reaction.add"],
         "resources": [resource],
         "issued_at": issued_at,
@@ -476,7 +470,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
     state: &AppState,
     session: &SessionRecord,
     realm_id: &str,
-    agent_principal_id: &str,
+    agent_id: &str,
     event_kind: &str,
     previous_status: &str,
     reason: Option<&str>,
@@ -490,8 +484,8 @@ pub(super) async fn submit_durable_agent_lifecycle(
         other => other,
     };
     let mut payload = json!({
-        "agent_principal_id": agent_principal_id,
-        "controller_principal_id": session.actor.clone(),
+        "agent_id": agent_id,
+        "controller_id": session.actor.clone(),
         "transition": transition,
         "previous_status": previous_status,
         "status_changed_at": status_changed_at,
@@ -527,18 +521,18 @@ pub(super) async fn submit_revoke_agent_keys(
     state: &AppState,
     session: &SessionRecord,
     realm_id: &str,
-    agent_principal_id: &str,
+    agent_id: &str,
     key_ids: &[String],
 ) -> Result<(), AppError> {
     let revoked_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let targets: Vec<String> = if key_ids.is_empty() {
-        vec![default_agent_key_id(agent_principal_id)]
+        vec![default_agent_key_id(agent_id)]
     } else {
         key_ids.to_vec()
     };
     for key_id in targets {
         let payload = json!({
-            "agent_principal_id": agent_principal_id,
+            "agent_id": agent_id,
             "key_id": key_id,
             "revoked_by": session.actor.clone(),
             "revoked_at": revoked_at,
@@ -564,11 +558,11 @@ pub(super) async fn submit_revoke_agent_grants(
 
 /// Deterministic default agent key id used by the dev pairing fan-out so
 /// authorize / revoke target the same key without a key inventory table.
-pub(super) fn default_agent_key_id(agent_principal_id: &str) -> String {
+pub(super) fn default_agent_key_id(agent_id: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(b"ak:agent_key:dev:v1:");
-    hasher.update(agent_principal_id.as_bytes());
+    hasher.update(agent_id.as_bytes());
     let digest = hasher.finalize();
     format!("ak:agent_key:{}", hex::encode(&digest[..16]))
 }

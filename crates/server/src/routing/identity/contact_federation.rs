@@ -39,7 +39,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, ContactRecord, ProjectionEventRecord};
 
 const HEADER_CONTENT_DIGEST: &str = "content-digest";
-const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
+const HEADER_SOURCE_SERVICE_ID: &str = "source-service-did";
 const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]";
 
 pub(crate) fn peer_router() -> Router {
@@ -58,8 +58,8 @@ struct PeerContactDeliveryOutcome {
 }
 
 /// Issuer-side: federate a signed contact fact to `subject_id`'s home
-/// Principal Server (`recipient_service_did`). Returns `Ok(false)` (no-op)
-/// when `recipient_service_did` is this service (same-server request handled
+/// Principal Server (`recipient_service_id`). Returns `Ok(false)` (no-op)
+/// when `recipient_service_id` is this service (same-server request handled
 /// locally) or when the deployment does not list the peer; `Ok(true)` when a
 /// durable outbound delivery was enqueued.
 ///
@@ -74,23 +74,23 @@ pub(crate) async fn federate_contact_fact(
     fact_kind: &str,
     issuer: &str,
     subject_id: &str,
-    recipient_service_did: &str,
+    recipient_service_id: &str,
     introduction_evidence: Option<ContactIntroductionEvidence>,
     fact_payload: Value,
     contact_event_id: &str,
 ) -> Result<bool, AppError> {
-    let recipient_service_did = recipient_service_did.trim();
-    if recipient_service_did.is_empty() || recipient_service_did == state.config.service_did {
+    let recipient_service_id = recipient_service_id.trim();
+    if recipient_service_id.is_empty() || recipient_service_id == state.config.service_id {
         // Same Principal Server: nothing to federate, the local operation
         // already projected the fact for both holders.
         return Ok(false);
     }
-    let Some(peer_url) = crate::routing::federation::federation::peer_url_for_service_did(
+    let Some(peer_url) = crate::routing::federation::federation::peer_url_for_service_id(
         state,
-        recipient_service_did,
+        recipient_service_id,
     ) else {
         tracing::warn!(
-            recipient_service_did,
+            recipient_service_id,
             issuer,
             fact_kind,
             "contact fact federation: recipient service DID is not a configured federation peer; \
@@ -111,8 +111,8 @@ pub(crate) async fn federate_contact_fact(
         contact_event_id,
     )?;
     let idempotency_key = contact_delivery_idempotency_key(
-        &state.config.service_did,
-        recipient_service_did,
+        &state.config.service_id,
+        recipient_service_id,
         fact_kind.as_str(),
         issuer,
         subject_id,
@@ -123,8 +123,8 @@ pub(crate) async fn federate_contact_fact(
         PeerContactAddress {
             subject_id: Did::new(subject_id.to_owned())
                 .map_err(|error| AppError::invalid_param(format!("invalid subject_id: {error}")))?,
-            recipient_service_did: Did::new(recipient_service_did.to_owned()).map_err(|error| {
-                AppError::invalid_param(format!("invalid recipient_service_did: {error}"))
+            recipient_service_id: Did::new(recipient_service_id.to_owned()).map_err(|error| {
+                AppError::invalid_param(format!("invalid recipient_service_id: {error}"))
             })?,
             recipient_service_type: Some("principal_server".to_owned()),
         },
@@ -141,7 +141,7 @@ pub(crate) async fn federate_contact_fact(
     crate::routing::federation::outbox::enqueue_outbound(
         state,
         &peer_url,
-        recipient_service_did,
+        recipient_service_id,
         "/_arkret/peer/contacts",
         &idempotency_key,
         &payload_json,
@@ -152,7 +152,7 @@ pub(crate) async fn federate_contact_fact(
         fact_kind = fact_kind.as_str(),
         issuer,
         subject_id,
-        recipient_service_did,
+        recipient_service_id,
         "enqueued cross-PS contact fact delivery"
     );
     Ok(true)
@@ -198,8 +198,8 @@ fn build_contact_envelope(
 }
 
 fn contact_delivery_idempotency_key(
-    origin_service_did: &str,
-    recipient_service_did: &str,
+    origin_service_id: &str,
+    recipient_service_id: &str,
     fact_kind: &str,
     issuer: &str,
     subject_id: &str,
@@ -208,8 +208,8 @@ fn contact_delivery_idempotency_key(
     let event_id = contact_event.event_id.as_str();
     let mut hasher = Sha256::new();
     for part in [
-        origin_service_did,
-        recipient_service_did,
+        origin_service_id,
+        recipient_service_id,
         fact_kind,
         issuer,
         subject_id,
@@ -250,10 +250,10 @@ async fn peer_contacts_submit(
     let fact_kind = delivery.fact_kind.as_str();
     let issuer = delivery.contact_event.actor_id.as_str().to_owned();
     let subject_id = delivery.contact_address.subject_id.as_str().to_owned();
-    let recipient_service_did = delivery.contact_address.recipient_service_did.as_str();
-    if recipient_service_did != state.config.service_did {
+    let recipient_service_id = delivery.contact_address.recipient_service_id.as_str();
+    if recipient_service_id != state.config.service_id {
         return Err(super::super::events::peer::cross_domain_replay(
-            "contact_address.recipient_service_did does not match this service",
+            "contact_address.recipient_service_id does not match this service",
         ));
     }
     let payload = delivery.contact_event.payload.clone();
@@ -261,13 +261,13 @@ async fn peer_contacts_submit(
     // Originating Principal Server of this delivery: the peer end of the
     // projected contact row (the issuer) is hosted there. `validate_peer_request`
     // above already verified this header is a present, well-formed DID, so we
-    // record it on the projection as the contact's `peer_service_did` — that is
+    // record it on the projection as the contact's `peer_service_id` — that is
     // the requester's/accepter's home server, NOT this service. inkson reads it
-    // off a pending_incoming row as the `requester_service_did` to address the
+    // off a pending_incoming row as the `requester_service_id` to address the
     // reverse `respond` delivery back to the originator.
-    let source_service_did = req
+    let source_service_id = req
         .headers()
-        .get(HEADER_SOURCE_SERVICE_DID)
+        .get(HEADER_SOURCE_SERVICE_ID)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -293,8 +293,8 @@ async fn peer_contacts_submit(
             evidence,
             &issuer,
             &subject_id,
-            recipient_service_did,
-            source_service_did.as_deref().unwrap_or_default(),
+            recipient_service_id,
+            source_service_id.as_deref().unwrap_or_default(),
         );
         if decision.action != InviteReceiveAction::Notify {
             super::append_audit_log(
@@ -329,7 +329,7 @@ async fn peer_contacts_submit(
         &subject_id,
         &payload,
         delivery.contact_event.event_id.as_str(),
-        source_service_did.as_deref(),
+        source_service_id.as_deref(),
     )
     .await?;
 
@@ -508,7 +508,7 @@ async fn project_delivered_contact_fact(
     subject_id: &str,
     payload: &Value,
     contact_event_id: &str,
-    source_service_did: Option<&str>,
+    source_service_id: Option<&str>,
 ) -> Result<&'static str, AppError> {
     let scope = normalize_scope(
         payload
@@ -561,8 +561,8 @@ async fn project_delivered_contact_fact(
                 // Peer end of this pending_incoming row is the remote requester
                 // (`issuer`), hosted on the delivering source server. The local
                 // holder later uses this as the reverse-delivery target when it
-                // responds (inkson's `requester_service_did`).
-                peer_service_did: source_service_did.map(ToOwned::to_owned),
+                // responds (inkson's `requester_service_id`).
+                peer_service_id: source_service_id.map(ToOwned::to_owned),
                 created_at: now(),
                 updated_at: now(),
             };
@@ -647,8 +647,8 @@ async fn project_delivered_contact_fact(
             // Peer end is the remote accepter (`issuer`), hosted on the
             // delivering source server. Record/backfill it so the requester's
             // row can address future invites/responses to the peer's home PS.
-            if let Some(source) = source_service_did {
-                contact.peer_service_did = Some(source.to_owned());
+            if let Some(source) = source_service_id {
+                contact.peer_service_id = Some(source.to_owned());
             }
             store
                 .put(&contact)
@@ -858,7 +858,7 @@ mod tests {
     fn test_config() -> AppConfig {
         AppConfig {
             public_base_url: "http://test".to_owned(),
-            service_did: "did:web:recipient.local".to_owned(),
+            service_id: "did:web:recipient.local".to_owned(),
             object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
             development_mode: true,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
@@ -875,16 +875,16 @@ mod tests {
 
     /// Cross-PS `ak.contact.requested` delivery: the projected pending_incoming
     /// row on the recipient (target holder) MUST record the *originating*
-    /// requester's home Principal Server as `peer_service_did` — the
+    /// requester's home Principal Server as `peer_service_id` — the
     /// `source-service-did` of the delivery, NOT the recipient's own service
     /// DID. This is exactly the address inkson reads back as
-    /// `requester_service_did` to federate the reverse `respond` delivery.
+    /// `requester_service_id` to federate the reverse `respond` delivery.
     #[tokio::test]
-    async fn delivered_request_records_originating_peer_service_did() {
+    async fn delivered_request_records_originating_peer_service_id() {
         let state = AppState::new(test_config(), Db { pool: None });
         let requester = "did:web:remote-alice.example"; // issuer, on source PS
         let target = "did:web:local-bob.example"; // subject_id, this holder
-        let source_service_did = "did:web:remote.local"; // requester's home PS
+        let source_service_id = "did:web:remote.local"; // requester's home PS
 
         let payload = json!({
             "requested_scopes": ["message"],
@@ -898,7 +898,7 @@ mod tests {
             target,
             &payload,
             "ak:event:0196419b-0000-7000-8000-000000000001",
-            Some(source_service_did),
+            Some(source_service_id),
         )
         .await
         .expect("delivered request projects");
@@ -913,20 +913,20 @@ mod tests {
             .expect("pending_incoming row was projected");
 
         assert_eq!(
-            record.peer_service_did.as_deref(),
-            Some(source_service_did),
-            "peer_service_did must be the originating requester's PS, not the recipient's own \
-             service_did ({})",
-            state.config.service_did,
+            record.peer_service_id.as_deref(),
+            Some(source_service_id),
+            "peer_service_id must be the originating requester's PS, not the recipient's own \
+             service_id ({})",
+            state.config.service_id,
         );
         assert_eq!(
             record.request_event_ref.as_deref(),
             Some("ak:event:0196419b-0000-7000-8000-000000000001"),
         );
         assert_ne!(
-            record.peer_service_did.as_deref(),
-            Some(state.config.service_did.as_str()),
-            "peer_service_did must not point at this recipient service",
+            record.peer_service_id.as_deref(),
+            Some(state.config.service_id.as_str()),
+            "peer_service_id must not point at this recipient service",
         );
     }
 }

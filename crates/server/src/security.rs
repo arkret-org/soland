@@ -274,7 +274,7 @@ pub fn federation_target_denied(
     }
     let url_host = peer_url.and_then(url_host);
     let did_domain = peer_did.and_then(did_web_domain);
-    let derived_trust_domain = peer_did.map(trust_domain_from_service_did);
+    let derived_trust_domain = peer_did.map(trust_domain_from_service_id);
     entries.iter().any(|entry| {
         let entry = entry.as_str();
         peer_did.is_some_and(|did| entry_matches(entry, did))
@@ -581,11 +581,11 @@ fn did_web_domain(did: &str) -> Option<String> {
     (!domain.trim().is_empty()).then_some(domain)
 }
 
-fn trust_domain_from_service_did(service_did: &str) -> String {
-    let scope = did_web_domain(service_did).unwrap_or_else(|| {
-        service_did
+fn trust_domain_from_service_id(service_id: &str) -> String {
+    let scope = did_web_domain(service_id).unwrap_or_else(|| {
+        service_id
             .strip_prefix("did:key:")
-            .unwrap_or(service_did)
+            .unwrap_or(service_id)
             .replace(':', ".")
     });
     format!("ak:trust_domain:{scope}")

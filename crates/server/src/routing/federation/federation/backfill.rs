@@ -199,9 +199,9 @@ pub async fn broadcast_seal_to_peers(state: &AppState, seal_id: &str) -> Vec<Str
 /// deployment lists it in `federation_peers` (and the deployment peer policy
 /// does not deny it). Used by federation senders (e.g. contact fact delivery)
 /// that address a target by its home Principal Server service DID.
-pub(crate) fn peer_url_for_service_did(state: &AppState, service_did: &str) -> Option<String> {
+pub(crate) fn peer_url_for_service_id(state: &AppState, service_id: &str) -> Option<String> {
     configured_peer_targets(state)
         .into_iter()
-        .find(|peer| peer.did == service_did)
+        .find(|peer| peer.did == service_id)
         .map(|peer| peer.url)
 }

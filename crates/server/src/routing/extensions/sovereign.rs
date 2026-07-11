@@ -231,7 +231,7 @@ struct StoreAndForwardStatusBody {
 struct DeploymentInfoResponseBody {
     profile: String,
     server_id: String,
-    service_did: String,
+    service_id: String,
     upstream_main: Option<String>,
     trust_roots: Vec<String>,
     allow_external_via_enclave: bool,
@@ -466,8 +466,8 @@ async fn deployment_info(
         .collect();
     json_ok(DeploymentInfoResponseBody {
         profile: deployment_profile(state, &guard),
-        server_id: state.config.service_did.clone(),
-        service_did: state.config.service_did.clone(),
+        server_id: state.config.service_id.clone(),
+        service_id: state.config.service_id.clone(),
         upstream_main: guard.upstream_main.clone(),
         trust_roots: guard.trust_roots.clone(),
         allow_external_via_enclave: guard.allow_external_via_enclave,

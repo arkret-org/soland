@@ -146,7 +146,7 @@ pub struct ProjectionState {
     /// Server-side Morph projection. Same shape as Strand. Mirror table
     /// is `projection_morphs` (durable).
     pub morphs: BTreeMap<String, MorphProjection>,
-    /// Server-side Applet registry projection, keyed by `service_did`
+    /// Server-side Applet registry projection, keyed by `service_id`
     /// (the canonical applet identity per spec
     /// `extensions/applet-integration.md`). Populated by
     /// `ak.applet.registration` (initial registration / re-registration)
@@ -156,16 +156,10 @@ pub struct ProjectionState {
     /// `ak.applet.bridge_error`) are NOT mirrored here — sessions are
     /// ephemeral and the applet bridge state machine lives client-side.
     pub applets: BTreeMap<String, AppletProjection>,
-    /// Server-side Agent registry projection, keyed by `agent_id`.
-    /// Same shape as `applets`. Populated by `ak.agent.endpoint`.
-    /// Protocol-session events for agents
-    /// (`ak.agent.interop_session.{start,status,result}`) are also not
-    /// mirrored — see `applets` rationale.
-    pub agents: BTreeMap<String, SolandAgentProjection>,
     /// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — FSM lifecycle
-    /// state for each agent_principal_id. Driven by
+    /// state for each agent_id. Driven by
     /// `ak.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
-    /// for any agent_principal_id we've seen; `Deactivated` is terminal
+    /// for any agent_id we've seen; `Deactivated` is terminal
     /// (no transition out, no resume after).
     pub agent_lifecycles: BTreeMap<String, AgentLifecycleState>,
     /// Actor-private action approval queue keyed by `request_id`.
@@ -174,7 +168,7 @@ pub struct ProjectionState {
     /// for the target agent before any future endpoint can be registered.
     pub agent_action_requests: BTreeMap<String, AgentActionRequestProjection>,
     /// AKP-0008 §4.5 / D3 — accepted, non-revoked agent key authorizations
-    /// keyed by `agent_principal_id`. An entry is the set of authorized
+    /// keyed by `agent_id`. An entry is the set of authorized
     /// `key_id`s the agent currently holds (cleared on
     /// `ak.agent.key.revoke`). The capability evaluator reads this to decide
     /// whether `effective_after_first_authorized_key` grants have activated:
@@ -267,14 +261,14 @@ pub struct ProjectionState {
     /// `ak.component.realm.policy_server.v1`.
     pub realm_policy_servers: BTreeMap<String, RealmPolicyServerConfig>,
     /// Device push-route projection keyed by the protocol composite
-    /// `(recipient_service_did, principal_id, device_id, push_route)`.
+    /// `(recipient_service_id, principal_id, device_id, push_route)`.
     /// These are actor-private state cells and MUST stay isolated per
     /// recipient Principal Server.
     pub push_routes: BTreeMap<PushRouteSubject, PushRouteCellValue>,
     /// Optional local Principal/Sync service DID. When set, incoming
-    /// `ak.device.push_route` writes whose `recipient_service_did` does
+    /// `ak.device.push_route` writes whose `recipient_service_id` does
     /// not match this service are rejected instead of cached.
-    pub local_service_did: Option<String>,
+    pub local_service_id: Option<String>,
     /// Stream-F (Wave 1B) — `ak.audit.erasure_receipt` projection.
     /// Append-only list of receipts the reducer has accepted. Spec
     /// `realm-and-space.md` §2.5.2 + erasure-receipt.schema.json.
@@ -306,8 +300,8 @@ impl ProjectionState {
         Self::default()
     }
 
-    pub fn set_local_service_did(&mut self, service_did: impl Into<String>) {
-        self.local_service_did = Some(service_did.into());
+    pub fn set_local_service_id(&mut self, service_id: impl Into<String>) {
+        self.local_service_id = Some(service_id.into());
     }
 
     pub fn push_route_cell_value(&self, subject: &PushRouteSubject) -> Option<&PushRouteCellValue> {
@@ -447,18 +441,18 @@ impl ProjectionState {
                 reason: "push_route_payload_not_object".to_owned(),
             };
         };
-        let Some(recipient_service_did) =
-            payload.get("recipient_service_did").and_then(Value::as_str)
+        let Some(recipient_service_id) =
+            payload.get("recipient_service_id").and_then(Value::as_str)
         else {
             return ProjectionEffect::Rejected {
-                reason: "push_route_missing_recipient_service_did".to_owned(),
+                reason: "push_route_missing_recipient_service_id".to_owned(),
             };
         };
-        if let Some(local_service_did) = self.local_service_did.as_deref()
-            && local_service_did != recipient_service_did
+        if let Some(local_service_id) = self.local_service_id.as_deref()
+            && local_service_id != recipient_service_id
         {
             return ProjectionEffect::Rejected {
-                reason: "recipient_service_did_mismatch".to_owned(),
+                reason: "recipient_service_id_mismatch".to_owned(),
             };
         }
         let Some(principal_id) = payload.get("principal_id").and_then(Value::as_str) else {
@@ -478,7 +472,7 @@ impl ProjectionState {
         };
 
         let subject = PushRouteSubject {
-            recipient_service_did: recipient_service_did.to_owned(),
+            recipient_service_id: recipient_service_id.to_owned(),
             principal_id: principal_id.to_owned(),
             device_id: device_id.to_owned(),
             push_route: push_route.to_owned(),
@@ -578,7 +572,7 @@ impl ProjectionState {
             self.cells.insert(
                 cell_ref,
                 CellState::Value(serde_json::json!({
-                    "recipient_service_did": &subject.recipient_service_did,
+                    "recipient_service_id": &subject.recipient_service_id,
                     "principal_id": &subject.principal_id,
                     "device_id": &subject.device_id,
                     "push_route": &subject.push_route,

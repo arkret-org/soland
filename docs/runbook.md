@@ -13,7 +13,7 @@ operator-relevant ones:
 | `migrations_pending` (top-level on `/readyz`) | `routing::system::describe::readyz` | Soft block — wait. If it persists more than 60 s on a healthy Postgres, check the diesel boot log for a partial migration. |
 | `database_unreachable` (top-level on `/readyz`) | same | Verify `DATABASE_URL`, check Postgres logs, confirm the soland process can reach the listed host. |
 | `cross_domain_replay_rejected` | Federation intake | A peer replayed an event whose `trust_domain` does not match this deployment's `SOLAND_TRUST_DOMAIN`. Confirm the peer's `Source-Trust-Domain` header is correct. |
-| `delivery_binding_stale` | Federation handover | Recipient has rebound; the response body carries `new_recipient_service_did` + `handover_frontier`. Update the routing table. |
+| `delivery_binding_stale` | Federation handover | Recipient has rebound; the response body carries `new_recipient_service_id` + `handover_frontier`. Update the routing table. |
 | `cursor_expired` | account / events subscribe | Client cursor older than the configured window. Client must re-subscribe with `from=null`. |
 | `handle_in_grace_period` | identity handle claim | Handle was released too recently. Wait out `HANDLE_GRACE_PERIOD_SECONDS` or pick a different handle. |
 | `retry_budget_exhausted` (DLQ row reason) | Federation outbox | Peer was unreachable for `MAX_ATTEMPTS` retries. Inspect the row in the dead-letter ledger via `GET /_soland/admin/federation/dead-letters`. |
@@ -185,7 +185,7 @@ nodes:
 
 Operationally:
 
-- **pause** (`POST /agents/{agent_principal_id}/pause`):
+- **pause** (`POST /agents/{agent_id}/pause`):
   - Soft-stop. Outstanding actor-stream events drain through the reducer.
     No new actor events accepted; the reducer surfaces `agent_paused` on
     writes.
@@ -193,10 +193,10 @@ Operationally:
   - **Operational triage**: if you see a spike in `agent_paused` rejects on a
     realm, check whether an admin in `sodmin` flipped the agent runtime
     profile; do not assume a misbehaving client.
-- **resume** (`POST /agents/{agent_principal_id}/resume`):
+- **resume** (`POST /agents/{agent_id}/resume`):
   - Reverse of pause; rejected with `agent_deactivated` if the state is
     Deactivated (terminal).
-- **deactivate** (`POST /agents/{agent_principal_id}/deactivate`):
+- **deactivate** (`POST /agents/{agent_id}/deactivate`):
   - Terminal. The historical `/revoke` alias is gone; alerts that still fire
     on `/revoke` paths are false positives — update the alert.
   - Inert reads remain allowed (so that auditors can backfill the agent's

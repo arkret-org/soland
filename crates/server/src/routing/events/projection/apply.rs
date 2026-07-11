@@ -740,17 +740,6 @@ async fn project_accepted_operations_inner(
             state, origin, operation,
         )
         .await;
-        // Reference agent runtime: if the accepted operation is
-        // `ak.agent.interop_session.start`, fan out a synthetic
-        // `ak.agent.interop_session.status` (running) followed by a
-        // terminal `ak.agent.interop_session.result` (completed) with
-        // an `audit_binding` placeholder so the lifecycle is observable
-        // end-to-end. See
-        // `routing::events::agent_bridge::maybe_emit_echo_result_for_session_start`.
-        crate::routing::events::agent_bridge::maybe_emit_echo_result_for_session_start(
-            state, origin, operation,
-        )
-        .await;
     }
 }
 

@@ -59,9 +59,9 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     // Connect the database and resolve this deployment's own service identity
-    // (identity-did.md §3.7) BEFORE anything derived from `service_did` — notary
+    // (identity-did.md §3.7) BEFORE anything derived from `service_id` — notary
     // key, HLC, DID resolver, trust domain — is constructed in AppState. This
-    // mutates `config.service_did` + `config.trust_domain` in place and returns
+    // mutates `config.service_id` + `config.trust_domain` in place and returns
     // the persistence instance the resolution used, so a self-minted / adopted
     // identity is the one the running server serves.
     let db = Db::from_env().await?;
@@ -70,14 +70,14 @@ async fn main() -> anyhow::Result<()> {
     // active. The configured URL remains visible in `/identity/describe` even
     // when the probe fails so coauth can show the operator's intended setup.
     if let Some(url) = config.external_webvh_provider_url.clone() {
-        let expected_service_did = std::env::var("SOLAND_EXTERNAL_WEBVH_PROVIDER_SERVICE_DID").ok();
+        let expected_service_id = std::env::var("SOLAND_EXTERNAL_WEBVH_PROVIDER_SERVICE_ID").ok();
         let expected_trust_domain = std::env::var("SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN")
             .ok()
             .unwrap_or_else(|| config.trust_domain.clone());
         match soland::state::did_resolver_chain::probe_webvh_provider_describe(
             &url,
             std::time::Duration::from_secs(3),
-            expected_service_did.as_deref(),
+            expected_service_id.as_deref(),
             Some(expected_trust_domain.as_str()),
             config.development_mode,
         )
@@ -133,12 +133,12 @@ async fn main() -> anyhow::Result<()> {
     // unleased row, and aggregates via SDK `ThresholdAggregator`. Returns
     // a JoinHandle we drop on the floor — the task lives for the process
     // lifetime and shutdown_signal teardown closes the runtime.
-    let watchdog_config = MultisigWatchdogConfig::for_service(&state.config.service_did);
+    let watchdog_config = MultisigWatchdogConfig::for_service(&state.config.service_id);
     let _watchdog = MultisigWatchdog::new(state.clone(), watchdog_config).spawn();
     tracing::info!(
         worker = "multisig_watchdog",
         enabled = true,
-        service_did = %state.config.service_did,
+        service_id = %state.config.service_id,
         "background worker configured"
     );
 
@@ -223,7 +223,7 @@ async fn main() -> anyhow::Result<()> {
         bind = %config.bind,
         metrics_bind = %config.metrics_bind,
         public_base_url = %config.public_base_url,
-        service_did = %config.service_did,
+        service_id = %config.service_id,
         tls_enabled = config.tls_enabled(),
         tls_cert_path = ?config.tls_cert_path,
         tls_key_path = ?config.tls_key_path,

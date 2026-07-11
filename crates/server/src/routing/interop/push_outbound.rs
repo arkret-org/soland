@@ -22,8 +22,8 @@
 //!   `fetch_state=cache_hit_stale`, so downstream `ak.edge.push.command.notify` never delivers off
 //!   a stale snapshot without an explicit operator action (force_refresh on /fetch, or import).
 //! - **Signed-service-DID trust**: snapshot imports / live fetches only promote
-//!   `trust_level=trusted` when the upstream contract's `service_did` matches
-//!   `AppConfig::push_bridge_trusted_service_dids` (or `development_mode=true`). Everything else
+//!   `trust_level=trusted` when the upstream contract's `service_id` matches
+//!   `AppConfig::push_bridge_trusted_service_ids` (or `development_mode=true`). Everything else
 //!   lands at `trust_level=pending` and outbound delivery treats it as unsigned-only.
 //! - **Auth modes / privacy descriptors**: `OutboundPushResolvedContract` surfaces the upstream
 //!   `auth_modes[]` and `privacy.*` fields so the delivery layer can bind outbound signing to
@@ -104,13 +104,13 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
         },
         delivery: OutboundPushDeliveryDescriptor {
             operation_id: "ak.edge.push.command.notify".to_owned(),
-            origin_service_did_header: "X-Arkret-Origin-Service-Did".to_owned(),
-            destination_service_did_header: "X-Arkret-Destination-Service-Did".to_owned(),
+            origin_service_id_header: "X-Arkret-Origin-Service-Did".to_owned(),
+            destination_service_id_header: "X-Arkret-Destination-Service-Did".to_owned(),
             request_id_header: "X-Arkret-Request-Id".to_owned(),
             idempotency_key_header: "Idempotency-Key".to_owned(),
             payload_mode: format!(
-                "blind_wakeup_from_principal_service_did={}",
-                state.config.service_did
+                "blind_wakeup_from_principal_service_id={}",
+                state.config.service_id
             ),
         },
         examples: OutboundPushBridgeExamples {
@@ -123,7 +123,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                 "force_refresh": true
             }),
             notify_headers: json!({
-                "X-Arkret-Origin-Service-Did": state.config.service_did,
+                "X-Arkret-Origin-Service-Did": state.config.service_id,
                 "X-Arkret-Destination-Service-Did": "did:web:floria.example",
                 "X-Arkret-Request-Id": "req_01js0000000000000000000000",
                 "Idempotency-Key": "notify-01js0000000000000000000000"
@@ -455,8 +455,8 @@ async fn outbound_push_bridge_cache_import(
         let mut record = outbound_push_bridge_cache_record(snapshot);
         // Honor the operator allowlist: an imported snapshot only lands at
         // `trust_level=trusted` if (a) we're in development_mode, or (b) the
-        // upstream `service_did` is configured in
-        // `push_bridge_trusted_service_dids`. Imports that claim
+        // upstream `service_id` is configured in
+        // `push_bridge_trusted_service_ids`. Imports that claim
         // `trust_level=trusted` without satisfying either are demoted to
         // `pending` so the outbound delivery loop refuses to bind signed
         // delivery off them.
@@ -581,13 +581,13 @@ fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
         contract: "ak.push.bridge.describe".to_owned(),
         expected_notify_path: "/_arkret/edge/push/notify".to_owned(),
         expected_operation_id: "ak.edge.push.command.notify".to_owned(),
-        expected_origin_service_did_header: "X-Arkret-Origin-Service-Did".to_owned(),
-        expected_destination_service_did_header: "X-Arkret-Destination-Service-Did".to_owned(),
+        expected_origin_service_id_header: "X-Arkret-Origin-Service-Did".to_owned(),
+        expected_destination_service_id_header: "X-Arkret-Destination-Service-Did".to_owned(),
         expected_request_id_header: "X-Arkret-Request-Id".to_owned(),
         expected_idempotency_key_header: "Idempotency-Key".to_owned(),
         auth_modes: vec!["bearer".to_owned()],
         privacy_mode: "blind_wakeup".to_owned(),
-        service_did: String::new(),
+        service_id: String::new(),
     }
 }
 
@@ -613,11 +613,11 @@ fn outbound_push_resolved_contract_from_remote(
         .and_then(Value::as_str)
         .unwrap_or(&fallback.privacy_mode)
         .to_owned();
-    let service_did = remote_contract
-        .pointer("/service_did")
-        .or_else(|| remote_contract.pointer("/origin/service_did"))
+    let service_id = remote_contract
+        .pointer("/service_id")
+        .or_else(|| remote_contract.pointer("/origin/service_id"))
         .and_then(Value::as_str)
-        .unwrap_or(&fallback.service_did)
+        .unwrap_or(&fallback.service_id)
         .to_owned();
     OutboundPushResolvedContract {
         contract: remote_contract
@@ -636,15 +636,15 @@ fn outbound_push_resolved_contract_from_remote(
             .and_then(Value::as_str)
             .unwrap_or(&fallback.expected_operation_id)
             .to_owned(),
-        expected_origin_service_did_header: remote_contract
-            .pointer("/delivery/origin_service_did_header")
+        expected_origin_service_id_header: remote_contract
+            .pointer("/delivery/origin_service_id_header")
             .and_then(Value::as_str)
-            .unwrap_or(&fallback.expected_origin_service_did_header)
+            .unwrap_or(&fallback.expected_origin_service_id_header)
             .to_owned(),
-        expected_destination_service_did_header: remote_contract
-            .pointer("/delivery/destination_service_did_header")
+        expected_destination_service_id_header: remote_contract
+            .pointer("/delivery/destination_service_id_header")
             .and_then(Value::as_str)
-            .unwrap_or(&fallback.expected_destination_service_did_header)
+            .unwrap_or(&fallback.expected_destination_service_id_header)
             .to_owned(),
         expected_request_id_header: remote_contract
             .pointer("/delivery/request_id_header")
@@ -658,7 +658,7 @@ fn outbound_push_resolved_contract_from_remote(
             .to_owned(),
         auth_modes,
         privacy_mode,
-        service_did,
+        service_id,
     }
 }
 
@@ -670,14 +670,14 @@ fn resolve_trust_level(state: &AppState, contract: &OutboundPushResolvedContract
     if state.config.development_mode {
         return "trusted".to_owned();
     }
-    if contract.service_did.is_empty() {
+    if contract.service_id.is_empty() {
         return "pending".to_owned();
     }
     if state
         .settings()
-        .push_bridge_trusted_service_dids
+        .push_bridge_trusted_service_ids
         .iter()
-        .any(|allowed| allowed == &contract.service_did)
+        .any(|allowed| allowed == &contract.service_id)
     {
         "trusted".to_owned()
     } else {

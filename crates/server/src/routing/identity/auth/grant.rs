@@ -45,7 +45,7 @@ pub(crate) async fn validate_session_grant_binding(
     let request = SessionGrantIntrospectRequestBody {
         id: None,
         grant_jwt: Some(input.grant_jwt.to_owned()),
-        audience: Some(state.config.service_did.as_str().to_owned()),
+        audience: Some(state.config.service_id.as_str().to_owned()),
         proof: input.proof.cloned(),
     };
     // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
@@ -99,7 +99,7 @@ pub(crate) async fn validate_session_grant_binding(
     let grant = response.grant.ok_or_else(|| {
         AppError::capability_denied("session grant introspection omitted grant metadata")
     })?;
-    if grant.audience != state.config.service_did {
+    if grant.audience != state.config.service_id {
         return Err(AppError::capability_denied(
             "session grant audience does not match this principal server",
         ));

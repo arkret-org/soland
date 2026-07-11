@@ -118,14 +118,14 @@ pub(crate) fn frontier_signature_payload(
 /// Build an Ed25519 detached-JWS signature envelope for the canonical
 /// frontier signature payload.
 pub(crate) fn sign_frontier_root(
-    service_did: &Did,
+    service_id: &Did,
     realm_id: Option<&RealmId>,
     observed_at: DateTime<Utc>,
     frontier_root: &Hash,
     signing_key: &ed25519_dalek::SigningKey,
 ) -> Result<Value, String> {
     let signed_payload =
-        frontier_signature_payload(realm_id, service_did, observed_at, frontier_root);
+        frontier_signature_payload(realm_id, service_id, observed_at, frontier_root);
     let canonical_bytes =
         canonical::canonical_json_bytes(&signed_payload).map_err(|error| error.to_string())?;
     let payload_digest = canonical::sha256_digest(&canonical_bytes);
@@ -136,7 +136,7 @@ pub(crate) fn sign_frontier_root(
         "alg": "EdDSA",
         "typ": "ak.events.frontier.signature.v1",
         "scheme": "ed25519-detached-jws",
-        "verification_method": format!("{}#frontier-key", service_did.as_str()),
+        "verification_method": format!("{}#frontier-key", service_id.as_str()),
         "payload_digest": payload_digest,
         "created_at": observed_at.to_rfc3339(),
         "jws": jws,

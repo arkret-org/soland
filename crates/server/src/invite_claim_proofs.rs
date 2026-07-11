@@ -18,7 +18,7 @@ const BINDING_PROOF_TRANSCRIPT_DOMAIN: &str = "ak.invite.claim.binding_proof.v1\
 #[derive(Clone, Debug)]
 pub(crate) struct InviteClaimProofContext {
     expected_verification_public_key: String,
-    expected_verification_service_did: String,
+    expected_verification_service_id: String,
     invite_digest: String,
 }
 
@@ -32,7 +32,7 @@ pub(crate) struct InviteClaimProofVerification<'a> {
     pub binding_proof: &'a Value,
     pub subject_proof: &'a Value,
     pub expected_verification_public_key: &'a str,
-    pub expected_verification_service_did: &'a str,
+    pub expected_verification_service_id: &'a str,
     pub invite_digest: &'a str,
 }
 
@@ -60,15 +60,15 @@ pub(crate) fn invite_claim_proof_context_from_projection(
     else {
         return Err("verification_public_key_required");
     };
-    let Some(expected_verification_service_did) =
-        trimmed_string(third_party_id.get("verification_service_did"))
+    let Some(expected_verification_service_id) =
+        trimmed_string(third_party_id.get("verification_service_id"))
     else {
-        return Err("verification_service_did_required");
+        return Err("verification_service_id_required");
     };
     let invite_digest = invite_record_digest(invite, third_party_id)?;
     Ok(Some(InviteClaimProofContext {
         expected_verification_public_key: expected_verification_public_key.to_owned(),
-        expected_verification_service_did: expected_verification_service_did.to_owned(),
+        expected_verification_service_id: expected_verification_service_id.to_owned(),
         invite_digest,
     }))
 }
@@ -109,7 +109,7 @@ pub(crate) async fn verify_invite_claim_proofs_for_operation(
         binding_proof,
         subject_proof,
         expected_verification_public_key: &context.expected_verification_public_key,
-        expected_verification_service_did: &context.expected_verification_service_did,
+        expected_verification_service_id: &context.expected_verification_service_id,
         invite_digest: &context.invite_digest,
     };
     verify_invite_claim_proofs_for_state(state, &verification).await
@@ -120,16 +120,16 @@ pub(crate) fn verify_invite_claim_proofs(
     resolver: &dyn DidResolver,
     verification: &InviteClaimProofVerification<'_>,
 ) -> Result<(), &'static str> {
-    let binding_service_did = verify_binding_proof_signature(resolver, verification)?;
-    verify_subject_proof_signature(resolver, verification, binding_service_did)
+    let binding_service_id = verify_binding_proof_signature(resolver, verification)?;
+    verify_subject_proof_signature(resolver, verification, binding_service_id)
 }
 
 async fn verify_invite_claim_proofs_for_state(
     state: &AppState,
     verification: &InviteClaimProofVerification<'_>,
 ) -> Result<(), &'static str> {
-    let binding_service_did = verify_binding_proof_signature_for_state(state, verification).await?;
-    verify_subject_proof_signature_for_state(state, verification, binding_service_did).await
+    let binding_service_id = verify_binding_proof_signature_for_state(state, verification).await?;
+    verify_subject_proof_signature_for_state(state, verification, binding_service_id).await
 }
 
 #[cfg(test)]
@@ -141,14 +141,14 @@ fn verify_binding_proof_signature<'a>(
         .binding_proof
         .as_object()
         .ok_or("binding_proof_not_object")?;
-    let service_did = proof_string(object, "verification_service_did")
-        .ok_or("binding_proof_service_did_required")?;
-    if service_did != verification.expected_verification_service_did {
+    let service_id = proof_string(object, "verification_service_id")
+        .ok_or("binding_proof_service_id_required")?;
+    if service_id != verification.expected_verification_service_id {
         return Err("verification_service_not_authorized");
     }
     let method =
         proof_string(object, "verification_method").ok_or("binding_proof_method_required")?;
-    crate::jws_verify::validate_verification_method_controller(service_did, method)
+    crate::jws_verify::validate_verification_method_controller(service_id, method)
         .map_err(|_| "binding_proof_method_invalid")?;
     if proof_string(object, "subject_id") != Some(verification.subject_id) {
         return Err("binding_proof_subject_mismatch");
@@ -170,7 +170,7 @@ fn verify_binding_proof_signature<'a>(
         if method != verification.expected_verification_public_key {
             return Err("binding_proof_method_mismatch");
         }
-        resolve_current_ed25519_key(resolver, service_did, method)
+        resolve_current_ed25519_key(resolver, service_id, method)
             .map_err(|_| "binding_proof_method_invalid")?
     } else {
         decode_ed25519_multibase_key(verification.expected_verification_public_key)
@@ -185,7 +185,7 @@ fn verify_binding_proof_signature<'a>(
     public_key
         .verify_strict(&transcript, &signature)
         .map_err(|_| "binding_proof_signature_invalid")?;
-    Ok(service_did)
+    Ok(service_id)
 }
 
 async fn verify_binding_proof_signature_for_state<'a>(
@@ -196,14 +196,14 @@ async fn verify_binding_proof_signature_for_state<'a>(
         .binding_proof
         .as_object()
         .ok_or("binding_proof_not_object")?;
-    let service_did = proof_string(object, "verification_service_did")
-        .ok_or("binding_proof_service_did_required")?;
-    if service_did != verification.expected_verification_service_did {
+    let service_id = proof_string(object, "verification_service_id")
+        .ok_or("binding_proof_service_id_required")?;
+    if service_id != verification.expected_verification_service_id {
         return Err("verification_service_not_authorized");
     }
     let method =
         proof_string(object, "verification_method").ok_or("binding_proof_method_required")?;
-    crate::jws_verify::validate_verification_method_controller(service_did, method)
+    crate::jws_verify::validate_verification_method_controller(service_id, method)
         .map_err(|_| "binding_proof_method_invalid")?;
     if proof_string(object, "subject_id") != Some(verification.subject_id) {
         return Err("binding_proof_subject_mismatch");
@@ -225,7 +225,7 @@ async fn verify_binding_proof_signature_for_state<'a>(
         if method != verification.expected_verification_public_key {
             return Err("binding_proof_method_mismatch");
         }
-        resolve_current_ed25519_key_for_state(state, service_did, method)
+        resolve_current_ed25519_key_for_state(state, service_id, method)
             .await
             .map_err(|_| "binding_proof_method_invalid")?
     } else {
@@ -241,14 +241,14 @@ async fn verify_binding_proof_signature_for_state<'a>(
     public_key
         .verify_strict(&transcript, &signature)
         .map_err(|_| "binding_proof_signature_invalid")?;
-    Ok(service_did)
+    Ok(service_id)
 }
 
 #[cfg(test)]
 fn verify_subject_proof_signature(
     resolver: &dyn DidResolver,
     verification: &InviteClaimProofVerification<'_>,
-    binding_service_did: &str,
+    binding_service_id: &str,
 ) -> Result<(), &'static str> {
     if !verification.subject_proof.is_object() {
         return Err("subject_proof_not_object");
@@ -273,7 +273,7 @@ fn verify_subject_proof_signature(
         verification.realm_id,
         verification.token_commitment,
         verification.claim_nonce,
-        binding_service_did,
+        binding_service_id,
         binding_digest.as_str(),
     )
     .map_err(|_| "subject_proof_transcript_invalid")?;
@@ -303,7 +303,7 @@ fn verify_subject_proof_signature(
 async fn verify_subject_proof_signature_for_state(
     state: &AppState,
     verification: &InviteClaimProofVerification<'_>,
-    binding_service_did: &str,
+    binding_service_id: &str,
 ) -> Result<(), &'static str> {
     if !verification.subject_proof.is_object() {
         return Err("subject_proof_not_object");
@@ -328,7 +328,7 @@ async fn verify_subject_proof_signature_for_state(
         verification.realm_id,
         verification.token_commitment,
         verification.claim_nonce,
-        binding_service_did,
+        binding_service_id,
         binding_digest.as_str(),
     )
     .map_err(|_| "subject_proof_transcript_invalid")?;
@@ -369,7 +369,7 @@ fn binding_proof_transcript_bytes(
         "realm_id": verification.realm_id,
         "subject_id": verification.subject_id,
         "token_commitment": verification.token_commitment,
-        "verification_service_did": verification.expected_verification_service_did,
+        "verification_service_id": verification.expected_verification_service_id,
     });
     transcript_bytes(BINDING_PROOF_TRANSCRIPT_DOMAIN, &transcript)
 }
@@ -412,14 +412,11 @@ fn invite_record_digest(
 #[cfg(test)]
 fn resolve_current_ed25519_key(
     resolver: &dyn DidResolver,
-    controller_did: &str,
+    controller_id: &str,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    crate::jws_verify::validate_verification_method_controller(
-        controller_did,
-        verification_method,
-    )?;
-    let did = Did::new(controller_did.to_owned())
+    crate::jws_verify::validate_verification_method_controller(controller_id, verification_method)?;
+    let did = Did::new(controller_id.to_owned())
         .map_err(|error| format!("controller DID invalid: {error}"))?;
     let document = resolver
         .resolve_did(&did)
@@ -434,14 +431,11 @@ fn resolve_current_ed25519_key(
 
 async fn resolve_current_ed25519_key_for_state(
     state: &AppState,
-    controller_did: &str,
+    controller_id: &str,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    crate::jws_verify::validate_verification_method_controller(
-        controller_did,
-        verification_method,
-    )?;
-    let did = Did::new(controller_did.to_owned())
+    crate::jws_verify::validate_verification_method_controller(controller_id, verification_method)?;
+    let did = Did::new(controller_id.to_owned())
         .map_err(|error| format!("controller DID invalid: {error}"))?;
     let document = crate::jws_verify::resolve_did_document_async(state, &did).await?;
     crate::jws_verify::require_verification_method_in_document(&document, verification_method)?;
@@ -548,7 +542,7 @@ mod tests {
             binding_proof,
             subject_proof,
             expected_verification_public_key: SERVICE_METHOD,
-            expected_verification_service_did: SERVICE,
+            expected_verification_service_id: SERVICE,
             invite_digest: INVITE_DIGEST,
         }
     }
@@ -564,7 +558,7 @@ mod tests {
         invite_digest: &str,
     ) -> Value {
         let mut binding_proof = json!({
-            "verification_service_did": SERVICE,
+            "verification_service_id": SERVICE,
             "verification_method": SERVICE_METHOD,
             "subject_id": SUBJECT,
             "realm_id": REALM,
@@ -583,7 +577,7 @@ mod tests {
             binding_proof: &binding_proof,
             subject_proof: &subject_placeholder,
             expected_verification_public_key: SERVICE_METHOD,
-            expected_verification_service_did: SERVICE,
+            expected_verification_service_id: SERVICE,
             invite_digest,
         };
         let transcript = binding_proof_transcript_bytes(&verification).unwrap();

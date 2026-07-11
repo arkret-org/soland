@@ -217,12 +217,12 @@ pub(super) fn normalize_addressed_agents(
 ) -> Result<Vec<String>, AppError> {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
-    for agent in &body.addressed_agent_principal_ids {
+    for agent in &body.addressed_agent_ids {
         let agent = agent.as_str().trim();
         if agent == controller {
             return Err(sidecar_failed_precondition(
                 CONTROLLER_IN_ADDRESSED_AGENTS,
-                "addressed_agent_principal_ids must not contain the controller",
+                "addressed_agent_ids must not contain the controller",
             ));
         }
         if seen.insert(agent.to_owned()) {
@@ -246,7 +246,7 @@ pub(super) async fn eligible_sidecar_agents(
         .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
     let mut eligible = BTreeSet::new();
     for record in records {
-        if let Some(agent_id) = record.get("agent_principal_id").and_then(Value::as_str)
+        if let Some(agent_id) = record.get("agent_id").and_then(Value::as_str)
             && agent_record_is_sidecar_eligible(state, realm_id, controller, &record)
         {
             eligible.insert(agent_id.to_owned());
@@ -269,10 +269,10 @@ pub(super) fn agent_record_is_sidecar_eligible(
     controller: &str,
     record: &Value,
 ) -> bool {
-    let Some(agent_id) = record.get("agent_principal_id").and_then(Value::as_str) else {
+    let Some(agent_id) = record.get("agent_id").and_then(Value::as_str) else {
         return false;
     };
-    if record.get("controller_did").and_then(Value::as_str) != Some(controller) {
+    if record.get("controller_id").and_then(Value::as_str) != Some(controller) {
         return false;
     }
     if record
@@ -376,7 +376,7 @@ pub(super) async fn ensure_sidecar_circle(
         "encryption_profile": "mls_rfc9420",
         "created_by": controller,
         "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
-        "controller_principal_id": controller,
+        "controller_id": controller,
         "controller_agent_circle_key": controller_agent_circle_key,
     });
     let payload = json!({
@@ -459,11 +459,7 @@ pub(super) fn find_sidecar_strand(
                 && strand.scope_circle_id.as_deref() == Some(circle_id)
                 && strand.fields.get("sidecar_profile").and_then(Value::as_str)
                     == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
-                && strand
-                    .fields
-                    .get("controller_principal_id")
-                    .and_then(Value::as_str)
-                    == Some(controller)
+                && strand.fields.get("controller_id").and_then(Value::as_str) == Some(controller)
                 && strand
                     .fields
                     .get("normalized_context_ref_digest")
@@ -500,7 +496,7 @@ pub(super) async fn ensure_sidecar_strand(
             "summary": "Controller-private AI sidecar thread",
             "fields": {
                 "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
-                "controller_principal_id": controller,
+                "controller_id": controller,
                 "normalized_context_ref": normalized_context_ref,
                 "normalized_context_ref_digest": normalized_context_ref_digest,
             },
@@ -575,7 +571,7 @@ pub(super) async fn ensure_sidecar_relation(
         .map_err(|err| AppError::internal(format!("generated relation id invalid: {err}")))?;
     let mut fields = json!({
         "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
-        "controller_principal_id": controller,
+        "controller_id": controller,
         "normalized_context_ref_digest": normalized_context_ref_digest,
     });
     if let Some(track_name) = track_name
@@ -625,7 +621,7 @@ pub(super) async fn ensure_sidecar_thread_impl(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     ensure_sidecar_controller_request(&body, &session)?;
-    let controller = body.controller_principal_id.as_str();
+    let controller = body.controller_id.as_str();
     let realm_id = body.context_ref.realm_id.clone();
     authorize_sidecar_ensure(state, controller, realm_id.as_str()).await?;
     let normalized_context_ref = normalize_sidecar_context_ref(&body.context_ref)?;
@@ -676,8 +672,8 @@ pub(super) async fn ensure_sidecar_thread_impl(
         Some(&session.actor),
         "ak.self.agent.sidecar_thread.command.ensure",
         json!({
-            "controller_principal_id": body.controller_principal_id,
-            "addressed_agent_principal_ids": addressed_agents,
+            "controller_id": body.controller_id,
+            "addressed_agent_ids": addressed_agents,
             "context_ref": normalized_context_ref,
             "normalized_context_ref_digest": normalized_context_ref_digest,
             "private_circle_id": private_circle_id,

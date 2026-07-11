@@ -75,7 +75,7 @@ pub(crate) async fn federation_actor_origin_acceptable(
     source_trust_domain: &str,
     binding_realm: &str,
 ) -> bool {
-    let actor_home_domain = super::trust_domain_from_service_did(actor);
+    let actor_home_domain = super::trust_domain_from_service_id(actor);
     if actor_home_domain == source_trust_domain {
         return true;
     }
@@ -84,7 +84,7 @@ pub(crate) async fn federation_actor_origin_acceptable(
 
 pub(super) async fn enforce_inbound_operation_batch_policy(
     state: &AppState,
-    origin_service_did: &str,
+    origin_service_id: &str,
     operations: &[Operation],
 ) -> Result<(), AppError> {
     if operations.len() > MAX_INBOUND_FEDERATION_OPERATIONS {
@@ -101,7 +101,7 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
     }
     // The origin peer authenticated as a service DID; derive its trust domain so
     // each operation's embedded author can be bound to it.
-    let origin_trust_domain = super::trust_domain_from_service_did(origin_service_did);
+    let origin_trust_domain = super::trust_domain_from_service_id(origin_service_id);
     for operation in operations {
         // SOL-SEC-01 — bind the operation's embedded actor DID to the origin
         // peer's domain before any side effect, so a verified peer cannot speak
@@ -126,14 +126,14 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
         enforce_realm_federation_policy(
             state,
             operation.realm_id.as_str(),
-            origin_service_did,
+            origin_service_id,
             None,
             FederationDirection::Inbound,
         )?;
         enforce_realm_moderation_federation_policy(
             state,
             operation.realm_id.as_str(),
-            origin_service_did,
+            origin_service_id,
             None,
             FederationDirection::Inbound,
         )?;
@@ -143,10 +143,10 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
             policy_actor
                 .as_ref()
                 .map(arkret_sdk::Did::as_str)
-                .unwrap_or(origin_service_did),
+                .unwrap_or(origin_service_id),
             operation,
             PolicyGateSurface::FederationInbound {
-                origin_service_did: origin_service_did.to_owned(),
+                origin_service_id: origin_service_id.to_owned(),
             },
         )
         .await
@@ -321,9 +321,9 @@ fn moderation_target_matches_peer(entry: &Value, peer_did: &str, peer_url: Optio
         .unwrap_or_default();
     let server_kind = matches!(
         kind,
-        "server" | "service" | "service_did" | "peer" | "federation_peer" | "federation_server"
+        "server" | "service" | "service_id" | "peer" | "federation_peer" | "federation_server"
     );
-    let did_matches = ["did", "service_did", "server_did", "peer_did", "target_did"]
+    let did_matches = ["did", "service_id", "server_did", "peer_did", "target_did"]
         .iter()
         .filter_map(|key| target.get(*key).or_else(|| entry.get(*key)))
         .any(|value| value.as_str() == Some(peer_did));

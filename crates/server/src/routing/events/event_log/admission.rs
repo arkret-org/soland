@@ -381,9 +381,9 @@ pub fn realm_policy_components_check(
 ///
 /// The recomputed value mirrors §10.5.1 rule 1 (`media_service_decrypts`) and
 /// rule 2 (the `purpose=media_plaintext` service DIDs in
-/// `plaintext_visible_services[]`). Service-DID extraction matches the shapes
+/// `plaintext_visible_services[]`). Service-ID extraction matches the shapes
 /// [`payload_declares_media_plaintext_service`] already accepts (bare string,
-/// `media_plaintext` sentinel, or `{purpose, service_did|did}` object) so the
+/// `media_plaintext` sentinel, or `{purpose, service_id|did}` object) so the
 /// digest input is consistent with the rule-2 presence gate; non-DID / sentinel
 /// entries that carry no concrete DID are skipped because the SDK digest is
 /// defined over concrete service DIDs.
@@ -412,7 +412,7 @@ fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_sdk
                         object.get("purpose").and_then(Value::as_str) == Some("media_plaintext");
                     if purpose_ok {
                         object
-                            .get("service_did")
+                            .get("service_id")
                             .or_else(|| object.get("did"))
                             .and_then(Value::as_str)
                     } else {
@@ -422,9 +422,9 @@ fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_sdk
                 _ => None,
             };
             if let Some(did_str) = did_str
-                && let Ok(service_did) = arkret_sdk::Did::new(did_str.to_owned())
+                && let Ok(service_id) = arkret_sdk::Did::new(did_str.to_owned())
             {
-                plaintext_visible_services.push(MediaPlaintextService { service_did });
+                plaintext_visible_services.push(MediaPlaintextService { service_id });
             }
         }
     }

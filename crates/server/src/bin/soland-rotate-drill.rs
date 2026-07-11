@@ -17,7 +17,7 @@
 //!    Exit 0 on full PASS, 1 on any assertion fail, 2 on prerequisite/IO.
 //!
 //! 2. `--export-only` — used by `scripts/backup-drill.sh`. Loads the KeyStore-persisted notary seed
-//!    (`arkret:signer:soland-notary:<service_did>`) and writes a single-key JSON snapshot to
+//!    (`arkret:signer:soland-notary:<service_id>`) and writes a single-key JSON snapshot to
 //!    `--output`.
 //!
 //! 3. `--import-only` — used by `scripts/restore-drill.sh`. Reads the JSON snapshot from `--input`
@@ -25,7 +25,7 @@
 //!
 //! All three modes honour the existing `PASION_*` / `SERVERX_*` env
 //! conventions:
-//!   - `SERVERX_SERVICE_DID` (or `--service-did`)
+//!   - `SERVERX_SERVICE_ID` (or `--service-did`)
 //!   - `PASION_TARGET_URL` / `SERVERX_PUBLIC_BASE_URL` (or `--target`)
 //!   - `PASION_SESSION_TOKEN` / `SERVERX_ADMIN_BEARER` (or `--bearer`)
 //!
@@ -49,7 +49,7 @@ enum Mode {
 #[derive(Clone, Debug)]
 struct Args {
     mode: Mode,
-    service_did: String,
+    service_id: String,
     target_url: Option<String>,
     bearer: Option<String>,
     realm_id: Option<String>,
@@ -60,11 +60,11 @@ struct Args {
 fn parse_args() -> anyhow::Result<Args> {
     let raw: Vec<String> = std::env::args().collect();
     let mut mode = Mode::RotateDrill;
-    // Canonical env is `SOLAND_SERVICE_DID` (see `config.rs`); default mirrors
+    // Canonical env is `SOLAND_SERVICE_ID` (see `config.rs`); default mirrors
     // the server's own did:webvh default. `did:web` is never the default — a
     // drill that silently signs against a forbidden DID would also derive the
-    // wrong notary KeyStore id (`arkret:signer:soland-notary:<service_did>`).
-    let mut service_did = std::env::var("SOLAND_SERVICE_DID").unwrap_or_else(|_| {
+    // wrong notary KeyStore id (`arkret:signer:soland-notary:<service_id>`).
+    let mut service_id = std::env::var("SOLAND_SERVICE_ID").unwrap_or_else(|_| {
         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
             .to_owned()
     });
@@ -93,7 +93,7 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "--service-did" => {
                 i += 1;
-                service_did = raw
+                service_id = raw
                     .get(i)
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("--service-did needs a value"))?;
@@ -148,7 +148,7 @@ fn parse_args() -> anyhow::Result<Args> {
                        --import-only    read seed from --input and write to KeyStore\n\
                      \n\
                      options:\n\
-                       --service-did <did>     SERVERX_SERVICE_DID (default: did:web:soland.local)\n\
+                       --service-did <did>     SERVERX_SERVICE_ID (default: did:web:soland.local)\n\
                        --target <url>          base URL of running soland (rotate-drill mode)\n\
                        --bearer <token>        admin session token (rotate-drill mode)\n\
                        --realm-id <id>         Realm id for the rotate endpoint path (required in rotate-drill mode)\n\
@@ -165,7 +165,7 @@ fn parse_args() -> anyhow::Result<Args> {
     let _ = explicit_mode; // surfaced for clarity; default is rotate-drill.
     Ok(Args {
         mode,
-        service_did,
+        service_id,
         target_url,
         bearer,
         realm_id,
@@ -216,9 +216,9 @@ enum DrillError {
     Assertion(String),
 }
 
-fn keystore_id(service_did: &str) -> (String, String) {
-    let app_id = format!("soland.{service_did}");
-    let key_id = format!("arkret:signer:soland-notary:{service_did}");
+fn keystore_id(service_id: &str) -> (String, String) {
+    let app_id = format!("soland.{service_id}");
+    let key_id = format!("arkret:signer:soland-notary:{service_id}");
     (app_id, key_id)
 }
 
@@ -229,7 +229,7 @@ fn run_export_only(args: &Args) -> Result<(), DrillError> {
         .output
         .as_deref()
         .ok_or_else(|| DrillError::Io("--export-only requires --output".to_owned()))?;
-    let (app_id, key_id) = keystore_id(&args.service_did);
+    let (app_id, key_id) = keystore_id(&args.service_id);
     let store = arkret_sdk::durable_platform_keystore(&app_id)
         .map_err(|e| DrillError::Io(format!("durable KeyStore unavailable: {e}")))?;
     let bytes = store
@@ -244,7 +244,7 @@ fn run_export_only(args: &Args) -> Result<(), DrillError> {
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let payload = serde_json::json!({
         "schema": "soland-rotate-drill.keystore-snapshot.v1",
-        "service_did": args.service_did,
+        "service_id": args.service_id,
         "key_id": key_id,
         "seed_b64": b64,
     });
@@ -286,7 +286,7 @@ fn run_import_only(args: &Args) -> Result<(), DrillError> {
             seed_bytes.len()
         )));
     }
-    let (app_id, key_id) = keystore_id(&args.service_did);
+    let (app_id, key_id) = keystore_id(&args.service_id);
     let store = arkret_sdk::durable_platform_keystore(&app_id)
         .map_err(|e| DrillError::Io(format!("durable KeyStore unavailable: {e}")))?;
     store
@@ -319,14 +319,14 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
     })?;
 
     eprintln!(
-        "[rotate-drill] target={target} service_did={}",
-        args.service_did
+        "[rotate-drill] target={target} service_id={}",
+        args.service_id
     );
 
     // ── 1. snapshot the OLD signing seed from the KeyStore ─────────────
     // This is later used to verify that an "old key" signature is
     // *rejected* by the in-process verifier after rotation.
-    let (app_id, key_id) = keystore_id(&args.service_did);
+    let (app_id, key_id) = keystore_id(&args.service_id);
     let store = arkret_sdk::durable_platform_keystore(&app_id)
         .map_err(|e| DrillError::Io(format!("durable KeyStore unavailable: {e}")))?;
     let old_seed_bytes = store
@@ -413,7 +413,7 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
     // assert verify_strict(new_pub, probe, sig) accepts.
     let probe_bytes = format!(
         "soland-rotate-drill probe v1 ({}) {}",
-        args.service_did,
+        args.service_id,
         chrono::Utc::now().to_rfc3339()
     )
     .into_bytes();

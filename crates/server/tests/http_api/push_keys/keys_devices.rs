@@ -366,14 +366,14 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "did:web:blob-bob.example",
     );
 
-    let service_did = state.config.service_did.clone();
+    let service_id = state.config.service_id.clone();
     let shared_plaintext_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
         "Shared Plaintext Blob Realm",
         None,
         "invite_only",
-        &[service_did.as_str()],
+        &[service_id.as_str()],
         &[],
     )
     .await;

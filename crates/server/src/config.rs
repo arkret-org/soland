@@ -5,12 +5,12 @@ pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_TO_DEVICE_QUEUE_CAPACITY: usize = 10_000;
 pub const PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV: &str = "SOLAND_PQ_TLS_DEPLOYMENT_PROBE";
 
-/// Built-in placeholder `service_did` used only when `SOLAND_SERVICE_DID` is
+/// Built-in placeholder `service_id` used only when `SOLAND_SERVICE_ID` is
 /// unset. It is deliberately a globally-shared, non-routable identity so a
 /// production deployment that boots without setting its own DID is rejected
 /// at startup (see [`AppConfig::from_env_and_args`]) rather than silently
 /// federating and signing under a fake shared identity.
-pub const PLACEHOLDER_SERVICE_DID: &str =
+pub const PLACEHOLDER_SERVICE_ID: &str =
     "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
 
 /// STUN URL shipped as the [`IceServersConfig::default`] value. A production
@@ -28,7 +28,7 @@ pub struct AppConfig {
     pub bind: SocketAddr,
     pub metrics_bind: SocketAddr,
     pub public_base_url: String,
-    pub service_did: String,
+    pub service_id: String,
     /// Optional TLS certificate PEM path. When both this and
     /// [`tls_key_path`] are configured, soland starts an HTTPS listener using
     /// Salvo's rustls integration instead of plain TCP.
@@ -130,23 +130,11 @@ pub struct AppConfig {
     /// — the env var holds the raw seed, base64-standard-padded; bad shape
     /// fails fast at startup with a clear error.
     pub notary_signing_key_seed: Option<[u8; 32]>,
-    /// Per-deployment Ed25519 seed used by the reference agent runtime
-    /// to sign `audit_binding` blocks on `ak.agent.interop_session.result`
-    /// events. When `None` (default), the bridge falls back to
-    /// `REFERENCE_AGENT_AUDIT_ED25519_SEED` — fine for dev / reference
-    /// deployments but provides no real authentication because every
-    /// other soland deployment can recompute the same signature.
-    ///
-    /// Env var `SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED` accepts a
-    /// 32-byte seed base64-standard-padded; bad shape fails fast at
-    /// startup. Production deployments SHOULD set this so the agent
-    /// service's verifying key is uniquely bound to the runtime.
-    pub agent_audit_binding_signing_seed: Option<[u8; 32]>,
     /// When true, the NotaryWorker loads its signing seed
-    /// from the SDK platform `KeyStore` (`durable_platform_keystore("soland.<service_did>")`)
+    /// from the SDK platform `KeyStore` (`durable_platform_keystore("soland.<service_id>")`)
     /// at boot and stores rotated keys back into the same KeyStore. When
     /// false (default), only `notary_signing_key_seed` (env-loaded) is
-    /// honored. The KeyStore key id is `arkret:signer:soland-notary:<service_did>`.
+    /// honored. The KeyStore key id is `arkret:signer:soland-notary:<service_id>`.
     ///
     /// Behavior when `use_keystore=true`:
     /// - First boot: try `KeyStore::load(...)`; on `not_found` fall back to
@@ -165,7 +153,7 @@ pub struct AppConfig {
     ///   on the hub for outbound dissemination.
     pub federation_fanout_topology: FederationFanoutTopology,
     /// Federation peers the outbound layer considers as broadcast targets
-    /// (mesh) or hub upstream (hub). Entries must be `base_url|service_did`
+    /// (mesh) or hub upstream (hub). Entries must be `base_url|service_id`
     /// so peer requests can bind destination-service-did. Empty disables
     /// federation outbound.
     pub federation_peers: Vec<String>,
@@ -180,7 +168,7 @@ pub struct AppConfig {
     /// Federation replica / observer admission posture (member-delivery-binding.md
     /// §4 delivery-binding gate). The inbound delivery-binding gate normally
     /// fails closed when a push targets a Realm this server already hosts but is
-    /// the effective `delivery_binding.recipient_service_did` for zero local
+    /// the effective `delivery_binding.recipient_service_id` for zero local
     /// members — there is then no local member binding the asserted frontier can
     /// correspond to. A conservative server (default `false`) rejects such
     /// pushes with `delivery_binding_stale`. A server explicitly deployed as a
@@ -220,8 +208,8 @@ pub struct AppConfig {
     /// Service DIDs allowed to be promoted from `trust_level=pending` to
     /// `trusted` on snapshot import. Empty (default) means imports stay at
     /// `pending` and have to be promoted manually via the live-fetch path.
-    /// Env: `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS` (comma-separated).
-    pub push_bridge_trusted_service_dids: Vec<String>,
+    /// Env: `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS` (comma-separated).
+    pub push_bridge_trusted_service_ids: Vec<String>,
     /// Resumable (tus) blob upload — staging directory for in-progress
     /// upload parts before they are completed into the blob store. See
     /// spec crypto-media/media-and-blob.md §2.1.
@@ -271,7 +259,7 @@ pub struct AppConfig {
     /// same proof bytes cannot be replayed cross-domain. Loaded from
     /// `SOLAND_TRUST_DOMAIN` (must match `ak:trust_domain:<scope>`,
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
-    /// Defaults to `ak:trust_domain:<host_of_service_did>`.
+    /// Defaults to `ak:trust_domain:<host_of_service_id>`.
     pub trust_domain: String,
     /// Deployment/admin upper bound for invite/contact receive policies.
     /// Constraints can only reduce holder reachability. Loaded from
@@ -573,7 +561,7 @@ impl AppConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             metrics_bind: "127.0.0.1:0".parse().unwrap(),
             public_base_url: "http://server".to_owned(),
-            service_did: "did:web:soland.local".to_owned(),
+            service_id: "did:web:soland.local".to_owned(),
             tls_cert_path: None,
             tls_key_path: None,
             database_url: None,
@@ -600,7 +588,6 @@ impl AppConfig {
             jws_replay_window_seconds: 300,
             jws_replay_window_per_family: Self::default_replay_overrides(),
             notary_signing_key_seed: None,
-            agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_fanout_topology: FederationFanoutTopology::Mesh,
             federation_peers: Vec::new(),
@@ -613,7 +600,7 @@ impl AppConfig {
             admin_principal_dids: Vec::new(),
             to_device_queue_capacity: 10_000,
             push_bridge_cache_ttl_seconds: 900,
-            push_bridge_trusted_service_dids: Vec::new(),
+            push_bridge_trusted_service_ids: Vec::new(),
             resumable_upload_dir: PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
             seal_compaction_min_age_seconds: 604_800,
@@ -645,8 +632,8 @@ impl AppConfig {
             .parse()?;
         let public_base_url =
             std::env::var("SOLAND_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
-        let service_did = env_non_empty("SOLAND_SERVICE_DID")
-            .unwrap_or_else(|| PLACEHOLDER_SERVICE_DID.to_owned());
+        let service_id =
+            env_non_empty("SOLAND_SERVICE_ID").unwrap_or_else(|| PLACEHOLDER_SERVICE_ID.to_owned());
         let tls_cert_path = env_non_empty("SOLAND_TLS_CERT_PATH").map(PathBuf::from);
         let tls_key_path = env_non_empty("SOLAND_TLS_KEY_PATH").map(PathBuf::from);
         if tls_cert_path.is_some() != tls_key_path.is_some() {
@@ -674,16 +661,14 @@ impl AppConfig {
         // When `SOLAND_BOOTSTRAP_SERVICE_IDENTITY=1` the placeholder is
         // tolerated at config load; the async boot resolve step then mints a
         // fresh `did:webvh` (or adopts a previously-persisted one) and overwrites
-        // `service_did` + `trust_domain` before anything signs under them.
+        // `service_id` + `trust_domain` before anything signs under them.
         let bootstrap_service_identity = std::env::var("SOLAND_BOOTSTRAP_SERVICE_IDENTITY")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
-        if !development_mode
-            && !bootstrap_service_identity
-            && service_did == PLACEHOLDER_SERVICE_DID
+        if !development_mode && !bootstrap_service_identity && service_id == PLACEHOLDER_SERVICE_ID
         {
             anyhow::bail!(
-                "SOLAND_SERVICE_DID is required when SOLAND_DEVELOPMENT_MODE is false (or set SOLAND_BOOTSTRAP_SERVICE_IDENTITY=1 to self-bootstrap a did:webvh); the built-in placeholder DID is a shared, non-routable identity"
+                "SOLAND_SERVICE_ID is required when SOLAND_DEVELOPMENT_MODE is false (or set SOLAND_BOOTSTRAP_SERVICE_IDENTITY=1 to self-bootstrap a did:webvh); the built-in placeholder DID is a shared, non-routable identity"
             );
         }
         // CORS posture per api-conventions.md §10 — browser clients SHOULD be
@@ -726,12 +711,6 @@ impl AppConfig {
             );
         }
         let notary_signing_key_seed = load_notary_signing_key_seed()?;
-        let agent_audit_binding_signing_seed = load_agent_audit_binding_signing_seed()?;
-        if !development_mode && agent_audit_binding_signing_seed.is_none() {
-            anyhow::bail!(
-                "SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED is required when SOLAND_DEVELOPMENT_MODE is false"
-            );
-        }
         let use_keystore = std::env::var("SOLAND_USE_KEYSTORE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
@@ -794,8 +773,8 @@ impl AppConfig {
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(900);
-        let push_bridge_trusted_service_dids =
-            std::env::var("SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS")
+        let push_bridge_trusted_service_ids =
+            std::env::var("SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS")
                 .ok()
                 .map(|value| {
                     value
@@ -858,7 +837,7 @@ impl AppConfig {
                 .unwrap_or_default();
         let candidate_join_policy_enabled =
             env_bool("SOLAND_CANDIDATE_JOIN_POLICY")?.unwrap_or(false);
-        let trust_domain = derive_trust_domain(&service_did)?;
+        let trust_domain = derive_trust_domain(&service_id)?;
         let receive_policy_constraints = load_receive_policy_constraints()?;
         let log_format = LogFormat::from_env(development_mode);
 
@@ -866,7 +845,7 @@ impl AppConfig {
             bind,
             metrics_bind,
             public_base_url,
-            service_did,
+            service_id,
             tls_cert_path,
             tls_key_path,
             database_url,
@@ -889,7 +868,6 @@ impl AppConfig {
             jws_replay_window_seconds,
             jws_replay_window_per_family: Self::default_replay_overrides(),
             notary_signing_key_seed,
-            agent_audit_binding_signing_seed,
             use_keystore,
             federation_fanout_topology,
             federation_peers,
@@ -900,7 +878,7 @@ impl AppConfig {
             admin_principal_dids,
             to_device_queue_capacity,
             push_bridge_cache_ttl_seconds,
-            push_bridge_trusted_service_dids,
+            push_bridge_trusted_service_ids,
             resumable_upload_dir,
             resumable_upload_incomplete_ttl_seconds,
             seal_compaction_min_age_seconds,
@@ -1271,46 +1249,14 @@ fn load_notary_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
     Ok(Some(seed))
 }
 
-/// Env-loaded Ed25519 seed for the reference agent runtime's
-/// `audit_binding` signer. Same shape rules as
-/// [`load_notary_signing_key_seed`] — base64-standard or
-/// url-safe-no-pad, MUST decode to exactly 32 bytes.
-fn load_agent_audit_binding_signing_seed() -> anyhow::Result<Option<[u8; 32]>> {
-    let raw = match std::env::var("SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED") {
-        Ok(value) => value.trim().to_owned(),
-        Err(_) => return Ok(None),
-    };
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    use base64::Engine as _;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(raw.as_bytes())
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(raw.as_bytes()))
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED must be base64 (standard or url-safe-no-pad): {e}"
-            )
-        })?;
-    if bytes.len() != 32 {
-        anyhow::bail!(
-            "SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED must decode to exactly 32 bytes (got {})",
-            bytes.len()
-        );
-    }
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&bytes);
-    Ok(Some(seed))
-}
-
 /// Round R2/R3 (T08) — derive a deployment-bound trust domain id.
 ///
 /// Order of resolution:
 /// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as `ak:trust_domain:<scope>` per SDK
 ///    [`arkret_sdk::TypedTrustDomainId`]).
-/// 2. Synthesised from the configured `service_did` — strip the DID method prefix and lowercase the
+/// 2. Synthesised from the configured `service_id` — strip the DID method prefix and lowercase the
 ///    remainder, then prefix with `ak:trust_domain:`.
-pub(crate) fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
+pub(crate) fn derive_trust_domain(service_id: &str) -> anyhow::Result<String> {
     if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
         // Validate via SDK typed id — rejects bad shape at boot.
         arkret_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {
@@ -1318,9 +1264,9 @@ pub(crate) fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
         })?;
         return Ok(value);
     }
-    let host = did_host_from_service_did(service_did)
-        .or_else(|| service_did.strip_prefix("did:key:").map(str::to_owned))
-        .unwrap_or_else(|| service_did.to_owned());
+    let host = did_host_from_service_id(service_id)
+        .or_else(|| service_id.strip_prefix("did:key:").map(str::to_owned))
+        .unwrap_or_else(|| service_id.to_owned());
     // Normalise to the SDK scope grammar: lowercase, keep
     // [a-z0-9.\-_:].
     let scope: String = host
@@ -1337,16 +1283,16 @@ pub(crate) fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     // Final safety check.
     arkret_sdk::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
         anyhow::anyhow!(
-            "derived trust_domain from service_did {service_did:?} failed validation: {e}"
+            "derived trust_domain from service_id {service_id:?} failed validation: {e}"
         )
     })?;
     Ok(candidate)
 }
 
-pub(crate) fn did_host_from_service_did(service_did: &str) -> Option<String> {
-    let host = if let Some(rest) = service_did.strip_prefix("did:web:") {
+pub(crate) fn did_host_from_service_id(service_id: &str) -> Option<String> {
+    let host = if let Some(rest) = service_id.strip_prefix("did:web:") {
         rest.split(':').next()?
-    } else if let Some(rest) = service_did.strip_prefix("did:webvh:") {
+    } else if let Some(rest) = service_id.strip_prefix("did:webvh:") {
         let mut parts = rest.split(':');
         let scid = parts.next()?;
         let host = parts.next()?;

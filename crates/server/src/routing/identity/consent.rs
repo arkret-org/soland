@@ -1348,8 +1348,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
     mutations: &[ConsentCellMutation],
 ) {
     let invalidated_action_scopes = revoke_target_scopes(scope);
-    let target_peer_service_dids =
-        consent_invalidation_peer_service_dids(state, holder, peer).await;
+    let target_peer_service_ids = consent_invalidation_peer_service_ids(state, holder, peer).await;
     let invalidated_quarantine_entries =
         match invalidate_quarantined_invites_for_revoke(state, holder, peer, scope, revoked_at)
             .await
@@ -1389,7 +1388,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
         "invalidated_action_scopes": invalidated_action_scopes,
         "invalidated_cache_scopes": CONSENT_SCOPE_CASCADE,
         "invalidated_channels": invalidated_channels,
-        "target_peer_service_dids": target_peer_service_dids,
+        "target_peer_service_ids": target_peer_service_ids,
         "local_quarantine_entries_invalidated": invalidated_quarantine_entries,
         "eager_invalidation": true,
         "scope_cascade_marker": if scope == "any" {
@@ -1429,7 +1428,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
 // scope=any cascade.
 // ────────────────────────────────────────────────────────────────────────
 
-async fn consent_invalidation_peer_service_dids(
+async fn consent_invalidation_peer_service_ids(
     state: &AppState,
     holder: &str,
     peer: &str,
@@ -1455,12 +1454,12 @@ async fn consent_invalidation_peer_service_dids(
             if !same_pair {
                 continue;
             }
-            if let Some(service_did) = record
-                .peer_service_did
+            if let Some(service_id) = record
+                .peer_service_id
                 .as_deref()
-                .filter(|value| *value != state.config.service_did)
+                .filter(|value| *value != state.config.service_id)
             {
-                services.insert(service_did.to_owned());
+                services.insert(service_id.to_owned());
             }
         }
     }
@@ -1657,7 +1656,7 @@ mod tests {
     fn test_config() -> AppConfig {
         AppConfig {
             public_base_url: "http://test".to_owned(),
-            service_did: "did:web:test.local".to_owned(),
+            service_id: "did:web:test.local".to_owned(),
             object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
             development_mode: true,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],

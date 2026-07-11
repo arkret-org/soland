@@ -40,7 +40,7 @@ struct FrankingProofVerifyRequestBody {
     #[serde(default)]
     sender_did: Option<String>,
     #[serde(default)]
-    receiving_service_did: Option<String>,
+    receiving_service_id: Option<String>,
     #[serde(default)]
     ciphertext_digest: Option<String>,
     #[serde(default)]
@@ -386,7 +386,7 @@ fn franking_proof_digest(proof: &FrankingProofVerifyRequestBody) -> String {
         "kind": proof.kind.as_deref().unwrap_or("ak.moderation.franking_proof"),
         "target_event_id": proof.target_event_id.as_deref().unwrap_or_default(),
         "sender_did": proof.sender_did.as_deref().unwrap_or_default(),
-        "receiving_service_did": proof.receiving_service_did.as_deref().unwrap_or_default(),
+        "receiving_service_id": proof.receiving_service_id.as_deref().unwrap_or_default(),
         "ciphertext_digest": proof.ciphertext_digest.as_deref().unwrap_or_default(),
         "event_canonical_digest": proof.event_canonical_digest.as_deref().unwrap_or_default(),
     });

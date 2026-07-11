@@ -271,10 +271,10 @@ async fn policy_components_media_plaintext_reads_realm_meta() {
                 encryption_profile: Some("mls_rfc9420".to_owned()),
                 plaintext_visible_services: std::collections::BTreeSet::from([state
                     .config
-                    .service_did
+                    .service_id
                     .clone()]),
                 plaintext_visible_service_classes: std::collections::BTreeMap::from([(
-                    state.config.service_did.clone(),
+                    state.config.service_id.clone(),
                     std::collections::BTreeSet::from([
                         arkret_sdk::PlaintextDataClassKind::MediaPlaintext,
                     ]),
@@ -730,7 +730,7 @@ async fn applet_registration_requires_realm_admin() {
             json!({
                 "sender": sender,
                 "applet_id": "ak:applet:01904100-0000-7000-8000-000000000a01",
-                "service_did": "did:web:slack-bridge.example",
+                "service_id": "did:web:slack-bridge.example",
                 "namespace": "slack",
             }),
         )

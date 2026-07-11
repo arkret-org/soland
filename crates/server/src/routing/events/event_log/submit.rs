@@ -100,7 +100,7 @@ const DELIVERY_BINDING_HANDOVER_GRACE_SECONDS: i64 = 86_400;
 struct DeliveryBindingMemberView {
     member: String,
     realm_id: String,
-    recipient_service_did: String,
+    recipient_service_id: String,
     membership_event_ref: Option<String>,
     delivery_binding_frontier_ref: String,
     updated_at: DateTime<Utc>,
@@ -110,7 +110,7 @@ struct DeliveryBindingMemberView {
 struct DeliveryBindingHandoverEvidence {
     realm_id: String,
     actor_id: Did,
-    new_recipient_service_did: Did,
+    new_recipient_service_id: Did,
     handover_frontier: Vec<EventId>,
     membership_event_ref: Option<String>,
     delivery_binding_frontier_ref: String,
@@ -446,7 +446,7 @@ pub(crate) async fn submit_federation_events(
     };
 
     let binding_realm = service_binding_ref.realm_id.as_str().to_owned();
-    let source_service_did = req
+    let source_service_id = req
         .headers()
         .get("source-service-did")
         .and_then(|value| value.to_str().ok())
@@ -457,7 +457,7 @@ pub(crate) async fn submit_federation_events(
     match crate::routing::federation::frontier_exchange::inbound_peer_is_stale(
         state,
         &binding_realm,
-        &source_service_did,
+        &source_service_id,
     )
     .await
     {
@@ -472,7 +472,7 @@ pub(crate) async fn submit_federation_events(
                 "peer.events.submit",
                 json!({
                     "realm_id": binding_realm,
-                    "source_service_did": source_service_did,
+                    "source_service_id": source_service_id,
                     "reason": "stale_peer",
                     "quarantine_count": quarantine.len()
                 }),
@@ -497,7 +497,7 @@ pub(crate) async fn submit_federation_events(
                 "peer.events.submit",
                 json!({
                     "realm_id": binding_realm,
-                    "source_service_did": source_service_did,
+                    "source_service_id": source_service_id,
                     "reason": "stale_peer_state_unavailable",
                     "error": error
                 }),
@@ -523,7 +523,7 @@ pub(crate) async fn submit_federation_events(
             res.status_code(StatusCode::CONFLICT);
             res.render(Json(
                 crate::routing::federation::federation::delivery_binding_stale_response(
-                    &evidence.new_recipient_service_did,
+                    &evidence.new_recipient_service_id,
                     &evidence.actor_id,
                     &evidence.handover_frontier,
                     evidence.witness,
@@ -535,7 +535,7 @@ pub(crate) async fn submit_federation_events(
             res.status_code(StatusCode::CONFLICT);
             res.render(Json(
                 crate::routing::federation::federation::delivery_binding_handed_over_response(
-                    &evidence.new_recipient_service_did,
+                    &evidence.new_recipient_service_id,
                 ),
             ));
             return;
@@ -550,7 +550,7 @@ pub(crate) async fn submit_federation_events(
     let profile_gate =
         match crate::routing::federation::federation::federation_profile_intersection_for_peer(
             state,
-            &source_service_did,
+            &source_service_id,
             Some(&source_trust_domain),
         )
         .await
@@ -573,7 +573,7 @@ pub(crate) async fn submit_federation_events(
                     json!({
                         "realm_id": binding_realm,
                         "source_trust_domain": source_trust_domain,
-                        "source_service_did": source_service_did,
+                        "source_service_id": source_service_id,
                         "request_canonical_digest": request_hash,
                         "accepted": Vec::<String>::new(),
                         "duplicate": Vec::<String>::new(),
@@ -662,7 +662,7 @@ pub(crate) async fn submit_federation_events(
             token_hash: format!("federation:{source_trust_domain}:{}", request_hash),
             actor,
             device_id,
-            audience: state.config.service_did.clone(),
+            audience: state.config.service_id.clone(),
             session_public_key: None,
             agent_session: None,
             expires_at: created_at + Duration::minutes(5),
@@ -802,14 +802,14 @@ mod federation_delivery_binding_tests {
 
     fn member_view(
         actor: &str,
-        recipient_service_did: &str,
+        recipient_service_id: &str,
         frontier: &EventId,
         updated_at: DateTime<Utc>,
     ) -> DeliveryBindingMemberView {
         DeliveryBindingMemberView {
             member: actor.to_owned(),
             realm_id: "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
-            recipient_service_did: recipient_service_did.to_owned(),
+            recipient_service_id: recipient_service_id.to_owned(),
             membership_event_ref: Some(frontier.as_str().to_owned()),
             delivery_binding_frontier_ref: frontier.as_str().to_owned(),
             updated_at,
@@ -876,7 +876,7 @@ mod federation_delivery_binding_tests {
         match result {
             FederationServiceBindingCheck::Stale(evidence) => {
                 assert_eq!(
-                    evidence.new_recipient_service_did.as_str(),
+                    evidence.new_recipient_service_id.as_str(),
                     "did:web:new.example"
                 );
                 assert_eq!(evidence.actor_id.as_str(), "did:web:alice.example");

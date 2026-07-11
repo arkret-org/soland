@@ -20,7 +20,7 @@ fn seed_state(history_visibility: &str) -> (ProjectionState, ServerHlc, chrono::
                 state: "join".to_owned(),
                 role: "member".to_owned(),
                 delivery_status: None,
-                recipient_service_did: None,
+                recipient_service_id: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,
                 invited_at: None,

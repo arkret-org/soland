@@ -9,7 +9,7 @@ use super::notary::{notary_value_from_cell, notary_value_object_from_body};
 use super::notary_cell_for;
 
 #[test]
-fn notary_value_from_cell_defaults_to_service_did_when_absent() {
+fn notary_value_from_cell_defaults_to_service_id_when_absent() {
     let resp = notary_value_from_cell(None, "did:web:soland.local").unwrap();
     assert_eq!(resp.kind_raw, "single_did");
     assert_eq!(resp.single_did.as_deref(), Some("did:web:soland.local"));

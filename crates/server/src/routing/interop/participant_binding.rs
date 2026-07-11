@@ -188,7 +188,7 @@ fn media_service_anchors(state: &AppState, realm_id: &str) -> Option<MediaServic
     }
     let service_id = config
         .get("service_id")
-        .or_else(|| config.get("service_did"))
+        .or_else(|| config.get("service_id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|id| !id.is_empty())

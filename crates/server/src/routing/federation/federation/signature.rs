@@ -174,15 +174,15 @@ fn verify_inbound_federation_http_signature_inner(
         ));
     }
 
-    let source_service_did = required_header(req, "source-service-did")?;
-    let destination_service_did = required_header(req, "destination-service-did")?;
+    let source_service_id = required_header(req, "source-service-did")?;
+    let destination_service_id = required_header(req, "destination-service-did")?;
     let source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
-    if destination_service_did != body_destination
-        || destination_service_did != state.config.service_did
+    if destination_service_id != body_destination
+        || destination_service_id != state.config.service_id
     {
         return Err(signature_error(
-            "Destination-Service-DID does not match the federation request destination",
+            "Destination-Service-ID does not match the federation request destination",
         ));
     }
     if destination_trust_domain != state.config.trust_domain {
@@ -190,27 +190,27 @@ fn verify_inbound_federation_http_signature_inner(
             "Destination-Trust-Domain does not match this service",
         ));
     }
-    let expected_source_trust_domain = trust_domain_from_service_did(&source_service_did);
+    let expected_source_trust_domain = trust_domain_from_service_id(&source_service_id);
     if source_trust_domain != expected_source_trust_domain {
         return Err(signature_error(
-            "Source-Trust-Domain does not match Source-Service-DID",
+            "Source-Trust-Domain does not match Source-Service-ID",
         ));
     }
 
     let target_uri = signature_target_uri(req, state);
     let authority = signature_authority(req, state);
     let endpoint_digest =
-        validate_destination_authority(state, req, &authority, &destination_service_did)?;
+        validate_destination_authority(state, req, &authority, &destination_service_id)?;
     let method = req.method().as_str().to_ascii_uppercase();
     let outer_params = signature_params(req, "signature-input")?;
-    validate_signature_params(&outer_params, &source_service_did, "outer")?;
+    validate_signature_params(&outer_params, &source_service_id, "outer")?;
     let outer_base = federation_http_signature_base(
         &method,
         &target_uri,
         &authority,
         &content_digest,
-        &source_service_did,
-        &destination_service_did,
+        &source_service_id,
+        &destination_service_id,
         &source_trust_domain,
         &destination_trust_domain,
         &request_digest,
@@ -221,12 +221,12 @@ fn verify_inbound_federation_http_signature_inner(
         state,
         req,
         "signature",
-        &source_service_did,
+        &source_service_id,
         &outer_base,
         "outer",
     )?;
 
-    if source_service_did != body_origin {
+    if source_service_id != body_origin {
         verify_relay_inner_signature(
             state,
             req,
@@ -234,8 +234,8 @@ fn verify_inbound_federation_http_signature_inner(
             &target_uri,
             &content_digest,
             body_origin,
-            &source_service_did,
-            &destination_service_did,
+            &source_service_id,
+            &destination_service_id,
             &request_digest,
         )?;
     }
@@ -314,14 +314,14 @@ fn verify_inbound_peer_http_signature_inner(
         (None, None)
     };
 
-    let source_service_did = required_header(req, "source-service-did")?;
-    let destination_service_did = required_header(req, "destination-service-did")?;
+    let source_service_id = required_header(req, "source-service-did")?;
+    let destination_service_id = required_header(req, "destination-service-did")?;
     let source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
 
-    if destination_service_did != state.config.service_did {
+    if destination_service_id != state.config.service_id {
         return Err(signature_error(
-            "Destination-Service-DID does not match this service",
+            "Destination-Service-ID does not match this service",
         ));
     }
     if destination_trust_domain != state.config.trust_domain {
@@ -329,27 +329,27 @@ fn verify_inbound_peer_http_signature_inner(
             "Destination-Trust-Domain does not match this service",
         ));
     }
-    let expected_source_trust_domain = trust_domain_from_service_did(&source_service_did);
+    let expected_source_trust_domain = trust_domain_from_service_id(&source_service_id);
     if source_trust_domain != expected_source_trust_domain {
         return Err(signature_error(
-            "Source-Trust-Domain does not match Source-Service-DID",
+            "Source-Trust-Domain does not match Source-Service-ID",
         ));
     }
 
     let target_uri = signature_target_uri(req, state);
     let authority = signature_authority(req, state);
     let endpoint_digest =
-        validate_destination_authority(state, req, &authority, &destination_service_did)?;
+        validate_destination_authority(state, req, &authority, &destination_service_id)?;
     let method = req.method().as_str().to_ascii_uppercase();
     let outer_params = signature_params(req, "signature-input")?;
-    validate_signature_params(&outer_params, &source_service_did, "outer")?;
+    validate_signature_params(&outer_params, &source_service_id, "outer")?;
     let outer_base = peer_http_signature_base(
         &method,
         &target_uri,
         &authority,
         content_digest.as_deref(),
-        &source_service_did,
-        &destination_service_did,
+        &source_service_id,
+        &destination_service_id,
         &source_trust_domain,
         &destination_trust_domain,
         request_digest.as_deref(),
@@ -360,12 +360,12 @@ fn verify_inbound_peer_http_signature_inner(
         state,
         req,
         "signature",
-        &source_service_did,
+        &source_service_id,
         &outer_base,
         "outer",
     )?;
 
-    if crate::security::federation_origin_denied(&source_service_did) {
+    if crate::security::federation_origin_denied(&source_service_id) {
         return Err(signature_error("peer is denied by local federation policy"));
     }
 
@@ -379,21 +379,21 @@ fn verify_relay_inner_signature(
     method: &str,
     target_uri: &str,
     content_digest: &str,
-    origin_service_did: &str,
-    relay_service_did: &str,
-    destination_service_did: &str,
+    origin_service_id: &str,
+    relay_service_id: &str,
+    destination_service_id: &str,
     request_digest: &str,
 ) -> Result<(), AppError> {
     let inner_params = signature_params(req, "relay-inner-signature-input")?;
-    validate_signature_params(&inner_params, origin_service_did, "relay inner")?;
+    validate_signature_params(&inner_params, origin_service_id, "relay inner")?;
     let inner_base = http_signature::signature_base(
         &[
             SignatureBaseComponent::required("@method", method),
             SignatureBaseComponent::required("@target-uri", target_uri),
             SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("origin-service-did", origin_service_did),
-            SignatureBaseComponent::required("relay-service-did", relay_service_did),
-            SignatureBaseComponent::required("destination-service-did", destination_service_did),
+            SignatureBaseComponent::required("origin-service-did", origin_service_id),
+            SignatureBaseComponent::required("relay-service-did", relay_service_id),
+            SignatureBaseComponent::required("destination-service-did", destination_service_id),
             SignatureBaseComponent::required("request-canonical-digest", request_digest),
         ],
         &inner_params,
@@ -402,7 +402,7 @@ fn verify_relay_inner_signature(
         state,
         req,
         "relay-inner-signature",
-        origin_service_did,
+        origin_service_id,
         &inner_base,
         "relay inner",
     )
@@ -414,8 +414,8 @@ fn federation_http_signature_base(
     target_uri: &str,
     authority: &str,
     content_digest: &str,
-    source_service_did: &str,
-    destination_service_did: &str,
+    source_service_id: &str,
+    destination_service_id: &str,
     source_trust_domain: &str,
     destination_trust_domain: &str,
     request_digest: &str,
@@ -428,8 +428,8 @@ fn federation_http_signature_base(
             SignatureBaseComponent::required("@target-uri", target_uri),
             SignatureBaseComponent::required("@authority", authority),
             SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("source-service-did", source_service_did),
-            SignatureBaseComponent::required("destination-service-did", destination_service_did),
+            SignatureBaseComponent::required("source-service-did", source_service_id),
+            SignatureBaseComponent::required("destination-service-did", destination_service_id),
             SignatureBaseComponent::required("source-trust-domain", source_trust_domain),
             SignatureBaseComponent::required("destination-trust-domain", destination_trust_domain),
             SignatureBaseComponent::required("request-canonical-digest", request_digest),
@@ -448,8 +448,8 @@ fn peer_http_signature_base(
     target_uri: &str,
     authority: &str,
     content_digest: Option<&str>,
-    source_service_did: &str,
-    destination_service_did: &str,
+    source_service_id: &str,
+    destination_service_id: &str,
     source_trust_domain: &str,
     destination_trust_domain: &str,
     request_digest: Option<&str>,
@@ -462,8 +462,8 @@ fn peer_http_signature_base(
             SignatureBaseComponent::required("@target-uri", target_uri),
             SignatureBaseComponent::required("@authority", authority),
             SignatureBaseComponent::optional("content-digest", content_digest),
-            SignatureBaseComponent::required("source-service-did", source_service_did),
-            SignatureBaseComponent::required("destination-service-did", destination_service_did),
+            SignatureBaseComponent::required("source-service-did", source_service_id),
+            SignatureBaseComponent::required("destination-service-did", destination_service_id),
             SignatureBaseComponent::required("source-trust-domain", source_trust_domain),
             SignatureBaseComponent::required("destination-trust-domain", destination_trust_domain),
             SignatureBaseComponent::optional("request-canonical-digest", request_digest),
@@ -477,8 +477,8 @@ fn peer_http_signature_base(
 }
 
 /// federation.md §3.2 line 105-106: verify the signed `@authority` host matches
-/// the endpoint registered for the Destination-Service-DID. Because the inbound
-/// path already enforces `destination_service_did == this service`, the
+/// the endpoint registered for the Destination-Service-ID. Because the inbound
+/// path already enforces `destination_service_id == this service`, the
 /// authoritative endpoint is this service's own published `public_base_url`.
 ///
 /// Returns the `Destination-Service-Endpoint-Digest` to bind into the transcript
@@ -489,7 +489,7 @@ fn validate_destination_authority(
     state: &AppState,
     req: &Request,
     authority: &str,
-    destination_service_did: &str,
+    destination_service_id: &str,
 ) -> Result<Option<String>, AppError> {
     // The registered endpoint authority for this (destination) service.
     if let Some(expected_authority) = public_base_url_authority(state)
@@ -497,7 +497,7 @@ fn validate_destination_authority(
     {
         crate::metrics::record_digest_mismatch("federation_authority_mismatch");
         return Err(signature_error(
-            "signed @authority host does not match the Destination-Service-DID endpoint",
+            "signed @authority host does not match the Destination-Service-ID endpoint",
         ));
     }
 
@@ -524,7 +524,7 @@ fn validate_destination_authority(
             ));
         }
         // Sanity: the digest must be for *this* service's destination DID.
-        debug_assert_eq!(destination_service_did, state.config.service_did);
+        debug_assert_eq!(destination_service_id, state.config.service_id);
         return Ok(Some(observed_digest));
     }
     Ok(None)
@@ -547,19 +547,19 @@ fn signature_params(req: &Request, header_name: &str) -> Result<String, AppError
 
 pub(super) fn validate_signature_params(
     signature_params: &str,
-    expected_service_did: &str,
+    expected_service_id: &str,
     label: &str,
 ) -> Result<(), AppError> {
-    let expected_keyid = format!("{expected_service_did}#federation-fanout-key");
-    let observed_keyid =
-        http_signature::signature_param_value(signature_params, "keyid").ok_or_else(|| {
+    let expected_keyid = format!("{expected_service_id}#federation-fanout-key");
+    let observed_keyid = http_signature::signature_param_value(signature_params, "keyid")
+        .ok_or_else(|| {
             signature_error(format!(
-                "{label} Signature-Input missing keyid; key_rotation_hint=refresh_origin_service_did"
+                "{label} Signature-Input missing keyid; key_rotation_hint=refresh_origin_service_id"
             ))
         })?;
     if observed_keyid != expected_keyid {
         return Err(signature_error(format!(
-            "{label} Signature-Input keyid mismatch; key_rotation_hint=refresh_origin_service_did"
+            "{label} Signature-Input keyid mismatch; key_rotation_hint=refresh_origin_service_id"
         )));
     }
     if http_signature::signature_param_value(signature_params, "alg").as_deref() != Some("ed25519")
@@ -592,7 +592,7 @@ fn verify_signature_header(
     state: &AppState,
     req: &Request,
     header_name: &str,
-    service_did: &str,
+    service_id: &str,
     signature_base: &str,
     label: &str,
 ) -> Result<(), AppError> {
@@ -603,61 +603,61 @@ fn verify_signature_header(
         |name| signature_error(format!("missing required federation header: {name}")),
         |message| {
             signature_error(format!(
-                "{label} signature decode failed: {message}; key_rotation_hint=refresh_origin_service_did"
+                "{label} signature decode failed: {message}; key_rotation_hint=refresh_origin_service_id"
             ))
         },
         || {
             signature_error(format!(
-                "{label} signature verification failed; key_rotation_hint=refresh_origin_service_did"
+                "{label} signature verification failed; key_rotation_hint=refresh_origin_service_id"
             ))
         },
-        || verifying_key_for_service_did(state, service_did),
+        || verifying_key_for_service_id(state, service_id),
     )
 }
 
 pub(super) fn origin_key_state_digest_for_service(
     state: &AppState,
-    service_did: &str,
+    service_id: &str,
 ) -> Result<String, AppError> {
-    let verifying_key = verifying_key_for_service_did(state, service_did)?;
+    let verifying_key = verifying_key_for_service_id(state, service_id)?;
     let mut hasher = Sha256::new();
     hasher.update(b"soland:federation-origin-key-state:v1:");
-    hasher.update(service_did.as_bytes());
+    hasher.update(service_id.as_bytes());
     hasher.update(verifying_key.to_bytes());
     Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
-fn verifying_key_for_service_did(
+fn verifying_key_for_service_id(
     state: &AppState,
-    service_did: &str,
+    service_id: &str,
 ) -> Result<VerifyingKey, AppError> {
-    if service_did == state.config.service_did {
+    if service_id == state.config.service_id {
         return Ok(state.notary_signing_key().verifying_key());
     }
-    if let Some(key) = configured_peer_verifying_key(service_did)? {
+    if let Some(key) = configured_peer_verifying_key(service_id)? {
         return Ok(key);
     }
     if state.config.development_mode {
         tracing::warn!(
-            service_did,
+            service_id,
             "development_mode accepted deterministic federation service key fallback"
         );
-        return Ok(development_service_signing_key(service_did).verifying_key());
+        return Ok(development_service_signing_key(service_id).verifying_key());
     }
-    let verification_method = format!("{service_did}#federation-fanout-key");
+    let verification_method = format!("{service_id}#federation-fanout-key");
     if let Ok(key) = crate::jws_verify::resolve_ed25519_pubkey(state, &verification_method) {
         return Ok(key);
     }
     Err(signature_error(
-        "source service key unavailable; key_rotation_hint=refresh_origin_service_did",
+        "source service key unavailable; key_rotation_hint=refresh_origin_service_id",
     ))
 }
 
-fn configured_peer_verifying_key(service_did: &str) -> Result<Option<VerifyingKey>, AppError> {
+fn configured_peer_verifying_key(service_id: &str) -> Result<Option<VerifyingKey>, AppError> {
     let Ok(raw) = std::env::var("SOLAND_FEDERATION_PEER_PUBLIC_KEYS") else {
         return Ok(None);
     };
-    let expected_method = format!("{service_did}#federation-fanout-key");
+    let expected_method = format!("{service_id}#federation-fanout-key");
     for entry in raw.split([',', ';', '\n']) {
         let entry = entry.trim();
         if entry.is_empty() {
@@ -670,7 +670,7 @@ fn configured_peer_verifying_key(service_did: &str) -> Result<Option<VerifyingKe
         else {
             continue;
         };
-        if id != service_did && id != expected_method {
+        if id != service_id && id != expected_method {
             continue;
         }
         return decode_peer_verifying_key(material)
@@ -696,8 +696,8 @@ fn decode_peer_verifying_key(material: &str) -> Result<VerifyingKey, String> {
     VerifyingKey::from_bytes(&raw).map_err(|error| format!("invalid Ed25519 key: {error}"))
 }
 
-fn development_service_signing_key(service_did: &str) -> SigningKey {
-    http_signature::deterministic_development_signing_key(b"soland:notary-ephemeral:", service_did)
+fn development_service_signing_key(service_id: &str) -> SigningKey {
+    http_signature::deterministic_development_signing_key(b"soland:notary-ephemeral:", service_id)
 }
 
 pub(in crate::routing) fn signature_target_uri(req: &Request, state: &AppState) -> String {
@@ -766,13 +766,13 @@ fn public_base_url_authority(state: &AppState) -> Option<String> {
     )
 }
 
-pub(crate) fn trust_domain_from_service_did(service_did: &str) -> String {
+pub(crate) fn trust_domain_from_service_id(service_id: &str) -> String {
     // Single canonical host parser lives in `crate::config`; delegate rather
     // than keep a second (previously casing-drifted) copy.
-    let scope = crate::config::did_host_from_service_did(service_did).unwrap_or_else(|| {
-        service_did
+    let scope = crate::config::did_host_from_service_id(service_id).unwrap_or_else(|| {
+        service_id
             .strip_prefix("did:key:")
-            .unwrap_or(service_did)
+            .unwrap_or(service_id)
             .to_ascii_lowercase()
             .replace(':', ".")
     });
@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn trust_domain_derives_webvh_host_not_scid() {
         assert_eq!(
-            trust_domain_from_service_did(
+            trust_domain_from_service_id(
                 "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service"
             ),
             "ak:trust_domain:local.host"

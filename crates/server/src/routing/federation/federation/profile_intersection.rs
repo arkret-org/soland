@@ -166,11 +166,11 @@ impl FederationProfileIntersection {
 
 pub(crate) async fn federation_profile_intersection_for_peer(
     state: &AppState,
-    source_service_did: &str,
+    source_service_id: &str,
     source_trust_domain: Option<&str>,
 ) -> Result<FederationProfileIntersection, FederationProfileGateRejection> {
     let local = local_semantic_claims(state);
-    let peer = peer_semantic_claims(state, source_service_did, source_trust_domain).await?;
+    let peer = peer_semantic_claims(state, source_service_id, source_trust_domain).await?;
     Ok(FederationProfileIntersection { local, peer })
 }
 
@@ -307,7 +307,7 @@ impl SemanticAtoms {
 
 fn local_semantic_claims(state: &AppState) -> SemanticClaims {
     let mut description = wire::describe(
-        &state.config.service_did,
+        &state.config.service_id,
         &state.config.public_base_url,
         state.db.mode(),
         state.config.development_mode,
@@ -331,15 +331,15 @@ fn local_semantic_claims(state: &AppState) -> SemanticClaims {
 
 async fn peer_semantic_claims(
     state: &AppState,
-    source_service_did: &str,
+    source_service_id: &str,
     source_trust_domain: Option<&str>,
 ) -> Result<SemanticClaims, FederationProfileGateRejection> {
     let mut profiles = BTreeSet::from([PROFILE_FEDERATION_MINIMAL.to_owned()]);
     let mut features = BTreeSet::new();
-    if let Some(description) = fetch_peer_description(state, source_service_did).await {
-        if description.service_did.as_str() != source_service_did {
+    if let Some(description) = fetch_peer_description(state, source_service_id).await {
+        if description.service_id.as_str() != source_service_id {
             return Err(FederationProfileGateRejection::profile_unsupported(
-                "peer ServiceDescribe service_did does not match Source-Service-DID",
+                "peer ServiceDescribe service_id does not match Source-Service-ID",
             ));
         }
         if let Some(expected_trust_domain) = source_trust_domain
@@ -359,9 +359,9 @@ async fn peer_semantic_claims(
 
 async fn fetch_peer_description(
     state: &AppState,
-    source_service_did: &str,
+    source_service_id: &str,
 ) -> Option<ServerDescription> {
-    let peer_url = super::peer_url_for_service_did(state, source_service_did)?;
+    let peer_url = super::peer_url_for_service_id(state, source_service_id)?;
     let url = format!("{}/_arkret/describe", peer_url.trim_end_matches('/'));
     let (url, client) = match crate::security::validate_http_url_for_egress_with_pinned_client(
         &url,
@@ -372,7 +372,7 @@ async fn fetch_peer_description(
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(
-                peer_service_did = %source_service_did,
+                peer_service_id = %source_service_id,
                 %error,
                 "peer ServiceDescribe URL rejected; falling back to federation_minimal profile surface"
             );
@@ -383,7 +383,7 @@ async fn fetch_peer_description(
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(
-                peer_service_did = %source_service_did,
+                peer_service_id = %source_service_id,
                 %url,
                 %error,
                 "peer ServiceDescribe fetch failed; falling back to federation_minimal profile surface"
@@ -396,7 +396,7 @@ async fn fetch_peer_description(
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(
-                peer_service_did = %source_service_did,
+                peer_service_id = %source_service_id,
                 %url,
                 %error,
                 "peer ServiceDescribe response body read failed; falling back to federation_minimal profile surface"
@@ -406,7 +406,7 @@ async fn fetch_peer_description(
     };
     if !status.is_success() {
         tracing::warn!(
-            peer_service_did = %source_service_did,
+            peer_service_id = %source_service_id,
             %url,
             %status,
             "peer ServiceDescribe returned non-success; falling back to federation_minimal profile surface"
@@ -417,7 +417,7 @@ async fn fetch_peer_description(
         Ok(description) => {
             if let Err(error) = description.validate() {
                 tracing::warn!(
-                    peer_service_did = %source_service_did,
+                    peer_service_id = %source_service_id,
                     %url,
                     %error,
                     "peer ServiceDescribe invariant validation failed; falling back to federation_minimal profile surface"
@@ -428,7 +428,7 @@ async fn fetch_peer_description(
         }
         Err(error) => {
             tracing::warn!(
-                peer_service_did = %source_service_did,
+                peer_service_id = %source_service_id,
                 %url,
                 %error,
                 "peer ServiceDescribe parse failed; falling back to federation_minimal profile surface"

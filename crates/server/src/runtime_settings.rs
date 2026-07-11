@@ -76,13 +76,13 @@ pub struct RuntimeSettings {
     /// Principal DIDs allowed to call the production-gated admin surfaces
     /// when `development_mode` is false.
     pub admin_principal_dids: Vec<String>,
-    /// Federation broadcast / hub-upstream target set (`base_url|service_did`).
+    /// Federation broadcast / hub-upstream target set (`base_url|service_id`).
     pub federation_peers: Vec<String>,
     /// Mesh vs hub outbound fanout topology.
     pub federation_fanout_topology: FederationFanoutTopology,
     /// Service DIDs promotable from `pending` to `trusted` on push-bridge
     /// snapshot import.
-    pub push_bridge_trusted_service_dids: Vec<String>,
+    pub push_bridge_trusted_service_ids: Vec<String>,
     /// Candidate join-policy member-application read surface toggle.
     pub candidate_join_policy_enabled: bool,
     /// Federation replica/observer admission posture.
@@ -100,7 +100,7 @@ impl RuntimeSettings {
             admin_principal_dids: config.admin_principal_dids.clone(),
             federation_peers: config.federation_peers.clone(),
             federation_fanout_topology: config.federation_fanout_topology,
-            push_bridge_trusted_service_dids: config.push_bridge_trusted_service_dids.clone(),
+            push_bridge_trusted_service_ids: config.push_bridge_trusted_service_ids.clone(),
             candidate_join_policy_enabled: config.candidate_join_policy_enabled,
             federation_replica_observer: config.federation_replica_observer,
             rate_limit: RateLimitSettings::from_limiter_config(&RateLimiterConfig::from_env(
@@ -137,8 +137,8 @@ impl RuntimeSettings {
             keys::FEDERATION_FANOUT_TOPOLOGY => {
                 self.federation_fanout_topology = decode(key, value)?
             }
-            keys::PUSH_BRIDGE_TRUSTED_SERVICE_DIDS => {
-                self.push_bridge_trusted_service_dids = decode(key, value)?
+            keys::PUSH_BRIDGE_TRUSTED_SERVICE_IDS => {
+                self.push_bridge_trusted_service_ids = decode(key, value)?
             }
             keys::CANDIDATE_JOIN_POLICY_ENABLED => {
                 self.candidate_join_policy_enabled = decode(key, value)?
@@ -165,8 +165,8 @@ impl RuntimeSettings {
             keys::FEDERATION_FANOUT_TOPOLOGY => {
                 serde_json::to_value(self.federation_fanout_topology)
             }
-            keys::PUSH_BRIDGE_TRUSTED_SERVICE_DIDS => {
-                serde_json::to_value(&self.push_bridge_trusted_service_dids)
+            keys::PUSH_BRIDGE_TRUSTED_SERVICE_IDS => {
+                serde_json::to_value(&self.push_bridge_trusted_service_ids)
             }
             keys::CANDIDATE_JOIN_POLICY_ENABLED => {
                 serde_json::to_value(self.candidate_join_policy_enabled)
@@ -198,7 +198,7 @@ pub mod keys {
     pub const ADMIN_PRINCIPAL_DIDS: &str = "admin_principal_dids";
     pub const FEDERATION_PEERS: &str = "federation_peers";
     pub const FEDERATION_FANOUT_TOPOLOGY: &str = "federation_fanout_topology";
-    pub const PUSH_BRIDGE_TRUSTED_SERVICE_DIDS: &str = "push_bridge_trusted_service_dids";
+    pub const PUSH_BRIDGE_TRUSTED_SERVICE_IDS: &str = "push_bridge_trusted_service_ids";
     pub const CANDIDATE_JOIN_POLICY_ENABLED: &str = "candidate_join_policy_enabled";
     pub const FEDERATION_REPLICA_OBSERVER: &str = "federation_replica_observer";
     pub const RATE_LIMIT: &str = "rate_limit";
@@ -208,7 +208,7 @@ pub mod keys {
         ADMIN_PRINCIPAL_DIDS,
         FEDERATION_PEERS,
         FEDERATION_FANOUT_TOPOLOGY,
-        PUSH_BRIDGE_TRUSTED_SERVICE_DIDS,
+        PUSH_BRIDGE_TRUSTED_SERVICE_IDS,
         CANDIDATE_JOIN_POLICY_ENABLED,
         FEDERATION_REPLICA_OBSERVER,
         RATE_LIMIT,
@@ -279,7 +279,7 @@ mod tests {
             admin_principal_dids: vec!["did:web:ops.example".to_owned()],
             federation_peers: vec!["https://peer.example|did:web:peer.example".to_owned()],
             federation_fanout_topology: FederationFanoutTopology::Hub,
-            push_bridge_trusted_service_dids: vec!["did:web:push.example".to_owned()],
+            push_bridge_trusted_service_ids: vec!["did:web:push.example".to_owned()],
             candidate_join_policy_enabled: true,
             federation_replica_observer: false,
             rate_limit: RateLimitSettings {
@@ -377,7 +377,7 @@ mod tests {
                 admin_principal_dids: vec![],
                 federation_peers: vec![],
                 federation_fanout_topology: FederationFanoutTopology::Mesh,
-                push_bridge_trusted_service_dids: vec![],
+                push_bridge_trusted_service_ids: vec![],
                 candidate_join_policy_enabled: false,
                 federation_replica_observer: false,
                 rate_limit: RateLimitSettings {

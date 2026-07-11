@@ -52,7 +52,7 @@ fn verify_federation_origin(origin: &str) -> bool {
 }
 
 fn federation_destination_matches(state: &AppState, destination: &str) -> bool {
-    destination == state.config.service_did
+    destination == state.config.service_id
 }
 
 // Router-facing endpoint handlers, re-exported at the original
@@ -67,7 +67,7 @@ use arkret_sdk::{Operation, RealmId};
 #[cfg(test)]
 use backfill::operation_frontier_value;
 // Cross-module helpers consumed elsewhere in `crate::routing`.
-pub(crate) use backfill::peer_url_for_service_did;
+pub(crate) use backfill::peer_url_for_service_id;
 // Outbound broadcast helpers used by the parent module's Move/Seal handlers.
 pub use backfill::{broadcast_move_to_peers, broadcast_seal_to_peers};
 // Imports re-exported for `federation_tests.rs` (`use super::*`) which relies
@@ -93,7 +93,7 @@ pub(crate) use profile_intersection::federation_profile_intersection_for_peer;
 use salvo::http::StatusCode;
 #[cfg(test)]
 use serde_json::{Value, json};
-pub(crate) use signature::trust_domain_from_service_did;
+pub(crate) use signature::trust_domain_from_service_id;
 pub(in crate::routing) use signature::{
     signature_authority, signature_target_uri, verify_inbound_peer_http_signature,
 };

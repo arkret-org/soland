@@ -15,7 +15,7 @@ pub(super) fn identity_trust_roots(state: &AppState) -> Vec<Value> {
         "id": "soland.local_identity_store",
         "kind": "local_identity_store",
         "profile": "ak.profile.identity_registry.v1",
-        "service_did": state.config.service_did,
+        "service_id": state.config.service_id,
         "trust_domain": state.config.trust_domain,
         "proof_verification": {
             "controller_proof": "eddsa-jcs-2022",

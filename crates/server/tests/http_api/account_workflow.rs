@@ -470,7 +470,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(bob_invites["invites"].as_array().unwrap().len(), 1);
     assert_eq!(bob_invites["invites"][0]["realm_id"], invite_realm_id);
     assert_eq!(
-        bob_invites["invites"][0]["third_party_id"]["recipient_service_did"],
+        bob_invites["invites"][0]["third_party_id"]["recipient_service_id"],
         "did:web:soland.local"
     );
     assert_eq!(

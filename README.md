@@ -62,7 +62,7 @@ Operator-visible highlights:
   source-key revocation return the cached body with
   `reason_code=historical_only`; no side effects.
 - **Delivery-binding handover error codes** —
-  `delivery_binding_stale` (with `new_recipient_service_did` +
+  `delivery_binding_stale` (with `new_recipient_service_id` +
   `handover_frontier`) and `delivery_binding_handed_over`.
 - **`ak.cross_signing.publish` CAS** —
   `expected_previous_generation == current && new = current + 1`,
@@ -77,7 +77,7 @@ operator must address at boot — see
 normative source. The key operational hooks:
 
 - **`SOLAND_TRUST_DOMAIN`** — required `ak:trust_domain:<scope>` value
-  (defaults to a value derived from the configured `service_did`).
+  (defaults to a value derived from the configured `service_id`).
   Enters the canonical transcript of every `ak.cross_signing.reset`
   proof; rotating this value invalidates outstanding proofs.
 - **Ephemeral kinds rejected on `POST /_arkret/self/events`** — producers
@@ -165,7 +165,7 @@ DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
 ```bash
 docker run --rm -p 8698:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
-  -e SOLAND_SERVICE_DID=did:webvh:<scid>:soland.example:webvh:service \
+  -e SOLAND_SERVICE_ID=did:webvh:<scid>:soland.example:webvh:service \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
@@ -190,7 +190,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_TLS_CERT_PATH` | unset | TLS certificate PEM path; when paired with `SOLAND_TLS_KEY_PATH`, soland serves HTTPS via rustls |
 | `SOLAND_TLS_KEY_PATH` | unset | TLS private-key PEM path paired with `SOLAND_TLS_CERT_PATH` |
 | `SOLAND_PQ_TLS_DEPLOYMENT_PROBE` | unset | Set to `verified` only after an external TLS 1.3 probe proves `X25519MLKEM768` negotiation and fail-closed classical fallback |
-| `SOLAND_SERVICE_DID` | `did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service` | Service DID — also the proof `audience` binding |
+| `SOLAND_SERVICE_ID` | `did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service` | Service DID — also the proof `audience` binding |
 | `SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED` | `true` | Enable soland's built-in `did:webvh` provider for coauth registration |
 | `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER` | unset | Shared bearer token coauth must present to write embedded `did:webvh` registrations |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider, such as a standalone StarID service |
@@ -255,7 +255,7 @@ and the `local.host.pem` / `local.host-key.pem` file names.
    ```dotenv
    SOLAND_BIND=127.0.0.1:443
    SOLAND_PUBLIC_BASE_URL=https://local.host:443
-   SOLAND_SERVICE_DID=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service
+   SOLAND_SERVICE_ID=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service
    SOLAND_TLS_CERT_PATH=./local.host.pem
    SOLAND_TLS_KEY_PATH=./local.host-key.pem
    SOLAND_OBJECT_STORAGE_BACKEND=filesystem
@@ -270,7 +270,7 @@ and the `local.host.pem` / `local.host-key.pem` file names.
    ```
 
 If you choose a different hostname, update `SOLAND_PUBLIC_BASE_URL`,
-`SOLAND_SERVICE_DID`, and the TLS file paths together. Use a host name that
+`SOLAND_SERVICE_ID`, and the TLS file paths together. Use a host name that
 contains a dot so embedded `did:webvh` URLs remain valid.
 
 ### Run local Caddy for coauth integration
@@ -288,7 +288,7 @@ Start soland on `127.0.0.1:8698`, start coauth on `127.0.0.1:7080`, then run:
 ```dotenv
 SOLAND_BIND=127.0.0.1:8698
 SOLAND_PUBLIC_BASE_URL=https://local.host
-SOLAND_SERVICE_DID=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service
+SOLAND_SERVICE_ID=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service
 SOLAND_DEVELOPMENT_MODE=true
 SOLAND_ACCOUNT_AUTHORITY_URL=https://auth.local.host
 SOLAND_OAUTH_CLIENT_ID=01GFWR28C4KNE04WG3HKXB7C9R
@@ -319,7 +319,7 @@ When `SOLAND_DEVELOPMENT_MODE=false` (the default), submitted commits must use
 production proof material — no `alg: none` or `dev-proof`, proof `payload_digest`
 must match the canonical commit digest, the verification method must be rooted
 in the commit author DID, and proof `domain`/`audience` must bind to
-`SOLAND_SERVICE_DID`.
+`SOLAND_SERVICE_ID`.
 
 `GET /_arkret/root/identity/describe` exposes `did_webvh.providers[]` for coauth.
 When the embedded provider is enabled, coauth can register through

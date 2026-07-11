@@ -23,7 +23,7 @@ pub(crate) async fn append_encrypted_message_franking(
         "realm_id": parsed.realm_id,
         "target_event_id": parsed.event_id,
         "sender_did": parsed.actor_id,
-        "receiving_service_did": state.config.service_did,
+        "receiving_service_id": state.config.service_id,
         "ciphertext_digest": ciphertext_digest,
         "event_canonical_digest": parsed.canonical_digest,
         "timestamp": now(),
@@ -85,7 +85,7 @@ fn franking_proof_digest(proof: &Value) -> String {
             .unwrap_or(arkret_sdk::events::kinds::MODERATION_FRANKING_PROOF),
         "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
         "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
-        "receiving_service_did": proof.get("receiving_service_did").and_then(Value::as_str).unwrap_or_default(),
+        "receiving_service_id": proof.get("receiving_service_id").and_then(Value::as_str).unwrap_or_default(),
         "ciphertext_digest": proof.get("ciphertext_digest").and_then(Value::as_str).unwrap_or_default(),
         "event_canonical_digest": proof.get("event_canonical_digest").and_then(Value::as_str).unwrap_or_default(),
     });

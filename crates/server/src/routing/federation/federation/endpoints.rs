@@ -325,7 +325,7 @@ pub(crate) async fn federation_transaction(
 
 fn local_peer_policy_digest_for_transaction(
     state: &AppState,
-    origin_service_did: &str,
+    origin_service_id: &str,
     body: &arkret_sdk::FederationTransactionRequestBody,
 ) -> Result<String, AppError> {
     let live_settings = state.settings();
@@ -368,12 +368,12 @@ fn local_peer_policy_digest_for_transaction(
     };
     let policy_state = json!({
         "schema": "ak.federation.local_peer_policy_digest.v1",
-        "source_service_did": origin_service_did,
-        "destination_service_did": body.destination.as_str(),
+        "source_service_id": origin_service_id,
+        "destination_service_id": body.destination.as_str(),
         "service_binding_ref": body.service_binding_ref.as_str(),
         "fanout_topology": live_settings.federation_fanout_topology.as_str(),
         "federation_peers": federation_peers,
-        "source_denied": crate::security::federation_origin_denied(origin_service_did),
+        "source_denied": crate::security::federation_origin_denied(origin_service_id),
         "max_inbound_operations": MAX_INBOUND_FEDERATION_OPERATIONS,
         "realm_policies": realm_policies,
         "realm_moderation_policies": moderation_policies,
@@ -540,7 +540,7 @@ pub(crate) async fn federation_pull_operations(
             .map(|seal| {
                 json!({
                     "realm_id": realm_id.clone(),
-                    "service_did": state.config.service_did.clone(),
+                    "service_id": state.config.service_id.clone(),
                     "service_type": "principal_server",
                     "role": "primary",
                     "endpoint": state.config.public_base_url.clone(),
@@ -934,7 +934,7 @@ pub(crate) async fn federation_seals_push(
     //      exactly like the sibling `federation_transaction` / `federation_push_operations` tracks
     //      run `federation_actor_origin_acceptable` per operation. A signed peer MUST NOT be able
     //      to push Seals covering Moves authored in a trust domain it does not speak for.
-    let origin_trust_domain = super::signature::trust_domain_from_service_did(&body.origin);
+    let origin_trust_domain = super::signature::trust_domain_from_service_id(&body.origin);
     let mut accepted: Vec<String> = Vec::new();
     let mut rejected: Vec<serde_json::Value> = Vec::new();
     'seals: for seal in body.seals {

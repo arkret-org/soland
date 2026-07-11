@@ -633,7 +633,7 @@ fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
 fn base_search_policy() -> Value {
     serde_json::json!({
         "enabled_profile_refs": ["ak.profile.search.blind_index.v1"],
-        "allowed_service_dids": ["did:web:search.example"],
+        "allowed_service_ids": ["did:web:search.example"],
         "data_classes": ["blind_tokens"],
         "revocation_behavior": "fail_closed",
         "leakage_class": "deterministic_token",

@@ -10,7 +10,7 @@ use soland::state::{CanonicalEventRecord, RealmMetaRecord};
 use super::common::*;
 
 const PEER_SOURCE_DID: &str = "did:web:remote.example";
-const SERVICE_DID: &str = "did:web:soland.local";
+const SERVICE_ID: &str = "did:web:soland.local";
 const TEST_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
 const TEST_CIRCLE_ID: &str = "ak:circle:0196419b-0000-7000-8000-0000000000c1";
 
@@ -114,7 +114,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
             .unwrap()
             .starts_with("sha256:")
     );
-    assert_eq!(frontier["issuer"], SERVICE_DID);
+    assert_eq!(frontier["issuer"], SERVICE_ID);
     assert_eq!(frontier["signature"]["alg"], "EdDSA");
     assert_eq!(
         frontier["signature"]["signed_payload"]["frontier_root"],
@@ -142,7 +142,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let body = peer_submit_body(&overflow);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
-    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
+    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, target, &body)
     {
         submit = submit.add_header(name, value, true);
     }
@@ -239,7 +239,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     let body = peer_submit_body(&event);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
-    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
+    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, target, &body)
     {
         submit = submit.add_header(name, value, true);
     }
@@ -279,7 +279,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     let body = peer_submit_body(&event);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
-    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
+    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, target, &body)
     {
         submit = submit.add_header(name, value, true);
     }
@@ -409,7 +409,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     });
     let mut resolve = TestClient::post(resolve_target).json(&resolve_body);
     for (name, value) in
-        signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, resolve_target, &resolve_body)
+        signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, resolve_target, &resolve_body)
     {
         resolve = resolve.add_header(name, value, true);
     }
@@ -484,7 +484,7 @@ async fn submit_peer_event(state: AppState, event: &Value) -> Value {
     let body = peer_submit_body(event);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
-    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
+    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, target, &body)
     {
         submit = submit.add_header(name, value, true);
     }
@@ -497,14 +497,10 @@ async fn submit_peer_event(state: AppState, event: &Value) -> Value {
 }
 
 fn peer_get_headers(target_uri: &str) -> Vec<(&'static str, String)> {
-    signed_federation_get_headers(PEER_SOURCE_DID, SERVICE_DID, target_uri)
+    signed_federation_get_headers(PEER_SOURCE_DID, SERVICE_ID, target_uri)
 }
 
-async fn seed_peer_read_authorization(
-    state: &AppState,
-    source_service_did: &str,
-    member_did: &str,
-) {
+async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str, member_did: &str) {
     let now = Utc::now() - ChronoDuration::seconds(60);
     let mut meta = state
         .persistence
@@ -531,9 +527,9 @@ async fn seed_peer_read_authorization(
             updated_at: now,
         });
     meta.plaintext_visible_services
-        .insert(source_service_did.to_owned());
+        .insert(source_service_id.to_owned());
     meta.plaintext_visible_service_classes
-        .entry(source_service_did.to_owned())
+        .entry(source_service_id.to_owned())
         .or_default()
         .insert(arkret_sdk::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;
@@ -547,7 +543,7 @@ async fn seed_peer_read_authorization(
         state,
         realm_sync_endpoint_event(
             "ak:event:01904100-0000-7000-8000-fede0000a001",
-            source_service_did,
+            source_service_id,
             21,
         ),
         now,
@@ -558,7 +554,7 @@ async fn seed_peer_read_authorization(
         member_binding_event(
             "ak:event:01904100-0000-7000-8000-fede0000a002",
             member_did,
-            source_service_did,
+            source_service_id,
             22,
         ),
         now + ChronoDuration::seconds(1),
@@ -566,11 +562,11 @@ async fn seed_peer_read_authorization(
     .await;
 }
 
-fn realm_sync_endpoint_event(event_id: &str, source_service_did: &str, seq: u64) -> Value {
+fn realm_sync_endpoint_event(event_id: &str, source_service_id: &str, seq: u64) -> Value {
     let payload = serde_json::json!({
         "object": {
             "sync_endpoints": [{
-                "did": source_service_did,
+                "did": source_service_id,
                 "endpoint": "https://remote.example",
                 "role": "federation_peer",
                 "service_type": "principal_server",
@@ -592,7 +588,7 @@ fn realm_sync_endpoint_event(event_id: &str, source_service_did: &str, seq: u64)
 fn member_binding_event(
     event_id: &str,
     member_did: &str,
-    source_service_did: &str,
+    source_service_id: &str,
     seq: u64,
 ) -> Value {
     let payload = serde_json::json!({
@@ -601,7 +597,7 @@ fn member_binding_event(
         "role": "member",
         "delivery_status": "routable",
         "delivery_binding": {
-            "recipient_service_did": source_service_did,
+            "recipient_service_id": source_service_id,
             "binding_source": "explicit",
             "delivery_binding_frontier": "ak:frontier:peer-read-test"
         }
@@ -719,8 +715,8 @@ fn event_envelope(
         "actor_seq": actor_seq,
         "realm_id": TEST_REALM_ID,
         "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": SERVICE_DID,
-        "domain": SERVICE_DID,
+        "audience": SERVICE_ID,
+        "domain": SERVICE_ID,
         "prev_refs": [],
         "auth_refs": [],
         "payload": payload,
@@ -728,8 +724,8 @@ fn event_envelope(
             "type": "dev-proof",
             "verification_method": format!("{actor_id}#01904100-0000-7000-8000-a11ce0000001"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": SERVICE_DID,
-            "domain": SERVICE_DID,
+            "audience": SERVICE_ID,
+            "domain": SERVICE_ID,
             "payload_digest": sha256_json(&payload)
         }]
     });

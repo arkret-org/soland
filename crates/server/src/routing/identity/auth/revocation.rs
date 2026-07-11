@@ -52,7 +52,7 @@ pub async fn active_delegated_sessions_for_actor(
 pub async fn revoke_delegated_sessions_for_applet(
     state: &AppState,
     applet_id: &str,
-    service_did: Option<&str>,
+    service_id: Option<&str>,
     grant_refs: &[String],
 ) -> Result<Vec<String>, String> {
     let revoked_at = now();
@@ -66,7 +66,7 @@ pub async fn revoke_delegated_sessions_for_applet(
     for mut session in sessions.into_iter().filter(|session| {
         session.revoked_at.is_none()
             && session.agent_session.as_ref().is_some_and(|agent| {
-                delegated_session_matches_applet(agent, applet_id, service_did, grant_refs)
+                delegated_session_matches_applet(agent, applet_id, service_id, grant_refs)
             })
     }) {
         session.revoked_at = Some(revoked_at);
@@ -86,11 +86,11 @@ pub async fn revoke_delegated_sessions_for_applet(
 fn delegated_session_matches_applet(
     agent: &AgentSessionRecord,
     applet_id: &str,
-    service_did: Option<&str>,
+    service_id: Option<&str>,
     grant_refs: &[String],
 ) -> bool {
     json_contains_string(&agent.scope_details, applet_id)
-        || service_did.is_some_and(|did| json_contains_string(&agent.scope_details, did))
+        || service_id.is_some_and(|did| json_contains_string(&agent.scope_details, did))
         || grant_refs
             .iter()
             .any(|grant_ref| json_contains_string(&agent.scope_details, grant_ref))
@@ -283,7 +283,7 @@ pub fn token_for(actor: &str, device_id: &str, expires_ms: i64) -> String {
     format!("sx_{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
 
-/// Service-DID bound hash of a session credential, used as the persistence key
+/// Service-ID bound hash of a session credential, used as the persistence key
 /// so cross-service credentials can never collide.
 pub fn session_credential_hash(token: &str, audience: &str) -> String {
     let mut hasher = Sha256::new();

@@ -3,27 +3,12 @@ const REALM: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
 const AGENT: &str = "did:web:agent.example";
 const REQUEST: &str = "ak:agent-action-request:01904100-0000-7000-8000-cfc039892037";
 
-fn agent_endpoint() -> Operation {
-    make_operation(
-        arkret_sdk::events::kinds::AGENT_ENDPOINT,
-        REALM,
-        serde_json::json!({
-            "agent_id": AGENT,
-            "protocol": "echo",
-            "endpoints": [{
-                "protocol": "https-json",
-                "endpoint_url": "https://agent.example/runtime"
-            }]
-        }),
-    )
-}
-
 fn action_request(request_id: &str) -> Operation {
     make_operation(
         arkret_sdk::events::kinds::AGENT_ACTION_REQUEST,
         REALM,
         serde_json::json!({
-            "agent_principal_id": AGENT,
+            "agent_id": AGENT,
             "request_id": request_id
         }),
     )
@@ -36,8 +21,8 @@ fn action_approve(request_id: &str) -> Operation {
         serde_json::json!({
             "approval_id": "ak:agent-approval:01904100-0000-7000-8000-cfc039892038",
             "request_id": request_id,
-            "agent_principal_id": AGENT,
-            "controller_principal_id": "did:web:controller.example",
+            "agent_id": AGENT,
+            "controller_id": "did:web:controller.example",
             "proposed_action": "ak.message.create",
             "target": { "kind": "realm", "realm_id": REALM },
             "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -53,7 +38,7 @@ fn pause_agent() -> Operation {
         arkret_sdk::events::kinds::AGENT_PAUSE,
         REALM,
         serde_json::json!({
-            "agent_principal_id": AGENT,
+            "agent_id": AGENT,
             "status_changed_at": "2026-06-19T00:00:00Z"
         }),
     )
@@ -64,7 +49,7 @@ fn resume_agent() -> Operation {
         arkret_sdk::events::kinds::AGENT_RESUME,
         REALM,
         serde_json::json!({
-            "agent_principal_id": AGENT,
+            "agent_id": AGENT,
             "status_changed_at": "2026-06-19T00:01:00Z"
         }),
     )
@@ -75,19 +60,16 @@ fn deactivate_agent() -> Operation {
         arkret_sdk::events::kinds::AGENT_DEACTIVATE,
         REALM,
         serde_json::json!({
-            "agent_principal_id": AGENT,
+            "agent_id": AGENT,
             "status_changed_at": "2026-06-19T00:02:00Z"
         }),
     )
 }
 
 #[test]
-fn pause_revokes_endpoint_and_pending_action_requests() {
+fn pause_cancels_pending_action_requests() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-
-    state.apply(&agent_endpoint(), &hlc);
-    assert!(state.agents.contains_key(AGENT));
 
     state.apply(&action_request(REQUEST), &hlc);
     assert_eq!(
@@ -99,45 +81,15 @@ fn pause_revokes_endpoint_and_pending_action_requests() {
     assert!(matches!(
         effect,
         ProjectionEffect::AgentLifecycleProjected {
-            agent_principal_id,
+            agent_id,
             new_state: AgentLifecycleState::Paused,
-        } if agent_principal_id == AGENT
+        } if agent_id == AGENT
     ));
-    assert!(!state.agents.contains_key(AGENT));
     let request = &state.agent_action_requests[REQUEST];
     assert_eq!(request.status, AgentActionRequestStatus::Cancelled);
     assert_eq!(request.cancel_reason.as_deref(), Some("agent_paused"));
     assert!(request.resolved_at.is_some());
     assert!(request.resolution_event_id.is_some());
-}
-
-#[test]
-fn lifecycle_state_blocks_endpoint_reregistration_until_resume() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-
-    state.apply(&pause_agent(), &hlc);
-    let paused_effect = state.apply(&agent_endpoint(), &hlc);
-    assert!(matches!(
-        paused_effect,
-        ProjectionEffect::Rejected { reason } if reason == "agent_paused"
-    ));
-
-    state.apply(&resume_agent(), &hlc);
-    let active_effect = state.apply(&agent_endpoint(), &hlc);
-    assert!(matches!(
-        active_effect,
-        ProjectionEffect::AgentProjectionUpdated { agent_id } if agent_id == AGENT
-    ));
-    assert!(state.agents.contains_key(AGENT));
-
-    state.apply(&deactivate_agent(), &hlc);
-    assert!(!state.agents.contains_key(AGENT));
-    let deactivated_effect = state.apply(&agent_endpoint(), &hlc);
-    assert!(matches!(
-        deactivated_effect,
-        ProjectionEffect::Rejected { reason } if reason == "agent_deactivated"
-    ));
 }
 
 #[test]

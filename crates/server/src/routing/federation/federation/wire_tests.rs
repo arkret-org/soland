@@ -65,7 +65,7 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
     );
     assert_eq!(
         response
-            .pointer("/error/details/new_recipient_service_did")
+            .pointer("/error/details/new_recipient_service_id")
             .and_then(Value::as_str),
         Some("did:web:bob.example")
     );
@@ -83,7 +83,7 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
     );
     assert_eq!(
         response
-            .pointer("/error/details/handover_proof/recipient_service_did")
+            .pointer("/error/details/handover_proof/recipient_service_id")
             .and_then(Value::as_str),
         Some("did:web:bob.example")
     );
@@ -110,7 +110,7 @@ fn delivery_binding_handed_over_response_carries_new_service() {
     );
     assert_eq!(
         response
-            .pointer("/error/details/new_recipient_service_did")
+            .pointer("/error/details/new_recipient_service_id")
             .and_then(Value::as_str),
         Some("did:web:bob.example")
     );

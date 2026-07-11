@@ -45,7 +45,7 @@ CREATE TABLE public.handle_releases (
 
 CREATE TABLE public.agent_keys (
     id uuid NOT NULL,
-    agent_principal_id text NOT NULL,
+    agent_id text NOT NULL,
     verification_method text NOT NULL,
     state text DEFAULT 'authorized'::text NOT NULL,
     authorized_at timestamp with time zone NOT NULL,
@@ -56,7 +56,7 @@ CREATE TABLE public.agent_keys (
 
 CREATE TABLE public.agent_participation (
     id uuid NOT NULL,
-    agent_principal_id text NOT NULL,
+    agent_id text NOT NULL,
     scope_kind text NOT NULL,
     scope_key text NOT NULL,
     realm_id uuid NOT NULL,
@@ -82,7 +82,6 @@ CREATE TABLE public.agent_participation_ceiling (
 CREATE TABLE public.agent_principals (
     id text NOT NULL,
     controller_id text NOT NULL,
-    agent_id text NOT NULL,
     display_name text NOT NULL,
     agent_slug text,
     state text DEFAULT 'active'::text NOT NULL,
@@ -109,7 +108,7 @@ CREATE TABLE public.agent_principals (
 
 CREATE TABLE public.agent_sessions (
     id uuid NOT NULL,
-    agent_principal_id text NOT NULL,
+    agent_id text NOT NULL,
     verification_method text NOT NULL,
     runtime_attestation jsonb,
     state text DEFAULT 'active'::text NOT NULL,
@@ -145,7 +144,7 @@ CREATE TABLE public.applet_registrations (
 );
 
 CREATE TABLE public.applet_transactions (
-    source_service_did text NOT NULL,
+    source_service_id text NOT NULL,
     idempotency_key text NOT NULL,
     source_signature_anchor text NOT NULL,
     request_digest text NOT NULL,
@@ -465,7 +464,7 @@ CREATE TABLE public.federation_outbox_dead_letter (
 
 CREATE TABLE public.federation_frontier_exchange (
     realm_id uuid NOT NULL,
-    peer_service_did text NOT NULL,
+    peer_service_id text NOT NULL,
     status text NOT NULL,
     consecutive_failures integer DEFAULT 0 NOT NULL,
     last_success_at bigint,
@@ -731,7 +730,7 @@ CREATE TABLE public.notifications (
 
 CREATE TABLE public.pending_agent_drafts (
     id uuid NOT NULL,
-    agent_principal_id text NOT NULL,
+    agent_id text NOT NULL,
     controller_id text NOT NULL,
     draft_payload jsonb NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
@@ -1117,12 +1116,12 @@ CREATE TABLE public.webvh_log_events (
 -- The deployment's own authoritative service identity (identity-did.md §3.7).
 -- Singleton: at most one row keyed by the fixed id 'self'. `provenance` is
 -- 'bootstrapped_local' (soland self-minted its did:webvh + hosts the log) or
--- 'adopted_config' (a pre-existing / external service_did recorded from config
+-- 'adopted_config' (a pre-existing / external service_id recorded from config
 -- on first boot). This row is the fail-closed source of truth; a configured
--- SOLAND_SERVICE_DID that disagrees with it MUST reject startup.
+-- SOLAND_SERVICE_ID that disagrees with it MUST reject startup.
 CREATE TABLE public.service_identity (
     id text NOT NULL,
-    service_did text NOT NULL,
+    service_id text NOT NULL,
     provenance text NOT NULL,
     did_document jsonb DEFAULT '{}'::jsonb NOT NULL,
     update_key_seed_multibase text,
@@ -1165,7 +1164,7 @@ ALTER TABLE ONLY public.agent_participation
     ADD CONSTRAINT agent_participation_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.agent_participation
-    ADD CONSTRAINT agent_participation_agent_principal_id_scope_key_key UNIQUE (agent_principal_id, scope_key);
+    ADD CONSTRAINT agent_participation_agent_id_scope_key_key UNIQUE (agent_id, scope_key);
 
 ALTER TABLE ONLY public.agent_principals
     ADD CONSTRAINT agent_principals_pkey PRIMARY KEY (id);
@@ -1177,7 +1176,7 @@ ALTER TABLE ONLY public.applet_registrations
     ADD CONSTRAINT applet_registrations_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.applet_transactions
-    ADD CONSTRAINT applet_transactions_pkey PRIMARY KEY (source_service_did, idempotency_key);
+    ADD CONSTRAINT applet_transactions_pkey PRIMARY KEY (source_service_id, idempotency_key);
 
 ALTER TABLE ONLY public.audit_logs
     ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (id);
@@ -1276,7 +1275,7 @@ ALTER TABLE ONLY public.federation_outbox
     ADD CONSTRAINT federation_outbox_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.federation_frontier_exchange
-    ADD CONSTRAINT federation_frontier_exchange_pkey PRIMARY KEY (realm_id, peer_service_did);
+    ADD CONSTRAINT federation_frontier_exchange_pkey PRIMARY KEY (realm_id, peer_service_id);
 
 ALTER TABLE ONLY public.federation_transactions
     ADD CONSTRAINT federation_transactions_pkey PRIMARY KEY (id);
@@ -1448,7 +1447,7 @@ CREATE UNIQUE INDEX account_localparts_primary_account_idx ON public.account_loc
 
 CREATE INDEX account_lifecycle_state_idx ON public.account_lifecycle USING btree (state, changed_at);
 
-CREATE INDEX agent_keys_principal_idx ON public.agent_keys USING btree (agent_principal_id);
+CREATE INDEX agent_keys_principal_idx ON public.agent_keys USING btree (agent_id);
 
 CREATE INDEX agent_keys_state_idx ON public.agent_keys USING btree (state);
 
@@ -1464,7 +1463,7 @@ CREATE UNIQUE INDEX agent_principals_approval_request_idx ON public.agent_princi
 
 CREATE INDEX agent_principals_state_idx ON public.agent_principals USING btree (state);
 
-CREATE INDEX agent_sessions_principal_idx ON public.agent_sessions USING btree (agent_principal_id);
+CREATE INDEX agent_sessions_principal_idx ON public.agent_sessions USING btree (agent_id);
 
 CREATE INDEX agent_sessions_state_idx ON public.agent_sessions USING btree (state);
 
@@ -1610,7 +1609,7 @@ CREATE INDEX notifications_strand_idx ON public.notifications USING btree (stran
 
 CREATE INDEX pending_agent_drafts_controller_idx ON public.pending_agent_drafts USING btree (controller_id);
 
-CREATE INDEX pending_agent_drafts_principal_idx ON public.pending_agent_drafts USING btree (agent_principal_id);
+CREATE INDEX pending_agent_drafts_principal_idx ON public.pending_agent_drafts USING btree (agent_id);
 
 CREATE INDEX pending_agent_drafts_state_idx ON public.pending_agent_drafts USING btree (state);
 
@@ -1712,19 +1711,19 @@ ALTER TABLE ONLY public.account_localparts
     ADD CONSTRAINT account_localparts_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.agent_keys
-    ADD CONSTRAINT agent_keys_agent_principal_id_fkey FOREIGN KEY (agent_principal_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
+    ADD CONSTRAINT agent_keys_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.agent_participation
-    ADD CONSTRAINT agent_participation_agent_principal_id_fkey FOREIGN KEY (agent_principal_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
+    ADD CONSTRAINT agent_participation_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.agent_sessions
-    ADD CONSTRAINT agent_sessions_agent_principal_id_fkey FOREIGN KEY (agent_principal_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
+    ADD CONSTRAINT agent_sessions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.federation_outbox_dead_letter
     ADD CONSTRAINT federation_outbox_dead_letter_outbox_id_fkey FOREIGN KEY (outbox_id) REFERENCES public.federation_outbox(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.pending_agent_drafts
-    ADD CONSTRAINT pending_agent_drafts_agent_principal_id_fkey FOREIGN KEY (agent_principal_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
+    ADD CONSTRAINT pending_agent_drafts_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.projection_circle_members
     ADD CONSTRAINT projection_circle_members_circle_id_fkey FOREIGN KEY (circle_id) REFERENCES public.projection_circles(id) ON DELETE CASCADE;

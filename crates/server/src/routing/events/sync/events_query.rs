@@ -1054,7 +1054,7 @@ fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkre
     let sender = row.get("sender").and_then(Value::as_str);
     let actor_id = sender
         .filter(|value| validate_did(value).is_ok())
-        .unwrap_or(state.config.service_did.as_str());
+        .unwrap_or(state.config.service_id.as_str());
     let millis = created_at.timestamp_millis().max(0);
     let hlc = format!("{millis:012x}-0000-00000000");
     let event = json!({

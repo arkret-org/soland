@@ -233,7 +233,7 @@ pub(crate) async fn admin_list_multisig_pending(
 /// ```
 ///
 /// When `use_keystore=true`, the new seed is also stored under
-/// `arkret:signer:soland-notary:<service_did>` so it survives
+/// `arkret:signer:soland-notary:<service_id>` so it survives
 /// process restart. When `use_keystore=false`, the rotation lives only
 /// in the running process's `ArcSwap` (suitable for dev/test, not
 /// production — the next restart re-loads the env-supplied seed). The
@@ -296,8 +296,8 @@ pub(crate) async fn admin_rotate_signing_key(
     let mut keystore_persisted = false;
     let mut keystore_warning: Option<String> = None;
     if state.config.use_keystore {
-        let app_id = format!("soland.{}", state.config.service_did);
-        let key_id = format!("arkret:signer:soland-notary:{}", state.config.service_did);
+        let app_id = format!("soland.{}", state.config.service_id);
+        let key_id = format!("arkret:signer:soland-notary:{}", state.config.service_id);
         match arkret_sdk::durable_platform_keystore(&app_id) {
             Ok(store) => match store.store(&key_id, &seed) {
                 Ok(()) => {
@@ -330,7 +330,7 @@ pub(crate) async fn admin_rotate_signing_key(
     let _new_key =
         state.rotate_notary_signing_key(&seed, crate::config::NotarySigningKeyOrigin::Configured);
 
-    let did = state.config.service_did.clone();
+    let did = state.config.service_id.clone();
     let kid = format!("{did}#notary-key");
     let rotated_at = chrono::Utc::now();
     crate::routing::append_audit_log(

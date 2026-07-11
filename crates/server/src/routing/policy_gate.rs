@@ -15,7 +15,7 @@ use crate::{ids, kinds};
 #[derive(Clone, Debug)]
 pub(crate) enum PolicyGateSurface {
     LocalSubmit,
-    FederationInbound { origin_service_did: String },
+    FederationInbound { origin_service_id: String },
 }
 
 #[derive(Clone, Debug)]
@@ -158,7 +158,7 @@ impl PolicyGateRejection {
 fn policy_client_for_state(state: &AppState) -> Result<PolicyClient, PolicyGateRejection> {
     let http = crate::security::build_default_egress_http_client(Duration::from_secs(10))
         .map_err(|error| PolicyGateRejection::internal(format!("policy client: {error}")))?;
-    Ok(PolicyClient::new(http, state.config.service_did.clone())
+    Ok(PolicyClient::new(http, state.config.service_id.clone())
         .with_private_network_egress(crate::security::private_networks_allowed(
             state.config.development_mode,
         ))
@@ -182,7 +182,7 @@ async fn policy_request_for_operation(
     let actor_id = Did::new(actor_id.to_owned()).map_err(|error| {
         PolicyGateRejection::forbidden_request(format!("invalid actor DID: {error}"))
     })?;
-    let source_service_did = Did::new(state.config.service_did.clone()).map_err(|error| {
+    let source_service_id = Did::new(state.config.service_id.clone()).map_err(|error| {
         PolicyGateRejection::internal(format!("invalid local service DID: {error}"))
     })?;
     let event_preview = serde_json::to_value(operation).map_err(|error| {
@@ -192,8 +192,8 @@ async fn policy_request_for_operation(
     })?;
     let surface_value = match surface {
         PolicyGateSurface::LocalSubmit => json!({"surface": "local_submit"}),
-        PolicyGateSurface::FederationInbound { origin_service_did } => {
-            json!({"surface": "federation_inbound", "origin_service_did": origin_service_did})
+        PolicyGateSurface::FederationInbound { origin_service_id } => {
+            json!({"surface": "federation_inbound", "origin_service_id": origin_service_id})
         }
     };
     let mut policy_doc_ids = state
@@ -213,7 +213,7 @@ async fn policy_request_for_operation(
         realm_id,
         actor_id,
         action: action.to_owned(),
-        source_service_did,
+        source_service_id,
         source_service_type: "soland".to_owned(),
         source_ip_digest: digest_value("policy-gate:no-source-ip")
             .map_err(PolicyGateRejection::forbidden_request)?,

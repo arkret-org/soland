@@ -22,7 +22,7 @@ pub(super) async fn search_organizations(
         .collect::<Vec<_>>();
     let realm_entries = live_realm_entries(state).await;
     let realm_refs: Vec<&RealmDirectoryEntry> = realm_entries.iter().collect();
-    let organization = demo_organization(&realm_refs, &state.config.service_did);
+    let organization = demo_organization(&realm_refs, &state.config.service_id);
     if state.config.development_mode && query_matches(&organization, body.query.as_deref()) {
         results.push(organization);
     }
@@ -94,13 +94,13 @@ pub(super) async fn resolve_organization(
 
     let realm_entries = live_realm_entries(state).await;
     let realm_refs: Vec<&RealmDirectoryEntry> = realm_entries.iter().collect();
-    let organization = demo_organization(&realm_refs, &state.config.service_did);
+    let organization = demo_organization(&realm_refs, &state.config.service_id);
     let matches_id = body.organization_did.as_ref().is_some_and(|did| {
         did.as_str()
             == organization["organization_did"]
                 .as_str()
                 .unwrap_or_default()
-            || did.as_str() == state.config.service_did
+            || did.as_str() == state.config.service_id
     });
     let matches_handle = body
         .handle

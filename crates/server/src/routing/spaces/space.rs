@@ -1161,7 +1161,7 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
         .ok()
         .flatten()
         .is_some_and(|record| {
-            record.allows_plaintext_data_class(&state.config.service_did, data_class)
+            record.allows_plaintext_data_class(&state.config.service_id, data_class)
         })
 }
 

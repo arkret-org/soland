@@ -54,7 +54,7 @@ fn join_op(member: &str, binding: Value) -> Operation {
 
 // ── 1. delivery_binding_policy_member_join_test ─────────────────────────
 //
-// `recipient_service_did` outside the policy's `allowed_recipient_services`
+// `recipient_service_id` outside the policy's `allowed_recipient_services`
 // allow-list MUST be rejected with `recipient_service_not_allowed`.
 
 #[test]
@@ -87,7 +87,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         "did:web:bob",
         json!({
             "binding_source": "explicit",
-            "recipient_service_did": "did:web:rogue.example",
+            "recipient_service_id": "did:web:rogue.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
             "resolved_at": "2026-05-19T00:00:00Z",
         }),
@@ -106,7 +106,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         "did:web:alice",
         json!({
             "binding_source": "explicit",
-            "recipient_service_did": "did:web:principal.acme.example",
+            "recipient_service_id": "did:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-bbbbbbbbbbbb",
             "resolved_at": "2026-05-19T00:00:00Z",
         }),
@@ -143,7 +143,7 @@ fn delivery_binding_policy_empty_recipient_allow_list_rejects_all() {
         "did:web:ida",
         json!({
             "binding_source": "explicit",
-            "recipient_service_did": "did:web:principal.acme.example",
+            "recipient_service_id": "did:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-abcdefabcdef",
         }),
     );
@@ -175,7 +175,7 @@ fn delivery_binding_policy_omitted_recipient_allow_list_rejects_all() {
         "did:web:jane",
         json!({
             "binding_source": "explicit",
-            "recipient_service_did": "did:web:principal.acme.example",
+            "recipient_service_id": "did:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-abcdefabcd00",
         }),
     );
@@ -207,7 +207,7 @@ fn delivery_binding_policy_star_sentinel_is_unrestricted() {
         "did:web:kim",
         json!({
             "binding_source": "explicit",
-            "recipient_service_did": "did:web:principal.anywhere.example",
+            "recipient_service_id": "did:web:principal.anywhere.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-abcdefabcd11",
         }),
     );
@@ -239,7 +239,7 @@ fn delivery_binding_policy_rejects_disallowed_binding_source() {
         "did:web:carol",
         json!({
             "binding_source": "explicit",
-            "recipient_service_did": "did:web:principal.acme.example",
+            "recipient_service_id": "did:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-cccccccccccc",
         }),
     );
@@ -274,7 +274,7 @@ fn delivery_binding_policy_rejects_missing_service_acceptance() {
         "did:web:dave",
         json!({
             "binding_source": "explicit",
-            "recipient_service_did": "did:web:principal.acme.example",
+            "recipient_service_id": "did:web:principal.acme.example",
             // service_acceptance_ref omitted
         }),
     );
@@ -309,7 +309,7 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
         "did:web:eve",
         json!({
             "binding_source": "did_document_default",
-            "recipient_service_did": "did:web:principal.example",
+            "recipient_service_id": "did:web:principal.example",
             "did_document_digest": "sha256:deadbeef",
             "resolved_at": "2026-05-19T00:00:00Z",
         }),
@@ -349,7 +349,7 @@ fn delivery_binding_policy_rejects_did_document_default_when_disabled() {
         "did:web:fred",
         json!({
             "binding_source": "did_document_default",
-            "recipient_service_did": "did:web:principal.example",
+            "recipient_service_id": "did:web:principal.example",
             "did_document_digest": "sha256:deadbeef",
         }),
     );
@@ -392,7 +392,7 @@ fn delivery_binding_handover_stale_when_frontier_behind_policy() {
         "did:web:greta",
         json!({
             "binding_source": "explicit",
-            "recipient_service_did": "did:web:principal.acme.example",
+            "recipient_service_id": "did:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-dddddddddddd",
             "delivery_binding_frontier": "ak:frontier:01000000",
         }),
@@ -409,7 +409,7 @@ fn delivery_binding_handover_stale_when_frontier_behind_policy() {
         "did:web:greta",
         json!({
             "binding_source": "explicit",
-            "recipient_service_did": "did:web:principal.acme.example",
+            "recipient_service_id": "did:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-eeeeeeeeeeee",
             "delivery_binding_frontier": "ak:frontier:02000000",
         }),
@@ -445,7 +445,7 @@ fn delivery_binding_handover_stale_when_frontier_absent() {
         "did:web:henry",
         json!({
             "binding_source": "explicit",
-            "recipient_service_did": "did:web:principal.acme.example",
+            "recipient_service_id": "did:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-ffffffffffff",
         }),
     );

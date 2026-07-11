@@ -1105,12 +1105,9 @@ fn evaluate_constraint(
                     "allowed_session_ids constraint requires a non-empty allow list".to_owned(),
                 );
             }
-            if !resource.starts_with("ak:agent_interop_session:") {
-                return None;
-            }
             if allowed_session_ids
                 .iter()
-                .any(|session| session.as_ref() == resource)
+                .any(|session| session == resource)
             {
                 None
             } else {

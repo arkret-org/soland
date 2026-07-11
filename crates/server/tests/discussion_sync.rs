@@ -113,7 +113,7 @@ async fn seed_realm(
 }
 
 async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
-    let service_did = state.config.service_did.clone();
+    let service_id = state.config.service_id.clone();
     let mut meta = state
         .persistence
         .realm_meta()
@@ -121,9 +121,9 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
         .await
         .unwrap()
         .unwrap();
-    meta.plaintext_visible_services.insert(service_did.clone());
+    meta.plaintext_visible_services.insert(service_id.clone());
     meta.plaintext_visible_service_classes.insert(
-        service_did,
+        service_id,
         BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = chrono::Utc::now();
@@ -211,7 +211,7 @@ async fn seed_pending_invite(
             inviter: inviter.to_owned(),
             invitee: Some(invitee.to_owned()),
             invite_delivery_target: Some(json!({
-                "recipient_service_did": state.config.service_did.clone(),
+                "recipient_service_id": state.config.service_id.clone(),
                 "recipient_service_type": "principal_server"
             })),
             introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),

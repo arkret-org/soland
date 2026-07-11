@@ -316,7 +316,7 @@ struct ContactRow {
     #[diesel(sql_type = Nullable<Text>)]
     message: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
-    peer_service_did: Option<String>,
+    peer_service_id: Option<String>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -334,14 +334,14 @@ impl From<ContactRow> for ContactRecord {
             response_event_ref: row.response_event_ref,
             tombstone_event_ref: row.tombstone_event_ref,
             message: row.message,
-            peer_service_did: row.peer_service_did,
+            peer_service_id: row.peer_service_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
         }
     }
 }
 
-const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, scope, status, request_event_ref, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_did, created_at, updated_at";
+const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, scope, status, request_event_ref, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_id, created_at, updated_at";
 
 #[async_trait]
 impl ContactStore for PgContactStore {
@@ -406,7 +406,7 @@ impl ContactStore for PgContactStore {
         .bind::<Nullable<Text>, _>(record.response_event_ref.as_deref())
         .bind::<Nullable<Text>, _>(record.tombstone_event_ref.as_deref())
         .bind::<Nullable<Text>, _>(record.message.as_deref())
-        .bind::<Nullable<Text>, _>(record.peer_service_did.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)

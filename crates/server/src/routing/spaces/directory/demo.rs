@@ -29,17 +29,17 @@ pub(super) fn require_demo_directory_provider(state: &AppState) -> Result<(), Ap
     Err(AppError::not_found("directory provider not configured"))
 }
 
-pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_did: &str) -> Value {
+pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_id: &str) -> Value {
     json!({
         "organization_id": "ak:org:demo",
-        "organization_did": service_did,
+        "organization_did": service_id,
         "handle": "@arkret-demo",
         "title": "Arkret Demo Organization",
         "display_name": "Arkret Demo Organization",
         "description": "Demo organization projected by soland",
         "source_refs": ["ak:event:0196419b-0000-7000-8000-0000000000d0"],
         "policy_revision": "local",
-        "service_did": service_did,
+        "service_id": service_id,
         "realm_count": realms.len(),
         "actor_count": 1,
     })

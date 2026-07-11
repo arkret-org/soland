@@ -46,17 +46,17 @@ pub(crate) async fn contact_request(
     }
     let target = body.target.as_str().to_owned();
     // Spec contact-and-direct-conversation.md §4.1 — cross-PS addressing.
-    // When `recipient_service_did` names a different Principal Server, the
+    // When `recipient_service_id` names a different Principal Server, the
     // target holder is remote: skip the local-account precondition and
     // federate the signed `ak.contact.requested` fact to the target's home PS.
-    let recipient_service_did = body
-        .recipient_service_did
+    let recipient_service_id = body
+        .recipient_service_id
         .as_ref()
         .map(|did| did.as_str().trim().to_owned())
         .filter(|did| !did.is_empty());
-    let is_remote_target = recipient_service_did
+    let is_remote_target = recipient_service_id
         .as_deref()
-        .is_some_and(|did| did != state.config.service_did);
+        .is_some_and(|did| did != state.config.service_id);
     if !is_remote_target {
         let target_account = state
             .persistence
@@ -176,7 +176,7 @@ pub(crate) async fn contact_request(
         message: record_message,
         // Local (same-Principal-Server) request: peer's home server is this
         // service, so there is nothing cross-PS to address.
-        peer_service_did: None,
+        peer_service_id: None,
         created_at: now(),
         updated_at: now(),
     };
@@ -222,7 +222,7 @@ pub(crate) async fn contact_request(
     }
     // Spec §4.1 — federate the signed `ak.contact.requested` fact to the
     // target holder's home Principal Server when the target is remote.
-    if let Some(recipient_service_did) = recipient_service_did.as_deref()
+    if let Some(recipient_service_id) = recipient_service_id.as_deref()
         && is_remote_target
     {
         let introduction_evidence_digest =
@@ -232,7 +232,7 @@ pub(crate) async fn contact_request(
             "ak.contact.requested",
             &contact.requester,
             &contact.target,
-            recipient_service_did,
+            recipient_service_id,
             Some(introduction_evidence),
             json!({
                 "request_id": request_event_ref.as_str(),
@@ -536,19 +536,19 @@ pub(crate) async fn contact_respond(
     // Spec §4.1 — federate the accept / reject fact back to the original
     // requester's home Principal Server when the requester is remote. The
     // requester DID does not embed its home PS, so the responder supplies it
-    // via `requester_service_did` (cross-PS addressing).
-    if let Some(requester_service_did) = body
-        .requester_service_did
+    // via `requester_service_id` (cross-PS addressing).
+    if let Some(requester_service_id) = body
+        .requester_service_id
         .as_ref()
         .map(|did| did.as_str().trim().to_owned())
-        .filter(|did| !did.is_empty() && did != &state.config.service_did)
+        .filter(|did| !did.is_empty() && did != &state.config.service_id)
     {
         super::super::contact_federation::federate_contact_fact(
             state,
             response_fact_kind,
             &session.actor,
             &contact.requester,
-            &requester_service_did,
+            &requester_service_id,
             None,
             response_fact_payload,
             response_event_ref.as_str(),
@@ -621,8 +621,8 @@ pub(crate) async fn contact_tombstone(
     let mut requester_side_revoke_scopes = Vec::new();
     // Peer's home Principal Server learned from a stored holder↔peer row (set
     // on cross-PS contact deliveries). Used as the federation fallback when the
-    // request body omits `peer_service_did`.
-    let mut row_peer_service_did: Option<String> = None;
+    // request body omits `peer_service_id`.
+    let mut row_peer_service_id: Option<String> = None;
     let rows = store
         .list_for_actor(&holder)
         .await
@@ -633,14 +633,14 @@ pub(crate) async fn contact_tombstone(
         if !touches_peer {
             continue;
         }
-        if row_peer_service_did.is_none()
-            && let Some(service_did) = row
-                .peer_service_did
+        if row_peer_service_id.is_none()
+            && let Some(service_id) = row
+                .peer_service_id
                 .as_ref()
                 .map(|did| did.trim().to_owned())
                 .filter(|did| !did.is_empty())
         {
-            row_peer_service_did = Some(service_did);
+            row_peer_service_id = Some(service_id);
         }
         if row.requester == peer
             && row.target == holder
@@ -726,23 +726,23 @@ pub(crate) async fn contact_tombstone(
     // Spec contact-and-direct-conversation.md §2/§4.1 — federate the
     // `ak.contact.tombstoned` fact to the peer's home Principal Server when the
     // peer is remote. The addressing service DID comes from the request body
-    // first, then falls back to the `peer_service_did` recorded on the stored
+    // first, then falls back to the `peer_service_id` recorded on the stored
     // holder↔peer contact row. The receiver
     // (`contact_federation::peer_contacts_submit`) downgrades the mirrored row.
-    if let Some(peer_service_did) = body
-        .peer_service_did
+    if let Some(peer_service_id) = body
+        .peer_service_id
         .as_ref()
         .map(|did| did.as_str().trim().to_owned())
         .filter(|did| !did.is_empty())
-        .or(row_peer_service_did)
-        .filter(|did| did != &state.config.service_did)
+        .or(row_peer_service_id)
+        .filter(|did| did != &state.config.service_id)
     {
         super::super::contact_federation::federate_contact_fact(
             state,
             "ak.contact.tombstoned",
             &holder,
             &peer,
-            &peer_service_did,
+            &peer_service_id,
             None,
             tombstone_fact_payload,
             tombstone_event_ref.as_str(),
@@ -1039,7 +1039,7 @@ async fn contact_list_rows(
             bidirectional_scopes: Vec::new(),
             effective_scopes: Vec::new(),
             invite_consent_grant_ref: None,
-            peer_service_did: None,
+            peer_service_id: None,
             direct_conversation: None,
             agents: Vec::new(),
         });
@@ -1058,9 +1058,9 @@ async fn contact_list_rows(
         // Surface the peer's home Principal Server when learned from a cross-PS
         // delivery (None for same-PS contacts). Multiple scoped records can
         // collapse into one peer row; keep the first known service DID.
-        if entry.peer_service_did.is_none() {
-            entry.peer_service_did = record
-                .peer_service_did
+        if entry.peer_service_id.is_none() {
+            entry.peer_service_id = record
+                .peer_service_id
                 .as_deref()
                 .and_then(|did| Did::new(did.to_owned()).ok());
         }
@@ -1115,7 +1115,7 @@ async fn contact_list_rows(
             continue;
         }
         let Some(controller) = record
-            .get("controller_did")
+            .get("controller_id")
             .and_then(Value::as_str)
             .filter(|controller| *controller != actor)
             .and_then(|controller| Did::new(controller.to_owned()).ok())
@@ -1139,8 +1139,8 @@ async fn contact_list_rows(
             .entry(controller.to_string())
             .or_default()
             .push(ContactAgentProjection {
-                agent_principal_id: row.peer.clone(),
-                controller_principal_id: controller,
+                agent_id: row.peer.clone(),
+                controller_id: controller,
                 display_name,
                 agent_slug,
                 direct_conversation: row.direct_conversation.clone(),
@@ -1154,12 +1154,12 @@ async fn contact_list_rows(
         row.agents.sort_by(|left, right| {
             left.display_name
                 .as_deref()
-                .unwrap_or(left.agent_principal_id.as_str())
+                .unwrap_or(left.agent_id.as_str())
                 .cmp(
                     right
                         .display_name
                         .as_deref()
-                        .unwrap_or(right.agent_principal_id.as_str()),
+                        .unwrap_or(right.agent_id.as_str()),
                 )
         });
     }

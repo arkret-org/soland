@@ -134,13 +134,13 @@ impl ProjectionState {
         } else {
             None
         };
-        let recipient_service_did =
+        let recipient_service_id =
             if new_state == "join" && delivery_status.as_deref() == Some("routable") {
                 operation
                     .payload
                     .get("delivery_binding")
                     .and_then(Value::as_object)
-                    .and_then(|binding| binding.get("recipient_service_did"))
+                    .and_then(|binding| binding.get("recipient_service_id"))
                     .and_then(Value::as_str)
                     .filter(|value| !value.trim().is_empty())
                     .map(ToOwned::to_owned)
@@ -178,7 +178,7 @@ impl ProjectionState {
                 state: new_state.to_owned(),
                 role,
                 delivery_status,
-                recipient_service_did,
+                recipient_service_id,
                 membership_event_ref: event_ref,
                 delivery_binding_frontier,
                 invited_at,
@@ -242,7 +242,7 @@ impl ProjectionState {
                 state: "join".to_owned(),
                 role: "member".to_owned(),
                 delivery_status: None,
-                recipient_service_did: None,
+                recipient_service_id: None,
                 membership_event_ref: Some(operation.operation_id.as_str().to_owned()),
                 delivery_binding_frontier: None,
                 invited_at: None,

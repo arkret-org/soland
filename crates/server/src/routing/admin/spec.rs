@@ -33,7 +33,7 @@ struct AdminServerStatusCounts {
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AdminServerStatusOutcome {
     status: String,
-    service_did: String,
+    service_id: String,
     storage: String,
     development_mode: bool,
     checked_by: String,
@@ -50,7 +50,7 @@ struct AdminServerInfoOutcome {
     protocol_version: Option<String>,
     server_name: Option<String>,
     uptime: Option<u64>,
-    service_did: String,
+    service_id: String,
     trust_domain: String,
     development_mode: bool,
     /// Whether the deployment accepts public self-registration according to
@@ -70,7 +70,6 @@ struct AdminServerStatsOutcome {
     report_count: u64,
     federation_peer_count: u64,
     applet_count: u64,
-    agent_count: u64,
     blob_count: u64,
     blob_total_size: u64,
     generated_at: String,
@@ -185,7 +184,7 @@ async fn get_server_status(
     let realm_count = state.realms.lock().search(Default::default()).len();
     json_ok(AdminServerStatusOutcome {
         status: "ok".to_owned(),
-        service_did: state.config.service_did.clone(),
+        service_id: state.config.service_id.clone(),
         storage: state.db.mode().to_owned(),
         development_mode: state.config.development_mode,
         checked_by: session.actor,
@@ -216,9 +215,9 @@ async fn get_server_info(
     json_ok(AdminServerInfoOutcome {
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
         protocol_version: Some(arkret_sdk::PROTOCOL_VERSION.to_owned()),
-        server_name: Some(state.config.service_did.clone()),
+        server_name: Some(state.config.service_id.clone()),
         uptime: None,
-        service_did: state.config.service_did.clone(),
+        service_id: state.config.service_id.clone(),
         trust_domain: state.config.trust_domain.clone(),
         development_mode: state.config.development_mode,
         allow_public_registration: state.account_registration_policy.lock().enabled,
@@ -268,9 +267,9 @@ async fn get_server_stats(
         .map(|items| items.len() as u64)
         .unwrap_or(0);
     let federation_peer_count = state.settings().federation_peers.len() as u64;
-    let (applet_count, agent_count) = {
+    let applet_count = {
         let proj = state.projection.lock();
-        (proj.applets.len() as u64, proj.agents.len() as u64)
+        proj.applets.len() as u64
     };
     let blobs = state
         .persistence
@@ -289,7 +288,6 @@ async fn get_server_stats(
         report_count,
         federation_peer_count,
         applet_count,
-        agent_count,
         blob_count,
         blob_total_size,
         generated_at: super::now().to_rfc3339(),
