@@ -421,7 +421,7 @@ pub(crate) struct PgAccountStore {
 fn account_with_primary_localpart_select(where_clause: &str) -> String {
     format!(
         "SELECT a.id, a.principal_id AS did, COALESCE(lp.localpart, '') AS localpart, \
-         a.display_name, a.created_at \
+         a.display_name, a.payload, a.created_at \
          FROM accounts a \
          LEFT JOIN LATERAL ( \
              SELECT localpart FROM account_localparts \
@@ -450,16 +450,21 @@ impl AccountStore for PgAccountStore {
 
     async fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
+        let payload = serde_json::json!({
+            "bio": record.bio,
+            "avatar_blob_ref": record.avatar_blob_ref,
+        });
         let row = sql_query(
             "INSERT INTO accounts (id, principal_id, display_name, payload, created_at, updated_at) \
-             VALUES ($1, $2, $3, '{}'::jsonb, $4, $4) \
+             VALUES ($1, $2, $3, $4, $5, $5) \
              ON CONFLICT (principal_id) DO UPDATE SET \
-             display_name = EXCLUDED.display_name, updated_at = NOW() \
+             display_name = EXCLUDED.display_name, payload = EXCLUDED.payload, updated_at = NOW() \
              RETURNING id",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.id))
         .bind::<Text, _>(&record.did)
         .bind::<Nullable<Text>, _>(&record.display_name)
+        .bind::<Jsonb, _>(&payload)
         .bind::<Timestamptz, _>(record.created_at)
         .get_result::<AccountIdRow>(&mut *conn)
         .await
@@ -872,6 +877,8 @@ struct AccountRow {
     localpart: String,
     #[diesel(sql_type = Nullable<Text>)]
     display_name: Option<String>,
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -938,11 +945,16 @@ impl From<AccountRow> for AccountRecord {
             did: row.did,
             localpart: row.localpart,
             display_name: row.display_name,
-            // Pg backend doesn't carry bio / avatar_url yet — the Memory
-            // store does. When the Pg projection lands, extend AccountRow
-            // + this hydrate.
-            bio: None,
-            avatar_url: None,
+            bio: row
+                .payload
+                .get("bio")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            avatar_blob_ref: row
+                .payload
+                .get("avatar_blob_ref")
+                .and_then(Value::as_str)
+                .and_then(|value| BlobRef::new(value.to_owned()).ok()),
             created_at: row.created_at,
         }
     }

@@ -4,7 +4,7 @@
 //! the parent module.
 
 use arkret_sdk::{
-    Did, ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptProof, ErasureScope,
+    BlobRef, Did, ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptProof, ErasureScope,
     ErasureStorageBoundary, ErasureSubject, ErasureSubjectKind,
 };
 
@@ -41,7 +41,7 @@ pub(super) async fn export_account(
     let profile = account.as_ref().map(|account| AccountExportProfile {
         display_name: account.display_name.clone(),
         bio: account.bio.clone(),
-        avatar_url: account.avatar_url.clone(),
+        avatar_blob_ref: account.avatar_blob_ref.clone(),
     });
     let account_payload = account.map(|account| account_response(account, state));
 
@@ -139,7 +139,7 @@ struct AccountExportOutcome {
 struct AccountExportProfile {
     pub display_name: Option<String>,
     pub bio: Option<String>,
-    pub avatar_url: Option<String>,
+    pub avatar_blob_ref: Option<BlobRef>,
 }
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
@@ -734,13 +734,13 @@ pub(super) async fn erase_account(
     .await;
 
     // Pseudonymize the account record (replace display_name / bio /
-    // avatar_url with placeholders; retain DID + a release-marked
+    // avatar_blob_ref with placeholders; retain DID + a release-marked
     // handle so foreign references resolve cleanly).
     if let Ok(Some(mut account)) = state.persistence.accounts().get(&actor).await {
         let previous_localpart = account.localpart.clone();
         account.display_name = Some("[user erased]".to_owned());
         account.bio = None;
-        account.avatar_url = None;
+        account.avatar_blob_ref = None;
         account.localpart = String::new();
         let _ = state.persistence.accounts().put(&account).await;
         let _ = state

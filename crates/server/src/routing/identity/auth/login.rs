@@ -153,7 +153,7 @@ pub(super) async fn dev_login(
             localpart: normalize_localpart(&synthetic_handle),
             display_name: Some(synthetic_display),
             bio: None,
-            avatar_url: None,
+            avatar_blob_ref: None,
             created_at: now(),
         };
         state

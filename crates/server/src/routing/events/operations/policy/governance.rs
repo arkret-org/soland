@@ -43,7 +43,8 @@ pub(super) async fn validate_member_state_policy(
         return Err(reason);
     }
     if operation.payload.get("membership").and_then(Value::as_str) == Some("join") {
-        if let Some(member) = membership_target(operation)
+        let target = membership_target(operation);
+        if let Some(member) = target
             && crate::routing::organizations::organization_policy_blocks_join(
                 state,
                 operation.realm_id.as_str(),
@@ -53,7 +54,87 @@ pub(super) async fn validate_member_state_policy(
         {
             return Err("organization_policy_denied");
         }
-        return Ok(());
+        let Some(actor) = operation
+            .payload
+            .get("sender")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        else {
+            // Peer/service-originated federation operations are authenticated
+            // by their transport and convergence path.
+            return Ok(());
+        };
+        let Some(target) = target else {
+            return Err("invalid_membership_target");
+        };
+        if actor == target {
+            return Ok(());
+        }
+        if active_native_agent_controlled_by(state, target, actor).await {
+            return Ok(());
+        }
+        let realm_id = operation.realm_id.as_str();
+        if realm_owner_matches(state, realm_id, actor).await {
+            return Ok(());
+        }
+        let (owner, members) = realm_owner_and_members(state, realm_id).await;
+        for action in ["ak.realm.admin", "ak.realm.join.review"] {
+            if state
+                .authz
+                .check(
+                    actor,
+                    action,
+                    realm_id,
+                    realm_id,
+                    owner.as_deref(),
+                    &members,
+                    &[],
+                )
+                .allowed
+            {
+                return Ok(());
+            }
+        }
+        return Err("missing_capability");
+    }
+    if operation.payload.get("membership").and_then(Value::as_str) == Some("leave") {
+        let Some(actor) = operation
+            .payload
+            .get("sender")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return Ok(());
+        };
+        let Some(target) = membership_target(operation) else {
+            return Err("invalid_membership_target");
+        };
+        if actor == target || native_agent_controlled_by(state, target, actor, false).await {
+            return Ok(());
+        }
+        let realm_id = operation.realm_id.as_str();
+        if realm_owner_matches(state, realm_id, actor).await {
+            return Ok(());
+        }
+        let (owner, members) = realm_owner_and_members(state, realm_id).await;
+        for action in ["ak.realm.admin", "ak.realm.join.review"] {
+            if state
+                .authz
+                .check(
+                    actor,
+                    action,
+                    realm_id,
+                    realm_id,
+                    owner.as_deref(),
+                    &members,
+                    &[],
+                )
+                .allowed
+            {
+                return Ok(());
+            }
+        }
+        return Err("missing_capability");
     }
     if operation.payload.get("membership").and_then(Value::as_str) != Some("ban") {
         return Ok(());
@@ -91,6 +172,27 @@ pub(super) async fn validate_member_state_policy(
         return Ok(());
     }
     Err("missing_capability")
+}
+
+async fn active_native_agent_controlled_by(
+    state: &AppState,
+    agent_id: &str,
+    controller_id: &str,
+) -> bool {
+    native_agent_controlled_by(state, agent_id, controller_id, true).await
+}
+
+async fn native_agent_controlled_by(
+    state: &AppState,
+    agent_id: &str,
+    controller_id: &str,
+    require_active: bool,
+) -> bool {
+    let Ok(Some(record)) = state.persistence.agents().get(agent_id).await else {
+        return false;
+    };
+    record.get("controller_id").and_then(Value::as_str) == Some(controller_id)
+        && (!require_active || record.get("state").and_then(Value::as_str) == Some("active"))
 }
 
 /// COT-06-004 — capability gate for `ak.realm.set_default_strand`. Mirrors the

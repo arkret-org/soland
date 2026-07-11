@@ -327,6 +327,42 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         project_invite_acceptance(state, member, operation).await;
     }
 
+    let cascaded_agent_ids = if matches!(membership, Some("leave" | "ban")) {
+        let agent_ids = state
+            .persistence
+            .agents()
+            .list_for_controller(member)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|record| {
+                record
+                    .get("agent_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .collect::<Vec<_>>();
+        let membership_frontier = operation
+            .payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| operation.operation_id.as_str().to_owned());
+        state
+            .projection
+            .lock()
+            .cascade_controller_agent_memberships(
+                operation.realm_id.as_str(),
+                member,
+                &agent_ids,
+                origin,
+                vec![membership_frontier],
+                operation.created_at,
+            )
+    } else {
+        Vec::new()
+    };
+
     {
         let mut realms = state.realms.lock();
         let Some(mut entry) = realms.get(&realm_id).cloned() else {
@@ -335,6 +371,11 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         if let Ok(member) = Did::new(member) {
             if matches!(membership, Some("leave" | "ban")) {
                 entry.members.remove(&member);
+                for agent_id in &cascaded_agent_ids {
+                    if let Ok(agent_id) = Did::new(agent_id.clone()) {
+                        entry.members.remove(&agent_id);
+                    }
+                }
             } else if membership == Some("join") {
                 entry.members.insert(member);
                 // HDLREN-3/4 (arkret-spec @ 7157ee8) — `handle` is no longer

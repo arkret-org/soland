@@ -27,6 +27,7 @@ pub(super) async fn provision_agent(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
     let agent_slug = body.slug.trim().to_owned();
+    let avatar_blob_ref = body.avatar_blob_ref.map(|value| value.to_string());
     let now_utc = chrono::Utc::now();
     validate_agent_slug(&agent_slug)
         .map_err(|err| AppError::invalid_param(format!("slug is invalid: {err}")))?;
@@ -82,6 +83,8 @@ pub(super) async fn provision_agent(
         &realm,
         &agent_id,
         display_name.as_deref(),
+        &agent_slug,
+        avatar_blob_ref.as_deref(),
         &requested_scope,
     )
     .await?;
@@ -99,6 +102,7 @@ pub(super) async fn provision_agent(
             "controller_id": controller_id,
             "display_name": display_name,
             "agent_slug": agent_slug.clone(),
+            "avatar_blob_ref": avatar_blob_ref,
             "requested_scope": requested_scope,
             "accountability": body.accountability,
             "state": "pending_runtime_key",
@@ -121,6 +125,7 @@ pub(super) async fn provision_agent(
             "controller_id": controller_id,
             "display_name": display_name,
             "slug": agent_slug,
+            "avatar_blob_ref": avatar_blob_ref,
             "pairing_request_id": pairing_request_id,
         }),
         "accepted",
@@ -201,7 +206,9 @@ pub(super) async fn renew_agent_pairing(
             .agents()
             .list_for_controller(&session.actor)
             .await
-            .map_err(|err| AppError::internal(format!("agent slug conflict check failed: {err}")))?;
+            .map_err(|err| {
+                AppError::internal(format!("agent slug conflict check failed: {err}"))
+            })?;
         if siblings.iter().any(|sibling| {
             sibling.get("agent_id").and_then(Value::as_str) != Some(agent_id.as_str())
                 && sibling.get("agent_slug").and_then(Value::as_str) == Some(agent_slug.as_str())

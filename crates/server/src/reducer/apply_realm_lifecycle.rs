@@ -316,6 +316,63 @@ impl ProjectionState {
         }
     }
 
+    pub(crate) fn cascade_controller_agent_memberships(
+        &mut self,
+        realm_id: &str,
+        controller_id: &str,
+        agent_ids: &[String],
+        updated_by: &str,
+        membership_frontier: Vec<String>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<String> {
+        let mut removed = Vec::new();
+        for agent_id in agent_ids {
+            let key = (realm_id.to_owned(), agent_id.clone());
+            let Some(previous) = self.members.get(&key).cloned() else {
+                continue;
+            };
+            if previous.state != "join" {
+                continue;
+            }
+            self.members.insert(
+                key,
+                SolandMembershipState {
+                    state: "leave".to_owned(),
+                    delivery_status: None,
+                    recipient_service_id: None,
+                    delivery_binding_frontier: None,
+                    membership_event_ref: membership_frontier.first().cloned(),
+                    updated_at: now,
+                    ..previous
+                },
+            );
+            if let Ok(cell_id) =
+                arkret_sdk::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{agent_id}"))
+            {
+                self.cells
+                    .insert(cell_id, CellState::Value(Value::String("leave".to_owned())));
+            }
+            self.cascade_realm_member_removal_to_circles(
+                realm_id,
+                agent_id,
+                "leave",
+                updated_by,
+                membership_frontier.clone(),
+                now,
+            );
+            removed.push(agent_id.clone());
+        }
+        if !removed.is_empty() {
+            tracing::info!(
+                realm_id,
+                controller_id,
+                removed_agents = removed.len(),
+                "cascaded controller membership removal to native personal agents"
+            );
+        }
+        removed
+    }
+
     /// COT-06-004 — apply `ak.realm.set_default_strand`. Points the Realm's
     /// `default_strand_id` at `payload.strand_id`. The named Strand MUST already be
     /// projected in this Realm (else `failed_precondition` — no dangling

@@ -10,7 +10,7 @@ async fn memory_account_store_crud() {
         localpart: "test".to_owned(),
         display_name: Some("Test".to_owned()),
         bio: None,
-        avatar_url: None,
+        avatar_blob_ref: Some(BlobRef::new(format!("ak:blob:sha256:{}", "01".repeat(32))).unwrap()),
         created_at: Utc::now(),
     };
 
@@ -21,6 +21,8 @@ async fn memory_account_store_crud() {
     let fetched = store.get("did:web:test").await.unwrap().unwrap();
     assert_eq!(fetched.did, "did:web:test");
     assert_eq!(fetched.localpart, "test");
+    assert_eq!(fetched.bio, record.bio);
+    assert_eq!(fetched.avatar_blob_ref, record.avatar_blob_ref);
     localparts
         .add("did:web:test", "second", true)
         .await

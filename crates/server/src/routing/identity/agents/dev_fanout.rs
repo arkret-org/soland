@@ -160,6 +160,8 @@ pub(super) async fn fanout_provision_subevents(
     realm_id: &str,
     agent_id: &str,
     display_name: Option<&str>,
+    agent_slug: &str,
+    avatar_blob_ref: Option<&str>,
     requested_scope: &Value,
 ) -> Result<(String, String, Vec<String>), AppError> {
     let controller = session.actor.clone();
@@ -167,16 +169,28 @@ pub(super) async fn fanout_provision_subevents(
     //    principal as the profile subject. The `profile_create_payload` def resolves to
     //    `state_payload`, so the profile object rides in `value` (the soland actor-profile reducer
     //    is not wired; list/get read the agent_principals table).
-    let profile_payload = json!({
-        "value": {
-            "id": format!("ak:actor_profile:{agent_id}"),
-            "schema": "ak.schema.actor_profile.v1",
-            "actor_id": agent_id,
-            "actor_kind": "agent",
-            "display_name": display_name.unwrap_or("Agent"),
-            "status": "active",
-        },
+    let mut profile = json!({
+        "id": format!("ak:actor_profile:{agent_id}"),
+        "schema": "ak.schema.actor_profile.v1",
+        "actor_id": agent_id,
+        "actor_kind": "agent",
+        "display_name": display_name.unwrap_or("Agent"),
+        "agent_slug": agent_slug,
     });
+    if let Some(avatar_blob_ref) = avatar_blob_ref {
+        profile
+            .as_object_mut()
+            .expect("agent profile is an object")
+            .insert(
+                "avatar_blob_ref".to_owned(),
+                Value::String(avatar_blob_ref.to_owned()),
+            );
+    }
+    profile
+        .as_object_mut()
+        .expect("agent profile is an object")
+        .insert("status".to_owned(), Value::String("active".to_owned()));
+    let profile_payload = json!({ "value": profile });
     let profile_event = submit_agent_fanout_event(
         state,
         session,

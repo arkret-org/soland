@@ -84,6 +84,7 @@ CREATE TABLE public.agent_principals (
     controller_id text NOT NULL,
     display_name text,
     agent_slug text,
+    avatar_blob_ref text,
     state text DEFAULT 'active'::text NOT NULL,
     requested_scope jsonb,
     accountability jsonb,

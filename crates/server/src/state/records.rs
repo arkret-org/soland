@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::{BlobVisibility, FreshnessState, PlaintextDataClassKind};
+use arkret_sdk::{BlobRef, BlobVisibility, FreshnessState, PlaintextDataClassKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -58,9 +58,8 @@ pub struct AccountRecord {
     /// `ak.self.account.command.update_profile`); rendered by `demo_actors` in directory
     /// search results.
     pub bio: Option<String>,
-    /// HTTPS URL pointing at the actor's avatar image. Server holds the
-    /// link verbatim — no transcoding or caching.
-    pub avatar_url: Option<String>,
+    /// Canonical content-addressed avatar Blob reference.
+    pub avatar_blob_ref: Option<BlobRef>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 

@@ -795,7 +795,7 @@ async fn local_account_register(
             .clone()
             .or_else(|| Some(body.handle.trim_start_matches('@').to_owned())),
         bio: None,
-        avatar_url: None,
+        avatar_blob_ref: None,
         created_at: now(),
     };
     state
@@ -1085,7 +1085,7 @@ async fn account_viewer(
         .map_err(|error| AppError::internal(format!("stored account DID is invalid: {error}")))?;
 
     let primary_handle_claim = account_primary_handle_claim(state, &account).await;
-    let profile = Some(actor_profile_from_account(&account, None, None)?);
+    let profile = Some(actor_profile_from_account(&account, None)?);
     let is_server_admin = state.is_admin_principal(&session.actor);
     json_ok(AccountView {
         principal_id,
@@ -1183,7 +1183,7 @@ async fn gate_account_register(
         localpart,
         display_name: body.display_name.clone(),
         bio: None,
-        avatar_url: None,
+        avatar_blob_ref: None,
         created_at: now(),
     };
     state
@@ -1297,7 +1297,9 @@ async fn update_profile(
         )
         .with_wire_code("invalid_avatar_url"));
     }
-    let avatar_blob_ref = patch_blob_ref(&patch, "avatar_blob_ref")?;
+    if let Some(avatar_blob_ref) = patch_blob_ref(&patch, "avatar_blob_ref")? {
+        current.avatar_blob_ref = avatar_blob_ref;
+    }
     accounts_store
         .put(&current)
         .await
@@ -1309,12 +1311,13 @@ async fn update_profile(
         json!({
             "display_name": current.display_name.clone(),
             "bio": current.bio.clone(),
+            "avatar_blob_ref": current.avatar_blob_ref.clone(),
         }),
         "accepted",
     )
     .await;
     json_ok(AccountUpdateProfileOutcome {
-        profile: actor_profile_from_account(&current, avatar_blob_ref.flatten(), Some(now()))?,
+        profile: actor_profile_from_account(&current, Some(now()))?,
     })
 }
 
@@ -1381,7 +1384,6 @@ fn patch_blob_ref(patch: &Value, field: &str) -> Result<Option<Option<BlobRef>>,
 
 fn actor_profile_from_account(
     account: &AccountRecord,
-    avatar_blob_ref: Option<BlobRef>,
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<ActorProfile, AppError> {
     let principal_id = Did::new(account.did.clone())
@@ -1405,7 +1407,7 @@ fn actor_profile_from_account(
             .unwrap_or_else(|| account.localpart.clone()),
         handle: Some(account.handle()),
         agent_slug: None,
-        avatar_blob_ref,
+        avatar_blob_ref: account.avatar_blob_ref.clone(),
         status: None,
         accountable_principal_ids: vec![principal_id.clone()],
         profile_fields,

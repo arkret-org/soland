@@ -150,6 +150,50 @@ fn realm_leave_cascades_to_circle_history_membership() {
 }
 
 #[test]
+fn controller_removal_cascades_owned_agent_membership() {
+    let (mut state, _hlc, base) = seed_state("joined");
+    state
+        .circles
+        .get_mut(CIRCLE)
+        .unwrap()
+        .members
+        .insert(BOB.to_owned());
+    state.circle_memberships.insert(
+        (CIRCLE.to_owned(), BOB.to_owned()),
+        CircleMembershipState {
+            circle_id: CIRCLE.to_owned(),
+            member: BOB.to_owned(),
+            state: "join".to_owned(),
+            invited_at: None,
+            joined_at: base,
+            updated_at: base,
+        },
+    );
+
+    let removed = state.cascade_controller_agent_memberships(
+        REALM,
+        ALICE,
+        &[BOB.to_owned()],
+        ALICE,
+        vec!["ak:event:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()],
+        base + Duration::minutes(30),
+    );
+
+    assert_eq!(removed, vec![BOB.to_owned()]);
+    assert_eq!(
+        state.members[&(REALM.to_owned(), BOB.to_owned())].state,
+        "leave"
+    );
+    assert!(!state.circles[CIRCLE].members.contains(BOB));
+    assert_eq!(
+        state
+            .circle_membership(CIRCLE, BOB)
+            .map(|membership| membership.state.as_str()),
+        Some("leave")
+    );
+}
+
+#[test]
 fn circle_member_leave_enqueues_mls_remove_obligation() {
     let (mut state, hlc, base) = seed_state("joined");
     state.circles.get_mut(CIRCLE).unwrap().mls_group_ref = Some("ak:mls:group:circle".to_owned());

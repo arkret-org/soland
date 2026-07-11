@@ -698,7 +698,7 @@ impl AppState {
                 localpart: "alice".to_owned(),
                 display_name: Some("Alice Example".to_owned()),
                 bio: None,
-                avatar_url: None,
+                avatar_blob_ref: None,
                 created_at: now,
             };
             if let Err(error) = self.persistence.accounts().put(&demo_account).await {

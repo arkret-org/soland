@@ -115,7 +115,7 @@ pub(super) fn generate_agent_principal_did(service_id: &str) -> String {
 
 /// Project a persisted agent_principal JSON record into the spec
 /// `agent_projection` shape (`agent-operations.schema.json#/$defs/agent_projection`):
-/// `{agent_id, display_name?, slug?, status, created_at?, updated_at?}`.
+/// `{agent_id, display_name?, slug, avatar_blob_ref?, status, created_at?, updated_at?}`.
 /// Soland-internal columns (`controller_id`, `pairing_*`) are NOT
 /// part of the protocol projection and are dropped at the wire boundary; the
 /// persistence `state` column carries the `agent_status` enum value verbatim.
@@ -144,6 +144,9 @@ pub(super) fn agent_projection_from_record(record: &Value) -> AgentProjection {
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .unwrap_or_default(),
+        avatar_blob_ref: str_field("avatar_blob_ref")
+            .filter(|value| !value.is_empty())
+            .and_then(|value| BlobRef::new(value.to_owned()).ok()),
         status,
         created_at: parse_ts("created_at"),
         updated_at: parse_ts("updated_at"),

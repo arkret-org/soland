@@ -71,7 +71,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         "handle": "@alice",
         "display_name": "Alice Example",
         "organization_id": "ak:org:demo",
-        "avatar_url": null,
+        "avatar_blob_ref": null,
         "presence": {"status": "online", "updated_at": now()},
     })];
 
@@ -103,7 +103,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             "account_state": account_state,
             "bio": account.bio,
             "organization_id": "ak:org:demo",
-            "avatar_url": account.avatar_url,
+            "avatar_blob_ref": account.avatar_blob_ref,
             "presence": presence,
         }));
     }
@@ -147,7 +147,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             "state": account_state.clone(),
             "account_state": account_state,
             "organization_id": "ak:org:demo",
-            "avatar_url": null,
+            "avatar_blob_ref": null,
             "presence": presence,
         }));
     }

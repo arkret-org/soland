@@ -38,14 +38,15 @@ use arkret_sdk::models::{
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
     AgentProjection, AgentProvisionOutcome, AgentProvisionRequestBody,
     AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
-    AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome,
-    AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
-    AgentRuntimeApprovalStatusRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
-    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView,
-    PublicKey, effective_participation, validate_agent_slug, validate_selection_within_ceiling,
+    AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
+    AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody,
+    AgentSidecarContextRef, AgentSidecarExposureAck, AgentSidecarThreadEnsureOutcome,
+    AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView, PublicKey,
+    effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
 use arkret_sdk::{
-    CircleId, Did, EventId, GrantId, Hash, Operation, OperationId, RealmId, RelationId, StrandId,
+    BlobRef, CircleId, Did, EventId, GrantId, Hash, Operation, OperationId, RealmId, RelationId,
+    StrandId,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -66,10 +67,9 @@ use crate::state::{AppState, SessionRecord};
 
 mod dev_fanout;
 use dev_fanout::{
-    attach_agent_grant_event, ensure_self_realm, fanout_provision_subevents,
-    fanout_renewal_grants, materialize_capability_grant, revoke_capability_grant,
-    submit_durable_agent_lifecycle, submit_durable_key_authorize, submit_revoke_agent_grants,
-    submit_revoke_agent_keys,
+    attach_agent_grant_event, ensure_self_realm, fanout_provision_subevents, fanout_renewal_grants,
+    materialize_capability_grant, revoke_capability_grant, submit_durable_agent_lifecycle,
+    submit_durable_key_authorize, submit_revoke_agent_grants, submit_revoke_agent_keys,
 };
 
 mod common;

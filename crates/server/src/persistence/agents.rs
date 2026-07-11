@@ -291,7 +291,7 @@ impl AgentParticipationStore for PgAgentParticipationStore {
 /// AKP-0008 — native personal agent principal persistence (provision /
 /// list / get / lifecycle). JSON Value records carry the soland-internal
 /// agent principal columns: id, controller_id,
-/// display_name, agent_slug, state, created_at, updated_at. The wire boundary
+/// display_name, agent_slug, avatar_blob_ref, state, created_at, updated_at. The wire boundary
 /// projects these into the spec `agent_projection` (dropping the internal
 /// columns) — see `routing::identity::agents::agent_projection_from_record`.
 #[async_trait]
@@ -398,6 +398,8 @@ struct AgentPrincipalRow {
     display_name: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     agent_slug: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    avatar_blob_ref: Option<String>,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Jsonb>)]
@@ -433,7 +435,7 @@ struct AgentPrincipalRow {
 }
 
 const AGENT_COLUMNS: &str = "id AS agent_id, controller_id, display_name, \
-     agent_slug, state, requested_scope, accountability, self_realm_id, provision_event_refs, \
+     agent_slug, avatar_blob_ref, state, requested_scope, accountability, self_realm_id, provision_event_refs, \
      pairing_request_id, pairing_code, pairing_expires_at, approval_request_id, \
      runtime_key_request, approval_requested_at, authorized_event_ref, \
      authorized_verification_method, authorized_public_key_digest, created_at, updated_at";
@@ -445,6 +447,7 @@ impl From<AgentPrincipalRow> for Value {
             "controller_id": row.controller_id,
             "display_name": row.display_name,
             "agent_slug": row.agent_slug,
+            "avatar_blob_ref": row.avatar_blob_ref,
             "state": row.state,
             "requested_scope": row.requested_scope,
             "accountability": row.accountability,
@@ -490,6 +493,10 @@ impl AgentStore for PgAgentStore {
             .map(ToOwned::to_owned);
         let agent_slug = record
             .get("agent_slug")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let avatar_blob_ref = record
+            .get("avatar_blob_ref")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         let state = record
@@ -569,15 +576,16 @@ impl AgentStore for PgAgentStore {
             .map(ToOwned::to_owned);
         sql_query(
             "INSERT INTO agent_principals \
-             (id, controller_id, display_name, agent_slug, state, requested_scope, \
+             (id, controller_id, display_name, agent_slug, avatar_blob_ref, state, requested_scope, \
               accountability, self_realm_id, provision_event_refs, pairing_request_id, \
               pairing_code, pairing_expires_at, approval_request_id, runtime_key_request, \
               approval_requested_at, authorized_event_ref, authorized_verification_method, \
               authorized_public_key_digest, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW()) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW(), NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
              controller_id = EXCLUDED.controller_id, \
              display_name = EXCLUDED.display_name, agent_slug = EXCLUDED.agent_slug, \
+             avatar_blob_ref = EXCLUDED.avatar_blob_ref, \
              state = EXCLUDED.state, requested_scope = EXCLUDED.requested_scope, \
              accountability = EXCLUDED.accountability, self_realm_id = EXCLUDED.self_realm_id, \
              provision_event_refs = EXCLUDED.provision_event_refs, \
@@ -594,6 +602,7 @@ impl AgentStore for PgAgentStore {
         .bind::<Text, _>(&controller_id)
         .bind::<Nullable<Text>, _>(&display_name)
         .bind::<Nullable<Text>, _>(&agent_slug)
+        .bind::<Nullable<Text>, _>(&avatar_blob_ref)
         .bind::<Text, _>(&state)
         .bind::<Nullable<Jsonb>, _>(&requested_scope)
         .bind::<Nullable<Jsonb>, _>(&accountability)
