@@ -171,8 +171,8 @@ pub mod reasons {
     pub const REACTION_SCOPE_MISMATCH: &str = core_error::REASON_REACTION_SCOPE_MISMATCH;
     pub const DIRECT_CONVERSATION_UNAVAILABLE: &str =
         core_error::ERROR_CODE_DIRECT_CONVERSATION_UNAVAILABLE;
-    pub const PEER_UNRESOLVABLE: &str = core_error::REASON_PEER_UNRESOLVABLE;
-    pub const KEYPACKAGE_UNKNOWN: &str = core_error::REASON_KEYPACKAGE_UNKNOWN;
+    pub const PEER_UNRESOLVABLE: &str = core_error::ERROR_CODE_PEER_UNRESOLVABLE;
+    pub const KEYPACKAGE_UNKNOWN: &str = core_error::ERROR_CODE_KEYPACKAGE_UNKNOWN;
 
     /// AKP-0007 reason codes registered in this round. Test scaffolding
     /// uses this slice to assert the full set is surfaced through

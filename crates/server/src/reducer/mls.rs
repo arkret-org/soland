@@ -66,11 +66,11 @@ pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 /// (encryption-and-audit.md §2.5.1). On a federation push the ingest pipeline
 /// maps it to a 412 whole-batch reject.
 pub const REASON_GOVERNANCE_BINDING_MISMATCH: &str =
-    arkret_sdk::error::REASON_MLS_GOVERNANCE_BINDING_MISMATCH;
+    arkret_sdk::error::REASON_GOVERNANCE_BINDING_MISMATCH;
 /// Reject code emitted while a group's `covered_frontier_cell` is `⊥`
 /// (concurrent commits, encryption-and-audit.md §2.5.2). Sends / decrypts on
 /// the contested epoch stay fail-closed until a resolving commit advances it.
-pub const REASON_DECRYPTION_PENDING: &str = arkret_sdk::error::REASON_MLS_DECRYPTION_PENDING;
+pub const REASON_DECRYPTION_PENDING: &str = arkret_sdk::error::REASON_DECRYPTION_PENDING;
 /// Reject code for a Remove commit whose governance binding does not cover the
 /// event frontier that created the pending remove obligation.
 pub const REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER: &str =
