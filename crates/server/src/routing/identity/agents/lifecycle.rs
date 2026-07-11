@@ -138,6 +138,161 @@ pub(super) async fn provision_agent(
     })
 }
 
+/// `ak.self.agent.command.renew_pairing` — re-open pairing on an agent whose
+/// runtime key was never authorized instead of burning the principal and
+/// provisioning a replacement. Security invariant: pairing HANDLES are
+/// one-time (the fresh `pairing_request_id` + `pairing_code` replace the old
+/// tuple, which becomes permanently unresolvable through the same
+/// anti-enumeration lookup), the PRINCIPAL is not.
+#[endpoint(
+    operation_id = "ak.self.agent.command.renew_pairing",
+    tags("agents"),
+    summary = "Re-open pairing on a never-activated personal agent",
+    status_codes(200, 400, 401, 403, 404, 412, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.renew_pairing"))]
+pub(super) async fn renew_agent_pairing(
+    aa: AuthArgs,
+    agent_id: PathParam<String>,
+    body: JsonBody<AgentRenewPairingRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AgentProvisionOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let agent_id = agent_id.into_inner();
+    let body = body.into_inner();
+    let record = require_agent_controller(state, &session, &agent_id).await?;
+    // Lazy-expire first so a stale pending record renews through the same
+    // path (grants already revoked) as an observed-expired one.
+    let record = lazily_expire_pairing(state, &session, record).await;
+    match record.get("state").and_then(Value::as_str) {
+        Some("pending_runtime_key" | "pairing_expired") => {}
+        Some("deactivated") => {
+            return Err(pairing_failed_precondition(
+                "agent is deactivated; deactivation is terminal",
+            )
+            .with_reason_detail("agent_deactivated"));
+        }
+        _ => {
+            return Err(pairing_failed_precondition(
+                "agent already has an authorized runtime key; rotate the key instead of renewing pairing",
+            ));
+        }
+    }
+    if !state.config.development_mode {
+        return Err(AppError::unsupported_feature(
+            "production agent pairing renewal requires protocol-valid delegated fan-out",
+        )
+        .with_wire_code("agent_provision_fanout_unavailable"));
+    }
+    let now_utc = chrono::Utc::now();
+    // `pairing_expired` does not reserve the slug, so a replacement agent may
+    // have claimed it since. Renewing would then produce two open agents with
+    // the same selector slug for one controller — reject like provision does.
+    let agent_slug = record
+        .get("agent_slug")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if !agent_slug.is_empty() {
+        let siblings = state
+            .persistence
+            .agents()
+            .list_for_controller(&session.actor)
+            .await
+            .map_err(|err| AppError::internal(format!("agent slug conflict check failed: {err}")))?;
+        if siblings.iter().any(|sibling| {
+            sibling.get("agent_id").and_then(Value::as_str) != Some(agent_id.as_str())
+                && sibling.get("agent_slug").and_then(Value::as_str) == Some(agent_slug.as_str())
+                && agent_record_reserves_selector_slug(sibling, &now_utc)
+        }) {
+            return Err(pairing_failed_precondition(
+                "slug is already bound to an active or open agent for this controller",
+            ));
+        }
+    }
+    // Re-issue the pending grants the expiry cleanup revoked. A still-open
+    // pairing keeps its live grants; only re-fan-out when none remain.
+    let realm = ensure_self_realm(state, &session).await?;
+    let live_grant_ids = {
+        let proj = state.projection.lock();
+        proj.grant_ids_for_subject(&agent_id)
+    };
+    let grant_ids = if live_grant_ids.is_empty() {
+        let requested_scope = record
+            .get("requested_scope")
+            .cloned()
+            .unwrap_or(Value::Null);
+        fanout_renewal_grants(state, &session, &realm, &agent_id, &requested_scope).await?
+    } else {
+        live_grant_ids
+    };
+    let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
+    let pairing_code = generate_pairing_code();
+    let pairing_ttl_ms = body
+        .pairing_ttl_ms
+        .unwrap_or(15 * 60 * 1000)
+        .min(24 * 60 * 60 * 1000);
+    let expires_at = now_utc + chrono::Duration::milliseconds(pairing_ttl_ms as i64);
+    let timestamp = now_utc.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let mut record = record;
+    {
+        let obj = record
+            .as_object_mut()
+            .ok_or_else(|| AppError::internal("agent record is not an object"))?;
+        obj.insert("state".to_owned(), json!("pending_runtime_key"));
+        obj.insert(
+            "pairing_request_id".to_owned(),
+            json!(pairing_request_id.clone()),
+        );
+        obj.insert("pairing_code".to_owned(), json!(pairing_code.clone()));
+        obj.insert(
+            "pairing_expires_at".to_owned(),
+            json!(expires_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+        );
+        // A runtime-key request submitted against the dead handle must not
+        // survive into the renewed pairing.
+        obj.insert("approval_request_id".to_owned(), Value::Null);
+        obj.insert("runtime_key_request".to_owned(), Value::Null);
+        obj.insert("approval_requested_at".to_owned(), Value::Null);
+        obj.insert("updated_at".to_owned(), json!(timestamp));
+        if let Some(refs) = obj
+            .get_mut("provision_event_refs")
+            .and_then(Value::as_object_mut)
+        {
+            refs.insert("initial_capability_grant_ids".to_owned(), json!(grant_ids));
+        }
+    }
+    state
+        .persistence
+        .agents()
+        .put(record)
+        .await
+        .map_err(|err| AppError::internal(format!("agent persist failed: {err}")))?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "ak.self.agent.command.renew_pairing",
+        json!({
+            "agent_id": agent_id,
+            "controller_id": session.actor,
+            "slug": agent_slug,
+            "pairing_request_id": pairing_request_id,
+        }),
+        "accepted",
+    )
+    .await;
+    let agent_principal_did = arkret_sdk::Did::new(agent_id)
+        .map_err(|err| AppError::internal(format!("persisted agent DID invalid: {err}")))?;
+    json_ok(AgentProvisionOutcome {
+        agent_id: agent_principal_did,
+        pairing_request_id,
+        pairing_code: Some(pairing_code),
+        expires_at,
+    })
+}
+
 #[endpoint(
     operation_id = "ak.self.agent.query.list",
     tags("agents"),

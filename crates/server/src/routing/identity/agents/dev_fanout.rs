@@ -223,6 +223,31 @@ pub(super) async fn fanout_provision_subevents(
     Ok((profile_event, accountability_event, grant_ids))
 }
 
+/// Re-issue the initial pending capability grant for a pairing renewal
+/// (`ak.self.agent.command.renew_pairing`). The pairing-expiry cleanup
+/// auto-revoked the provision-time grant, so a renewed pairing re-runs step 3
+/// of [`fanout_provision_subevents`] with the persisted `requested_scope` —
+/// same actions, same `effective_after_first_authorized_key=true` flag.
+pub(super) async fn fanout_renewal_grants(
+    state: &AppState,
+    session: &SessionRecord,
+    realm_id: &str,
+    agent_id: &str,
+    requested_scope: &Value,
+) -> Result<Vec<String>, AppError> {
+    let controller = session.actor.clone();
+    let actions = initial_grant_actions(requested_scope);
+    let mut grant_ids = Vec::new();
+    if !actions.is_empty() {
+        let grant_id = ids::generate_grant_id();
+        let grant_payload =
+            capability_grant_payload(&grant_id, realm_id, &controller, agent_id, &actions, true);
+        materialize_grant(state, session, realm_id, grant_payload).await?;
+        grant_ids.push(grant_id);
+    }
+    Ok(grant_ids)
+}
+
 /// Expand `requested_scope` (the provision request DSL) into a minimal
 /// content capability action set. Service-surface actions may be present in
 /// `agent_key_scope.actions`, but they are never materialized as

@@ -36,8 +36,9 @@ use arkret_sdk::models::{
     AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
-    AgentProjection, AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
-    AgentRotateKeyOutcome, AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome,
+    AgentProjection, AgentProvisionOutcome, AgentProvisionRequestBody,
+    AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
+    AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome,
     AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
     AgentRuntimeApprovalStatusRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
     AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView,
@@ -66,8 +67,9 @@ use crate::state::{AppState, SessionRecord};
 mod dev_fanout;
 use dev_fanout::{
     attach_agent_grant_event, ensure_self_realm, fanout_provision_subevents,
-    materialize_capability_grant, revoke_capability_grant, submit_durable_agent_lifecycle,
-    submit_durable_key_authorize, submit_revoke_agent_grants, submit_revoke_agent_keys,
+    fanout_renewal_grants, materialize_capability_grant, revoke_capability_grant,
+    submit_durable_agent_lifecycle, submit_durable_key_authorize, submit_revoke_agent_grants,
+    submit_revoke_agent_keys,
 };
 
 mod common;
@@ -90,6 +92,7 @@ pub(super) fn protocol_router() -> Router {
                 .post(provision_agent)
                 .get(list_agents)
                 .push(Router::with_path("{agent_id}").get(get_agent))
+                .push(Router::with_path("{agent_id}/renew-pairing").post(renew_agent_pairing))
                 .push(Router::with_path("{agent_id}/pause").post(pause_agent))
                 .push(Router::with_path("{agent_id}/resume").post(resume_agent))
                 .push(Router::with_path("{agent_id}/deactivate").post(deactivate_agent))
