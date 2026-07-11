@@ -124,13 +124,15 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
         return;
     }
-    // Cap how long the stream stays open. Default 60s; tests
+    // Cap how long the stream stays open. Default 5s so clients whose HTTP
+    // runtime exposes the NDJSON body only when the response closes (notably
+    // browser/WASM fetch adapters) still observe bounded live latency. Tests
     // typically pass `max_duration_ms=500` to bound assertion latency.
     // Production clients reconnect after the close (HTTP/1.1 long-poll
     // pattern) or use SSE EventSource auto-reconnect.
     let max_duration_ms = query_param(req, "max_duration_ms")
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(60_000)
+        .unwrap_or(5_000)
         .min(600_000);
     // Heartbeat interval. Default 15s; min 100ms (for tests).
     let heartbeat_ms = query_param(req, "heartbeat_ms")
@@ -169,6 +171,8 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                     }
                 }
             }
+            // Unlike account initial sync, a cursorless Realm subscribe is a
+            // live tail. Durable history bootstrap uses events.query.scan.
             None => None,
         }
     } else {
@@ -187,13 +191,11 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         // 1. Replay incrementally through the upper bound captured after the
         // live receiver was installed. Queued notifications for replayed ids
         // are discarded below, creating one replay-to-live boundary.
-        if let (Some(page_cursor), Some(upper_bound)) =
-            (resume_event_id.clone(), replay_upper_bound.as_deref())
-        {
+        if let Some(upper_bound) = replay_upper_bound.as_deref() {
             let page = projected_event_page_for_realms_through(
                 &state,
                 &realm_filter,
-                Some(&page_cursor),
+                resume_event_id.as_deref(),
                 Some(upper_bound),
                 EVENTS_CATCHUP_LIMIT,
             )
@@ -210,10 +212,23 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
             };
             let has_more = page.has_more;
             for event in page.items {
-                if !projection_record_visible_to_session(&state, &event, session_for_stream.as_ref()).await {
+                if !projection_record_visible_to_session(
+                    &state,
+                    &event,
+                    session_for_stream.as_ref(),
+                )
+                .await
+                {
                     continue;
                 }
                 replayed_event_ids.insert(event.event_id.clone());
+                let projected = projection_event_json(&event);
+                let Some(event_envelope) = full_event_from_projection_json(&state, &projected).await else {
+                    tracing::warn!(event_id = %event.event_id, "events catch-up could not materialize a canonical event envelope");
+                    let frame = json!({"kind": "resync_required"});
+                    yield Ok(ndjson_line(&frame));
+                    return;
+                };
                 let cursor = sync_token_for_events_query(
                     &state,
                     session_for_stream.as_ref(),
@@ -226,7 +241,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                     "kind": "event",
                     "realm_id": event.realm_id.clone(),
                     "cursor": cursor,
-                    "payload": projection_event_json(&event),
+                    "payload": event_envelope,
                 });
                 yield Ok(ndjson_line(&frame));
             }
@@ -293,11 +308,28 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                         &filter_digest_for_stream,
                                         &cursor,
                                     ).await;
+                                    let Some(event_envelope) = full_event_from_projection_json(
+                                        &state,
+                                        &event_payload,
+                                    ).await else {
+                                        tracing::warn!(event_id = %cursor, "live event could not materialize a canonical event envelope");
+                                        active_realms.remove(&realm_id);
+                                        terminal = active_realms.is_empty();
+                                        let frame = json!({
+                                            "kind": "resync_required",
+                                            "realm_id": realm_id,
+                                        });
+                                        yield Ok(ndjson_line(&frame));
+                                        if terminal {
+                                            break;
+                                        }
+                                        continue;
+                                    };
                                     json!({
                                         "kind": "event",
                                         "realm_id": realm_id,
                                         "cursor": live_cursor,
-                                        "payload": event_payload,
+                                        "payload": event_envelope,
                                     })
                                 }
                                 EventNotificationKind::EpochRotation { previous_epoch, new_epoch } => {
@@ -1010,26 +1042,33 @@ async fn full_events_from_projection_json(
 ) -> Vec<arkret_sdk::Event> {
     let mut events = Vec::with_capacity(projection_rows.len());
     for row in projection_rows {
-        let Some(event_id) = row.get("event_id").and_then(Value::as_str) else {
-            continue;
-        };
-        if projection_row_is_redacted_message_tombstone(row) {
-            if let Some(event) = projection_only_event_from_row(state, row) {
-                events.push(event);
-            }
-            continue;
-        }
-        if let Ok(Some(record)) = state.persistence.events().get(event_id).await
-            && let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record)
-        {
-            events.push(event);
-            continue;
-        }
-        if let Some(event) = projection_only_event_from_row(state, row) {
+        if let Some(event) = full_event_from_projection_json(state, row).await {
             events.push(event);
         }
     }
     events
+}
+
+/// Materialize the full Event envelope required by an `event` subscribe
+/// frame. Projection rows are useful for visibility filtering and pagination,
+/// but are not wire Event envelopes (`event_kind` vs `kind`, no actor_seq,
+/// prev_refs, proofs, ...). Reuse the query path's canonical lookup and its
+/// explicit projection-only tombstone fallback so stream and scan expose the
+/// same typed payload contract.
+async fn full_event_from_projection_json(
+    state: &AppState,
+    row: &Value,
+) -> Option<arkret_sdk::Event> {
+    let event_id = row.get("event_id").and_then(Value::as_str)?;
+    if projection_row_is_redacted_message_tombstone(row) {
+        return projection_only_event_from_row(state, row);
+    }
+    if let Ok(Some(record)) = state.persistence.events().get(event_id).await
+        && let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record)
+    {
+        return Some(event);
+    }
+    projection_only_event_from_row(state, row)
 }
 
 fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {

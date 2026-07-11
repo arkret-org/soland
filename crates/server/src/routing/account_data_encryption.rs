@@ -1,6 +1,5 @@
-use std::sync::OnceLock;
-
-use arkret_sdk::{Did, ProtocolSchemaRegistry, RealmId};
+use arkret_sdk::account_data_crypto::AccountDataEncryptedValue;
+use arkret_sdk::{Did, RealmId};
 use serde_json::{Map, Value};
 
 const ACCOUNT_DATA_TYPE_AGENT_DRAFT: &str = "ak.agent.draft.v1";
@@ -190,7 +189,7 @@ pub(crate) fn validate_encrypted_account_data_value(
                 {
                     return Ok(());
                 }
-                return validate_encrypted_carrier(carrier);
+                return validate_encrypted_carrier(data_type, carrier);
             }
         }
         return Err(AccountDataEncryptionError::MissingEncryptedCarrier);
@@ -199,12 +198,12 @@ pub(crate) fn validate_encrypted_account_data_value(
         return Ok(());
     }
     reject_content_plaintext_fields(object)?;
-    if validate_encrypted_carrier(value).is_ok() {
+    if validate_encrypted_carrier(data_type, value).is_ok() {
         return Ok(());
     }
     for field in ["encrypted_payload", "encrypted_content"] {
         if let Some(carrier) = object.get(field) {
-            return validate_encrypted_carrier(carrier);
+            return validate_encrypted_carrier(data_type, carrier);
         }
     }
     if object.contains_key("ciphertext") {
@@ -295,24 +294,25 @@ fn field_is_forbidden_plaintext(field: &str) -> bool {
     FORBIDDEN_PLAINTEXT_FIELDS.contains(&field)
 }
 
-fn validate_encrypted_carrier(value: &Value) -> Result<(), AccountDataEncryptionError> {
-    validate_encrypted_envelope_metadata(value)
+fn validate_encrypted_carrier(
+    data_type: &str,
+    value: &Value,
+) -> Result<(), AccountDataEncryptionError> {
+    validate_encrypted_envelope_metadata(data_type, value)
 }
 
-fn validate_encrypted_envelope_metadata(value: &Value) -> Result<(), AccountDataEncryptionError> {
-    static REGISTRY: OnceLock<Option<ProtocolSchemaRegistry>> = OnceLock::new();
-
-    let registry = REGISTRY
-        .get_or_init(|| {
-            arkret_sdk::schema::schema_registry_from_default_spec_artifacts()
-                .ok()
-                .flatten()
-        })
-        .as_ref()
-        .ok_or(AccountDataEncryptionError::InvalidEnvelopeMetadata)?;
-    registry
-        .validate_value(arkret_sdk::ENCRYPTED_ENVELOPE_SCHEMA, value)
-        .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)
+fn validate_encrypted_envelope_metadata(
+    data_type: &str,
+    value: &Value,
+) -> Result<(), AccountDataEncryptionError> {
+    let envelope: AccountDataEncryptedValue = serde_json::from_value(value.clone())
+        .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)?;
+    arkret_sdk::account_data_crypto::validate_account_data_encrypted_value(
+        &envelope,
+        &envelope.aad.actor_id,
+        data_type,
+    )
+    .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)
 }
 
 #[cfg(test)]
@@ -325,26 +325,18 @@ mod tests {
         "ak.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
     }
 
-    fn encrypted_envelope() -> Value {
-        json!({
-            "scheme": "mls-rfc9420",
-            "version": "1.0",
-            "group_id": "testGroup",
-            "epoch": 1,
-            "content_type": "application/vnd.arkret.account-data+json",
-            "ciphertext": "b3BhcXVl",
-            "aad_visibility_event_id": "hidden",
-            "aad": {
-                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
-                "event_kind": "ak.account_data.set"
-            },
-            "key_ref": {
-                "algorithm": "MLS",
-                "group_state_ref": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-            },
-            "aad_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-            "payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-        })
+    fn encrypted_envelope(data_type: &str) -> Value {
+        serde_json::to_value(
+            arkret_sdk::account_data_crypto::seal_account_data_value_with_nonce(
+                &[7u8; 32],
+                "did:web:alice.example",
+                data_type,
+                &json!({"private": true}),
+                [9u8; 24],
+            )
+            .unwrap(),
+        )
+        .unwrap()
     }
 
     fn conformance_marker() -> Value {
@@ -362,7 +354,8 @@ mod tests {
 
     #[test]
     fn encrypted_account_data_accepts_spec_envelope_metadata() {
-        validate_encrypted_account_data_value(private_key(), &encrypted_envelope()).unwrap();
+        validate_encrypted_account_data_value(private_key(), &encrypted_envelope(private_key()))
+            .unwrap();
     }
 
     #[test]
@@ -378,7 +371,7 @@ mod tests {
             private_key(),
             &json!({
                 "filename": "private.pdf",
-                "encrypted_payload": encrypted_envelope()
+                "encrypted_payload": encrypted_envelope(private_key())
             }),
         )
         .unwrap_err();
@@ -473,7 +466,7 @@ mod tests {
             &json!({
                 "key": private_key(),
                 "owner": "did:web:alice.example",
-                "body": encrypted_envelope(),
+                "body": encrypted_envelope(private_key()),
                 "updated_at": "2026-06-18T00:00:00Z"
             }),
         )
@@ -496,7 +489,7 @@ mod tests {
     fn reminder_rejects_plaintext_note_and_target_ref() {
         let key = "ak.reminders.v1:local-reminder-1";
         validate_encrypted_account_data_key(key).unwrap();
-        validate_encrypted_account_data_value(key, &encrypted_envelope()).unwrap();
+        validate_encrypted_account_data_value(key, &encrypted_envelope(key)).unwrap();
 
         let err = validate_encrypted_account_data_value(
             key,
@@ -506,7 +499,7 @@ mod tests {
                 "remind_at": "2026-06-19T08:00:00Z",
                 "note": "private reminder note",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
-                "encrypted_payload": encrypted_envelope()
+                "encrypted_payload": encrypted_envelope(key)
             }),
         )
         .unwrap_err();
@@ -518,7 +511,7 @@ mod tests {
     fn snooze_rejects_plaintext_target_ref() {
         let key = "ak.snooze.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         validate_encrypted_account_data_key(key).unwrap();
-        validate_encrypted_account_data_value(key, &encrypted_envelope()).unwrap();
+        validate_encrypted_account_data_value(key, &encrypted_envelope(key)).unwrap();
 
         let err = validate_encrypted_account_data_value(
             key,
@@ -527,7 +520,7 @@ mod tests {
                 "target_ref": "ak:strand:01904100-0000-7000-8000-000000000001",
                 "snooze_expires_at": "2026-06-19T09:00:00Z",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
-                "encrypted_payload": encrypted_envelope()
+                "encrypted_payload": encrypted_envelope(key)
             }),
         )
         .unwrap_err();
@@ -539,7 +532,7 @@ mod tests {
     fn scheduled_send_rejects_plaintext_message_payload() {
         let key = "ak.scheduled_send.v1:ak:message:01904100-0000-7000-8000-000000000001";
         validate_encrypted_account_data_key(key).unwrap();
-        validate_encrypted_account_data_value(key, &encrypted_envelope()).unwrap();
+        validate_encrypted_account_data_value(key, &encrypted_envelope(key)).unwrap();
 
         let err = validate_encrypted_account_data_value(
             key,
@@ -553,7 +546,7 @@ mod tests {
                 },
                 "message_payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
-                "encrypted_payload": encrypted_envelope()
+                "encrypted_payload": encrypted_envelope(key)
             }),
         )
         .unwrap_err();
@@ -565,7 +558,7 @@ mod tests {
     fn search_index_manifest_rejects_plaintext_manifest_fields() {
         let key = "ak.search.index_manifest.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         validate_encrypted_account_data_key(key).unwrap();
-        validate_encrypted_account_data_value(key, &encrypted_envelope()).unwrap();
+        validate_encrypted_account_data_value(key, &encrypted_envelope(key)).unwrap();
 
         let err = validate_encrypted_account_data_value(
             key,
@@ -576,7 +569,7 @@ mod tests {
                     "blob_ref": "ak:blob:sha256:1111111111111111111111111111111111111111111111111111111111111111",
                     "ciphertext_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
                 }],
-                "encrypted_payload": encrypted_envelope()
+                "encrypted_payload": encrypted_envelope(key)
             }),
         )
         .unwrap_err();
