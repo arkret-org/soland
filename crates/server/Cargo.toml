@@ -82,7 +82,7 @@ url = "2.5"
 # (the dalek stack pins that ecosystem); already in the lock tree via the SDK.
 rand_chacha = "0.3.1"
 reqwest = {workspace = true,default-features = false,features = ["form", "json", "rustls"]}
-salvo = {workspace = true,default-features = false,features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "test", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"]}
+salvo = {workspace = true,default-features = false,features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"]}
 salvo-oapi = {workspace = true,features = ["yaml"]}
 serde = {workspace = true,features = ["derive"]}
 serde_json = {workspace = true}
@@ -101,6 +101,7 @@ uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
 proptest = {workspace = true}
+salvo = {workspace = true,features = ["test"]}
 # Dev-dependency self-reference: activates the `test-util` feature when
 # compiling the tests/ integration binaries, which link the library without
 # `cfg(test)` and would otherwise not see `AppConfig::test_default()`.
