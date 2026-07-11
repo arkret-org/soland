@@ -443,7 +443,7 @@ async fn post_signed_applet_message_transaction(
     let created = chrono::Utc::now().timestamp();
     let signature_params = format!(
         "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \
-         \"source-service-did\" \"destination-service-did\" \"idempotency-key\");\
+         \"source-service-id\" \"destination-service-id\" \"idempotency-key\");\
          created={created};expires={};keyid=\"{verification_method}\";alg=\"ed25519\"",
         created + 60
     );
@@ -557,8 +557,8 @@ fn applet_signature_base(
          \"@target-uri\": http://server/_arkret/edge/applet/transactions\n\
          \"@authority\": server\n\
          \"content-digest\": {content_digest}\n\
-         \"source-service-did\": {source_service_id}\n\
-         \"destination-service-did\": {destination_service_id}\n\
+         \"source-service-id\": {source_service_id}\n\
+         \"destination-service-id\": {destination_service_id}\n\
          \"idempotency-key\": {idempotency_key}\n\
          \"@signature-params\": {signature_params}",
     )

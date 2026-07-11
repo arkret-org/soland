@@ -55,7 +55,7 @@ pub(super) fn moderation_request_source_ip_hash(req: &Request) -> String {
 
 pub(super) fn moderation_request_source_service(req: &Request) -> Option<String> {
     req.headers()
-        .get("source-service-did")
+        .get("source-service-id")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())

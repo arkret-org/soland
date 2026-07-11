@@ -438,7 +438,7 @@ pub struct ContactRecord {
     pub message: Option<String>,
     /// Service DID of the Principal Server hosting the contact's *peer* end,
     /// when learned from a cross-Principal-Server contact delivery
-    /// (`ak.peer.contacts.command.submit`, `source-service-did` header). `None` for
+    /// (`ak.peer.contacts.command.submit`, `source-service-id` header). `None` for
     /// same-Principal-Server contacts. In-memory projection only — surfaced on
     /// `contact_list_row.peer_service_id` so the holder can address
     /// responses/invites back to the peer's home server.

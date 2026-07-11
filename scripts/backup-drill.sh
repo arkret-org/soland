@@ -62,7 +62,7 @@ if [ "$USE_KEYSTORE" = "true" ]; then
     echo "[backup-drill] step 2/3: keystore export via soland-rotate-drill --export-only"
     cargo run --quiet --bin soland-rotate-drill -- \
         --export-only \
-        --service-did "$SERVICE_ID" \
+        --service-id "$SERVICE_ID" \
         --output "$KEYSTORE_PATH"
 else
     echo "[backup-drill] step 2/3: keystore export skipped (SOLAND_USE_KEYSTORE != true)"

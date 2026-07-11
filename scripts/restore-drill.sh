@@ -76,7 +76,7 @@ if [ "$USE_KEYSTORE" = "true" ] && \
     echo "[restore-drill] step 2/3: keystore restore via soland-rotate-drill --import-only"
     cargo run --quiet --bin soland-rotate-drill -- \
         --import-only \
-        --service-did "$SERVICE_ID" \
+        --service-id "$SERVICE_ID" \
         --input "$WORKDIR/keystore.json"
 else
     echo "[restore-drill] step 2/3: keystore restore skipped"

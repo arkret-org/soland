@@ -32,13 +32,13 @@ pub(super) fn verify_mimi_write_service_proof(
         ));
     }
 
-    let source_service_id = mimi_required_header(req, "source-service-did")?;
+    let source_service_id = mimi_required_header(req, "source-service-id")?;
     if !source_service_id.starts_with("did:") {
         return Err(mimi_signature_error_invalid(
             "Source-Service-ID must be a DID",
         ));
     }
-    let destination_service_id = mimi_required_header(req, "destination-service-did")?;
+    let destination_service_id = mimi_required_header(req, "destination-service-id")?;
     if destination_service_id != state.config.service_id {
         return Err(mimi_signature_error_invalid(
             "Destination-Service-ID does not match this service",
@@ -114,8 +114,8 @@ pub(super) fn mimi_validate_signature_params(
         "@authority",
         "content-digest",
         "request-canonical-digest",
-        "source-service-did",
-        "destination-service-did",
+        "source-service-id",
+        "destination-service-id",
         "provider-id",
     ] {
         let needle = format!("\"{component}\"");
@@ -186,8 +186,8 @@ pub(super) fn mimi_http_signature_base(
             SignatureBaseComponent::required("@authority", authority),
             SignatureBaseComponent::required("content-digest", content_digest),
             SignatureBaseComponent::required("request-canonical-digest", request_digest),
-            SignatureBaseComponent::required("source-service-did", source_service_id),
-            SignatureBaseComponent::required("destination-service-did", destination_service_id),
+            SignatureBaseComponent::required("source-service-id", source_service_id),
+            SignatureBaseComponent::required("destination-service-id", destination_service_id),
             SignatureBaseComponent::required("provider-id", provider_id),
             SignatureBaseComponent::optional("mimi-room-uri", room_uri),
         ],

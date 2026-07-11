@@ -38,9 +38,9 @@ fn signed_mimi_headers(
     let expires = created + 300;
     let verification_method = format!("{MIMI_SOURCE_SERVICE_ID}#mimi-provider-test-key");
     let components = if room_uri.is_some() {
-        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"request-canonical-digest\" \"source-service-did\" \"destination-service-did\" \"provider-id\" \"mimi-room-uri\")"
+        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"request-canonical-digest\" \"source-service-id\" \"destination-service-id\" \"provider-id\" \"mimi-room-uri\")"
     } else {
-        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"request-canonical-digest\" \"source-service-did\" \"destination-service-did\" \"provider-id\")"
+        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"request-canonical-digest\" \"source-service-id\" \"destination-service-id\" \"provider-id\")"
     };
     let signature_params = format!(
         "{components};created={created};expires={expires};keyid=\"{verification_method}\";alg=\"ed25519\"",
@@ -55,8 +55,8 @@ fn signed_mimi_headers(
          \"@authority\": {authority}\n\
          \"content-digest\": {content_digest}\n\
          \"request-canonical-digest\": {request_digest}\n\
-         \"source-service-did\": {MIMI_SOURCE_SERVICE_ID}\n\
-         \"destination-service-did\": {MIMI_DESTINATION_SERVICE_ID}\n\
+         \"source-service-id\": {MIMI_SOURCE_SERVICE_ID}\n\
+         \"destination-service-id\": {MIMI_DESTINATION_SERVICE_ID}\n\
          \"provider-id\": {MIMI_PROVIDER_ID}\n\
          {room_component}\
          \"@signature-params\": {signature_params}",
@@ -66,9 +66,9 @@ fn signed_mimi_headers(
     let mut headers = vec![
         ("content-digest", content_digest),
         ("request-canonical-digest", request_digest),
-        ("source-service-did", MIMI_SOURCE_SERVICE_ID.to_owned()),
+        ("source-service-id", MIMI_SOURCE_SERVICE_ID.to_owned()),
         (
-            "destination-service-did",
+            "destination-service-id",
             MIMI_DESTINATION_SERVICE_ID.to_owned(),
         ),
         ("provider-id", MIMI_PROVIDER_ID.to_owned()),

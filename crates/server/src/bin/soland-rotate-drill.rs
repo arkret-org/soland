@@ -25,7 +25,7 @@
 //!
 //! All three modes honour the existing `PASION_*` / `SERVERX_*` env
 //! conventions:
-//!   - `SERVERX_SERVICE_ID` (or `--service-did`)
+//!   - `SERVERX_SERVICE_ID` (or `--service-id`)
 //!   - `PASION_TARGET_URL` / `SERVERX_PUBLIC_BASE_URL` (or `--target`)
 //!   - `PASION_SESSION_TOKEN` / `SERVERX_ADMIN_BEARER` (or `--bearer`)
 //!
@@ -91,12 +91,12 @@ fn parse_args() -> anyhow::Result<Args> {
                 mode = Mode::ImportOnly;
                 explicit_mode = true;
             }
-            "--service-did" => {
+            "--service-id" => {
                 i += 1;
                 service_id = raw
                     .get(i)
                     .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("--service-did needs a value"))?;
+                    .ok_or_else(|| anyhow::anyhow!("--service-id needs a value"))?;
             }
             "--target" => {
                 i += 1;
@@ -148,7 +148,7 @@ fn parse_args() -> anyhow::Result<Args> {
                        --import-only    read seed from --input and write to KeyStore\n\
                      \n\
                      options:\n\
-                       --service-did <did>     SERVERX_SERVICE_ID (default: did:web:soland.local)\n\
+                       --service-id <did>      SERVERX_SERVICE_ID (default: did:web:soland.local)\n\
                        --target <url>          base URL of running soland (rotate-drill mode)\n\
                        --bearer <token>        admin session token (rotate-drill mode)\n\
                        --realm-id <id>         Realm id for the rotate endpoint path (required in rotate-drill mode)\n\

@@ -19,8 +19,8 @@ use crate::persistence::PeerEventsPageQuery;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, CanonicalEventRecord, RealmMetaRecord};
 
-const HEADER_SOURCE_SERVICE_ID: &str = "source-service-did";
-const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-did";
+const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
+const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const MAX_PEER_EVENTS_QUERY_LIMIT: usize = 100;
 const MAX_PEER_EVENTS_RESOLVE: usize = 100;
 
@@ -85,8 +85,8 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
         supported_profiles: vec!["ak.profile.federation_minimal.v1".to_owned()],
         supported_bindings: vec![
             "http-message-signature".to_owned(),
-            "source-service-did".to_owned(),
-            "destination-service-did".to_owned(),
+            "source-service-id".to_owned(),
+            "destination-service-id".to_owned(),
             "source-trust-domain".to_owned(),
             "destination-trust-domain".to_owned(),
             "request-canonical-digest".to_owned(),
@@ -1432,15 +1432,15 @@ pub(in crate::routing) async fn validate_peer_request(
     }
     let source_service_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;
     if validate_did(&source_service_id).is_err() {
-        return Err(schema_violation("source-service-did must be a DID"));
+        return Err(schema_violation("source-service-id must be a DID"));
     }
     let destination_service_id = required_header(req, HEADER_DESTINATION_SERVICE_ID)?;
     if validate_did(&destination_service_id).is_err() {
-        return Err(schema_violation("destination-service-did must be a DID"));
+        return Err(schema_violation("destination-service-id must be a DID"));
     }
     if destination_service_id != state.config.service_id {
         return Err(cross_domain_replay(
-            "destination-service-did header does not match this service",
+            "destination-service-id header does not match this service",
         ));
     }
     // federation.md §3.2/§6: all `/_arkret/peer/*` requests MUST be authenticated

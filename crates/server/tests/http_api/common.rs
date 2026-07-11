@@ -132,23 +132,23 @@ pub(crate) fn signed_federation_get_headers(
     let expires = created + 300;
     let keyid = format!("{origin}#federation-fanout-key");
     let signature_params = format!(
-        "(\"@method\" \"@target-uri\" \"@authority\" \"source-service-did\" \"destination-service-did\" \"source-trust-domain\" \"destination-trust-domain\");created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
+        "(\"@method\" \"@target-uri\" \"@authority\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\");created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
     );
     let authority = authority_from_target_uri(target_uri);
     let signature_base = format!(
         "\"@method\": GET\n\
          \"@target-uri\": {target_uri}\n\
          \"@authority\": {authority}\n\
-         \"source-service-did\": {origin}\n\
-         \"destination-service-did\": {destination}\n\
+         \"source-service-id\": {origin}\n\
+         \"destination-service-id\": {destination}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}\n\
          \"@signature-params\": {signature_params}",
     );
     let signature = development_service_signing_key(origin).sign(signature_base.as_bytes());
     vec![
-        ("source-service-did", origin.to_owned()),
-        ("destination-service-did", destination.to_owned()),
+        ("source-service-id", origin.to_owned()),
+        ("destination-service-id", destination.to_owned()),
         ("source-trust-domain", source_trust_domain),
         ("destination-trust-domain", destination_trust_domain),
         ("signature-input", format!("sig1={signature_params}")),
@@ -175,7 +175,7 @@ fn signed_federation_request_headers(
     let expires = created + 300;
     let keyid = format!("{origin}#federation-fanout-key");
     let signature_params = format!(
-        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-did\" \"destination-service-did\" \"source-trust-domain\" \"destination-trust-domain\" \"request-canonical-digest\");created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
+        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\" \"request-canonical-digest\");created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
     );
     let authority = authority_from_target_uri(target_uri);
     let signature_base = format!(
@@ -183,8 +183,8 @@ fn signed_federation_request_headers(
          \"@target-uri\": {target_uri}\n\
          \"@authority\": {authority}\n\
          \"content-digest\": {content_digest}\n\
-         \"source-service-did\": {origin}\n\
-         \"destination-service-did\": {destination}\n\
+         \"source-service-id\": {origin}\n\
+         \"destination-service-id\": {destination}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}\n\
          \"request-canonical-digest\": {request_digest}\n\
@@ -194,8 +194,8 @@ fn signed_federation_request_headers(
     vec![
         ("content-digest", content_digest),
         ("request-canonical-digest", request_digest),
-        ("source-service-did", origin.to_owned()),
-        ("destination-service-did", destination.to_owned()),
+        ("source-service-id", origin.to_owned()),
+        ("destination-service-id", destination.to_owned()),
         ("source-trust-domain", source_trust_domain),
         ("destination-trust-domain", destination_trust_domain),
         ("signature-input", format!("sig1={signature_params}")),

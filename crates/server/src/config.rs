@@ -154,7 +154,7 @@ pub struct AppConfig {
     pub federation_fanout_topology: FederationFanoutTopology,
     /// Federation peers the outbound layer considers as broadcast targets
     /// (mesh) or hub upstream (hub). Entries must be `base_url|service_id`
-    /// so peer requests can bind destination-service-did. Empty disables
+    /// so peer requests can bind destination-service-id. Empty disables
     /// federation outbound.
     pub federation_peers: Vec<String>,
     /// G3.S0 — when true (default), `main.rs` spawns the

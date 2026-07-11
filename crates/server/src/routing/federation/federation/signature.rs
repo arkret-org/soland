@@ -174,8 +174,8 @@ fn verify_inbound_federation_http_signature_inner(
         ));
     }
 
-    let source_service_id = required_header(req, "source-service-did")?;
-    let destination_service_id = required_header(req, "destination-service-did")?;
+    let source_service_id = required_header(req, "source-service-id")?;
+    let destination_service_id = required_header(req, "destination-service-id")?;
     let source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
     if destination_service_id != body_destination
@@ -250,7 +250,7 @@ fn verify_inbound_federation_http_signature_inner(
 /// `/_soland/peer/federation/*` track, which carries a typed body with an
 /// `origin`/`destination` field and an optional relay-inner signature), the
 /// canonical peer surface authenticates purely on the federation trust headers:
-/// the origin is the `source-service-did` header, so there is no relay-inner
+/// the origin is the `source-service-id` header, so there is no relay-inner
 /// hop to verify. The function handles both bodied requests (POST submit /
 /// query_post / resolve / invites / contacts) and bodyless GETs (query /
 /// frontier / snapshot.head), binding the signature to an empty-body
@@ -314,8 +314,8 @@ fn verify_inbound_peer_http_signature_inner(
         (None, None)
     };
 
-    let source_service_id = required_header(req, "source-service-did")?;
-    let destination_service_id = required_header(req, "destination-service-did")?;
+    let source_service_id = required_header(req, "source-service-id")?;
+    let destination_service_id = required_header(req, "destination-service-id")?;
     let source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
 
@@ -391,9 +391,9 @@ fn verify_relay_inner_signature(
             SignatureBaseComponent::required("@method", method),
             SignatureBaseComponent::required("@target-uri", target_uri),
             SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("origin-service-did", origin_service_id),
-            SignatureBaseComponent::required("relay-service-did", relay_service_id),
-            SignatureBaseComponent::required("destination-service-did", destination_service_id),
+            SignatureBaseComponent::required("origin-service-id", origin_service_id),
+            SignatureBaseComponent::required("relay-service-id", relay_service_id),
+            SignatureBaseComponent::required("destination-service-id", destination_service_id),
             SignatureBaseComponent::required("request-canonical-digest", request_digest),
         ],
         &inner_params,
@@ -428,8 +428,8 @@ fn federation_http_signature_base(
             SignatureBaseComponent::required("@target-uri", target_uri),
             SignatureBaseComponent::required("@authority", authority),
             SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("source-service-did", source_service_id),
-            SignatureBaseComponent::required("destination-service-did", destination_service_id),
+            SignatureBaseComponent::required("source-service-id", source_service_id),
+            SignatureBaseComponent::required("destination-service-id", destination_service_id),
             SignatureBaseComponent::required("source-trust-domain", source_trust_domain),
             SignatureBaseComponent::required("destination-trust-domain", destination_trust_domain),
             SignatureBaseComponent::required("request-canonical-digest", request_digest),
@@ -462,8 +462,8 @@ fn peer_http_signature_base(
             SignatureBaseComponent::required("@target-uri", target_uri),
             SignatureBaseComponent::required("@authority", authority),
             SignatureBaseComponent::optional("content-digest", content_digest),
-            SignatureBaseComponent::required("source-service-did", source_service_id),
-            SignatureBaseComponent::required("destination-service-did", destination_service_id),
+            SignatureBaseComponent::required("source-service-id", source_service_id),
+            SignatureBaseComponent::required("destination-service-id", destination_service_id),
             SignatureBaseComponent::required("source-trust-domain", source_trust_domain),
             SignatureBaseComponent::required("destination-trust-domain", destination_trust_domain),
             SignatureBaseComponent::optional("request-canonical-digest", request_digest),

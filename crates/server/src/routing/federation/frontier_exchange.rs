@@ -193,8 +193,8 @@ impl FrontierExchangeWorker {
 
 fn signed_get_headers(state: &AppState, peer_did: &str, target_url: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    insert_header(&mut headers, "source-service-did", &state.config.service_id);
-    insert_header(&mut headers, "destination-service-did", peer_did);
+    insert_header(&mut headers, "source-service-id", &state.config.service_id);
+    insert_header(&mut headers, "destination-service-id", peer_did);
     insert_header(
         &mut headers,
         "source-trust-domain",
@@ -213,8 +213,8 @@ fn signed_get_headers(state: &AppState, peer_did: &str, target_url: &str) -> Hea
         "\"@method\"",
         "\"@target-uri\"",
         "\"@authority\"",
-        "\"source-service-did\"",
-        "\"destination-service-did\"",
+        "\"source-service-id\"",
+        "\"destination-service-id\"",
         "\"source-trust-domain\"",
         "\"destination-trust-domain\"",
     ]
@@ -227,13 +227,13 @@ fn signed_get_headers(state: &AppState, peer_did: &str, target_url: &str) -> Hea
         "\"@method\": GET\n\
          \"@target-uri\": {target_url}\n\
          \"@authority\": {authority}\n\
-         \"source-service-did\": {}\n\
-         \"destination-service-did\": {}\n\
+         \"source-service-id\": {}\n\
+         \"destination-service-id\": {}\n\
          \"source-trust-domain\": {}\n\
          \"destination-trust-domain\": {}\n\
          \"@signature-params\": {signature_params}",
-        header_value(&headers, "source-service-did").unwrap_or_default(),
-        header_value(&headers, "destination-service-did").unwrap_or_default(),
+        header_value(&headers, "source-service-id").unwrap_or_default(),
+        header_value(&headers, "destination-service-id").unwrap_or_default(),
         header_value(&headers, "source-trust-domain").unwrap_or_default(),
         header_value(&headers, "destination-trust-domain").unwrap_or_default(),
     );

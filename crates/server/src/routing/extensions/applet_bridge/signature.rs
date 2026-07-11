@@ -24,7 +24,7 @@ pub(super) struct VerifiedInboundTransactionSignature {
 ///
 /// Covered RFC 9421 components (MUST, symmetric with `federation.md` §3.2):
 /// `@method`, `@target-uri`, `@authority`, `content-digest`,
-/// `source-service-did`, `destination-service-did`, `idempotency-key`, plus the
+/// `source-service-id`, `destination-service-id`, `idempotency-key`, plus the
 /// `created` / `expires` signature params. Failure codes (all 401 with the
 /// discriminating `reason`, `error.code` stays generic `unauthenticated`):
 /// - missing `Signature` / bearer-only → `http_signature_required`
@@ -78,7 +78,7 @@ pub(super) async fn verify_inbound_transaction_signature(
 
     // Bound trust headers MUST be consistent with the body / this service
     // (`http_signature_invalid`).
-    let header_source = applet_required_header(req, "source-service-did")?;
+    let header_source = applet_required_header(req, "source-service-id")?;
     if header_source != source_service_id {
         return Err(applet_signature_error_invalid(
             "Source-Service-ID header does not match the transaction source_service_id",
@@ -90,7 +90,7 @@ pub(super) async fn verify_inbound_transaction_signature(
             "Idempotency-Key header does not match the signed transcript binding",
         ));
     }
-    let destination_service_id = applet_required_header(req, "destination-service-did")?;
+    let destination_service_id = applet_required_header(req, "destination-service-id")?;
     if destination_service_id != state.config.service_id {
         return Err(applet_signature_error_invalid(
             "Destination-Service-ID does not match this edge service",
@@ -334,8 +334,8 @@ pub(super) fn applet_http_signature_base(
             SignatureBaseComponent::required("@target-uri", target_uri),
             SignatureBaseComponent::required("@authority", authority),
             SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("source-service-did", source_service_id),
-            SignatureBaseComponent::required("destination-service-did", destination_service_id),
+            SignatureBaseComponent::required("source-service-id", source_service_id),
+            SignatureBaseComponent::required("destination-service-id", destination_service_id),
             SignatureBaseComponent::required("idempotency-key", idempotency_key),
         ],
         signature_params,

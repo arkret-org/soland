@@ -34,8 +34,8 @@ use crate::state::{AccountDataRecord, AppState, SessionRecord};
 use crate::wire::now;
 
 const HEADER_CONTENT_DIGEST: &str = "content-digest";
-const HEADER_SOURCE_SERVICE_ID: &str = "source-service-did";
-const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-did";
+const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
+const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
 const DEFAULT_LOCATOR_TTL_MINUTES: i64 = 15;
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;

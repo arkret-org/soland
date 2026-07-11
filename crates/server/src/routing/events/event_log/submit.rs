@@ -448,7 +448,7 @@ pub(crate) async fn submit_federation_events(
     let binding_realm = service_binding_ref.realm_id.as_str().to_owned();
     let source_service_id = req
         .headers()
-        .get("source-service-did")
+        .get("source-service-id")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())

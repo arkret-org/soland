@@ -26,7 +26,7 @@ env:
   PGHOST: 127.0.0.1
   PGPORT: 5432
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/soland_drill
-  SOLAND_SERVICE_DID: did:web:soland.drill.local
+  SOLAND_SERVICE_ID: did:web:soland.drill.local
   SOLAND_BACKUP_DIR: ${{ github.workspace }}/_drill/backups
   SOLAND_USE_KEYSTORE: "false"
   SOLAND_DEVELOPMENT_MODE: "true"
@@ -206,24 +206,24 @@ jobs:
           set -euxo pipefail
           export XDG_DATA_HOME="$GITHUB_WORKSPACE/_drill/keystore-xdg"
           mkdir -p "$XDG_DATA_HOME"
-          KEY_ID="arkret:signer:soland-notary:${SOLAND_SERVICE_DID}"
+          KEY_ID="arkret:signer:soland-notary:${SOLAND_SERVICE_ID}"
           SEED_B64="AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
           mkdir -p _drill
           cat > _drill/seed-in.json <<EOF
           {
             "schema": "soland-rotate-drill.keystore-snapshot.v1",
-            "service_did": "${SOLAND_SERVICE_DID}",
+            "service_id": "${SOLAND_SERVICE_ID}",
             "key_id": "${KEY_ID}",
             "seed_b64": "${SEED_B64}"
           }
           EOF
           ./target/debug/soland-rotate-drill \
               --import-only \
-              --service-did "$SOLAND_SERVICE_DID" \
+              --service-id "$SOLAND_SERVICE_ID" \
               --input _drill/seed-in.json
           ./target/debug/soland-rotate-drill \
               --export-only \
-              --service-did "$SOLAND_SERVICE_DID" \
+              --service-id "$SOLAND_SERVICE_ID" \
               --output _drill/seed-out.json
           ROUNDTRIP_B64="$(jq -r .seed_b64 _drill/seed-out.json)"
           if [ "$ROUNDTRIP_B64" != "$SEED_B64" ]; then

@@ -39,7 +39,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, ContactRecord, ProjectionEventRecord};
 
 const HEADER_CONTENT_DIGEST: &str = "content-digest";
-const HEADER_SOURCE_SERVICE_ID: &str = "source-service-did";
+const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]";
 
 pub(crate) fn peer_router() -> Router {
@@ -876,7 +876,7 @@ mod tests {
     /// Cross-PS `ak.contact.requested` delivery: the projected pending_incoming
     /// row on the recipient (target holder) MUST record the *originating*
     /// requester's home Principal Server as `peer_service_id` — the
-    /// `source-service-did` of the delivery, NOT the recipient's own service
+    /// `source-service-id` of the delivery, NOT the recipient's own service
     /// DID. This is exactly the address inkson reads back as
     /// `requester_service_id` to federate the reverse `respond` delivery.
     #[tokio::test]

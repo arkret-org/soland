@@ -109,12 +109,12 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         captured.captured
     );
     assert!(
-        lower.contains("source-service-did: did:web:soland-outbox.local"),
+        lower.contains("source-service-id: did:web:soland-outbox.local"),
         "captured request missing Source-Service-ID binding; got: {}",
         captured.captured
     );
     assert!(
-        lower.contains("destination-service-did: did:web:peer.example"),
+        lower.contains("destination-service-id: did:web:peer.example"),
         "captured request missing Destination-Service-ID binding; got: {}",
         captured.captured
     );
@@ -432,8 +432,8 @@ fn http_signature_verifies_with_headers(
         Some(request_canonical_digest),
     ) = (
         headers.get("content-digest"),
-        headers.get("source-service-did"),
-        headers.get("destination-service-did"),
+        headers.get("source-service-id"),
+        headers.get("destination-service-id"),
         headers.get("source-trust-domain"),
         headers.get("destination-trust-domain"),
         headers.get("request-canonical-digest"),
@@ -448,8 +448,8 @@ fn http_signature_verifies_with_headers(
          \"@target-uri\": {target_uri}\n\
          \"@authority\": {authority}\n\
          \"content-digest\": {content_digest}\n\
-         \"source-service-did\": {source_service_id}\n\
-         \"destination-service-did\": {destination_service_id}\n\
+         \"source-service-id\": {source_service_id}\n\
+         \"destination-service-id\": {destination_service_id}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}\n\
          \"request-canonical-digest\": {request_canonical_digest}\n\

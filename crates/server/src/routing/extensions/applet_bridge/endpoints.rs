@@ -148,8 +148,8 @@ async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcom
                 "@target-uri",
                 "@authority",
                 "content-digest",
-                "source-service-did",
-                "destination-service-did",
+                "source-service-id",
+                "destination-service-id",
                 "idempotency-key"
             ],
             "source_signature_anchor": "ak.applet.source_signature_anchor.v1",

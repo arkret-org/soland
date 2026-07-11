@@ -8,7 +8,7 @@ use super::signature::{
 fn params(created: i64, expires: i64) -> String {
     format!(
         "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \
-         \"source-service-did\" \"destination-service-did\" \"idempotency-key\");\
+         \"source-service-id\" \"destination-service-id\" \"idempotency-key\");\
          created={created};expires={expires};keyid=\"did:web:app#applet-service-key\";\
          alg=\"ed25519\""
     )
@@ -42,8 +42,8 @@ fn signature_base_covers_required_components() {
         "\"@target-uri\":",
         "\"@authority\": edge.example",
         "\"content-digest\": sha-256=:abc=:",
-        "\"source-service-did\": did:web:app",
-        "\"destination-service-did\": did:web:edge",
+        "\"source-service-id\": did:web:app",
+        "\"destination-service-id\": did:web:edge",
         "\"idempotency-key\": idem-1",
         "\"@signature-params\":",
     ] {

@@ -150,8 +150,8 @@ fn rfc9421_sign(
         "\"@target-uri\"",
         "\"@authority\"",
         "\"content-digest\"",
-        "\"source-service-did\"",
-        "\"destination-service-did\"",
+        "\"source-service-id\"",
+        "\"destination-service-id\"",
         "\"source-trust-domain\"",
         "\"destination-trust-domain\"",
         "\"request-canonical-digest\"",
@@ -168,8 +168,8 @@ fn rfc9421_sign(
          \"@target-uri\": {}\n\
          \"@authority\": {}\n\
          \"content-digest\": {}\n\
-         \"source-service-did\": {}\n\
-         \"destination-service-did\": {}\n\
+         \"source-service-id\": {}\n\
+         \"destination-service-id\": {}\n\
          \"source-trust-domain\": {}\n\
          \"destination-trust-domain\": {}\n\
          \"request-canonical-digest\": {}\n\
@@ -178,8 +178,8 @@ fn rfc9421_sign(
         target_url,
         authority,
         header_value(&headers, "content-digest").unwrap_or_default(),
-        header_value(&headers, "source-service-did").unwrap_or_default(),
-        header_value(&headers, "destination-service-did").unwrap_or_default(),
+        header_value(&headers, "source-service-id").unwrap_or_default(),
+        header_value(&headers, "destination-service-id").unwrap_or_default(),
         header_value(&headers, "source-trust-domain").unwrap_or_default(),
         header_value(&headers, "destination-trust-domain").unwrap_or_default(),
         request_canonical_digest,
@@ -367,10 +367,10 @@ impl FederationDispatcher {
         }
         insert_header_if_valid(
             &mut headers,
-            "source-service-did",
+            "source-service-id",
             &self.state.config.service_id,
         );
-        insert_header_if_valid(&mut headers, "destination-service-did", &row.peer_did);
+        insert_header_if_valid(&mut headers, "destination-service-id", &row.peer_did);
         insert_header_if_valid(
             &mut headers,
             "source-trust-domain",
