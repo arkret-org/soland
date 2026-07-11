@@ -109,7 +109,13 @@ pub(super) async fn set_agent_participation(
     // grant id is deterministic per (agent, scope_key) so set/unset/set
     // converge on a single cell. Production submits these from inkson.
     if state.config.development_mode {
-        let realm = ensure_self_realm(state, &session).await?;
+        // The materialized capability belongs to the participation target
+        // Realm, not the controller's private agent-control Realm. Keeping
+        // the event and its resource selector in the same Realm is required
+        // for the issuer upper-bound check to evaluate the controller's
+        // authority over this scope rather than accidentally using unrelated
+        // self-Realm ownership.
+        let realm = body.scope.realm_id().as_str().to_owned();
         let grant_id = participation_grant_id(&agent_id, &body.scope.scope_key());
         if effective.reply {
             let resource = participation_scope_resource(&body.scope);

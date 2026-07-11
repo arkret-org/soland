@@ -34,6 +34,38 @@ pub(super) async fn hydrate_projections_from_persistence(
         }
     }
 
+    // Realm metadata is the durable mirror used by the regular Realm index.
+    // Restore the reducer-side Realm cache from the same source as well: the
+    // capability reducer reads `realm_states.owner` when checking a root
+    // grant issuer's effective upper bound. Without this hydration, an
+    // already-existing controller self Realm is visible to `ensure_self_realm`
+    // after restart but has no owner in the reducer, so a legitimate
+    // controller-authored agent grant is rejected as
+    // `grant_exceeds_issuer_authority`.
+    if let Ok(rows) = persistence.realm_meta().list().await {
+        for (realm_id, record) in rows {
+            proj.realm_states.insert(
+                realm_id.clone(),
+                crate::reducer::SolandRealmState {
+                    realm_id,
+                    owner: Some(record.owner),
+                    title: None,
+                    deleted: record.deleted,
+                    archived: false,
+                    frozen: false,
+                    freeze_expires_at: None,
+                    created_at: record.created_at,
+                    updated_at: record.updated_at,
+                    trust_domain: None,
+                    terminal_state: None,
+                    successor_realm_id: None,
+                    default_strand_id: None,
+                    active_profiles: Vec::new(),
+                },
+            );
+        }
+    }
+
     if let Ok(rows) = persistence
         .space_container_projections()
         .snapshot_all()

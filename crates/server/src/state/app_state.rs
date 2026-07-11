@@ -767,6 +767,7 @@ impl AppState {
         .await;
         {
             let mut proj = self.projection.lock();
+            proj.realm_states.extend(proj_updates.realm_states);
             proj.space_containers.extend(proj_updates.space_containers);
             proj.strands.extend(proj_updates.strands);
             proj.morphs.extend(proj_updates.morphs);
@@ -1556,5 +1557,52 @@ mod membership_hydration_tests {
             .expect("commit epoch rehydrated");
         assert_eq!(epoch.epoch, 0);
         assert_eq!(epoch.policy_root, "sha256:locked-root");
+    }
+
+    #[tokio::test]
+    async fn realm_owner_rehydrates_for_capability_upper_bound_checks() {
+        use crate::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
+
+        let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
+        let owner = "did:webvh:z6mkfixture:example.test:users:alice";
+        let now = chrono::Utc::now();
+        let store = SolandMemoryPersistenceStore::new();
+        store
+            .realm_meta()
+            .put(
+                realm_id,
+                &RealmMetaRecord {
+                    owner: owner.to_owned(),
+                    deleted: false,
+                    discoverability: "invite_only".to_owned(),
+                    history_visibility: "shared".to_owned(),
+                    history_sharing_policy: None,
+                    history_sharing_policy_digest: None,
+                    preview_policy: None,
+                    preview_policy_digest: None,
+                    asset_privacy_policy: None,
+                    asset_privacy_policy_digest: None,
+                    encryption_profile: None,
+                    plaintext_visible_services: BTreeSet::new(),
+                    plaintext_visible_service_classes: BTreeMap::new(),
+                    minimal_metadata_realm: false,
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+            .await
+            .expect("put realm metadata");
+
+        let mut proj = ProjectionState::new();
+        hydrate_projections_from_persistence(&store, &mut proj, &SolandAuthzEngine::new()).await;
+
+        let hydrated = proj.realm_states.get(realm_id).expect("realm rehydrated");
+        assert_eq!(hydrated.owner.as_deref(), Some(owner));
+        assert!(proj.issuer_has_projected_capability(
+            owner,
+            realm_id,
+            "ak.message.create",
+            realm_id,
+        ));
     }
 }

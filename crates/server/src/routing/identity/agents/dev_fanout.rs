@@ -16,7 +16,7 @@ use chrono::{Duration, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
 use super::SessionRecord;
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
@@ -86,13 +86,37 @@ pub(super) async fn submit_agent_fanout_event(
     });
     let outcome = submit_event_value(state, session, envelope)
         .await
-        .map_err(|err| {
-            AppError::internal(format!(
-                "agent fan-out submit failed for {kind}: {} ({})",
-                err.message, err.code
-            ))
-        })?;
+        .map_err(|err| agent_fanout_submit_error(kind, err.status, err.code, err.message))?;
     Ok(outcome.event_id)
+}
+
+fn agent_fanout_submit_error(
+    kind: &str,
+    status: salvo::http::StatusCode,
+    wire_code: String,
+    detail: String,
+) -> AppError {
+    let message = format!("agent fan-out submit failed for {kind}: {detail}");
+    if let Some(code) = ErrorCode::from_wire(&wire_code) {
+        return AppError::new(code, message).with_status(status);
+    }
+
+    // Reducer rejection reasons (for example
+    // `grant_exceeds_issuer_authority`) are stable reason codes, not
+    // top-level error codes. Preserve the semantic HTTP class and expose the
+    // reducer discriminator in details instead of turning an expected
+    // failed-precondition into a misleading 500 internal_error.
+    let code = match status {
+        salvo::http::StatusCode::PRECONDITION_FAILED => ErrorCode::FailedPrecondition,
+        salvo::http::StatusCode::CONFLICT => ErrorCode::Conflict,
+        salvo::http::StatusCode::FORBIDDEN => ErrorCode::CapabilityDenied,
+        salvo::http::StatusCode::UNAUTHORIZED => ErrorCode::Unauthenticated,
+        salvo::http::StatusCode::BAD_REQUEST => ErrorCode::InvalidParam,
+        _ => ErrorCode::InternalError,
+    };
+    AppError::new(code, message)
+        .with_status(status)
+        .with_reason_code(wire_code)
 }
 
 /// Idempotently ensure the controller's self realm exists in the realm
@@ -611,6 +635,26 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn reducer_rejection_keeps_failed_precondition_reason() {
+        let error = agent_fanout_submit_error(
+            "ak.capability.grant",
+            salvo::http::StatusCode::PRECONDITION_FAILED,
+            "grant_exceeds_issuer_authority".to_owned(),
+            "grant_exceeds_issuer_authority".to_owned(),
+        );
+
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some("grant_exceeds_issuer_authority")
+        );
+        assert_eq!(
+            error.http_status(),
+            salvo::http::StatusCode::PRECONDITION_FAILED
+        );
+    }
 
     #[test]
     fn initial_grant_default_uses_content_read_only() {
