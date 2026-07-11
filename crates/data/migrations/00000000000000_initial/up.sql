@@ -82,7 +82,7 @@ CREATE TABLE public.agent_participation_ceiling (
 CREATE TABLE public.agent_principals (
     id text NOT NULL,
     controller_id text NOT NULL,
-    display_name text NOT NULL,
+    display_name text,
     agent_slug text,
     state text DEFAULT 'active'::text NOT NULL,
     requested_scope jsonb,

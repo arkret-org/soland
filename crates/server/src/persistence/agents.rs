@@ -394,8 +394,8 @@ struct AgentPrincipalRow {
     agent_id: String,
     #[diesel(sql_type = Text)]
     controller_id: String,
-    #[diesel(sql_type = Text)]
-    display_name: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    display_name: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     agent_slug: Option<String>,
     #[diesel(sql_type = Text)]
@@ -484,7 +484,10 @@ impl AgentStore for PgAgentStore {
         };
         let agent_id = get_str("agent_id")?;
         let controller_id = get_str("controller_id")?;
-        let display_name = get_str("display_name")?;
+        let display_name = record
+            .get("display_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
         let agent_slug = record
             .get("agent_slug")
             .and_then(Value::as_str)
@@ -589,7 +592,7 @@ impl AgentStore for PgAgentStore {
         )
         .bind::<Text, _>(&agent_id)
         .bind::<Text, _>(&controller_id)
-        .bind::<Text, _>(&display_name)
+        .bind::<Nullable<Text>, _>(&display_name)
         .bind::<Nullable<Text>, _>(&agent_slug)
         .bind::<Text, _>(&state)
         .bind::<Nullable<Jsonb>, _>(&requested_scope)
