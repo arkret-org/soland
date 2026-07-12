@@ -5,7 +5,9 @@
 use std::sync::Arc;
 
 use soland::persistence::SolandMemoryPersistenceStore;
-use soland::state::{DeviceInventoryRecord, DeviceMessageRecord, RecoveryPolicyRecord};
+use soland::state::{
+    DeviceInventoryRecord, DeviceMessageRecord, RecoveryPolicyRecord, RecoverySessionRecord,
+};
 
 use super::helpers::*;
 use crate::common::*;
@@ -191,6 +193,39 @@ async fn seed_verified_recovery_session_for_reset_test(
     session["updated_at"] =
         serde_json::json!(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
     (session, session_id)
+}
+
+async fn seed_verified_reset_recovery_session(
+    state: &AppState,
+    principal_id: &str,
+    policy_id: &str,
+) -> String {
+    let now = chrono::Utc::now();
+    let recovery_session_id = new_prefixed_uuid7("ak:recovery_session:");
+    state
+        .persistence
+        .recovery_sessions()
+        .insert(RecoverySessionRecord {
+            recovery_session_id: recovery_session_id.clone(),
+            principal_id: principal_id.to_owned(),
+            requesting_device_id: RESET_SOURCE_DEVICE.to_owned(),
+            trust_domain: "ak:trust_domain:soland.local".to_owned(),
+            policy_id: policy_id.to_owned(),
+            policy_version: 1,
+            ssk_generation: 1,
+            policy_payload: serde_json::json!({}),
+            challenge: "verified-reset-session".to_owned(),
+            state: "verified".to_owned(),
+            proof_payload: Some(serde_json::json!({
+                "proof": { "kind": "principal_signing" }
+            })),
+            created_at: now - chrono::Duration::seconds(1),
+            updated_at: now,
+            expires_at: now + chrono::Duration::minutes(10),
+        })
+        .await
+        .unwrap();
+    recovery_session_id
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -851,7 +886,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
     let recovery_key = SigningKey::from_bytes(&[124u8; 32]);
     let (_recovery_did, recovery_ref) = did_key_principal(&recovery_key);
-    seed_reset_recovery_policy(
+    let policy_id = seed_reset_recovery_policy(
         &state,
         &principal_id,
         "recovery_unlock",
@@ -867,13 +902,15 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
         "Reset Source",
     )
     .await;
+    let recovery_session_id =
+        seed_verified_reset_recovery_session(&state, &principal_id, &policy_id).await;
     let event_id = new_prefixed_uuid7("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
         serde_json::json!({
             "kind": "recovery_unlock",
-            "recovery_session_id": new_prefixed_uuid7("ak:recovery_session:"),
+            "recovery_session_id": recovery_session_id,
             "recovery_secret_ref": recovery_ref,
             "unlock_commitment": "sha256:placeholder",
             "alg": "EdDSA",
@@ -900,7 +937,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
     let service_key = SigningKey::from_bytes(&[128u8; 32]);
     let (service_id, service_vm) = did_key_principal(&service_key);
-    seed_reset_recovery_policy(
+    let policy_id = seed_reset_recovery_policy(
         &state,
         &principal_id,
         "trusted_recovery_service",
@@ -916,12 +953,15 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
         "Reset Source",
     )
     .await;
+    let recovery_session_id =
+        seed_verified_reset_recovery_session(&state, &principal_id, &policy_id).await;
     let event_id = new_prefixed_uuid7("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
         serde_json::json!({
             "kind": "trusted_recovery_service",
+            "recovery_session_id": recovery_session_id,
             "service_id": service_id,
             "verification_method": service_vm,
             "alg": "EdDSA",

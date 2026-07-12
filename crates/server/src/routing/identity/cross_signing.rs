@@ -167,13 +167,14 @@ pub async fn validate_cross_signing_reset(
             Ok(())
         }
         CrossSigningResetProof::RecoveryUnlock {
-            recovery_session_id: _,
+            recovery_session_id,
             recovery_secret_ref,
             unlock_commitment,
             alg,
             signature,
         } => {
             ensure_reset_alg(alg)?;
+            require_verified_reset_recovery_session(state, &content, recovery_session_id).await?;
             let policy = active_reset_recovery_policy(state, &content, "recovery_unlock").await?;
             if !policy_mentions_identifier(
                 &policy,
@@ -223,6 +224,7 @@ pub async fn validate_cross_signing_reset(
             .await
         }
         CrossSigningResetProof::TrustedRecoveryService {
+            recovery_session_id,
             service_id,
             verification_method,
             alg,
@@ -230,6 +232,7 @@ pub async fn validate_cross_signing_reset(
             attestation_ref,
         } => {
             ensure_reset_alg(alg)?;
+            require_verified_reset_recovery_session(state, &content, recovery_session_id).await?;
             let policy =
                 active_reset_recovery_policy(state, &content, "trusted_recovery_service").await?;
             if !policy_mentions_identifier(
@@ -262,6 +265,30 @@ pub async fn validate_cross_signing_reset(
             Ok(())
         }
     }
+}
+
+async fn require_verified_reset_recovery_session(
+    state: &AppState,
+    content: &CrossSigningResetContent,
+    recovery_session_id: &str,
+) -> Result<(), &'static str> {
+    let record = state
+        .persistence
+        .recovery_sessions()
+        .get(recovery_session_id)
+        .await
+        .map_err(|_| "cross_signing_reset_recovery_session_unavailable")?
+        .ok_or("cross_signing_reset_recovery_session_missing")?;
+    if record.principal_id != content.principal_id.as_str() {
+        return Err("cross_signing_reset_recovery_session_principal_mismatch");
+    }
+    if record.state != "verified" {
+        return Err("cross_signing_reset_recovery_session_not_verified");
+    }
+    if content.issued_at < record.created_at || content.issued_at > record.expires_at {
+        return Err("cross_signing_reset_recovery_session_expired");
+    }
+    Ok(())
 }
 
 /// Record an accepted `ak.cross_signing.reset` into the `DeviceManager` (drops

@@ -627,15 +627,31 @@ pub(crate) async fn recovery_token_for_principal(state: AppState, principal_id: 
 
 pub(crate) async fn ingest_fresh_recovery_did_document(state: &AppState, did: &str) {
     let now = chrono::Utc::now();
+    let did_document = if let Some(public_key_multibase) = did.strip_prefix("did:key:") {
+        let verification_method = format!("{did}#{public_key_multibase}");
+        serde_json::json!({
+            "id": did,
+            "verificationMethod": [{
+                "id": verification_method,
+                "type": "Multikey",
+                "controller": did,
+                "publicKeyMultibase": public_key_multibase,
+            }],
+            "authentication": [verification_method],
+            "assertionMethod": [verification_method],
+        })
+    } else {
+        serde_json::json!({
+            "id": did,
+            "verificationMethod": [],
+        })
+    };
     state
         .persistence
         .webvh()
         .put_document(WebvhDocumentRecord {
             did: did.to_owned(),
-            did_document: serde_json::json!({
-                "id": did,
-                "verificationMethod": [],
-            }),
+            did_document,
             key_log_head: Some("sha256:recovery-test-head".to_owned()),
             seq: 1,
             method_evidence: serde_json::json!({ "mode": "test" }),

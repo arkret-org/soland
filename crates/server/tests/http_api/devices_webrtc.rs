@@ -1208,7 +1208,7 @@ fn call_signal_envelope(
     envelope["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",
-        "verification_method": format!("{actor}#device"),
+        "verification_method": format!("{actor}#{device_id}"),
         "event_digest": event_digest,
         "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
@@ -1284,7 +1284,8 @@ async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_dev
     assert!(bob_signals[0]["proof"]["event_digest"].is_string());
     assert!(bob_signals[0]["proof"]["jws"].is_string());
     assert_eq!(
-        bob_signals[0]["proof"]["verification_method"], "did:web:alice.example#device",
+        bob_signals[0]["proof"]["verification_method"],
+        "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
         "the relay delivers the envelope verbatim so the receiver can verify proof"
     );
 
