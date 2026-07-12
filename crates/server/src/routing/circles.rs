@@ -147,19 +147,31 @@ fn circle_view_from_projection(
     } else {
         Vec::new()
     };
-    circle_view_from_with_pending(c, pending_mls_removals, include_member_details)
+    let viewer_membership = projection
+        .circle_membership(&c.circle_id, actor)
+        .map(|membership| parse_sdk_field("viewer_membership", &membership.state))
+        .transpose()?;
+    circle_view_from_with_pending(
+        c,
+        pending_mls_removals,
+        viewer_membership,
+        include_member_details,
+    )
 }
 
 fn circle_view_from_with_pending(
     c: &CircleProjection,
     pending_mls_removals: Vec<CirclePendingMlsRemoval>,
+    viewer_membership: Option<CircleMembership>,
     include_member_details: bool,
 ) -> Result<CircleView, AppError> {
     Ok(CircleView {
         circle_id: parse_sdk_field("circle_id", &c.circle_id)?,
         realm_id: parse_sdk_field("realm_id", &c.realm_id)?,
+        profile_ref: c.profile_ref.clone(),
         title: c.title.clone(),
         summary: c.summary.clone(),
+        display: parse_sdk_field("display", &c.display)?,
         directory_visibility: parse_sdk_field("directory_visibility", &c.directory_visibility)?,
         join_rule: parse_sdk_field("join_rule", &c.join_rule)?,
         history_visibility: parse_sdk_field("history_visibility", &c.history_visibility)?,
@@ -178,6 +190,9 @@ fn circle_view_from_with_pending(
         mls_group_ref: c.mls_group_ref.clone(),
         pending_mls_removals,
         state: parse_sdk_field("state", c.state.as_str())?,
+        member_count: include_member_details
+            .then(|| u32::try_from(c.members.len()).unwrap_or(u32::MAX)),
+        viewer_membership,
         members: if include_member_details {
             c.members
                 .iter()
@@ -207,6 +222,10 @@ fn circle_directory_visible_to_actor(
             && projection
                 .member(&circle.realm_id, actor)
                 .is_some_and(|member| member.state == "join"))
+}
+
+fn is_ordinary_circle_profile(profile_ref: Option<&str>) -> bool {
+    profile_ref.is_none()
 }
 
 fn pending_mls_removals_from_projection(
@@ -412,6 +431,7 @@ async fn list_circles(
     let circles = projection
         .circles_for_realm(realm_id.as_str())
         .iter()
+        .filter(|c| is_ordinary_circle_profile(c.profile_ref.as_deref()))
         .filter(|c| circle_directory_visible_to_actor(&projection, c, &session.actor))
         .map(|c| circle_view_from_projection(&projection, c, &session.actor))
         .collect::<Result<Vec<_>, _>>()?;
@@ -1068,5 +1088,16 @@ mod tests {
             .expect("display.short_name");
         assert!(short_name.len() <= 24);
         assert!(short_name.starts_with('S'));
+    }
+
+    #[test]
+    fn ordinary_circle_list_filter_rejects_sidecar_and_unknown_profiles() {
+        assert!(is_ordinary_circle_profile(None));
+        assert!(!is_ordinary_circle_profile(Some(
+            arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD
+        )));
+        assert!(!is_ordinary_circle_profile(Some(
+            "ak.profile.future_private_circle.v1"
+        )));
     }
 }

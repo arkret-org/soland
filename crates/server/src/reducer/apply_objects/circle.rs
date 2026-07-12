@@ -68,6 +68,13 @@ impl ProjectionState {
             .get("summary")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        let display = object.get("display").cloned().unwrap_or_else(|| {
+            serde_json::json!({
+                "short_name": "Circle",
+                "color_token": "slate",
+                "symbol": { "glyph": "ring" }
+            })
+        });
         let directory_visibility = object
             .get("directory_visibility")
             .and_then(Value::as_str)
@@ -83,6 +90,10 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .unwrap_or("invited")
             .to_owned();
+        let profile_ref = object
+            .get("profile_ref")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
         let content_encryption_floor = object
             .get("content_encryption_floor")
             .and_then(Value::as_str)
@@ -129,8 +140,10 @@ impl ProjectionState {
         let projection = CircleProjection {
             circle_id: circle_id.to_owned(),
             realm_id: realm_id.clone(),
+            profile_ref,
             title,
             summary,
+            display,
             directory_visibility,
             join_rule,
             history_visibility,

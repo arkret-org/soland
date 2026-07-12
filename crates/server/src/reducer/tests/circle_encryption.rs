@@ -38,8 +38,10 @@ fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
         CircleProjection {
             circle_id: circle.clone(),
             realm_id: realm.clone(),
+            profile_ref: None,
             title: "Ops".to_owned(),
             summary: None,
+            display: serde_json::json!({"short_name":"Ops","color_token":"slate","symbol":{"glyph":"ring"}}),
             directory_visibility: "members".to_owned(),
             join_rule: "invite".to_owned(),
             history_visibility: "joined".to_owned(),

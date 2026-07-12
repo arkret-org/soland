@@ -262,7 +262,7 @@ pub(super) fn payload_asserts_agent_sidecar_ensure(payload: &Value) -> bool {
     let profile_matches = payload.get("profile").and_then(Value::as_str).or_else(|| {
         payload
             .get("object")
-            .and_then(|object| object.get("sidecar_profile"))
+            .and_then(|object| object.get("profile_ref"))
             .and_then(Value::as_str)
     }) == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD);
     if !profile_matches {
@@ -307,7 +307,7 @@ pub(super) fn sidecar_circle_create_shape_is_constrained(
     if object.get("created_by").and_then(Value::as_str) != Some(actor) {
         return false;
     }
-    if object.get("sidecar_profile").and_then(Value::as_str)
+    if object.get("profile_ref").and_then(Value::as_str)
         != Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
     {
         return false;

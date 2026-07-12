@@ -241,7 +241,7 @@ mod tests {
                 "directory_visibility": "members",
                 "join_rule": "invite",
                 "history_visibility": "joined",
-                "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+                "profile_ref": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
                 "created_by": actor,
                 "controller_id": actor,
                 "controller_agent_circle_key": key,

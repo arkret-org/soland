@@ -777,8 +777,10 @@ CREATE TABLE public.projection_circle_members (
 CREATE TABLE public.projection_circles (
     id uuid NOT NULL,
     realm_id uuid NOT NULL,
+    profile_ref text,
     title text NOT NULL,
     summary text,
+    display jsonb NOT NULL,
     directory_visibility text DEFAULT 'members'::text NOT NULL,
     join_rule text DEFAULT 'invite'::text NOT NULL,
     history_visibility text DEFAULT 'joined'::text NOT NULL,

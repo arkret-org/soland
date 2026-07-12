@@ -34,8 +34,10 @@ fn seed_state(history_visibility: &str) -> (ProjectionState, ServerHlc, chrono::
         CircleProjection {
             circle_id: CIRCLE.to_owned(),
             realm_id: REALM.to_owned(),
+            profile_ref: None,
             title: "Ops".to_owned(),
             summary: None,
+            display: serde_json::json!({"short_name":"Ops","color_token":"slate","symbol":{"glyph":"ring"}}),
             directory_visibility: "members".to_owned(),
             join_rule: "invite".to_owned(),
             history_visibility: history_visibility.to_owned(),

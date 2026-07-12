@@ -632,8 +632,11 @@ pub struct CircleProjection {
     /// Parent Realm id. Create-locked — a Circle never re-binds to another
     /// Realm. Spec `circle.schema.json` §`realm_id`.
     pub realm_id: String,
+    /// Optional create-locked Circle semantic profile discriminator.
+    pub profile_ref: Option<String>,
     pub title: String,
     pub summary: Option<String>,
+    pub display: Value,
     pub directory_visibility: String,
     pub join_rule: String,
     pub history_visibility: String,

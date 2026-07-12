@@ -312,6 +312,7 @@ pub(super) fn find_sidecar_circle(
         .values()
         .find(|circle| {
             circle.realm_id == realm_id
+                && circle.profile_ref.as_deref() == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
                 && circle.created_by == controller
                 && circle.title == short_name
                 && circle.directory_visibility == "members"
@@ -363,10 +364,13 @@ pub(super) async fn ensure_sidecar_circle(
     let object = json!({
         "id": circle_id,
         "realm_id": realm_id,
+        "profile_ref": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "title": short_name,
         "summary": "Controller-private AI sidecar scope",
         "display": {
             "short_name": short_name,
+            "color_token": "slate",
+            "symbol": { "glyph": "spark" },
         },
         "directory_visibility": "members",
         "join_rule": "invite",
@@ -375,7 +379,6 @@ pub(super) async fn ensure_sidecar_circle(
         "metadata_encryption_floor": "e2ee_required",
         "encryption_profile": "mls_rfc9420",
         "created_by": controller,
-        "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "controller_id": controller,
         "controller_agent_circle_key": controller_agent_circle_key,
     });

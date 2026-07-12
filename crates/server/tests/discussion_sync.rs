@@ -339,8 +339,10 @@ fn install_projected_circle_scope(
         CircleProjection {
             circle_id: circle_id.to_owned(),
             realm_id: realm_id.to_owned(),
+            profile_ref: None,
             title: "Need to know".to_owned(),
             summary: None,
+            display: serde_json::json!({"short_name":"Need","color_token":"slate","symbol":{"glyph":"ring"}}),
             directory_visibility: "members".to_owned(),
             join_rule: "invite".to_owned(),
             history_visibility: "joined".to_owned(),
