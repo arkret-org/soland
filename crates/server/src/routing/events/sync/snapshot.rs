@@ -1693,7 +1693,11 @@ fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
         return false;
     }
     let Some(entries) = payload.get("entries").and_then(Value::as_array) else {
-        return false;
+        // Account data is opaque unless the holder has authorized a readable
+        // policy projection. An encrypted or otherwise unreadable blocklist
+        // cannot prove that this sender is allowed, so cross-actor fanout must
+        // fail closed.
+        return true;
     };
     entries
         .iter()

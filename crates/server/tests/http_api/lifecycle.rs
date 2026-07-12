@@ -248,7 +248,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         5,
         "ak.strand.update",
         serde_json::json!({
-            "strand_id": strand_id,
+            "target_ref": strand_id,
             "patch": { "metadata": { "title": "Edit while archived" } }
         }),
         vec!["ak:event:01904100-0000-7000-8000-e10ec0000003"],
@@ -444,7 +444,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         2,
         "ak.strand.update",
         serde_json::json!({
-            "strand_id": strand_id,
+            "target_ref": strand_id,
             "patch": {
                 "content": {
                     "$op": "set",
@@ -510,7 +510,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         2,
         "ak.strand.update",
         serde_json::json!({
-            "strand_id": task_strand_id,
+            "target_ref": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
         vec!["ak:event:01904100-0000-7000-8000-f51ec0000001"],
@@ -529,7 +529,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         3,
         "ak.strand.update",
         serde_json::json!({
-            "strand_id": task_strand_id,
+            "target_ref": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "in_progress" } } }
         }),
         vec!["ak:event:01904100-0000-7000-8000-f51ec0000001"],
@@ -549,7 +549,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         4,
         "ak.strand.update",
         serde_json::json!({
-            "strand_id": task_strand_id,
+            "target_ref": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
         vec!["ak:event:01904100-0000-7000-8000-f51ec0000003"],
@@ -593,7 +593,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         6,
         "ak.strand.update",
         serde_json::json!({
-            "strand_id": incident_strand_id,
+            "target_ref": incident_strand_id,
             "patch": { "metadata": { "fields": { "status": "resolved" } } }
         }),
         vec!["ak:event:01904100-0000-7000-8000-f51ec0000005"],

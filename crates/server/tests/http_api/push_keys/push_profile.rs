@@ -650,22 +650,15 @@ async fn typing_submit_accepts_default_realm_strand_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let default_strand_id = DEMO_REALM_ID.replacen("ak:realm:", "ak:strand:", 1);
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
-
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ak.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ak.typing",
+            serde_json::json!({
                 "strand_id": default_strand_id,
                 "typing": true
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -693,22 +686,15 @@ async fn typing_submit_wakes_account_subscribe_stream() {
     let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000004";
     insert_typing_scope_strand(state.clone(), strand_id, Some(true));
     let mut wakeups = state.event_broadcast.subscribe();
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
-
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ak.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ak.typing",
+            serde_json::json!({
                 "strand_id": strand_id,
                 "typing": true
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -747,22 +733,15 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
         .as_str()
         .expect("baseline sync cursor")
         .to_owned();
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
-
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ak.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ak.typing",
+            serde_json::json!({
                 "strand_id": strand_id,
                 "typing": true
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -800,22 +779,15 @@ async fn typing_submit_rejects_disabled_discussion_strand_scope() {
     let token = dev_token(state.clone()).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000001";
     insert_typing_scope_strand(state.clone(), strand_id, Some(false));
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
-
     let rejected_typing = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ak.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ak.typing",
+            serde_json::json!({
                 "strand_id": strand_id,
                 "typing": true
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(rejected_typing.status_code, Some(StatusCode::FORBIDDEN));
@@ -829,7 +801,7 @@ async fn typing_submit_rejects_disabled_discussion_strand_scope() {
 }
 
 #[tokio::test]
-async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() {
+async fn public_read_receipt_policy_rejected_for_world_readable_realm_without_opt_in() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let now = chrono::Utc::now();
@@ -874,31 +846,14 @@ async fn public_read_receipt_rejected_for_world_readable_realm_without_opt_in() 
         }),
     )
     .await;
-    assert!(
-        policy["status"] == "accepted"
-            || policy["accepted"]
-                .as_array()
-                .is_some_and(|events| !events.is_empty()),
-        "read receipt policy event: {policy}"
+    assert_ne!(
+        policy["status"], "accepted",
+        "read receipt policy: {policy}"
     );
-
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
-    let receipt = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ak.receipt.read",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
-                "event_id": new_prefixed_uuid7("ak:event:")
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(receipt.status_code, Some(StatusCode::FORBIDDEN));
+    assert_eq!(
+        policy["error"]["code"],
+        "read_receipt_visibility_combination_invalid"
+    );
 }
 
 #[tokio::test]
@@ -943,20 +898,16 @@ async fn typing_fanout_respects_receiver_blocklist() {
         "blocklist event: {bob_blocklist}"
     );
 
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
+    let default_strand_id = DEMO_REALM_ID.replacen("ak:realm:", "ak:strand:", 1);
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&serde_json::json!({
-            "kind": "ak.typing",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "payload": {
+        .json(&broadcast_ephemeral_envelope(
+            "ak.typing",
+            serde_json::json!({
+                "strand_id": default_strand_id,
                 "typing": true
-            }
-        }))
+            }),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()

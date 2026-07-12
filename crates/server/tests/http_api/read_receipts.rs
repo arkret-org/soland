@@ -175,7 +175,7 @@ async fn read_receipt_policy_rejects_forced_public_world_readable_without_second
 fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i64) -> Value {
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::milliseconds(ttl_ms);
-    serde_json::json!({
+    let mut envelope = serde_json::json!({
         "kind": "ak.receipt.read",
         "realm_id": DEMO_REALM_ID,
         "actor_id": actor,
@@ -191,7 +191,18 @@ fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i
             "read_scope": {"kind": "realm"},
             "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
         }
-    })
+    });
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
+    let event_digest = arkret_sdk::canonical::sha256_digest(&canonical);
+    envelope["proof"] = serde_json::json!({
+        "kind": "detached_jws",
+        "alg": "EdDSA",
+        "verification_method": format!("{actor}#{device_id}"),
+        "event_digest": event_digest,
+        "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+    });
+    envelope
 }
 
 async fn post_read_receipt(

@@ -10,6 +10,27 @@ use soland::state::{CanonicalEventRecord, RealmMetaRecord};
 use super::common::*;
 
 const PEER_SOURCE_DID: &str = "did:web:remote.example";
+const PEER_DELIVERY_FRONTIER: &str = "ak:event:01904100-0000-7000-8000-fede00000001";
+
+fn seed_peer_delivery_binding(state: &AppState) {
+    let now = Utc::now();
+    state.projection.lock().members.insert(
+        (TEST_REALM_ID.to_owned(), "did:web:alice.example".to_owned()),
+        soland::reducer::SolandMembershipState {
+            member: "did:web:alice.example".to_owned(),
+            realm_id: TEST_REALM_ID.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: Some("routable".to_owned()),
+            recipient_service_id: Some(SERVICE_ID.to_owned()),
+            membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
+            delivery_binding_frontier: Some(PEER_DELIVERY_FRONTIER.to_owned()),
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+        },
+    );
+}
 const SERVICE_ID: &str = "did:web:soland.local";
 const TEST_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
 const TEST_CIRCLE_ID: &str = "ak:circle:0196419b-0000-7000-8000-0000000000c1";
@@ -125,6 +146,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
 #[tokio::test]
 async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let state = AppState::new(test_config(), Db { pool: None });
+    seed_peer_delivery_binding(&state);
     let now = Utc::now();
     for idx in 0..16 {
         let event_id = format!("ak:event:01904100-0000-7000-8000-fede000001{idx:02x}");
@@ -226,6 +248,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
 #[tokio::test]
 async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     let state = AppState::new(test_config(), Db { pool: None });
+    seed_peer_delivery_binding(&state);
     let mut event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede00000099",
         1,
@@ -268,6 +291,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
 #[tokio::test]
 async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     let state = AppState::new(test_config(), Db { pool: None });
+    seed_peer_delivery_binding(&state);
     // `did:web:alice.example` is seeded into the demo Realm's membership
     // index; the source domain is `remote.example` (mismatched home), so
     // acceptance exercises the membership-index path.
@@ -289,12 +313,13 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(outcome["status"], "accepted");
+    assert_eq!(outcome["status"], "accepted", "{outcome:?}");
 }
 
 #[tokio::test]
-async fn peer_events_submit_accepts_bound_mls_welcome_and_rejects_missing_claim_envelope() {
+async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration() {
     let state = AppState::new(test_config(), Db { pool: None });
+    seed_peer_delivery_binding(&state);
     let welcome_event_id = "ak:event:01904100-0000-7000-8000-fede00000b01";
     let welcome_event = event_envelope(
         welcome_event_id,
@@ -305,46 +330,17 @@ async fn peer_events_submit_accepts_bound_mls_welcome_and_rejects_missing_claim_
         mls_welcome_payload("claim-peer-01", "opaque-peer-welcome"),
     );
     let outcome = submit_peer_event(state.clone(), &welcome_event).await;
-    assert_eq!(outcome["status"], "accepted", "{outcome:?}");
-    assert_eq!(outcome["accepted"], serde_json::json!([welcome_event_id]));
-    assert_eq!(
-        state
-            .persistence
-            .mls_welcomes()
-            .snapshot_all()
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-
-    let missing_claim_event_id = "ak:event:01904100-0000-7000-8000-fede00000b02";
-    let mut missing_claim_payload =
-        mls_welcome_payload("claim-peer-02", "opaque-peer-welcome-missing");
-    missing_claim_payload
-        .as_object_mut()
-        .unwrap()
-        .remove("claim_envelope");
-    let missing_claim_event = event_envelope(
-        missing_claim_event_id,
-        "ak.mls.welcome",
-        "ak.schema.event.v1",
-        "did:web:alice.example",
-        52,
-        missing_claim_payload,
-    );
-    let outcome = submit_peer_event(state.clone(), &missing_claim_event).await;
     assert_eq!(outcome["status"], "partial", "{outcome:?}");
     assert!(outcome["accepted"].as_array().unwrap().is_empty());
     let rejected = outcome["rejected"].as_array().unwrap();
     assert_eq!(rejected.len(), 1);
-    assert_eq!(rejected[0]["id"], missing_claim_event_id);
-    assert_eq!(rejected[0]["reason_code"], "schema_violation");
+    assert_eq!(rejected[0]["id"], welcome_event_id);
+    assert_eq!(rejected[0]["reason_code"], "profile_unsupported");
     assert!(
         rejected[0]["detail"]
             .as_str()
             .unwrap()
-            .contains("claim_envelope"),
+            .contains("ak.profile.mls_governance_binding.full.v1"),
         "{outcome:?}"
     );
     assert_eq!(
@@ -355,7 +351,7 @@ async fn peer_events_submit_accepts_bound_mls_welcome_and_rejects_missing_claim_
             .await
             .unwrap()
             .len(),
-        1
+        0
     );
 }
 
@@ -458,24 +454,81 @@ async fn self_events_reject_federation_wire() {
 }
 
 fn peer_submit_body(event: &Value) -> Value {
-    let event_id = event["event_id"].as_str().unwrap();
-    let event_digest = event["canonical_digest"].as_str().unwrap();
+    let mut wire_event = event.clone();
+    let wire_object = wire_event.as_object_mut().unwrap();
+    for legacy_field in [
+        "schema_id",
+        "device_id",
+        "audience",
+        "domain",
+        "auth_refs",
+        "canonical_digest",
+        "canonical_hash",
+    ] {
+        wire_object.remove(legacy_field);
+    }
+    wire_object.entry("created_at").or_insert_with(|| {
+        serde_json::json!(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    });
+    wire_object.entry("hlc").or_insert_with(|| {
+        serde_json::json!(format!(
+            "{:012x}-0000-a13f9c2e",
+            Utc::now().timestamp_millis()
+        ))
+    });
+    wire_object
+        .entry("refs")
+        .or_insert_with(|| serde_json::json!([]));
+    let mut proof_source = wire_event.clone();
+    let proof_source_object = proof_source.as_object_mut().unwrap();
+    for derived_field in [
+        "proofs",
+        "unsigned",
+        "effective_scope",
+        "actor_kind",
+        "canonical_digest",
+        "canonical_hash",
+    ] {
+        proof_source_object.remove(derived_field);
+    }
+    let proof_source_bytes = arkret_sdk::canonical::canonical_json_bytes(&proof_source).unwrap();
+    let proof_event_digest =
+        arkret_sdk::canonical::canonical_digest_with_suite(&proof_source_bytes, "sha256").unwrap();
+    if let Some(proofs) = wire_event.get_mut("proofs").and_then(Value::as_array_mut) {
+        for proof in proofs {
+            let verification_method = proof["verification_method"].clone();
+            let domain = proof["domain"].clone();
+            let audience = proof["audience"].clone();
+            *proof = serde_json::json!({
+                "kind": "detached_jws",
+                "alg": "EdDSA",
+                "verification_method": verification_method,
+                "event_digest": &proof_event_digest,
+                "created_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "domain": domain,
+                "audience": audience,
+                "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+            });
+        }
+    }
+    let event_id = wire_event["event_id"].as_str().unwrap().to_owned();
+    let event_digest = event_canonical_digest(&wire_event);
     let binding_payload = serde_json::json!({
         "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": TEST_REALM_ID,
-        "event_id": event_id,
-        "canonical_digest": event_digest,
+        "event_id": &event_id,
+        "canonical_digest": &event_digest,
     });
     serde_json::json!({
         "service_binding_ref": {
             "realm_id": TEST_REALM_ID,
             "realm_policy_digest": sha256_json(&binding_payload),
             "membership_frontier": [event_id],
-            "delivery_binding_frontier": [event_id],
+            "delivery_binding_frontier": [PEER_DELIVERY_FRONTIER],
             "destination_service_type": "principal_server",
             "reducer_profile_digest": arkret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
         },
-        "events": [event],
+        "events": [wire_event],
         "idempotency_key": format!("ak:outbox:event:{event_id}"),
     })
 }
