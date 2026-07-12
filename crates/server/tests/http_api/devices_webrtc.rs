@@ -633,7 +633,13 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
 async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
-    let token = dev_token(state.clone()).await;
+    // Use a non-owner member so the pre-grant assertion actually isolates
+    // `ak.call.join`; the seeded Alice account is the demo Realm owner and
+    // owners receive ordinary Realm-level capabilities by default.
+    let actor = "did:web:bob.example";
+    let device_id = "ak:device:01904100-0000-7000-8000-b0b000000003";
+    add_test_realm_member(&state, DEMO_REALM_ID, actor);
+    let token = dev_token_for_device(state.clone(), actor, device_id, "Bob Phone").await;
     // A fresh call id with NO `ak.call.state` cell and NO ephemeral session.
     let call_id = new_prefixed_uuid7("ak:call:");
 
@@ -643,8 +649,8 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": call_id,
-            "actor_id": "did:web:alice.example",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "actor_id": actor,
+            "device_id": device_id,
             "focus_id": "ak:focus:livekit:green"
         }))
         .send(&app_from_state(state.clone()))
@@ -657,19 +663,14 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
 
     // Grant ak.call.join → the token is issued against the brand-new call even
     // though no signaling session and no `ak.call.state` cell exist.
-    grant_call_capability(
-        &state,
-        DEMO_REALM_ID,
-        "did:web:alice.example",
-        "ak.call.join",
-    );
+    grant_call_capability(&state, DEMO_REALM_ID, actor, "ak.call.join");
     let issued: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": call_id,
-            "actor_id": "did:web:alice.example",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "actor_id": actor,
+            "device_id": device_id,
             "focus_id": "ak:focus:livekit:green"
         }))
         .send(&app_from_state(state))
@@ -1400,13 +1401,16 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
 #[tokio::test]
 async fn ephemeral_call_signal_without_send_capability_is_denied() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice = "did:web:alice.example";
-    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let alice_token = dev_token(state.clone()).await;
+    // Use a non-owner member so owner-default authorization cannot mask the
+    // missing explicit `ak.call.signal.send` grant.
+    let actor = "did:web:bob.example";
+    let device_id = "ak:device:01904100-0000-7000-8000-b0b000000004";
+    add_test_realm_member(&state, DEMO_REALM_ID, actor);
+    let token = dev_token_for_device(state.clone(), actor, device_id, "Bob Phone").await;
     // No `ak.call.signal.send` grant.
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca14";
-    let envelope = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
-    let denied = post_ephemeral(state.clone(), &alice_token, &envelope).await;
+    let envelope = call_signal_envelope(actor, device_id, call_id, "invite", 1);
+    let denied = post_ephemeral(state.clone(), &token, &envelope).await;
     assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
 
     // Nothing entered the relay.

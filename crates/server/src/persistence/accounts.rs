@@ -79,6 +79,30 @@ impl MemoryAccountStore {
         }
     }
 
+    /// Insert a constructor-time fixture without requiring an async runtime.
+    ///
+    /// This is intentionally limited to the in-memory store used by the
+    /// development/test harness. Database-backed startup continues to seed
+    /// through `AppState::hydrate`, where writes can be awaited normally.
+    pub(crate) fn seed(&self, record: AccountRecord) {
+        self.data.lock().insert(record.did.clone(), record.clone());
+
+        if record.localpart.trim().is_empty() {
+            return;
+        }
+        self.localparts.lock().insert(
+            record.localpart.clone(),
+            AccountLocalpartRecord {
+                id: ids::generate("account_localpart"),
+                account_did: record.did,
+                localpart: record.localpart,
+                is_primary: true,
+                created_at: record.created_at,
+                updated_at: record.created_at,
+            },
+        );
+    }
+
     fn primary_localpart_from(
         localparts: &BTreeMap<String, AccountLocalpartRecord>,
         did: &str,

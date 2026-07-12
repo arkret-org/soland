@@ -133,6 +133,42 @@ impl SolandMemoryPersistenceStore {
             idempotency_keys: MemoryIdempotencyStore::new(),
         }
     }
+
+    pub(crate) fn new_with_demo_data() -> Self {
+        let store = Self::new();
+        let now = chrono::Utc::now();
+        store.accounts.seed(AccountRecord {
+            id: "ak:account:0196419b-0000-7000-8000-000000000001".to_owned(),
+            did: "did:web:alice.example".to_owned(),
+            localpart: "alice".to_owned(),
+            display_name: Some("Alice Example".to_owned()),
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: now,
+        });
+        store.realm_meta.seed(
+            "ak:realm:0196419b-0000-7000-8000-000000000000",
+            RealmMetaRecord {
+                owner: "did:web:alice.example".to_owned(),
+                deleted: false,
+                discoverability: "public".to_owned(),
+                history_visibility: "shared".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
+                encryption_profile: None,
+                plaintext_visible_services: std::collections::BTreeSet::new(),
+                plaintext_visible_service_classes: std::collections::BTreeMap::new(),
+                minimal_metadata_realm: false,
+                created_at: now,
+                updated_at: now,
+            },
+        );
+        store
+    }
 }
 
 impl Default for SolandMemoryPersistenceStore {

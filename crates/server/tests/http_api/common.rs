@@ -17,7 +17,7 @@ pub(crate) use salvo::http::StatusCode;
 pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::Value;
 pub(crate) use sha2::{Digest, Sha256};
-pub(crate) use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+pub(crate) use soland::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
 pub(crate) use soland::ratelimit::RateLimiterConfig;
 pub(crate) use soland::state::{
     AppState, EventNotification, MessageRecord, PresenceRecord, RealmDirectoryEntry,
@@ -919,21 +919,26 @@ pub(crate) async fn register_account(
     login["session_credential"].as_str().unwrap().to_owned()
 }
 
-/// Like [`register_account`] but sends a canonical `<localpart>:<domain>`
-/// `handle`, so registration creates an `account_localparts` binding.
-/// `resolve_handle` only discloses handles that have a local binding
-/// (discovery-directory.md §9 resolve_handle; `resolve_registration_localpart`
-/// requires the canonical form).
+/// Seed a deployment-local account/localpart binding for directory tests.
+///
+/// service-http-binding.md §3.3 keeps bare handles out of the protocol
+/// account-register DTO. The product fixture endpoint accepts a localpart;
+/// protocol directory reads then expose its canonical `<localpart>:<domain>`
+/// claim (discovery-directory.md §9).
 pub(crate) async fn register_account_with_handle(
     state: AppState,
     did: &str,
     handle: &str,
     device_id: &str,
 ) -> String {
-    let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
+    let localpart = handle
+        .split_once(':')
+        .map(|(localpart, _)| localpart)
+        .expect("canonical handle fixture");
+    let registered: Value = TestClient::post("http://server/_soland/self/account/register")
         .json(&serde_json::json!({
-            "principal_id": did,
-            "handle": handle,
+            "did": did,
+            "handle": format!("@{localpart}"),
             "display_name": handle,
             "device_id": device_id
         }))
@@ -942,10 +947,7 @@ pub(crate) async fn register_account_with_handle(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(
-        registered["principal_id"], did,
-        "register response: {registered}"
-    );
+    assert_eq!(registered["did"], did, "register response: {registered}");
 
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({

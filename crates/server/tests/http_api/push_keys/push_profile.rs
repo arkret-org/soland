@@ -410,7 +410,10 @@ async fn push_profile_and_moderation_contracts_work() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "target_ref": "ak:event:01904100-0000-7000-8000-4a4116cba4e8",
+            // content-moderation.md §3.1.1: target_ref must resolve to its
+            // actual Realm/effective_scope. The demo Realm is a real visible
+            // target; the former synthetic event id had no projection row.
+            "target_ref": DEMO_REALM_ID,
             "report_reason_code": "spam",
             "reporter": "did:web:alice.example"
         }))
@@ -419,7 +422,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(report["status"], "submitted");
+    assert_eq!(report["status"], "submitted", "report response: {report}");
     assert!(
         state
             .persistence

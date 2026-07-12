@@ -348,7 +348,19 @@ impl AppState {
             .map(|pool| {
                 Arc::new(PgPersistenceStore::new(pool.clone())) as Arc<dyn PersistenceStore>
             })
-            .unwrap_or_else(|| Arc::new(SolandMemoryPersistenceStore::new()));
+            .unwrap_or_else(|| {
+                // The sync integration harness builds a fresh in-memory state
+                // per request and does not run the async boot hydration step.
+                // Seed the explicitly-enabled demo account in the concrete
+                // memory store so directory, moderation, and admin projections
+                // observe the same fixture as a normally hydrated dev server.
+                let store = if config.seed_demo_data {
+                    SolandMemoryPersistenceStore::new_with_demo_data()
+                } else {
+                    SolandMemoryPersistenceStore::new()
+                };
+                Arc::new(store)
+            });
         Self::new_with_persistence(config, db, persistence)
     }
 

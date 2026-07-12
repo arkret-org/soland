@@ -158,6 +158,10 @@ impl MemoryRealmMetaStore {
             data: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
+
+    pub(crate) fn seed(&self, realm_id: &str, record: RealmMetaRecord) {
+        self.data.lock().insert(realm_id.to_owned(), record);
+    }
 }
 
 #[async_trait]

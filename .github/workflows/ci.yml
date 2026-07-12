@@ -72,7 +72,12 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
         working-directory: soland
 
-      - name: Test
+      # Keep test binaries separate from `target/dev`, matching the local
+      # `just test` gate and preventing Windows dev-server file locks. This
+      # command includes the full `-p soland --test http_api` suite.
+      - name: Test (includes HTTP API suite)
+        env:
+          CARGO_TARGET_DIR: target/test
         run: cargo test --locked
         working-directory: soland
 

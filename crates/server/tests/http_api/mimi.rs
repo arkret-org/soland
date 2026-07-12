@@ -509,18 +509,12 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
             "mimi_room_uri": room_uri.clone(),
             "realm_id": demo_realm,
             "target_ref": demo_realm,
-            "reporter": "did:web:reporter.example",
+            // mimi-interop.md §11: attribute a report only after the reporter
+            // resolves through a local account or valid consent/holder claim.
+            // This reducer-chain test uses the seeded local demo principal;
+            // fake consent references are not valid resolution evidence.
+            "reporter": "did:web:alice.example",
             "abuse_reason_code": "spam",
-            // mimi-interop.md §11: an inbound MIMI report's `reporter` MUST be
-            // resolved to an Arkret principal via a local account, holder claim,
-            // or consent proof; a non-local reporter without any of these is
-            // rejected with `mimi_reporter_resolution_required`. The typed
-            // MimiReportAbuseRequestBody only preserves consent inside the
-            // flexible `evidence_package` (unknown top-level fields are dropped),
-            // so carry it there.
-            "evidence_package": {
-                "consent_ref": "ak:consent:0196419b-0000-7000-8000-0000000000c0"
-            },
         }),
         None
     )
@@ -529,7 +523,10 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(report_resp["status"], "queued");
+    assert_eq!(
+        report_resp["status"], "queued",
+        "report response: {report_resp}"
+    );
 
     let events_again: Value = TestClient::get(format!(
         "http://server/_arkret/self/events?realms={demo_realm}"
@@ -549,7 +546,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
                 && event["payload"]["target_event_digest"] == demo_realm
         })
         .expect("moderation.report event missing from projection log");
-    assert_eq!(report_event["actor_id"], "did:web:reporter.example");
+    assert_eq!(report_event["actor_id"], "did:web:alice.example");
 
     let custom_group_id = "mimi-group-p4-custom";
     let migrating_body = mimi_room_update_body(room_id, demo_realm, group_id, "hub", "migrating");
