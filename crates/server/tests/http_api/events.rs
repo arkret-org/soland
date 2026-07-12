@@ -289,6 +289,7 @@ async fn account_subscribe_projects_realm_encryption_profile() {
 async fn events_describe_and_single_event_submit_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
+    authorize_test_plaintext_message_service(&state, "did:web:alice.example", DEMO_REALM_ID).await;
 
     let describe: Value = TestClient::get("http://server/_arkret/self/events/describe")
         .send(&app_from_state(state.clone()))

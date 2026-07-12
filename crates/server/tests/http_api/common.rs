@@ -797,44 +797,7 @@ pub(crate) async fn submit_message_event(
     encrypted: bool,
 ) -> Value {
     if !encrypted {
-        let now = chrono::Utc::now();
-        let mut meta = state
-            .persistence
-            .realm_meta()
-            .get(realm_id)
-            .await
-            .unwrap()
-            .unwrap_or_else(|| RealmMetaRecord {
-                owner: actor.to_owned(),
-                deleted: false,
-                discoverability: "invite_only".to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
-                preview_policy: None,
-                preview_policy_digest: None,
-                asset_privacy_policy: None,
-                asset_privacy_policy_digest: None,
-                encryption_profile: Some("none".to_owned()),
-                plaintext_visible_services: Default::default(),
-                plaintext_visible_service_classes: Default::default(),
-                minimal_metadata_realm: false,
-                created_at: now,
-                updated_at: now,
-            });
-        meta.plaintext_visible_services
-            .insert(state.config.service_id.clone());
-        meta.plaintext_visible_service_classes
-            .entry(state.config.service_id.clone())
-            .or_default()
-            .insert(arkret_sdk::PlaintextDataClassKind::MessageContent);
-        meta.updated_at = now;
-        state
-            .persistence
-            .realm_meta()
-            .put(realm_id, &meta)
-            .await
-            .unwrap();
+        authorize_test_plaintext_message_service(&state, actor, realm_id).await;
     }
     let event = signed_message_event_envelope(actor, realm_id, thread_id, content, encrypted);
     let mut response: Value = TestClient::post("http://server/_arkret/self/events")
@@ -872,6 +835,51 @@ pub(crate) async fn submit_message_event(
         "submit_message_event response missing event_id: {response}"
     );
     response
+}
+
+pub(crate) async fn authorize_test_plaintext_message_service(
+    state: &AppState,
+    actor: &str,
+    realm_id: &str,
+) {
+    let now = chrono::Utc::now();
+    let mut meta = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .unwrap()
+        .unwrap_or_else(|| RealmMetaRecord {
+            owner: actor.to_owned(),
+            deleted: false,
+            discoverability: "invite_only".to_owned(),
+            history_visibility: "joined".to_owned(),
+            history_sharing_policy: None,
+            history_sharing_policy_digest: None,
+            preview_policy: None,
+            preview_policy_digest: None,
+            asset_privacy_policy: None,
+            asset_privacy_policy_digest: None,
+            encryption_profile: Some("none".to_owned()),
+            plaintext_visible_services: Default::default(),
+            plaintext_visible_service_classes: Default::default(),
+            minimal_metadata_realm: false,
+            created_at: now,
+            updated_at: now,
+        });
+    meta.plaintext_visible_services
+        .insert(state.config.service_id.clone());
+    meta.plaintext_visible_service_classes
+        .entry(state.config.service_id.clone())
+        .or_default()
+        .insert(arkret_sdk::PlaintextDataClassKind::MessageContent);
+    meta.updated_at = now;
+    state
+        .persistence
+        .realm_meta()
+        .put(realm_id, &meta)
+        .await
+        .unwrap();
 }
 
 pub(crate) async fn register_account(

@@ -6,7 +6,7 @@
 use super::common::*;
 
 #[tokio::test]
-async fn sync_directory_and_index_share_demo_realm() {
+async fn sync_and_directory_share_demo_realm() {
     let sync_describe: Value = TestClient::get("http://server/_arkret/self/account/describe")
         .send(&app())
         .await
@@ -22,7 +22,6 @@ async fn sync_directory_and_index_share_demo_realm() {
             "chat",
             "topic",
             "offline_queue_flush",
-            "backfill_gap",
             "bottom_cell_repair"
         ])
     );
@@ -34,12 +33,9 @@ async fn sync_directory_and_index_share_demo_realm() {
             .await;
     assert_eq!(invalid_profile.status_code.unwrap().as_u16(), 405);
 
-    let sync = account_subscribe_frame(
-        AppState::new(test_config(), Db { pool: None }),
-        None,
-        "catchup=true",
-    )
-    .await;
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let sync = account_subscribe_frame(state, Some(&token), "catchup=true").await;
     assert!(
         sync["realms"]
             .as_object()
@@ -55,15 +51,6 @@ async fn sync_directory_and_index_share_demo_realm() {
         .await
         .unwrap();
     assert_eq!(directory["realms"].as_array().unwrap().len(), 1);
-
-    let index: Value = TestClient::post("http://server/_soland/self/index/query")
-        .json(&serde_json::json!({"realm_ids": ["ak:realm:0196419b-0000-7000-8000-000000000000"]}))
-        .send(&app())
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(index["results"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]

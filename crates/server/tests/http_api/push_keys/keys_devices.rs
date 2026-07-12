@@ -559,7 +559,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .as_str()
         .expect("push registration returns push_target_id");
 
-    let plaintext_push = TestClient::post("http://server/_arkret/edge/push/notify")
+    let mut plaintext_push = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "push_target_id": push_target_id,
@@ -570,7 +570,9 @@ async fn auth_keys_device_messages_and_blobs_work() {
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(plaintext_push.status_code.unwrap().as_u16(), 400);
+    assert_eq!(plaintext_push.status_code.unwrap().as_u16(), 422);
+    let plaintext_push_body: Value = plaintext_push.take_json().await.unwrap();
+    assert_eq!(plaintext_push_body["error"]["code"], "schema_violation");
 
     let notify: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({

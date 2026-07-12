@@ -443,12 +443,12 @@ async fn self_events_reject_federation_wire() {
         .await;
     assert_eq!(response.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "missing_param");
+    assert_eq!(body["error"]["code"], "schema_violation");
     assert!(
         body["error"]["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("event_id"),
+            .contains("/_arkret/peer/events"),
         "{body:?}"
     );
 }
