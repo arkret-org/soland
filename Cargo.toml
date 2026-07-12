@@ -28,6 +28,7 @@ bytes = "1.11.1"
 chrono = "0.4.45"
 chrono-tz = { version = "0.10.4", default-features = false }
 arkret-core = { version = "0.3.0", path = "../arkret-rust-sdk/crates/core", default-features = false }
+arkret-wire-base = { version = "0.3.0", path = "../arkret-rust-sdk/crates/wire-base", default-features = false }
 arkret-sdk = { version = "0.3.0", package = "arkret", path = "../arkret-rust-sdk/crates/sdk" }
 deadpool = "0.13"
 diesel = "2.3.10"

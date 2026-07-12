@@ -326,7 +326,8 @@ fn aggregate_and_publish(state: &AppState, record: &MultisigPendingRecord) -> Re
 
     let _multi = aggregator
         .aggregate(&canonical_bytes, |partial, bytes| {
-            verify_ed25519_partial(state, partial, bytes).map_err(arkret_sdk::Error::Protocol)
+            verify_ed25519_partial(state, partial, bytes)
+                .map_err(arkret_wire_base::WireError::Protocol)
         })
         .map_err(|e| format!("aggregate: {e}"))?;
 

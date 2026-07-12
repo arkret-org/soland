@@ -57,6 +57,7 @@ bs58 = {workspace = true}
 bytes = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}
 arkret-sdk = {workspace = true,features = ["full-surface", "device-runtime", "applet-runtime", "mls", "salvo", "signer", "keystore-macos", "keystore-linux", "keystore-windows"]}
+arkret-wire-base = {workspace = true}
 deadpool = {workspace = true,features = ["rt_tokio_1"]}
 diesel = {workspace = true,features = ["postgres", "serde_json", "chrono", "uuid", "pq-src"]}
 diesel-async = {workspace = true,features = ["postgres", "deadpool", "async-connection-wrapper"]}
