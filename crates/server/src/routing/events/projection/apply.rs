@@ -729,17 +729,6 @@ async fn project_accepted_operations_inner(
                 "failed to persist accepted operation projection"
             );
         }
-        // Reference applet bridge: if the accepted operation is
-        // `ak.applet.interop_session.start`, emit a synthetic
-        // `ak.applet.interop_session.status` (echo response)
-        // immediately afterwards so the timeline observes the full
-        // round trip without a real applet service plugged in. See
-        // `routing::events::applet_bridge::maybe_emit_echo_status_for_session_start`
-        // for the body shape contract.
-        crate::routing::events::applet_bridge::maybe_emit_echo_status_for_session_start(
-            state, origin, operation,
-        )
-        .await;
     }
 }
 

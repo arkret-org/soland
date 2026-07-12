@@ -420,30 +420,6 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             valid: true,
         },
         OperationVector {
-            name: "applet session start",
-            kind: arkret_sdk::events::kinds::APPLET_INTEROP_SESSION_START,
-            payload: json!({
-                "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
-                "session_id": "ak:session:01904100-0000-7000-8000-aa55aa55aa55",
-                "params": {},
-            }),
-            valid: true,
-        },
-        OperationVector {
-            name: "applet session status",
-            kind: arkret_sdk::events::kinds::APPLET_INTEROP_SESSION_STATUS,
-            // applet_interop_session_status_payload: required {applet_id, session_id,
-            // runtime_status}; runtime_status enum
-            // {pending,running,completed,failed,cancelled}; additionalProperties=false.
-            payload: json!({
-                "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
-                "session_id": "ak:session:01904100-0000-7000-8000-aa55aa55aa55",
-                "runtime_status": "running",
-                "detail": {},
-            }),
-            valid: true,
-        },
-        OperationVector {
             name: "applet bridge error",
             kind: arkret_sdk::events::kinds::APPLET_BRIDGE_ERROR,
             // applet_bridge_error_payload: required {applet_id, realm_id, failed_transaction_ref,

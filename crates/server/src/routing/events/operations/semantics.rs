@@ -168,17 +168,6 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // ak.applet.interop_session.start — round 4 requires the
-        // `applet_id` to be either a DID or a strictly-validated
-        // `ak:applet:<uuidv7>` typed id.
-        "ak.applet.interop_session.start" => {
-            if let Some(applet_id) = operation.payload.get("applet_id").and_then(|v| v.as_str()) {
-                validate_applet_id(applet_id).map(|_| ()).map_err(
-                    |_| "applet_id must be a DID or ak:applet:<uuidv7> (typed-id wire break)",
-                )?;
-            }
-            Ok(())
-        }
         // ak.audit.policy_access — when `access_kind=e2ee_late_recovery`
         // the payload MUST carry `late_recovery_original_event_id`.
         "ak.audit.policy_access" => {
@@ -765,14 +754,6 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             },
             arkret_sdk::events::kinds::APPLET_DISCOVERY => OperationPayloadSchema {
                 requirements: APPLET_DISCOVERY_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::kinds::APPLET_INTEROP_SESSION_START => OperationPayloadSchema {
-                requirements: APPLET_SESSION_START_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::kinds::APPLET_INTEROP_SESSION_STATUS => OperationPayloadSchema {
-                requirements: APPLET_SESSION_STATUS_REQUIREMENTS,
                 validate: None,
             },
             arkret_sdk::events::kinds::APPLET_BRIDGE_ERROR => OperationPayloadSchema {

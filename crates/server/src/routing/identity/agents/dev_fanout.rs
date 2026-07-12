@@ -675,12 +675,6 @@ pub(super) async fn submit_durable_agent_lifecycle(
         "previous_status": previous_status,
         "status_changed_at": status_changed_at,
     });
-    if event_kind != "ak.self.agent.deactivate" {
-        payload.as_object_mut().expect("payload object").insert(
-            "freshness_frontier".to_owned(),
-            json!({ "captured_at": status_changed_at }),
-        );
-    }
     if let Some(reason) = reason {
         payload
             .as_object_mut()

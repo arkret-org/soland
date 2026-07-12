@@ -2,7 +2,6 @@ use salvo::prelude::*;
 
 use crate::state::SessionRecord;
 
-pub(super) mod applet_bridge;
 pub(super) mod event_log;
 pub(super) mod frontier;
 pub(super) mod peer;

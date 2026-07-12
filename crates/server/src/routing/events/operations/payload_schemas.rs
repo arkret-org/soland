@@ -524,8 +524,6 @@ pub(crate) const STRAND_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
 // Spec `extensions/applet-integration.md` + event-kind-registry rows:
 //   `ak.applet.registration` → service_id + namespace + capabilities
 //   `ak.applet.discovery`    → service_id + manifest
-//   `ak.applet.interop_session.start`  → applet_id + session_id + params
-//   `ak.applet.interop_session.status` → session_id + status + detail
 //   `ak.applet.bridge_error`            → session_id + errcode + message
 //
 // We require the structurally-identifying fields; richer policy
@@ -539,23 +537,6 @@ pub(crate) const APPLET_REGISTRATION_REQUIREMENTS: &[PayloadRequirement] = &[
 pub(crate) const APPLET_DISCOVERY_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("service_id", "applet discovery requires service_id"),
     PayloadRequirement::Required("manifest", "applet discovery requires manifest"),
-];
-pub(crate) const APPLET_SESSION_START_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "applet_id",
-        "applet interop_session.start requires applet_id",
-    ),
-    PayloadRequirement::Required(
-        "session_id",
-        "applet interop_session.start requires session_id",
-    ),
-];
-pub(crate) const APPLET_SESSION_STATUS_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "session_id",
-        "applet interop_session.status requires session_id",
-    ),
-    PayloadRequirement::Required("status", "applet interop_session.status requires status"),
 ];
 pub(crate) const APPLET_BRIDGE_ERROR_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("session_id", "applet bridge_error requires session_id"),

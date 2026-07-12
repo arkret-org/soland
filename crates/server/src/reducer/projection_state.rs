@@ -151,10 +151,8 @@ pub struct ProjectionState {
     /// `extensions/applet-integration.md`). Populated by
     /// `ak.applet.registration` (initial registration / re-registration)
     /// and updated by `ak.applet.discovery` (manifest refresh). Used by
-    /// `GET /_soland/admin/applets` admin snapshot. Protocol-session
-    /// events (`ak.applet.interop_session.{start,status}`,
-    /// `ak.applet.bridge_error`) are NOT mirrored here — sessions are
-    /// ephemeral and the applet bridge state machine lives client-side.
+    /// `GET /_soland/admin/applets` admin snapshot. Runtime-private applet
+    /// session progress is not a durable Arkret event and is not mirrored here.
     pub applets: BTreeMap<String, AppletProjection>,
     /// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — FSM lifecycle
     /// state for each agent_id. Driven by
