@@ -497,7 +497,7 @@ fn projection_event_matches_actor(
             .payload
             .get("subject")
             .and_then(Value::as_object)
-            .and_then(|subject| subject.get("ref"))
+            .and_then(|subject| subject.get("subject_ref"))
             .and_then(Value::as_str)
             == Some(actor)
 }

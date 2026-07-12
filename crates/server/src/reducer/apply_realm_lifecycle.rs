@@ -1445,7 +1445,9 @@ impl ProjectionState {
             .map(|s| {
                 (
                     s.get("kind").and_then(Value::as_str).map(ToOwned::to_owned),
-                    s.get("ref").and_then(Value::as_str).map(ToOwned::to_owned),
+                    s.get("subject_ref")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
                 )
             })
             .unwrap_or((None, None));

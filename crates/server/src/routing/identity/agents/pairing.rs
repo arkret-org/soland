@@ -527,7 +527,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
             "authorize_event.payload.approval_evidence.kind must be pairing_request",
         ));
     }
-    if approval_evidence.get("ref").is_some() {
+    if approval_evidence.get("evidence_ref").is_some() {
         return Err(AppError::invalid_param(
             "authorize_event.payload.approval_evidence.ref must be absent for pairing_request evidence",
         ));

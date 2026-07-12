@@ -363,6 +363,7 @@ pub(super) async fn ensure_sidecar_circle(
         .map_err(|err| AppError::internal(format!("generated circle id invalid: {err}")))?;
     let object = json!({
         "id": circle_id,
+        "schema": "ak.schema.circle.v1",
         "realm_id": realm_id,
         "profile_ref": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "title": short_name,
@@ -378,13 +379,15 @@ pub(super) async fn ensure_sidecar_circle(
         "content_encryption_floor": "e2ee_required",
         "metadata_encryption_floor": "e2ee_required",
         "encryption_profile": "mls_rfc9420",
+        "state": "active",
         "created_by": controller,
-        "controller_id": controller,
-        "controller_agent_circle_key": controller_agent_circle_key,
+        "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     });
     let payload = json!({
         "object": object,
         "sender": controller,
+        "controller_id": controller,
+        "controller_agent_circle_key": controller_agent_circle_key,
         "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
         "sidecar_ensure_capability_verified": true,
         "actor_capability": sidecar_actor_capability(None),
@@ -423,27 +426,19 @@ pub(super) async fn ensure_sidecar_member(
     }
     let payload = json!({
         "circle_id": circle_id,
-        "actor": actor,
         "actor_id": actor,
         "membership": "join",
-        "sender": controller,
-        "manage_capability_verified": true,
-        "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
-        "sidecar_ensure_capability_verified": true,
-        "actor_capability": {
-            "action": "ak.circle.member.manage",
-            "circle_id": circle_id,
-            "allowed": true,
-        },
     });
     let operation = new_sidecar_operation(
         realm_id,
         arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
         payload,
     )?;
-    accept_local_operations(state, controller, std::slice::from_ref(&operation))
-        .await
-        .map_err(sidecar_reducer_reject_to_app_error)
+    crate::routing::events::projection::accept_trusted_sidecar_member_operation(
+        state, controller, &operation,
+    )
+    .await
+    .map_err(sidecar_reducer_reject_to_app_error)
 }
 
 pub(super) fn find_sidecar_strand(
@@ -493,6 +488,7 @@ pub(super) async fn ensure_sidecar_strand(
         .map_err(|err| AppError::internal(format!("generated strand id invalid: {err}")))?;
     let object = json!({
         "id": strand_id,
+        "schema": "ak.schema.strand.v1",
         "realm_id": realm_id,
         "metadata": {
             "title": "AI sidecar",
@@ -504,15 +500,13 @@ pub(super) async fn ensure_sidecar_strand(
                 "normalized_context_ref_digest": normalized_context_ref_digest,
             },
         },
+        "tracks": { "discussion": { "enabled": true, "is_primary": true } },
         "scope_circle_id": circle_id,
         "created_by": controller,
+        "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     });
     let payload = json!({
         "object": object,
-        "sender": controller,
-        "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
-        "sidecar_ensure_capability_verified": true,
-        "actor_capability": sidecar_actor_capability(Some(circle_id.as_str())),
     });
     let operation =
         new_sidecar_operation(realm_id, arkret_sdk::events::kinds::STRAND_CREATE, payload)?;
@@ -586,16 +580,15 @@ pub(super) async fn ensure_sidecar_relation(
         );
     }
     let payload = json!({
-        "relation_id": relation_id,
-        "relation_kind": "agent_sidecar_of",
-        "from_ref": private_strand_id,
-        "to_ref": target_ref,
-        "scope_circle_id": circle_id,
-        "fields": fields,
-        "sender": controller,
-        "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
-        "sidecar_ensure_capability_verified": true,
-        "actor_capability": sidecar_actor_capability(Some(circle_id.as_str())),
+        "relation": {
+            "id": relation_id,
+            "kind": "agent_sidecar_of",
+            "from_ref": private_strand_id,
+            "to_ref": target_ref,
+            "scope_circle_id": circle_id,
+            "fields": fields,
+            "created_by": controller,
+        }
     });
     let operation = new_sidecar_operation(
         realm_id,

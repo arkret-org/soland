@@ -588,7 +588,7 @@ pub(super) async fn submit_durable_key_authorize(
         "issued_at": now_utc.to_rfc3339_opts(SecondsFormat::Secs, true),
         "approval_evidence": {
             "kind": "approval_event",
-            "ref": format!("ak:event:{}", uuid::Uuid::now_v7()),
+            "evidence_ref": format!("ak:event:{}", uuid::Uuid::now_v7()),
         },
     });
     submit_agent_fanout_event(state, session, realm_id, "ak.agent.key.authorize", payload).await

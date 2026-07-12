@@ -508,7 +508,7 @@ pub(crate) fn validate_read_marker_payload(operation: &Operation) -> Result<(), 
         .and_then(|value| value.as_object())
         .ok_or("read marker read_scope must be an object")?;
     for key in read_scope.keys() {
-        if !["kind", "ref", "track_name"].contains(&key.as_str()) {
+        if !["kind", "container_ref", "track_name"].contains(&key.as_str()) {
             return Err("read marker read_scope has unknown field");
         }
     }
@@ -518,8 +518,11 @@ pub(crate) fn validate_read_marker_payload(operation: &Operation) -> Result<(), 
         .ok_or("read marker read_scope.kind is required")?;
     match kind {
         "realm" => {
-            if read_scope.get("ref").is_some_and(|value| !value.is_null()) {
-                return Err("read marker read_scope.ref must be omitted for realm");
+            if read_scope
+                .get("container_ref")
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err("read marker read_scope.container_ref must be omitted for realm");
             }
             if read_scope
                 .get("track_name")
@@ -530,10 +533,10 @@ pub(crate) fn validate_read_marker_payload(operation: &Operation) -> Result<(), 
         }
         "circle" | "space" | "strand" | "thread" => {
             let reference = read_scope
-                .get("ref")
+                .get("container_ref")
                 .and_then(|value| value.as_str())
                 .filter(|value| !value.trim().is_empty())
-                .ok_or("read marker read_scope.ref is required")?;
+                .ok_or("read marker read_scope.container_ref is required")?;
             let expected_prefix = match kind {
                 "circle" => "ak:circle:",
                 "space" => "ak:space:",

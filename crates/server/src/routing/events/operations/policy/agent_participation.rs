@@ -338,7 +338,7 @@ pub(super) fn agent_action_target_matches(target: &Value, operation: &Operation)
             .and_then(Value::as_str)
             .is_some_and(|realm_id| realm_id == operation.realm_id.as_str()),
         Some("strand") => {
-            let Some(target_ref) = target.get("ref").and_then(Value::as_str) else {
+            let Some(target_ref) = target.get("object_ref").and_then(Value::as_str) else {
                 return false;
             };
             operation
@@ -349,7 +349,7 @@ pub(super) fn agent_action_target_matches(target: &Value, operation: &Operation)
                 .is_some_and(|strand_id| strand_id == target_ref)
         }
         Some("message") | Some("object") => {
-            let Some(target_ref) = target.get("ref").and_then(Value::as_str) else {
+            let Some(target_ref) = target.get("object_ref").and_then(Value::as_str) else {
                 return false;
             };
             operation.object_id.as_deref() == Some(target_ref)

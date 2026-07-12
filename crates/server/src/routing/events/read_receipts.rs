@@ -377,6 +377,6 @@ fn read_scope_circle_id(state: &AppState, read_scope: &Value) -> Option<String> 
     if read_scope.get("kind").and_then(Value::as_str) != Some(ReadScopeKind::Strand.as_str()) {
         return None;
     }
-    let strand_id = read_scope.get("ref").and_then(Value::as_str)?;
+    let strand_id = read_scope.get("object_ref").and_then(Value::as_str)?;
     state.projection.lock().strand_scope_circle_id(strand_id)
 }

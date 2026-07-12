@@ -277,7 +277,7 @@ pub(crate) fn read_scope_key(scope: &ReadScopeWire) -> String {
     format!(
         "{}\u{1f}{}\u{1f}{}",
         scope.kind.as_str(),
-        scope.object_ref.as_deref().unwrap_or(""),
+        scope.container_ref.as_deref().unwrap_or(""),
         track_selector
     )
 }

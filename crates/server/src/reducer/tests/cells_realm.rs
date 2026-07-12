@@ -478,7 +478,7 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
                 "receipt_id": "ak:receipt:01",
                 "schema": "ak.schema.erasure_receipt.v1",
                 "issuer": "did:web:soland.local",
-                "subject": {"kind": "realm", "ref": "ak:realm:01904100-0000-7000-8000-cfc039892036"},
+                "subject": {"kind": "realm", "subject_ref": "ak:realm:01904100-0000-7000-8000-cfc039892036"},
                 "scope": {
                     "storage_boundary": "projection_store",
                     "realm_id": "ak:realm:01904100-0000-7000-8000-cfc039892036",

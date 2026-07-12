@@ -1012,7 +1012,7 @@ fn realm_erasure_receipt(
         crate::ids::generate("receipt"),
         ErasureSubject {
             kind: ErasureSubjectKind::Principal,
-            reference: actor.to_owned(),
+            subject_ref: actor.to_owned(),
         },
         ErasureScope {
             storage_boundary: ErasureStorageBoundary::ProjectionStore,
@@ -1036,7 +1036,7 @@ fn account_erasure_receipt(
         crate::ids::generate("receipt"),
         ErasureSubject {
             kind: ErasureSubjectKind::Principal,
-            reference: actor.to_owned(),
+            subject_ref: actor.to_owned(),
         },
         ErasureScope {
             storage_boundary: ErasureStorageBoundary::AccountPrivateStore,

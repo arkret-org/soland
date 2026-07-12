@@ -6,7 +6,7 @@
 
 use arkret_sdk::{
     DeviceId, Did, Operation, OperationId, ReadCursorAdvanceRequestBody, ReadCursorList,
-    ReadCursorPosition, ReadMarkerOutcome, ReadScope, ReadScopeKind, RealmId,
+    ReadCursorPosition, ReadCursorScope, ReadMarkerOutcome, ReadScopeKind, RealmId,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, QueryParam};
@@ -136,7 +136,7 @@ pub(super) async fn get_read_cursors(
     json_ok(ReadCursorList { markers })
 }
 
-fn validate_read_scope(scope: &ReadScope) -> Result<(), AppError> {
+fn validate_read_scope(scope: &ReadCursorScope) -> Result<(), AppError> {
     // A read cursor supports only the realm/circle/space/strand/thread subset of
     // the shared read-scope discriminator family (read-cursor.schema.json §2.2).
     // view/message/morph are receipt-only and MUST be rejected here so Circle and
@@ -148,24 +148,24 @@ fn validate_read_scope(scope: &ReadScope) -> Result<(), AppError> {
     }
     match &scope.kind {
         ReadScopeKind::Realm => {
-            if scope.object_ref.is_some() || scope.track.is_some() {
+            if scope.container_ref.is_some() || scope.track.is_some() {
                 return Err(AppError::invalid_param(
-                    "read_scope.ref/track_name must be omitted when kind is realm",
+                    "read_scope.container_ref/track_name must be omitted when kind is realm",
                 ));
             }
         }
         _ => {
-            let Some(object_ref) = scope
-                .object_ref
+            let Some(container_ref) = scope
+                .container_ref
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
             else {
                 return Err(AppError::invalid_param(
-                    "read_scope.ref is required when kind is not realm",
+                    "read_scope.container_ref is required when kind is not realm",
                 ));
             };
-            validate_scope_ref(&scope.kind, object_ref)?;
+            validate_scope_ref(&scope.kind, container_ref)?;
             if !matches!(scope.kind, ReadScopeKind::Strand) && scope.track.is_some() {
                 return Err(AppError::invalid_param(
                     "read_scope.track_name is only valid when kind is strand",
