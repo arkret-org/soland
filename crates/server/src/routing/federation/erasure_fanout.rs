@@ -450,7 +450,7 @@ mod tests {
                 payload: json!({
                     "receipt_id": "r1",
                     "schema": "ak.schema.erasure_receipt.v1",
-                    "subject": {"kind": "principal", "ref": "did:web:alice.example"},
+                    "subject": {"kind": "principal", "subject_ref": "did:web:alice.example"},
                     "outcome": "completed",
                     "scope": {
                         "storage_boundary": "projection_store",

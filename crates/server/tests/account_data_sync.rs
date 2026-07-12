@@ -262,7 +262,7 @@ fn read_cursor_payload(
         "realm_id": realm_id,
         "read_scope": {
             "kind": "strand",
-            "ref": strand_id_for_realm(realm_id),
+            "container_ref": strand_id_for_realm(realm_id),
             "track_name": "discussion"
         },
         "position": {

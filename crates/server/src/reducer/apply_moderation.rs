@@ -59,7 +59,7 @@ fn payload_ref(operation: &Operation, field: &str) -> Option<String> {
         .or_else(|| {
             value
                 .get("id")
-                .or_else(|| value.get("ref"))
+                .or_else(|| value.get("object_ref"))
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .map(ToOwned::to_owned)

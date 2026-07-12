@@ -1344,7 +1344,7 @@ pub struct RedactMessageOutcome {
 }
 
 pub type SetReadMarkerRequestBody = arkret_sdk::ReadCursorAdvanceRequestBody;
-pub type ReadScopeWire = arkret_sdk::ReadScope;
+pub type ReadScopeWire = arkret_sdk::ReadCursorScope;
 pub type ReadCursorPositionWire = arkret_sdk::ReadCursorPosition;
 pub type ReadMarkerOutcome = arkret_sdk::ReadMarkerOutcome;
 

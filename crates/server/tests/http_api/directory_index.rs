@@ -448,20 +448,21 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
 #[tokio::test]
 async fn private_contact_discovery_rejects_plaintext_identifier_matching() {
     let service = app();
-    let mut response =
-        TestClient::post("http://server/_arkret/find/directory/private-contact-discovery")
-            .json(&serde_json::json!({
-                "requester": "did:web:alice.example",
-                "contacts": [
-                    {"ref": "did", "identifier": "did:web:alice.example"},
-                    {"ref": "handle", "handle": "@alice"},
-                    {"ref": "email", "identifier": "alice@example.com"},
-                    {"ref": "phone", "identifier": "+15550101010"}
-                ],
-                "privacy_profile": "ak.private_contact_discovery.v1"
-            }))
-            .send(&service)
-            .await;
+    let mut response = TestClient::post(
+        "http://server/_arkret/find/directory/private-contact-discovery",
+    )
+    .json(&serde_json::json!({
+        "requester": "did:web:alice.example",
+        "contacts": [
+            {"contact_ref": "did", "identifier_kind": "did", "identifier": "did:web:alice.example"},
+            {"contact_ref": "handle", "identifier_kind": "handle", "handle": "@alice"},
+            {"contact_ref": "email", "identifier_kind": "email", "identifier": "alice@example.com"},
+            {"contact_ref": "phone", "identifier_kind": "phone", "identifier": "+15550101010"}
+        ],
+        "privacy_profile": "ak.private_contact_discovery.v1"
+    }))
+    .send(&service)
+    .await;
 
     assert_eq!(response.status_code.unwrap(), StatusCode::NOT_IMPLEMENTED);
     let body: Value = response.take_json().await.unwrap();

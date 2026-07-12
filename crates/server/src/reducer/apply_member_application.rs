@@ -534,7 +534,6 @@ fn join_authorised_by_refs_from_payload(payload: &Value) -> Vec<String> {
                     }
                     object
                         .get("id")
-                        .or_else(|| object.get("ref"))
                         .or_else(|| object.get("digest"))
                         .and_then(Value::as_str)
                         .filter(|value| !value.trim().is_empty())
