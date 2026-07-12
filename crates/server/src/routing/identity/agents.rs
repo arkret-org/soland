@@ -204,6 +204,7 @@ mod tests {
         )
         .expect("pairing binding digest");
         json!({
+            "event_id": "ak:event:01999999-0000-7000-8000-000000000001",
             "kind": "ak.agent.key.authorize",
             "actor_id": controller,
             "payload": {
@@ -217,9 +218,9 @@ mod tests {
                 "issued_at": "2026-07-06T00:00:00Z",
                 "expires_at": "2999-01-01T00:00:00Z",
                 "approval_evidence": {
-                    "kind": "approval_event",
-                    "ref": "ak:event:01999999-0000-7000-8000-000000000001",
+                    "kind": "pairing_request",
                     "request_canonical_digest": request_canonical_digest,
+                    "pairing_request_id": record["pairing_request_id"],
                     "approved_by": controller,
                 },
             },
