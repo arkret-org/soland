@@ -250,11 +250,19 @@ pub(super) async fn fanout_provision_subevents(
     // 3. Initial capability grant (`ak.capability.grant`), issuer = controller, subject = agent,
     //    flagged inactive until pairing.
     let actions = initial_grant_actions(requested_scope);
+    let constraints = initial_grant_constraints(requested_scope, &actions);
     let mut grant_ids = Vec::new();
     if !actions.is_empty() {
         let grant_id = ids::generate_grant_id();
-        let grant_payload =
-            capability_grant_payload(&grant_id, realm_id, &controller, agent_id, &actions, true);
+        let grant_payload = capability_grant_payload(
+            &grant_id,
+            realm_id,
+            &controller,
+            agent_id,
+            &actions,
+            &constraints,
+            true,
+        );
         materialize_grant(state, session, realm_id, grant_payload).await?;
         grant_ids.push(grant_id);
     }
@@ -275,11 +283,19 @@ pub(super) async fn fanout_renewal_grants(
 ) -> Result<Vec<String>, AppError> {
     let controller = session.actor.clone();
     let actions = initial_grant_actions(requested_scope);
+    let constraints = initial_grant_constraints(requested_scope, &actions);
     let mut grant_ids = Vec::new();
     if !actions.is_empty() {
         let grant_id = ids::generate_grant_id();
-        let grant_payload =
-            capability_grant_payload(&grant_id, realm_id, &controller, agent_id, &actions, true);
+        let grant_payload = capability_grant_payload(
+            &grant_id,
+            realm_id,
+            &controller,
+            agent_id,
+            &actions,
+            &constraints,
+            true,
+        );
         materialize_grant(state, session, realm_id, grant_payload).await?;
         grant_ids.push(grant_id);
     }
@@ -310,6 +326,28 @@ fn initial_grant_actions(requested_scope: &Value) -> Vec<String> {
         .collect()
 }
 
+fn initial_grant_constraints(requested_scope: &Value, content_actions: &[String]) -> Vec<Value> {
+    requested_scope
+        .get("constraints")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|constraint| {
+            constraint
+                .get("applies_to_actions")
+                .and_then(Value::as_array)
+                .is_none_or(|applies_to| {
+                    applies_to.iter().any(|action| {
+                        action
+                            .as_str()
+                            .is_some_and(|action| content_actions.iter().any(|item| item == action))
+                    })
+                })
+        })
+        .cloned()
+        .collect()
+}
+
 fn initial_capability_grant_action(action: &str) -> bool {
     matches!(
         action,
@@ -336,6 +374,7 @@ fn capability_grant_payload(
     issuer: &str,
     subject: &str,
     actions: &[String],
+    constraints: &[Value],
     effective_after_first_authorized_key: bool,
 ) -> Value {
     let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -362,6 +401,12 @@ fn capability_grant_payload(
             "effective_after_first_authorized_key".to_owned(),
             Value::Bool(true),
         );
+    }
+    if !constraints.is_empty() {
+        grant
+            .as_object_mut()
+            .expect("grant object")
+            .insert("constraints".to_owned(), Value::Array(constraints.to_vec()));
     }
     json!({ "grant_id": grant_id, "grant": grant })
 }
@@ -715,5 +760,50 @@ mod tests {
         });
 
         assert!(initial_grant_actions(&requested).is_empty());
+    }
+
+    #[test]
+    fn requested_scope_preserves_content_grant_constraints() {
+        let requested = json!({
+            "actions": [ACTION_MESSAGE_CREATE],
+            "resources": [{ "kind": "operation", "operation": ACTION_MESSAGE_CREATE }],
+            "constraints": [{
+                "constraint_type": "claim_based",
+                "effect": "require_review",
+                "subtype": "accountability",
+                "applies_to_actions": [ACTION_MESSAGE_CREATE],
+                "controller_approval_required": true
+            }]
+        });
+
+        let actions = initial_grant_actions(&requested);
+        let constraints = initial_grant_constraints(&requested, &actions);
+        let payload = capability_grant_payload(
+            "ak:grant:01964137-0000-7000-8000-000000000001",
+            "ak:realm:01964137-0000-7000-8000-000000000002",
+            "did:web:controller.example",
+            "did:web:agent.example",
+            &actions,
+            &constraints,
+            true,
+        );
+
+        assert_eq!(payload["grant"]["constraints"], requested["constraints"]);
+    }
+
+    #[test]
+    fn requested_scope_does_not_copy_service_only_constraints_to_content_grant() {
+        let requested = json!({
+            "actions": [ACTION_EVENT_READ, SCOPE_EVENTS_QUERY_SCAN],
+            "resources": [{ "kind": "operation", "operation": ACTION_EVENT_READ }],
+            "constraints": [{
+                "constraint_type": "scope_limitation",
+                "effect": "allow",
+                "applies_to_actions": [SCOPE_EVENTS_QUERY_SCAN]
+            }]
+        });
+        let actions = initial_grant_actions(&requested);
+
+        assert!(initial_grant_constraints(&requested, &actions).is_empty());
     }
 }
