@@ -1390,7 +1390,6 @@ mod tests {
         verification_method: &str,
     ) -> AppletPackage {
         let (controller_id, _) = did_key_for_seed(controller_seed);
-        let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
         let mut package = AppletPackage::new(
             "package:ak:applet:test".to_owned(),
             "ak:applet:01974100-0000-7000-8000-000000000001".to_owned(),
@@ -1403,13 +1402,13 @@ mod tests {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
                 ..Default::default()
             },
-            registration_epoch,
         );
         package.requested_scopes = vec!["ak.message.create".to_owned()];
         package.registration_epoch_evidence =
             Some(arkret_sdk::applet::AppletRegistrationEpochEvidence::new(
                 package.service_id.clone(),
                 Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
+                arkret_sdk::applet::AppletDidMethodVersionEvidence::unversioned("did:web").unwrap(),
                 vec![arkret_sdk::applet::AppletAcceptedSigningKeyEvidence {
                     key_ref: package.webhook_auth.key_ref.clone(),
                     public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
@@ -1482,7 +1481,6 @@ mod tests {
     }
 
     fn sample_package() -> AppletPackage {
-        let registration_epoch = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
         AppletPackage::new(
             "package:ak:applet:test".to_owned(),
             "ak:applet:01974100-0000-7000-8000-000000000001".to_owned(),
@@ -1495,7 +1493,6 @@ mod tests {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
                 ..Default::default()
             },
-            registration_epoch,
         )
     }
 

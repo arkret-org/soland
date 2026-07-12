@@ -19,9 +19,9 @@ const EVENTS_CATCHUP_LIMIT: usize = 100;
 ///      history-vs-live window.
 ///   3. Build an async stream that yields: a) bounded replay frames when `catchup=true` b) one
 ///      `catchup_complete` frame after replay data, or after a `frontier` baseline when the replay
-///      is empty c) live event frames as broadcast
-///      notifications arrive d) periodic `heartbeat` frames every 30s of idle e) a terminal
-///      `resync_required` frame when subscription-wide broadcast lag is detected
+///      is empty c) live event frames as broadcast notifications arrive d) periodic `heartbeat`
+///      frames every 30s of idle e) a terminal `resync_required` frame when subscription-wide
+///      broadcast lag is detected
 ///   4. Stream terminates when:
 ///      - `max_duration_ms` query param elapsed (default 60_000 ms)
 ///      - client disconnects (drops the response stream)

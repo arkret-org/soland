@@ -312,16 +312,14 @@ fn event_canonical_digest(event: &Value) -> String {
     sha256_json(&canonical)
 }
 
-fn encrypted_account_data_marker(hex_pair: &str, ciphertext: &str) -> Value {
-    json!({
-        "client_side_conformance": {
-            "encrypted_account_data": true,
-            "profile_id": "ak.profile.e2ee_client.v1",
-            "payload_digest": format!("sha256:{}", hex_pair.repeat(32))
-        },
-        "content_type": "application/vnd.arkret.account-data+json",
-        "ciphertext": ciphertext,
-    })
+fn encrypted_account_data_value(actor_id: &str, data_type: &str, plaintext: &Value) -> Value {
+    serde_json::to_value(
+        arkret_sdk::account_data_crypto::seal_account_data_value_with_nonce(
+            &[7u8; 32], actor_id, data_type, plaintext, [9u8; 24],
+        )
+        .unwrap(),
+    )
+    .unwrap()
 }
 
 fn strand_id_for_realm(realm_id: &str) -> String {
@@ -396,7 +394,11 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         "plaintext blocklist must be rejected: {put}"
     );
 
-    let encrypted_blocklist = encrypted_account_data_marker("ab", "opaque-blocklist-v1");
+    let encrypted_blocklist = encrypted_account_data_value(
+        "did:web:alice.example",
+        "ak.account.blocklist",
+        &plaintext_blocklist,
+    );
     let put = submit_actor_private_event(
         state.clone(),
         &alice_desktop,

@@ -923,15 +923,17 @@ async fn typing_fanout_respects_receiver_blocklist() {
         serde_json::json!({
             "key": "ak.account.blocklist",
             "owner": "did:web:bob.example",
-            "body": {
-                "client_side_conformance": {
-                    "encrypted_account_data": true,
-                    "profile_id": "ak.profile.e2ee_client.v1",
-                    "payload_digest": "sha256:abababababababababababababababababababababababababababababababab"
-                },
-                "content_type": "application/vnd.arkret.account-data+json",
-                "ciphertext": "opaque-bob-blocklist"
-            },
+            "body": serde_json::to_value(
+                arkret_sdk::account_data_crypto::seal_account_data_value_with_nonce(
+                    &[7u8; 32],
+                    "did:web:bob.example",
+                    "ak.account.blocklist",
+                    &serde_json::json!({"entries": [{"target": "did:web:alice.example"}]}),
+                    [10u8; 24],
+                )
+                .unwrap(),
+            )
+            .unwrap(),
             "updated_at": "2026-05-21T00:00:00Z",
         }),
     )
