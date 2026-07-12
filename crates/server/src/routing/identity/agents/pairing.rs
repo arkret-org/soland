@@ -393,6 +393,13 @@ pub(super) async fn agent_key_pair(
             "authorized_public_key_digest".to_owned(),
             json!(runtime_public_key_digest),
         );
+        // Consume the one-time pairing handle: a subsequent pair attempt on the
+        // now-active agent is rejected until renew_pairing installs a fresh
+        // `pairing_request_id` (runtime replacement re-pairing, §3.6.1).
+        object.insert(
+            "paired_pairing_request_id".to_owned(),
+            json!(body.pairing_request_id),
+        );
         object.remove("approval_request_id");
         object.remove("runtime_key_request");
         object.remove("approval_requested_at");
@@ -560,12 +567,22 @@ pub(super) fn ensure_pairing_request_open(agent_record: &Value) -> Result<(), Ap
         Some("pairing_expired") => {
             return Err(pairing_failed_precondition("pairing request has expired"));
         }
-        Some("active") => {
-            return Err(pairing_failed_precondition(
-                "agent runtime key is already active",
-            ));
+        Some("active" | "paused") => {
+            // Runtime replacement re-pairing (key-management.md §3.6.1): an
+            // agent that already holds an authorized key MAY re-open pairing
+            // in place (status unchanged, zero downtime); completing the fresh
+            // handle supersedes every old active key. renew_pairing rotates
+            // `pairing_request_id` while leaving the last consumed handle in
+            // `paired_pairing_request_id`, so a live replacement handle exists
+            // iff the current handle has not yet been consumed. Without one,
+            // there is nothing to complete.
+            if !agent_pairing_handle_is_open(agent_record) {
+                return Err(pairing_failed_precondition(
+                    "agent runtime key is already active",
+                ));
+            }
         }
-        Some("paused" | "deactivated") => {
+        Some("deactivated") => {
             return Err(pairing_failed_precondition(
                 "agent is not accepting runtime key pairing",
             ));
@@ -581,6 +598,21 @@ pub(super) fn ensure_pairing_request_open(agent_record: &Value) -> Result<(), Ap
         return Err(pairing_failed_precondition("pairing request has expired"));
     }
     Ok(())
+}
+
+/// Whether the agent record carries an unconsumed pairing handle. The
+/// completion transaction stamps `paired_pairing_request_id` with the handle
+/// it consumed; renew_pairing installs a fresh `pairing_request_id` without
+/// touching that stamp. A current handle that differs from the last consumed
+/// one is therefore a live, single-use pairing handle.
+fn agent_pairing_handle_is_open(agent_record: &Value) -> bool {
+    let current = agent_record
+        .get("pairing_request_id")
+        .and_then(Value::as_str);
+    let consumed = agent_record
+        .get("paired_pairing_request_id")
+        .and_then(Value::as_str);
+    current.is_some() && current != consumed
 }
 
 pub(super) fn agent_record_reserves_selector_slug(
