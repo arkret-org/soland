@@ -293,7 +293,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     );
     assert_eq!(
         subscribe_messages[0]["content"]["new_device_pubkey"]["public_key"],
-        "emtleQ"
+        request_content["new_device_pubkey"]["public_key"]
     );
     assert!(
         subscribe["to_device"]["ack_token"]

@@ -304,7 +304,7 @@ async fn events_describe_and_single_event_submit_work() {
             .iter()
             .any(|operation| operation == "ak.self.events.command.submit")
     );
-    assert_eq!(describe["limits"]["max_event_bytes"], 64 * 1024);
+    assert_eq!(describe["limits"]["max_event_bytes"], 1024 * 1024);
     assert_eq!(describe["limits"]["max_resolve"], 100);
 
     let first = signed_event_envelope(
@@ -372,7 +372,7 @@ async fn events_describe_and_single_event_submit_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(second_submitted["status"], "accepted");
+    assert_eq!(second_submitted["status"], "accepted", "{second_submitted}");
 
     // Round 13: `ak.strand.create` now has a schema requirement (payload
     // MUST carry `object`) because it's in the canonical-kind registry;

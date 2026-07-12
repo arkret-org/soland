@@ -64,6 +64,7 @@ async fn production_agent_provision_fails_closed_without_durable_fanout() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "display_name": "Production Agent",
+            "slug": "production-agent",
             "requested_scope": {
                 "actions": [
                     "ak.self.events.stream.subscribe",
@@ -137,7 +138,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "display_name": "Summary Assistant",
-            "agent_slug": "summary",
+            "slug": "summary",
             "requested_scope": requested_scope,
             "accountability": null
         }))
@@ -163,14 +164,14 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     assert_eq!(agents.len(), 1, "{list_body}");
     assert_eq!(agents[0]["agent_id"], agent_id);
     assert_eq!(agents[0]["display_name"], "Summary Assistant");
-    assert_eq!(agents[0]["agent_slug"], "summary");
+    assert_eq!(agents[0]["slug"], "summary");
     assert_eq!(agents[0]["status"], "pending_runtime_key");
 
     let mut duplicate = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "display_name": "Duplicate Summary",
-            "agent_slug": "summary",
+            "slug": "summary",
             "requested_scope": {
                 "actions": ["ak.self.events.stream.subscribe"],
                 "resources": [{
@@ -186,12 +187,12 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
 
     assert_eq!(duplicate.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let duplicate_body: Value = duplicate.take_json().await.unwrap();
-    assert_eq!(duplicate_body["error"]["reason"], "invalid_param");
+    assert_eq!(duplicate_body["error"]["code"], "invalid_param");
     assert!(
         duplicate_body["error"]["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("agent_slug is already bound"),
+            .contains("slug is already bound"),
         "{duplicate_body}"
     );
 }
