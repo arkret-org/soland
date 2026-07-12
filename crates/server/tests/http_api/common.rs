@@ -431,6 +431,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
                 invited_at: None,
                 joined_at: now,
                 updated_at: now,
+                reason: None,
             },
         );
         serde_json::json!({
@@ -909,6 +910,48 @@ pub(crate) async fn register_account(
             "actor": did,
             "device_id": device_id,
             "display_name": handle.trim_start_matches('@')
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    login["session_credential"].as_str().unwrap().to_owned()
+}
+
+/// Like [`register_account`] but sends a canonical `<localpart>:<domain>`
+/// `handle`, so registration creates an `account_localparts` binding.
+/// `resolve_handle` only discloses handles that have a local binding
+/// (discovery-directory.md §9 resolve_handle; `resolve_registration_localpart`
+/// requires the canonical form).
+pub(crate) async fn register_account_with_handle(
+    state: AppState,
+    did: &str,
+    handle: &str,
+    device_id: &str,
+) -> String {
+    let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": did,
+            "handle": handle,
+            "display_name": handle,
+            "device_id": device_id
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        registered["principal_id"], did,
+        "register response: {registered}"
+    );
+
+    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
+        .json(&serde_json::json!({
+            "actor": did,
+            "device_id": device_id,
+            "display_name": handle
         }))
         .send(&app_from_state(state.clone()))
         .await

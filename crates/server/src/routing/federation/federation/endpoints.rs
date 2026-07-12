@@ -394,13 +394,22 @@ fn local_peer_policy_digest_for_transaction(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.push_operations"))]
 pub(crate) async fn federation_push_operations(
-    body: JsonBody<arkret_sdk::FederationPushOperationsRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<arkret_sdk::FederationPushOperationsOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    // federation.md §4.0 (SPEC-CR-008): the private `/_soland/peer/federation/*`
+    // write rail MUST fail closed as a non-interop entry *before* any interop
+    // payload parsing, with equal-or-stricter posture than the protocol
+    // `/_arkret/peer/events` track (no posture inversion). Guarding before the
+    // typed body extraction stops a disabled rail from leaking a 422
+    // schema-validation error in place of the canonical 501
+    // `federation_interop_track_only`.
     ensure_private_inbound_write_rail_local(state)?;
-    let body = body.into_inner();
+    let body: arkret_sdk::FederationPushOperationsRequestBody =
+        req.parse_json().await.map_err(|error| {
+            AppError::invalid_param(format!("invalid federation push body: {error}"))
+        })?;
     if !verify_federation_origin(body.origin.as_str()) {
         return Err(AppError::unauthenticated(
             "federation origin must be a valid DID",

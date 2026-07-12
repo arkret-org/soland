@@ -153,7 +153,14 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
         "example.edu"
     );
 
-    let mut duplicate = TestClient::post("http://server/_arkret/gate/account/register")
+    // sync/api-conventions.md §7 — `principal_id` is a resource identity, not a
+    // request-level idempotency key. Re-registering the same principal is a
+    // successor/idempotent bind (the handler returns the existing account with
+    // `state=active`), NOT a `duplicate_conflict`: that reason is reserved for a
+    // request-level idempotency-key collision carrying a different canonical
+    // body ("同一对象...的不同 canonical body 是普通后继写...MUST NOT 仅因
+    // identity 相同返回 duplicate_conflict").
+    let duplicate: Value = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": "did:web:carol.example.edu",
             "policy_evidence": {
@@ -163,13 +170,13 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
             }
         }))
         .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(duplicate.status_code.unwrap(), StatusCode::CONFLICT);
-    let duplicate: Value = duplicate.take_json().await.unwrap();
-    assert_eq!(
-        duplicate["error"]["details"]["reason_detail"],
-        "duplicate_conflict"
-    );
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(duplicate["principal_id"], "did:web:carol.example.edu");
+    assert_eq!(duplicate["state"], "active");
+    assert_eq!(duplicate["registration_audit"]["outcome"], "accepted");
 
     let rate_limited_state = AppState::new(test_config(), Db { pool: None });
     {

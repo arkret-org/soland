@@ -41,6 +41,23 @@ pub fn router_with_rate_limiter_and_request_size_config(
     // instead of the real status. The CORS layer is therefore attached at the
     // `Service` level (see `crate::service`), where salvo runs it even when no
     // route matches — so it can never be missed.
+    // Make the caller-supplied rate-limiter config authoritative for the
+    // runtime overlay the middleware actually enforces against. The limiter
+    // middleware reads `state.settings().rate_limit` (the hot-swappable admin
+    // overlay) once `AppState` is injected below; `RuntimeSettings::from_config`
+    // seeds that overlay from the environment (see `runtime_settings.rs`), so
+    // without this reconciliation an explicit config passed through
+    // `service_with_rate_limiter_config` (integration coverage of the A.3
+    // ceilings) would be silently ignored whenever state is present. The
+    // default `router()` path passes the same env-derived config the overlay was
+    // seeded with, so this is a no-op there.
+    {
+        let mut settings = (*state.settings()).clone();
+        settings.rate_limit =
+            crate::runtime_settings::RateLimitSettings::from_limiter_config(&rate_limiter_config);
+        settings.floor_rate_limit();
+        state.settings.store(std::sync::Arc::new(settings));
+    }
     let rate_limiter = RateLimiter::new(rate_limiter_config);
     // COT-06-002 / service-http-binding.md §2.1.2: decide whether to expose the
     // test-only `/_arkret/_conformance/*` namespace before `state` is moved into

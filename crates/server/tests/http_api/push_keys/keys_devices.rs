@@ -689,9 +689,19 @@ async fn device_authorize_projects_public_key_into_devices_table() {
         RealmId::new(control_realm).unwrap(),
         "ak.device.authorize",
         serde_json::json!({
+            // device-lifecycle.md §5.2: an accepted ak.device.authorize MUST
+            // carry hpke_key + canonical algorithms (they enter the device
+            // trust-binding transcript) plus authorized_by + not_before (the
+            // §5.2 possession-proof input). project_device_authorize parses the
+            // typed DeviceAuthorizePayload, so the fixture must be a
+            // spec-complete device.authorize, not a three-field stub.
             "principal_id": alice,
             "device_id": alice_device,
             "device_public_key": multibase,
+            "hpke_key": "z6LSTestPhase1HpkeKey",
+            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
+            "authorized_by": alice,
+            "not_before": "2026-05-08T10:00:00Z",
         }),
     );
     soland::test_support::project_accepted_operations(&state, alice, &[operation]).await;
@@ -731,9 +741,18 @@ async fn keys_query_exposes_service_attested_device_anchor() {
         RealmId::new(control_realm).unwrap(),
         "ak.device.authorize",
         serde_json::json!({
+            // device-lifecycle.md §5.4: a service_attested ak.device.authorize
+            // MUST carry device_public_key + hpke_key + canonical algorithms
+            // (receiver rejects missing hpke_key/algorithms), plus the §5.2
+            // authorized_by + not_before payload fields required by the typed
+            // DeviceAuthorizePayload the projection parses.
             "principal_id": alice,
             "device_id": alice_device,
             "device_public_key": multibase,
+            "hpke_key": "z6LSTestServiceAttestedHpkeKey",
+            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
+            "authorized_by": "did:web:auth.example",
+            "not_before": "2026-05-08T10:00:00Z",
             "enrollment_authority_binding": {
                 "kind": "service_attested",
                 "authority_did": "did:web:auth.example",
@@ -862,11 +881,17 @@ fn tier2_publish_and_authorize(
 
     let publish_payload = serde_json::to_value(&publish).unwrap();
     let authorize_payload = serde_json::json!({
+        // device-lifecycle.md §5.2: authorized_by + not_before are payload
+        // fields of ak.device.authorize; the projection parses the typed
+        // DeviceAuthorizePayload, which requires them alongside the
+        // trust-binding material below.
         "principal_id": principal,
         "device_id": device,
         "device_public_key": device_public_key,
         "hpke_key": "z6LSTestTier2HpkeKey",
         "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
+        "authorized_by": principal,
+        "not_before": "2026-05-08T10:00:00Z",
         "cross_signing_binding": {
             "verification_method": format!("{principal}#ak_self_signing_v1"),
             "alg": "EdDSA",

@@ -361,7 +361,14 @@ async fn mimi_provider_facade_contracts_work() {
     .unwrap();
     assert!(mapped["event_ref"].as_str().is_some());
     assert_eq!(mapped["delivery"]["status"], "accepted");
-    assert_eq!(mapped["rejected"], json!([]));
+    // mimi-operations.schema.json#mimi_submit_message_outcome: only `delivery`
+    // is required; an empty `rejected` is omitted (skip_serializing_if).
+    assert!(
+        mapped
+            .get("rejected")
+            .and_then(Value::as_array)
+            .is_none_or(|rejected| rejected.is_empty())
+    );
 
     let proxy_body = json!({
         "asset_ref": "ak:blob:sha256:e2e",
@@ -504,6 +511,16 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
             "target_ref": demo_realm,
             "reporter": "did:web:reporter.example",
             "abuse_reason_code": "spam",
+            // mimi-interop.md §11: an inbound MIMI report's `reporter` MUST be
+            // resolved to an Arkret principal via a local account, holder claim,
+            // or consent proof; a non-local reporter without any of these is
+            // rejected with `mimi_reporter_resolution_required`. The typed
+            // MimiReportAbuseRequestBody only preserves consent inside the
+            // flexible `evidence_package` (unknown top-level fields are dropped),
+            // so carry it there.
+            "evidence_package": {
+                "consent_ref": "ak:consent:0196419b-0000-7000-8000-0000000000c0"
+            },
         }),
         None
     )

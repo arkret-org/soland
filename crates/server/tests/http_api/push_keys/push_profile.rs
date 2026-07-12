@@ -338,6 +338,11 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert_eq!(push["ok"], true);
+    // push-notifications.md §5.1: push_target_id is the HMAC-derived pairwise
+    // pseudonym (ak:pseudonym:push:...) the server returns as registration_id; a
+    // hard-coded stable "ak:push_target:<uuid>" is both rejected by
+    // is_valid_push_target_id and can never match the registration.
+    let push_target = push["registration_id"].as_str().unwrap().to_owned();
 
     let initial_rules = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     assert!(
@@ -384,7 +389,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let notify_after_rejected_rule: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000001",
+                "push_target_id": push_target,
                 "wakeup_kind": "message",
                 "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "ak:device:01904100-0000-7000-8000-71551c000004"}]
             }
@@ -1166,11 +1171,14 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .await
         .unwrap();
     assert_eq!(registered["ok"], true);
+    // push-notifications.md §5.1: notify MUST use the HMAC-derived pairwise
+    // pseudonym returned as registration_id, not a stable literal id.
+    let push_target = registered["registration_id"].as_str().unwrap().to_owned();
 
     let stale_notify: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000003",
+                "push_target_id": push_target.clone(),
                 "wakeup_kind": "message",
                 "devices": [{"device_id": device_id}]
             }
@@ -1217,7 +1225,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let fresh_notify: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000004",
+                "push_target_id": push_target.clone(),
                 "wakeup_kind": "message",
                 "devices": [{"device_id": device_id}]
             }
@@ -1246,7 +1254,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let after_unregister: Value = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": "ak:push_target:01904100-0000-7000-8000-000000000005",
+                "push_target_id": push_target.clone(),
                 "wakeup_kind": "message",
                 "devices": [{"device_id": device_id}]
             }

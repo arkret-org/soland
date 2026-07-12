@@ -212,9 +212,10 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     let invites = bob_invites["invites"].as_array().unwrap();
     assert!(
         invites.iter().any(|invite| {
+            // ak.schema.invite.v1: the state field is `state`, not `status`.
             invite["realm_id"].as_str() == Some(realm_id.as_str())
                 && invite["invitee"].as_str() == Some(bob_did)
-                && invite["status"].as_str() == Some("pending")
+                && invite["state"].as_str() == Some("pending")
         }),
         "expected pending invite for bob in {realm_id} (got: {invites:?})"
     );
@@ -383,33 +384,32 @@ async fn service_id_is_config_driven_across_public_metadata() {
         serde_json::json!(["ak.self.events.command.submit"])
     );
 
-    let index: Value = TestClient::get("http://server/_soland/self/index/describe")
-        .send(&service)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(index["service_id"], service_id);
-
+    // The `/_soland/self/index/*` surface was retired (router_build.rs); the
+    // config-driven service_id is covered by the /_arkret describe surfaces and
+    // the resolve-realm join_candidates asserted above.
     let ice: Value = TestClient::post("http://server/_arkret/self/rtc/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": "ak:call:01964137-0000-7000-8000-000000000001",
             "actor_id": "did:web:alice.example",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            // media-operations.schema.json: `mode` is a required enum
+            // (p2p|sfu|turn) on the ice-config request body.
+            "mode": "turn"
         }))
         .send(&service)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(ice["signature"]["kid"], format!("{service_id}#media-ice"));
-    assert!(
-        ice["signature"]["sig"]
-            .as_str()
-            .is_some_and(|sig| sig.starts_with("eddsa-ed25519:"))
-    );
+    // webrtc-signaling.md §4: the ICE config response is signed by the service
+    // notary key. kid = <service_id>#notary-key (see move_seal_wire/notary.rs);
+    // signature_input is the fixed domain label `ak.media.ice_config.v1`; sig is
+    // bare base64url (no `eddsa-ed25519:` prefix); the signing input is
+    // label || 0x00 || canonical_json(response without `signature`).
+    assert_eq!(ice["signature"]["kid"], format!("{service_id}#notary-key"));
+    assert_eq!(ice["signature"]["signature_input"], "ak.media.ice_config.v1");
     assert_ne!(ice["signature"]["sig"], "placeholder");
     assert!(
         ice["signature"]["payload_digest"]
@@ -424,21 +424,12 @@ async fn service_id_is_config_driven_across_public_metadata() {
         format!("sha256:{}", hex::encode(Sha256::digest(&payload_bytes)))
     );
     let signature_bytes = URL_SAFE_NO_PAD
-        .decode(
-            ice["signature"]["sig"]
-                .as_str()
-                .unwrap()
-                .strip_prefix("eddsa-ed25519:")
-                .unwrap(),
-        )
+        .decode(ice["signature"]["sig"].as_str().unwrap())
         .unwrap();
     let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
-    let mut signing_input = Vec::with_capacity(
-        b"soland-media-ice-config-v1".len() + service_id.len() + payload_bytes.len() + 2,
-    );
-    signing_input.extend_from_slice(b"soland-media-ice-config-v1");
-    signing_input.push(0);
-    signing_input.extend_from_slice(service_id.as_bytes());
+    let mut signing_input =
+        Vec::with_capacity(b"ak.media.ice_config.v1".len() + payload_bytes.len() + 1);
+    signing_input.extend_from_slice(b"ak.media.ice_config.v1");
     signing_input.push(0);
     signing_input.extend_from_slice(&payload_bytes);
     state

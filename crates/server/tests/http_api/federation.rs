@@ -28,6 +28,7 @@ fn seed_peer_delivery_binding(state: &AppState) {
             invited_at: None,
             joined_at: now,
             updated_at: now,
+            reason: None,
         },
     );
 }

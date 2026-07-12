@@ -342,7 +342,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .unwrap();
     assert_eq!(me["did"], "did:web:bob.example");
 
-    let contact_request: Value = TestClient::post("http://server/_soland/self/contacts/request")
+    let contact_request: Value = TestClient::post("http://server/_arkret/self/contacts/request")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"target": "did:web:bob.example"}))
         .send(&app_from_state(state.clone()))
@@ -357,7 +357,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .to_owned();
 
     let duplicate_contact_request: Value =
-        TestClient::post("http://server/_soland/self/contacts/request")
+        TestClient::post("http://server/_arkret/self/contacts/request")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .json(&serde_json::json!({"target": "did:web:bob.example"}))
             .send(&app_from_state(state.clone()))
@@ -367,7 +367,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .unwrap();
     assert_eq!(duplicate_contact_request["state"], "pending_outgoing");
 
-    let accepted: Value = TestClient::post("http://server/_soland/self/contacts/respond")
+    let accepted: Value = TestClient::post("http://server/_arkret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
             "request_id": contact_request_id,
@@ -381,7 +381,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .unwrap();
     assert_eq!(accepted["state"], "accepted");
 
-    let accepted_again: Value = TestClient::post("http://server/_soland/self/contacts/respond")
+    let accepted_again: Value = TestClient::post("http://server/_arkret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
             "request_id": contact_request["request_event_ref"],
@@ -395,7 +395,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .unwrap();
     assert_eq!(accepted_again["state"], "accepted");
 
-    let reject_after_accept = TestClient::post("http://server/_soland/self/contacts/respond")
+    let reject_after_accept = TestClient::post("http://server/_arkret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
             "request_id": contact_request["request_event_ref"],
@@ -406,7 +406,9 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .await;
     assert_eq!(reject_after_accept.status_code.unwrap().as_u16(), 409);
 
-    let bob_contacts: Value = TestClient::get("http://server/_soland/self/contacts")
+    // contact-and-direct-conversation.md §5: ak.self.contact.command.* bind to
+    // /_arkret/self/contacts/* (the _soland mirror was retired).
+    let bob_contacts: Value = TestClient::get("http://server/_arkret/self/contacts")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -469,8 +471,12 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .unwrap();
     assert_eq!(bob_invites["invites"].as_array().unwrap().len(), 1);
     assert_eq!(bob_invites["invites"][0]["realm_id"], invite_realm_id);
+    // invite.schema.json + decision 0008: a direct member invite (invitee is a
+    // DID, no third_party_id) carries the recipient binding in
+    // invite_delivery_target.recipient_service_id; third_party_id exists only for
+    // third-party/3PID invites and only holds a verification_service_id.
     assert_eq!(
-        bob_invites["invites"][0]["third_party_id"]["recipient_service_id"],
+        bob_invites["invites"][0]["invite_delivery_target"]["recipient_service_id"],
         "did:web:soland.local"
     );
     assert_eq!(

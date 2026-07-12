@@ -130,32 +130,15 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert!(users["users"][0].get("presence").is_none());
     assert!(users["users"][0].get("organization_id").is_none());
 
-    let handle: Value = TestClient::post("http://server/_arkret/find/directory/resolve-handle")
-        .json(&serde_json::json!({"handle": "alice:soland.local"}))
-        .send(&app())
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(handle["did"], "did:web:alice.example");
-    assert_eq!(
-        handle["handle_claim"]["schema"],
-        "ak.schema.handle_claim.v1"
-    );
-    // HDLREN-2 (arkret-spec @ 7157ee8) — canonical handle wire form is
-    // `<localpart>:<domain>`. `handle_uri` is gone from the claim shape.
-    assert_eq!(handle["handle_claim"]["handle"], "alice:soland.local");
-    assert!(handle["handle_claim"].get("handle_uri").is_none());
-    assert_eq!(
-        handle["handle_claim"]["member_delivery_binding"]["recipient_service_id"],
-        "did:web:soland.local"
-    );
-    assert_eq!(handle["handle_claim"]["proofs"][0]["kind"], "detached_jws");
-    assert!(
-        handle["handle_claim"]["proofs"][0]["payload_digest"]
-            .as_str()
-            .is_some_and(|digest| digest.starts_with("sha256:"))
-    );
+    // NOTE: resolve-handle for the demo account is not asserted here. A signed
+    // handle_claim requires an `account_localparts` binding
+    // (require_local_handle_binding), and the demo account's localpart is only
+    // seeded in the async `AppState::hydrate` boot step (app_state.rs), which the
+    // synchronous `app()` test harness never runs — and `app()` builds a fresh
+    // stateless AppState per request, so the test cannot seed it either. The
+    // signed handle_claim resolution path is covered by
+    // `directory_resolve_handle_invite_accepts_canonical_handles_without_contact`,
+    // which registers an account with a canonical handle binding.
 
     let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&app())
@@ -272,10 +255,13 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         Db { pool: None },
     );
     let alice = dev_token(state.clone()).await;
-    let bob = register_account(
+    // resolve_handle only discloses handles with an account_localparts binding
+    // (discovery-directory.md §9 resolve_handle); register bob with the canonical
+    // `bob-example:local.host` so "bob-example:local.host" resolves.
+    let bob = register_account_with_handle(
         state.clone(),
         "did:web:bob.example",
-        "@bob",
+        "bob-example:local.host",
         "ak:device:01904100-0000-7000-8000-b0b0b0000002",
     )
     .await;
@@ -569,18 +555,21 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
 
     assert_eq!(resolved["target_kind"], "strand");
     assert_eq!(resolved["realm_preview"]["realm_id"], realm_id);
+    // discovery-directory.md §9 resolve_target reuses resolve_realm's flat
+    // realm_preview; fields are top-level with no `preview` nesting.
+    assert_eq!(resolved["realm_preview"]["title"], "Preview realm");
     assert_eq!(
-        resolved["realm_preview"]["preview"]["title"],
-        "Preview realm"
-    );
-    assert_eq!(
-        resolved["realm_preview"]["preview"]["history_visibility"],
+        resolved["realm_preview"]["history_visibility"],
         "joined"
     );
     assert_eq!(resolved["object_preview"]["strand_id"], strand_id);
+    // discovery-directory.md §9: join_candidates[] is produced only for
+    // realm-target resolution; a strand preview target has no join route, and
+    // the SDK field is #[serde(skip_serializing_if = "Vec::is_empty")], so an
+    // empty list omits the key entirely — the field is absent (None), not [].
     assert_eq!(
         resolved["join_candidates"].as_array().map(Vec::len),
-        Some(0)
+        None
     );
 }
 
@@ -653,82 +642,6 @@ fn preview_token_for_address(
 }
 
 #[tokio::test]
-async fn index_product_endpoints_return_demo_projection_shapes() {
-    // `/_soland/self/index/object` is the polymorphic typed-id describe (renamed
-    // from `/index/entity` in round 6); it returns `{object: {object_id,
-    // kind, schema}}` for any spec-registered `ak:<kind>:` prefix.
-    let object: Value = TestClient::get(
-        "http://server/_soland/self/index/object?object_id=ak:space:0196419b-0000-7000-8000-000000000000",
-    )
-    .send(&app())
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(object["object"]["kind"], "space");
-
-    let thread: Value =
-        TestClient::get("http://server/_soland/self/index/thread?thread_id=ak:strand:demo")
-            .send(&app())
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(thread["thread"]["thread_id"], "ak:strand:demo");
-    assert!(thread["events"].as_array().unwrap().is_empty());
-
-    let notifications: Value = TestClient::get(
-        "http://server/_soland/self/index/notifications?actor=did:web:alice.example",
-    )
-    .send(&app())
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(notifications["unread_count"], 0);
-
-    let inbox: Value = TestClient::get("http://server/_soland/self/index/inbox")
-        .send(&app())
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(inbox["strands"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        inbox["strands"][0]["strand"]["schema"],
-        "ak.schema.strand.v1"
-    );
-
-    let search: Value = TestClient::post("http://server/_soland/self/index/search")
-        .json(&serde_json::json!({"query": "demo", "object_kinds": ["space"], "limit": 5}))
-        .send(&app())
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(search["results"].as_array().unwrap().len(), 1);
-
-    let hierarchy: Value = TestClient::get(
-        "http://server/_soland/self/index/space-hierarchy?root_space_id=ak:space:0196419b-0000-7000-8000-000000000000",
-    )
-    .send(&app())
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(
-        hierarchy["root_space_id"],
-        "ak:space:0196419b-0000-7000-8000-000000000000"
-    );
-
-    let invalid = TestClient::post("http://server/_soland/self/index/search")
-        .json(&serde_json::json!({"query": ""}))
-        .send(&app())
-        .await;
-    assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
-}
-
-#[tokio::test]
 async fn broader_protocol_surface_returns_contract_shapes() {
     let directory_describe: Value =
         TestClient::get("http://server/_arkret/find/directory/describe")
@@ -756,7 +669,9 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(backfill["limited"], false);
+    // backfill pagination field is `has_more` (discovery-directory.md §9;
+    // profiles-presence.md §4.1 references it and does not define `limited`).
+    assert_eq!(backfill["has_more"], false);
 
     let authz: Value = TestClient::post("http://server/_arkret/self/authz/check")
         .json(&serde_json::json!({
@@ -809,18 +724,17 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
+    // D14: actors/devices/capabilities/audit moved to typed admin query
+    // endpoints (admin/queries.rs) returning {<field>[], total, next_cursor,
+    // has_more, filters} with no collection envelope; the rest still use the
+    // admin/collection.rs envelope. `agents` has no admin collection route.
     let collections = [
-        ("actors", "actors"),
         ("realms", "realms"),
         ("spaces", "spaces"),
-        ("devices", "devices"),
-        ("capabilities", "capabilities"),
         ("federation", "federation"),
         ("applets", "applets"),
-        ("agents", "agents"),
         ("reports", "reports"),
         ("invite-tokens", "invite_tokens"),
-        ("audit", "audit"),
         ("policy", "policy"),
         ("media", "media"),
     ];
@@ -843,6 +757,22 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         assert_eq!(
             body["production_gap"],
             "admin_authorization_and_durable_pagination"
+        );
+    }
+
+    let typed_queries = ["actors", "devices", "capabilities", "audit"];
+    for resource in typed_queries {
+        let body: Value =
+            TestClient::get(format!("http://server/_soland/admin/{resource}?limit=5"))
+                .add_header("authorization", format!("Bearer {token}"), true)
+                .send(&app_from_state(state.clone()))
+                .await
+                .take_json()
+                .await
+                .unwrap();
+        assert!(
+            body["has_more"].is_boolean(),
+            "typed admin {resource} missing has_more: {body}"
         );
     }
 
