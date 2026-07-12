@@ -519,9 +519,31 @@ pub(super) fn ensure_key_authorize_event_matches_request(
         runtime_public_key_digest,
         service_id,
     )?;
-    if payload
-        .get("approval_evidence")
-        .and_then(|value| value.get("request_canonical_digest"))
+    let approval_evidence = payload.get("approval_evidence").ok_or_else(|| {
+        AppError::invalid_param("authorize_event.payload.approval_evidence is required")
+    })?;
+    if approval_evidence.get("kind").and_then(Value::as_str) != Some("pairing_request") {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.approval_evidence.kind must be pairing_request",
+        ));
+    }
+    if approval_evidence.get("ref").is_some() {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.approval_evidence.ref must be absent for pairing_request evidence",
+        ));
+    }
+    let pairing_request_id = pairing_record_string(agent_record, "pairing_request_id")?;
+    if approval_evidence
+        .get("pairing_request_id")
+        .and_then(Value::as_str)
+        != Some(pairing_request_id)
+    {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.approval_evidence.pairing_request_id must match the pairing request",
+        ));
+    }
+    if approval_evidence
+        .get("request_canonical_digest")
         .and_then(Value::as_str)
         != Some(expected_digest.as_str())
     {
