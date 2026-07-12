@@ -46,7 +46,6 @@ use identity::auth::{auth_or_render, authenticated_session, is_device_revoked};
 use identity::device_messages::{TO_DEVICE_PAGE_LIMIT, device_message_envelopes_after};
 #[cfg(test)]
 use identity::did::validate_did_document_services;
-use spaces::directory::demo_actors;
 use spaces::space::{
     has_pending_call_signals_for_subscriber, has_pending_typing_for_subscriber,
     invite_token_matches_realm, invite_token_realm_id, is_realm_deleted, prune_expired_typing,

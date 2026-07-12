@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arkret_sdk::{
-    Did, Hash, Hlc, MoveId, PartialSignature, RealmId, Seal, SealId, ThresholdAggregator,
+    Did, Hash, Hlc, MoveId, PartialSignature, RealmId, Seal, SealId, ThresholdAggregator, WireError,
 };
 use base64::Engine as _;
 use chrono::Utc;
@@ -326,8 +326,7 @@ fn aggregate_and_publish(state: &AppState, record: &MultisigPendingRecord) -> Re
 
     let _multi = aggregator
         .aggregate(&canonical_bytes, |partial, bytes| {
-            verify_ed25519_partial(state, partial, bytes)
-                .map_err(arkret_wire_base::WireError::Protocol)
+            verify_ed25519_partial(state, partial, bytes).map_err(WireError::Protocol)
         })
         .map_err(|e| format!("aggregate: {e}"))?;
 
