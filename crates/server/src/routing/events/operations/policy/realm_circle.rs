@@ -175,6 +175,62 @@ pub(super) async fn validate_circle_management_policy(
     Err(reason)
 }
 
+pub(super) async fn sidecar_member_state_shape_is_constrained(
+    state: &AppState,
+    operation: &Operation,
+    controller: &str,
+    circle_id: &str,
+) -> bool {
+    if operation.payload.get("membership").and_then(Value::as_str) != Some("join") {
+        return false;
+    }
+    let Some(target) = operation.payload.get("actor_id").and_then(Value::as_str) else {
+        return false;
+    };
+    let realm_id = operation.realm_id.as_str();
+    {
+        let projection = state.projection.lock();
+        let Some(circle) = projection.circle(circle_id) else {
+            return false;
+        };
+        if circle.realm_id != realm_id
+            || circle.profile_ref.as_deref() != Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+            || circle.created_by != controller
+        {
+            return false;
+        }
+    }
+    if !policy_realm_member_joined(state, realm_id, target) {
+        return false;
+    }
+    if target == controller {
+        return true;
+    }
+    let Ok(records) = state
+        .persistence
+        .agents()
+        .list_for_controller(controller)
+        .await
+    else {
+        return false;
+    };
+    let record_matches = records.iter().any(|record| {
+        record.get("agent_id").and_then(Value::as_str) == Some(target)
+            && record.get("controller_id").and_then(Value::as_str) == Some(controller)
+            && record.get("state").and_then(Value::as_str) == Some("active")
+    });
+    if !record_matches {
+        return false;
+    }
+    let projection = state.projection.lock();
+    !matches!(
+        projection.agent_lifecycles.get(target),
+        Some(
+            arkret_sdk::AgentLifecycleState::Paused | arkret_sdk::AgentLifecycleState::Deactivated
+        )
+    ) && projection.agent_has_authorized_key(target)
+}
+
 /// Policy-layer acting-principal accessor.
 ///
 /// Unlike [`Operation::actor`], which probes `actor_id` before `sender`, the
@@ -294,7 +350,7 @@ pub(super) fn sidecar_circle_create_shape_is_constrained(
         return false;
     };
     let realm_id = operation.realm_id.as_str();
-    let controller = object
+    let controller = payload
         .get("controller_id")
         .and_then(Value::as_str)
         .unwrap_or(actor);
@@ -322,7 +378,7 @@ pub(super) fn sidecar_circle_create_shape_is_constrained(
         return false;
     }
     let expected_key = arkret_sdk::agent_sidecar_circle_key(realm_id, actor);
-    if object
+    if payload
         .get("controller_agent_circle_key")
         .and_then(Value::as_str)
         != Some(expected_key.as_str())

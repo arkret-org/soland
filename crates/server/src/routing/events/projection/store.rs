@@ -340,6 +340,21 @@ pub async fn accept_local_operations(
     Ok(())
 }
 
+pub async fn accept_trusted_sidecar_member_operation(
+    state: &AppState,
+    controller: &str,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    validate_operation_semantics(state, std::slice::from_ref(operation))?;
+    validate_content_encryption_floor(state, std::slice::from_ref(operation)).await?;
+    crate::routing::events::operations::validate_trusted_sidecar_member_operation(
+        state, operation, controller,
+    )
+    .await?;
+    project_accepted_operations(state, controller, std::slice::from_ref(operation)).await;
+    Ok(())
+}
+
 pub async fn persist_projected_operation(
     state: &AppState,
     origin: &str,

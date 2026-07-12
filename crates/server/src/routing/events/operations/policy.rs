@@ -22,6 +22,21 @@ use message_rules::*;
 pub(crate) use message_rules::{message_window_permits, realm_ids_match};
 use realm_circle::*;
 
+pub(crate) async fn validate_trusted_sidecar_member_operation(
+    state: &AppState,
+    operation: &Operation,
+    controller: &str,
+) -> Result<(), &'static str> {
+    let Some(circle_id) = operation_circle_id(operation) else {
+        return Err("sidecar_create_denied");
+    };
+    if sidecar_member_state_shape_is_constrained(state, operation, controller, circle_id).await {
+        Ok(())
+    } else {
+        Err("sidecar_create_denied")
+    }
+}
+
 pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, &'static str) {
     if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
@@ -233,6 +248,8 @@ mod tests {
         let valid_payload = serde_json::json!({
             "profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
             "sidecar_ensure_capability_verified": true,
+            "controller_id": actor,
+            "controller_agent_circle_key": key,
             "object": {
                 "id": "ak:circle:01964137-0000-7000-8000-000000000041",
                 "realm_id": realm_id,
@@ -243,8 +260,6 @@ mod tests {
                 "history_visibility": "joined",
                 "profile_ref": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
                 "created_by": actor,
-                "controller_id": actor,
-                "controller_agent_circle_key": key,
             },
         });
         let op = circle_create_with_payload(valid_payload.clone());
