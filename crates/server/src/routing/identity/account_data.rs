@@ -114,6 +114,20 @@ fn validate_registered_account_data_key(data_type: &str) -> Result<(), AppError>
         .map_err(|error| AppError::invalid_param(error.message()))
 }
 
+fn validate_private_account_data_content_for_actor(
+    actor_id: &str,
+    data_type: &str,
+    content: &Value,
+) -> Result<(), AppError> {
+    crate::routing::account_data_encryption::validate_encrypted_account_data_value_for_actor(
+        data_type,
+        content,
+        Some(actor_id),
+    )
+    .map_err(|error| AppError::invalid_param(error.message()))
+}
+
+#[cfg(test)]
 fn validate_private_account_data_content(data_type: &str, content: &Value) -> Result<(), AppError> {
     crate::routing::account_data_encryption::validate_encrypted_account_data_value(
         data_type, content,
@@ -214,7 +228,7 @@ async fn put_account_data(
     }
 
     let body = body.into_inner();
-    validate_private_account_data_content(&data_type, &body.content)?;
+    validate_private_account_data_content_for_actor(&session.actor, &data_type, &body.content)?;
     // Server-side guard against runaway payloads. Canonical serialisation is
     // the client's job; we just cap the wire size to keep one bad client from
     // filling the row with megabytes of base64.

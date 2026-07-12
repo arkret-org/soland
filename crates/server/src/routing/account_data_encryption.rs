@@ -6,20 +6,26 @@ const ACCOUNT_DATA_TYPE_AGENT_DRAFT: &str = "ak.agent.draft.v1";
 const ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION: &str = "ak.agent.sidecar_projection.v1";
 const ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION: &str = "ak.agent.participation.v1";
 const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ak.account.blocklist";
+const ACCOUNT_DATA_TYPE_CLIENT_UI_STATE: &str = "ak.client.ui_state";
+const ACCOUNT_DATA_TYPE_COLLECTIONS_STICKERS: &str = "ak.collections.stickers";
 const ACCOUNT_DATA_TYPE_DND_SCHEDULE: &str = "ak.dnd_schedule";
 const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
 const ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE: &str = "ak.presence.preference";
 const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ak.presence.visibility";
 const ACCOUNT_DATA_TYPE_PUSH_RULES: &str = "ak.push_rules";
+const ACCOUNT_DATA_TYPE_READ_RECEIPT_PREFERENCES: &str = "ak.read_receipt.preferences";
 const ACCOUNT_DATA_TYPE_TAGS_REALM: &str = "ak.tags.realm";
 
 const EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS: &[&str] = &[
     ACCOUNT_DATA_TYPE_BLOCKLIST,
+    ACCOUNT_DATA_TYPE_CLIENT_UI_STATE,
+    ACCOUNT_DATA_TYPE_COLLECTIONS_STICKERS,
     ACCOUNT_DATA_TYPE_DND_SCHEDULE,
     ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
     ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE,
     ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
     ACCOUNT_DATA_TYPE_PUSH_RULES,
+    ACCOUNT_DATA_TYPE_READ_RECEIPT_PREFERENCES,
 ];
 
 const SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
@@ -162,9 +168,18 @@ pub(crate) fn validate_encrypted_account_data_key(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn validate_encrypted_account_data_value(
     data_type: &str,
     value: &Value,
+) -> Result<(), AccountDataEncryptionError> {
+    validate_encrypted_account_data_value_for_actor(data_type, value, None)
+}
+
+pub(crate) fn validate_encrypted_account_data_value_for_actor(
+    data_type: &str,
+    value: &Value,
+    expected_actor_id: Option<&str>,
 ) -> Result<(), AccountDataEncryptionError> {
     if encrypted_account_data_prefix(data_type).is_none() {
         return Ok(());
@@ -179,56 +194,28 @@ pub(crate) fn validate_encrypted_account_data_value(
     {
         return Ok(());
     }
-    let is_presence_visibility = data_type == ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY;
     if is_account_data_set_operation_payload(object) {
         reject_operation_plaintext_fields(object)?;
         for field in ["body", "encrypted_payload", "encrypted_content"] {
             if let Some(carrier) = object.get(field) {
-                if is_presence_visibility
-                    && validate_presence_visibility_projection(carrier).is_ok()
-                {
-                    return Ok(());
-                }
-                return validate_encrypted_carrier(data_type, carrier);
+                return validate_encrypted_carrier(data_type, carrier, expected_actor_id);
             }
         }
         return Err(AccountDataEncryptionError::MissingEncryptedCarrier);
     }
-    if is_presence_visibility && validate_presence_visibility_projection(value).is_ok() {
-        return Ok(());
-    }
     reject_content_plaintext_fields(object)?;
-    if validate_encrypted_carrier(data_type, value).is_ok() {
+    if validate_encrypted_carrier(data_type, value, expected_actor_id).is_ok() {
         return Ok(());
     }
     for field in ["encrypted_payload", "encrypted_content"] {
         if let Some(carrier) = object.get(field) {
-            return validate_encrypted_carrier(data_type, carrier);
+            return validate_encrypted_carrier(data_type, carrier, expected_actor_id);
         }
     }
     if object.contains_key("ciphertext") {
         return Err(AccountDataEncryptionError::InvalidEnvelopeMetadata);
     }
     Err(AccountDataEncryptionError::MissingEncryptedCarrier)
-}
-
-fn validate_presence_visibility_projection(
-    value: &Value,
-) -> Result<(), AccountDataEncryptionError> {
-    let object = value
-        .as_object()
-        .ok_or(AccountDataEncryptionError::ValueMustBeObject)?;
-    if object.len() != 1 {
-        return Err(AccountDataEncryptionError::MissingEncryptedCarrier);
-    }
-    match object
-        .get("presence_visibility")
-        .and_then(Value::as_str)
-        .map(str::trim)
-    {
-        Some("public" | "contacts_only" | "nobody") => Ok(()),
-        _ => Err(AccountDataEncryptionError::InvalidEnvelopeMetadata),
-    }
 }
 
 fn validate_agent_private_key_tail(rest: &str) -> Result<(), AccountDataEncryptionError> {
@@ -297,19 +284,21 @@ fn field_is_forbidden_plaintext(field: &str) -> bool {
 fn validate_encrypted_carrier(
     data_type: &str,
     value: &Value,
+    expected_actor_id: Option<&str>,
 ) -> Result<(), AccountDataEncryptionError> {
-    validate_encrypted_envelope_metadata(data_type, value)
+    validate_encrypted_envelope_metadata(data_type, value, expected_actor_id)
 }
 
 fn validate_encrypted_envelope_metadata(
     data_type: &str,
     value: &Value,
+    expected_actor_id: Option<&str>,
 ) -> Result<(), AccountDataEncryptionError> {
     let envelope: AccountDataEncryptedValue = serde_json::from_value(value.clone())
         .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)?;
     arkret_sdk::account_data_crypto::validate_account_data_encrypted_value(
         &envelope,
-        &envelope.aad.actor_id,
+        expected_actor_id.unwrap_or(&envelope.aad.actor_id),
         data_type,
     )
     .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)
@@ -359,6 +348,17 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_account_data_rejects_cross_actor_aad() {
+        let error = validate_encrypted_account_data_value_for_actor(
+            private_key(),
+            &encrypted_envelope(private_key()),
+            Some("did:web:bob.example"),
+        )
+        .unwrap_err();
+        assert_eq!(error, AccountDataEncryptionError::InvalidEnvelopeMetadata);
+    }
+
+    #[test]
     fn encrypted_account_data_rejects_client_side_marker() {
         let error = validate_encrypted_account_data_value(private_key(), &conformance_marker())
             .unwrap_err();
@@ -390,17 +390,21 @@ mod tests {
 
     #[test]
     fn unregistered_account_data_is_not_reinterpreted() {
-        validate_encrypted_account_data_value("client.ui", &json!({"local_name": "Acme"})).unwrap();
+        validate_encrypted_account_data_value("ak.client.ui_state", &json!({"local_name": "Acme"}))
+            .unwrap();
     }
 
     #[test]
     fn standard_encrypted_account_data_requires_encrypted_carrier() {
         for key in [
             ACCOUNT_DATA_TYPE_BLOCKLIST,
+            ACCOUNT_DATA_TYPE_CLIENT_UI_STATE,
+            ACCOUNT_DATA_TYPE_COLLECTIONS_STICKERS,
             ACCOUNT_DATA_TYPE_DND_SCHEDULE,
             ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
             ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE,
             ACCOUNT_DATA_TYPE_PUSH_RULES,
+            ACCOUNT_DATA_TYPE_READ_RECEIPT_PREFERENCES,
         ] {
             let err =
                 validate_encrypted_account_data_value(key, &json!({"enabled": true})).unwrap_err();
@@ -417,36 +421,6 @@ mod tests {
         let err = validate_encrypted_account_data_value(
             ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
             &json!({"invite_event_id": "ak:event:0196419b-0000-7000-8000-000000000000"}),
-        )
-        .unwrap_err();
-        assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
-    }
-
-    #[test]
-    fn presence_visibility_allows_minimal_plaintext_projection() {
-        validate_encrypted_account_data_value(
-            ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
-            &json!({"presence_visibility": "contacts_only"}),
-        )
-        .unwrap();
-
-        validate_encrypted_account_data_value(
-            ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
-            &json!({
-                "key": ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
-                "owner": "did:web:alice.example",
-                "body": {"presence_visibility": "nobody"},
-                "updated_at": "2026-06-18T00:00:00Z"
-            }),
-        )
-        .unwrap();
-
-        let err = validate_encrypted_account_data_value(
-            ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
-            &json!({
-                "presence_visibility": "contacts_only",
-                "status_message": "busy"
-            }),
         )
         .unwrap_err();
         assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);

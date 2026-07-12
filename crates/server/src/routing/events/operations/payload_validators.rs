@@ -390,9 +390,15 @@ pub(crate) fn validate_account_data_set_payload(operation: &Operation) -> Result
     if operation.payload.get("tombstone").is_some() {
         return Ok(());
     }
-    crate::routing::account_data_encryption::validate_encrypted_account_data_value(
+    let owner = operation
+        .payload
+        .get("owner")
+        .and_then(Value::as_str)
+        .ok_or("account_data.set requires owner")?;
+    crate::routing::account_data_encryption::validate_encrypted_account_data_value_for_actor(
         key,
         &operation.payload,
+        Some(owner),
     )
     .map_err(|error| error.message())
 }

@@ -21,10 +21,11 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         "principal realm response: {principal_realm}"
     );
 
-    let body = serde_json::json!({
+    let plaintext = serde_json::json!({
         "theme": "night",
         "avatar_blob_ref": "ak:blob:sha256:1111111111111111111111111111111111111111111111111111111111111111"
     });
+    let body = account_data_encrypted_value(FRESH_DID, "ak.client.ui_state", &plaintext, 1);
     let put = submit_actor_private_event(
         state.clone(),
         &fresh,
@@ -33,7 +34,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         &principal_realm,
         "ak.account_data.set",
         serde_json::json!({
-            "key": "client.ui",
+            "key": "ak.client.ui_state",
             "owner": FRESH_DID,
             "body": body.clone(),
             "updated_at": "2026-06-08T00:00:00Z"
@@ -51,7 +52,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         "catchup=true&set_presence=online",
     )
     .await;
-    let entry = account_data_entry(&sync, "client.ui");
+    let entry = account_data_entry(&sync, "ak.client.ui_state");
     assert_eq!(entry["content"], body);
 
     let denied = submit_actor_private_event(
@@ -62,9 +63,14 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         &principal_realm,
         "ak.account_data.set",
         serde_json::json!({
-            "key": "client.ui",
+            "key": "ak.client.ui_state",
             "owner": "did:web:bob.example",
-            "body": {"theme": "light"},
+            "body": account_data_encrypted_value(
+                "did:web:bob.example",
+                "ak.client.ui_state",
+                &serde_json::json!({"theme": "light"}),
+                2,
+            ),
             "updated_at": "2026-06-08T00:01:00Z"
         }),
     )
@@ -89,7 +95,12 @@ async fn encrypted_account_data_realm_remark_round_trip() {
 
     let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
     let key = format!("ak.contacts.realm.{realm_id}");
-    let remark = account_data_client_side_marker("44", "opaque-realm-remark-v1");
+    let remark = account_data_encrypted_value(
+        "did:web:alice.example",
+        &key,
+        &serde_json::json!({"local_name": "Realm one"}),
+        3,
+    );
 
     let first = submit_actor_private_event(
         state.clone(),
@@ -121,7 +132,12 @@ async fn encrypted_account_data_realm_remark_round_trip() {
     assert_eq!(initial_entry["content"], remark);
 
     // Second event updates the same key with the new payload.
-    let updated_remark = account_data_client_side_marker("55", "opaque-realm-remark-v2");
+    let updated_remark = account_data_encrypted_value(
+        "did:web:alice.example",
+        &key,
+        &serde_json::json!({"local_name": "Realm two"}),
+        4,
+    );
     let updated = submit_actor_private_event(
         state.clone(),
         &alice,
@@ -203,7 +219,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
 }
 
 #[tokio::test]
-async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
+async fn encrypted_account_data_requires_standard_envelope_metadata() {
     const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
     let state = AppState::new(test_config(), Db { pool: None });
@@ -215,7 +231,12 @@ async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
     )
     .await;
     let key = "ak.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-    let envelope = account_data_encrypted_envelope();
+    let envelope = account_data_encrypted_value(
+        "did:web:alice.example",
+        key,
+        &serde_json::json!({"private": true}),
+        5,
+    );
 
     let accepted = submit_actor_private_event(
         state.clone(),
@@ -277,21 +298,14 @@ async fn encrypted_account_data_requires_envelope_metadata_or_marker() {
         "content_type": "application/vnd.arkret.account-data+json",
         "ciphertext": "opaque-client-envelope"
     });
-    let put: Value = TestClient::put(format!(
+    let response = TestClient::put(format!(
         "http://server/_arkret/self/account_data/{marker_key}"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .json(&serde_json::json!({"content": marker.clone()}))
     .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(
-        put["data_type"], marker_key,
-        "marker account_data PUT: {put}"
-    );
-    assert_eq!(put["content"], marker);
+    .await;
+    assert_eq!(response.status_code.unwrap().as_u16(), 400);
 }
 
 #[tokio::test]
@@ -363,38 +377,21 @@ fn account_data_entry<'a>(sync: &'a Value, key: &str) -> &'a Value {
         .expect("account_data entry present in sync response")
 }
 
-fn account_data_encrypted_envelope() -> Value {
-    serde_json::json!({
-        "scheme": "mls-rfc9420",
-        "version": "1.0",
-        "group_id": "testGroup",
-        "epoch": 1,
-        "content_type": "application/vnd.arkret.account-data+json",
-        "ciphertext": "b3BhcXVl",
-        "aad_visibility_event_id": "hidden",
-        "aad": {
-            "realm_id": DEMO_REALM_ID,
-            "event_kind": "ak.account_data.set"
-        },
-        "key_ref": {
-            "algorithm": "MLS",
-            "group_state_ref": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-        },
-        "aad_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-    })
-}
-
-fn account_data_client_side_marker(hex_pair: &str, ciphertext: &str) -> Value {
-    let digest = hex_pair.repeat(32);
-    serde_json::json!({
-        "client_side_conformance": {
-            "encrypted_account_data": true,
-            "profile_id": "ak.profile.e2ee_client.v1",
-            "plaintext_schema_id": "ak.schema.realm_remark.v1",
-            "payload_digest": format!("sha256:{digest}")
-        },
-        "content_type": "application/vnd.arkret.account-data+json",
-        "ciphertext": ciphertext
-    })
+fn account_data_encrypted_value(
+    actor_id: &str,
+    data_type: &str,
+    plaintext: &Value,
+    nonce_byte: u8,
+) -> Value {
+    serde_json::to_value(
+        arkret_sdk::account_data_crypto::seal_account_data_value_with_nonce(
+            &[7u8; 32],
+            actor_id,
+            data_type,
+            plaintext,
+            [nonce_byte; 24],
+        )
+        .unwrap(),
+    )
+    .unwrap()
 }
