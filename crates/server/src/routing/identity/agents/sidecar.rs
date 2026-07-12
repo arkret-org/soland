@@ -631,6 +631,14 @@ pub(super) async fn ensure_sidecar_thread_impl(
             .map_err(|err| AppError::internal(format!("context_ref digest failed: {err}")))?;
     let target_ref = sidecar_context_target_ref(&body.context_ref);
     let addressed_agents = normalize_addressed_agents(controller, &body)?;
+    tracing::info!(
+        controller_id = controller,
+        realm_id = %realm_id,
+        target_ref = %target_ref,
+        addressed_agent_count = addressed_agents.len(),
+        normalized_context_ref_digest = %normalized_context_ref_digest,
+        "agent sidecar ensure request validated"
+    );
     let eligible_agents =
         eligible_sidecar_agents(state, realm_id.as_str(), controller, &addressed_agents).await?;
     let controller_agent_circle_key = controller_agent_circle_key(realm_id.as_str(), controller);
@@ -667,6 +675,15 @@ pub(super) async fn ensure_sidecar_thread_impl(
         body.context_ref.track_name.as_deref(),
     )
     .await?;
+    tracing::info!(
+        controller_id = controller,
+        realm_id = %realm_id,
+        private_circle_id = %private_circle_id,
+        private_strand_id = %private_strand_id,
+        private_relation_id = %private_relation_id,
+        eligible_agent_count = eligible_agents.len(),
+        "agent sidecar ensure completed"
+    );
     append_audit_log(
         state,
         Some(&session.actor),
