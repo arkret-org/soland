@@ -346,5 +346,25 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
         "resuming from the catchup cursor must not replay the already-seen \
          event ({second_event_id}); body={body3}"
     );
-    assert!(!body3.contains("\"kind\":\"catchup_complete\""));
+    let empty_catchup_frames = body3
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<arkret_sdk::EventsSubscribeFrame>(line).unwrap())
+        .collect::<Vec<_>>();
+    let frontier_index = empty_catchup_frames
+        .iter()
+        .position(|frame| frame.kind == arkret_sdk::EventsSubscribeFrameKind::Frontier)
+        .expect("empty catch-up emits a frontier baseline");
+    let completion_index = empty_catchup_frames
+        .iter()
+        .position(|frame| frame.kind == arkret_sdk::EventsSubscribeFrameKind::CatchupComplete)
+        .expect("empty catch-up emits catchup_complete");
+    assert!(frontier_index < completion_index);
+    assert_eq!(
+        empty_catchup_frames[frontier_index]
+            .cursor
+            .as_ref()
+            .map(|cursor| cursor.as_str()),
+        Some(resume_cursor.as_str())
+    );
 }

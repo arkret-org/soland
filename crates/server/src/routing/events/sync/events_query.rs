@@ -18,7 +18,8 @@ const EVENTS_CATCHUP_LIMIT: usize = 100;
 ///   2. Subscribe to the live event broadcast BEFORE serving history so no events are missed in the
 ///      history-vs-live window.
 ///   3. Build an async stream that yields: a) bounded replay frames when `catchup=true` b) one
-///      `catchup_complete` frame only after replay emitted data c) live event frames as broadcast
+///      `catchup_complete` frame after replay data, or after a `frontier` baseline when the replay
+///      is empty c) live event frames as broadcast
 ///      notifications arrive d) periodic `heartbeat` frames every 30s of idle e) a terminal
 ///      `resync_required` frame when subscription-wide broadcast lag is detected
 ///   4. Stream terminates when:
@@ -252,7 +253,23 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
             }
         }
 
-        // 2. Completion is legal only when catch-up actually emitted replay data.
+        // 2. An empty bounded catch-up still needs an explicit baseline so
+        // clients can distinguish "caught up, no delta" from a truncated
+        // response. Reuse the validated resume cursor: `frontier` is
+        // projection-neutral but establishes the baseline required before
+        // `catchup_complete`.
+        if catchup && replay_cursor.is_none() {
+            if let Some(cursor) = after_token.as_ref() {
+                let frontier = json!({
+                    "kind": "frontier",
+                    "cursor": cursor,
+                });
+                yield Ok(ndjson_line(&frontier));
+                replay_cursor = Some(cursor.clone());
+            }
+        }
+
+        // Completion follows either replay data or the empty-replay frontier.
         if let Some(cursor) = replay_cursor.as_ref() {
             let catchup_complete = json!({
                 "kind": "catchup_complete",
