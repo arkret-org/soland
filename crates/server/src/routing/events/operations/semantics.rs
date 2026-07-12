@@ -880,24 +880,3 @@ pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static 
     })?;
     Ok(())
 }
-
-/// Spec B1.17 — accept an `applet_id` value. Must be either a DID or a
-/// strictly-validated `ak:applet:<uuidv7>` typed id. Returns the typed
-/// wrapper on success.
-pub fn validate_applet_id(
-    value: &str,
-) -> Result<arkret_sdk::AppletIdentifier, (&'static str, String)> {
-    // The SDK's `AppletIdentifier` is `enum { Did(Did), Cx(AppletId) }`.
-    // We attempt the DID form first (covers `did:webvh:applet.example`
-    // and similar), then fall back to the typed `ak:applet:` form.
-    if let Ok(did) = arkret_sdk::Did::new(value.to_owned()) {
-        return Ok(arkret_sdk::AppletIdentifier::Did(did));
-    }
-    if let Ok(applet) = arkret_sdk::AppletId::new(value.to_owned()) {
-        return Ok(arkret_sdk::AppletIdentifier::Cx(applet));
-    }
-    Err((
-        arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-        format!("applet_id must be a DID or ak:applet:<uuidv7>: got {value:?}"),
-    ))
-}
