@@ -443,6 +443,7 @@ fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) 
             invited_at: (membership == "invite").then_some(updated_at),
             joined_at: updated_at,
             updated_at,
+            reason: None,
         },
     );
 }

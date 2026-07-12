@@ -528,7 +528,6 @@ mod tests {
             .put(json!({
                 "agent_id": agent_id,
                 "controller_id": "did:web:alice.example",
-                "agent_id": "ak:agent:0196419b-0000-7000-8000-000000000001",
                 "display_name": "Alice Assistant",
                 "state": "active"
             }))

@@ -27,6 +27,7 @@ fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
                 invited_at: None,
                 joined_at: now,
                 updated_at: now,
+                reason: None,
             },
         );
     };

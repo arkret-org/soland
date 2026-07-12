@@ -689,13 +689,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "deactivate a personal agent",
     ),
     (
-        "/_arkret/self/agents/{agent_id}/rotate-key",
-        PathItemType::Post,
-        "agents",
-        "ak.self.agent.command.rotate_key",
-        "rotate a personal agent key",
-    ),
-    (
         "/_arkret/self/agents/{agent_id}/grants",
         PathItemType::Post,
         "agents",

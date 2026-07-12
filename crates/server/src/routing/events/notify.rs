@@ -589,7 +589,7 @@ mod tests {
             .put(json!({
                 "agent_id": agent,
                 "controller_id": controller,
-                "agent_id": "summary",
+                "agent_slug": "summary",
                 "display_name": "Summary",
                 "state": "active",
             }))

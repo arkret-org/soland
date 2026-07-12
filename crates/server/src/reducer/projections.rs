@@ -1190,6 +1190,11 @@ pub struct SolandMembershipState {
     pub invited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub joined_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// Machine-readable reason for the current state when the transition was
+    /// not member-initiated (for example `controller_membership_ended` on the
+    /// forced native-agent cascade, actor.md §3.3). `None` for ordinary
+    /// member-driven transitions.
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug)]

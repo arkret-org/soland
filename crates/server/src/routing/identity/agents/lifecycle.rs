@@ -143,16 +143,24 @@ pub(super) async fn provision_agent(
     })
 }
 
-/// `ak.self.agent.command.renew_pairing` — re-open pairing on an agent whose
-/// runtime key was never authorized instead of burning the principal and
-/// provisioning a replacement. Security invariant: pairing HANDLES are
-/// one-time (the fresh `pairing_request_id` + `pairing_code` replace the old
-/// tuple, which becomes permanently unresolvable through the same
-/// anti-enumeration lookup), the PRINCIPAL is not.
+/// `ak.self.agent.command.renew_pairing` — re-open pairing in place on any
+/// non-terminal agent (key-management.md §3.6.1). Two branches share the
+/// one-time-handle invariant (the fresh `pairing_request_id` + `pairing_code`
+/// replace the old tuple, which becomes permanently unresolvable through the
+/// same anti-enumeration lookup; the PRINCIPAL is not one-time):
+///
+/// - Bootstrap re-open (`pending_runtime_key` / `pairing_expired`): status returns to
+///   `pending_runtime_key` and, when the expiry cleanup already revoked the pending provision
+///   grants, they are re-issued at provision parity.
+/// - Runtime replacement (`active` / `paused`): zero-downtime key replacement. Agent status,
+///   existing keys, sessions, and grants all stay untouched; completing the new pairing supersedes
+///   every old active key (reason=`superseded_by_repairing`) in the pair transaction.
+///
+/// Only `deactivated` rejects (deactivation is terminal).
 #[endpoint(
     operation_id = "ak.self.agent.command.renew_pairing",
     tags("agents"),
-    summary = "Re-open pairing on a never-activated personal agent",
+    summary = "Re-open pairing on a non-terminal personal agent",
     status_codes(200, 400, 401, 403, 404, 412, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.renew_pairing"))]
@@ -171,8 +179,9 @@ pub(super) async fn renew_agent_pairing(
     // Lazy-expire first so a stale pending record renews through the same
     // path (grants already revoked) as an observed-expired one.
     let record = lazily_expire_pairing(state, &session, record).await;
-    match record.get("state").and_then(Value::as_str) {
-        Some("pending_runtime_key" | "pairing_expired") => {}
+    let bootstrap_reopen = match record.get("state").and_then(Value::as_str) {
+        Some("pending_runtime_key" | "pairing_expired") => true,
+        Some("active" | "paused") => false,
         Some("deactivated") => {
             return Err(pairing_failed_precondition(
                 "agent is deactivated; deactivation is terminal",
@@ -181,10 +190,10 @@ pub(super) async fn renew_agent_pairing(
         }
         _ => {
             return Err(pairing_failed_precondition(
-                "agent already has an authorized runtime key; rotate the key instead of renewing pairing",
+                "agent state does not permit pairing renewal",
             ));
         }
-    }
+    };
     if !state.config.development_mode {
         return Err(AppError::unsupported_feature(
             "production agent pairing renewal requires protocol-valid delegated fan-out",
@@ -219,14 +228,16 @@ pub(super) async fn renew_agent_pairing(
             ));
         }
     }
-    // Re-issue the pending grants the expiry cleanup revoked. A still-open
-    // pairing keeps its live grants; only re-fan-out when none remain.
-    let realm = ensure_self_realm(state, &session).await?;
+    // Bootstrap re-open only: re-issue the pending grants the expiry cleanup
+    // revoked. A still-open pairing keeps its live grants; only re-fan-out
+    // when none remain. Runtime replacement never touches grants — they bind
+    // the agent principal, not the key.
     let live_grant_ids = {
         let proj = state.projection.lock();
         proj.grant_ids_for_subject(&agent_id)
     };
-    let grant_ids = if live_grant_ids.is_empty() {
+    let grant_ids = if bootstrap_reopen && live_grant_ids.is_empty() {
+        let realm = ensure_self_realm(state, &session).await?;
         let requested_scope = record
             .get("requested_scope")
             .cloned()
@@ -248,7 +259,11 @@ pub(super) async fn renew_agent_pairing(
         let obj = record
             .as_object_mut()
             .ok_or_else(|| AppError::internal("agent record is not an object"))?;
-        obj.insert("state".to_owned(), json!("pending_runtime_key"));
+        if bootstrap_reopen {
+            obj.insert("state".to_owned(), json!("pending_runtime_key"));
+        }
+        // Runtime replacement is not a state transition: active/paused stay
+        // as-is while the fresh handle is open.
         obj.insert(
             "pairing_request_id".to_owned(),
             json!(pairing_request_id.clone()),
@@ -286,6 +301,7 @@ pub(super) async fn renew_agent_pairing(
             "controller_id": session.actor,
             "slug": agent_slug,
             "pairing_request_id": pairing_request_id,
+            "mode": if bootstrap_reopen { "bootstrap_reopen" } else { "runtime_replacement" },
         }),
         "accepted",
     )
@@ -447,6 +463,59 @@ pub(super) async fn lifecycle_transition(
     let record = require_agent_controller(state, &session, &agent_id).await?;
     let sidecar_exposure_ack =
         normalize_sidecar_exposure_ack(sidecar_exposure_ack, &session.actor)?;
+    // AKP-0008 D1: the durable lifecycle event and its fan-out only exist on
+    // the development fan-out path. Production MUST fail closed instead of
+    // mutating the read-side row without a durable transition (a deactivate
+    // that flips the projection but revokes nothing is worse than an error).
+    if !state.config.development_mode {
+        return Err(AppError::unsupported_feature(
+            "production agent lifecycle transitions require protocol-valid delegated fan-out",
+        )
+        .with_wire_code("agent_lifecycle_fanout_unavailable"));
+    }
+    // Resume re-disclosure (key-management.md §3.6.1): sidecar circles the
+    // controller created while the agent was paused re-enter the agent's
+    // eligibility set on resume, so the controller MUST explicitly
+    // re-acknowledge them; silent resume is forbidden.
+    if event_kind == "ak.self.agent.resume" {
+        let paused_at = record
+            .get("updated_at")
+            .and_then(Value::as_str)
+            .and_then(|value| {
+                chrono::DateTime::parse_from_rfc3339(value)
+                    .ok()
+                    .map(|parsed| parsed.with_timezone(&chrono::Utc))
+            });
+        let new_sidecar_ids = controller_sidecar_circles_since(state, &session.actor, paused_at);
+        if !new_sidecar_ids.is_empty() {
+            let acked: std::collections::BTreeSet<String> = sidecar_exposure_ack
+                .as_ref()
+                .and_then(|ack| ack.get("sidecar_refs"))
+                .and_then(Value::as_array)
+                .map(|refs| {
+                    refs.iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let missing: Vec<&String> = new_sidecar_ids
+                .iter()
+                .filter(|circle_id| !acked.contains(*circle_id))
+                .collect();
+            if !missing.is_empty() {
+                return Err(AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "resume requires explicit sidecar exposure acknowledgement for {} sidecar circle(s) created while paused",
+                        missing.len()
+                    ),
+                )
+                .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+                .with_reason_code("sidecar_exposure_ack_required"));
+            }
+        }
+    }
     let status_changed_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     // Read the current persisted state so the durable transition carries the
     // accurate `previous_status` (resume comes from `paused`, etc.).
@@ -459,70 +528,29 @@ pub(super) async fn lifecycle_transition(
     // `ak.self.agent.{pause,resume,deactivate}` event authored by the
     // controller, and on deactivate fan-out the revocation chain
     // (`ak.agent.key.revoke` + `ak.capability.revoke` for every grant the
-    // agent holds). Production submits the lifecycle event from inkson.
-    if state.config.development_mode {
-        let realm = ensure_self_realm(state, &session).await?;
-        submit_durable_agent_lifecycle(
-            state,
-            &session,
-            &realm,
-            &agent_id,
-            event_kind,
-            &previous_status,
-            reason.as_deref(),
-            sidecar_exposure_ack.as_ref(),
-        )
-        .await?;
-        if event_kind == "ak.self.agent.deactivate" {
-            let (key_ids, grant_ids) = {
-                let proj = state.projection.lock();
-                Some({
-                    (
-                        proj.authorized_key_ids_for(&agent_id),
-                        proj.grant_ids_for_subject(&agent_id),
-                    )
-                })
-            }
-            .unwrap_or_default();
-            submit_revoke_agent_keys(state, &session, &realm, &agent_id, &key_ids).await?;
-            submit_revoke_agent_grants(state, &session, &realm, &grant_ids).await?;
-        }
-    } else {
-        let mut payload = json!({
-            "agent_id": agent_id,
-            "controller_id": session.actor.clone(),
-            "transition": match event_kind {
-                "ak.self.agent.pause" => "pause",
-                "ak.self.agent.resume" => "resume",
-                "ak.self.agent.deactivate" => "deactivate",
-                _ => new_state.as_wire_str(),
-            },
-            "previous_status": previous_status,
-            "status_changed_at": status_changed_at.clone(),
-        });
-        // pause / resume carry the spec-required `freshness_frontier`;
-        // deactivate carries none (SPEC-SOL-003 resolution).
-        if event_kind != "ak.self.agent.deactivate" {
-            payload.as_object_mut().expect("payload object").insert(
-                "freshness_frontier".to_owned(),
-                json!({ "captured_at": status_changed_at.clone() }),
-            );
-        }
-        if let Some(reason) = reason.as_ref() {
-            payload
-                .as_object_mut()
-                .expect("payload object")
-                .insert("reason".to_owned(), Value::String(reason.clone()));
-        }
-        if event_kind == "ak.self.agent.resume"
-            && let Some(ack) = sidecar_exposure_ack
-        {
-            payload
-                .as_object_mut()
-                .expect("payload object")
-                .insert("sidecar_exposure_ack".to_owned(), ack);
-        }
-        append_audit_log(state, Some(&session.actor), event_kind, payload, "accepted").await;
+    // agent holds). Production fails closed above.
+    let realm = ensure_self_realm(state, &session).await?;
+    submit_durable_agent_lifecycle(
+        state,
+        &session,
+        &realm,
+        &agent_id,
+        event_kind,
+        &previous_status,
+        reason.as_deref(),
+        sidecar_exposure_ack.as_ref(),
+    )
+    .await?;
+    if event_kind == "ak.self.agent.deactivate" {
+        let (key_ids, grant_ids) = {
+            let proj = state.projection.lock();
+            (
+                proj.authorized_key_ids_for(&agent_id),
+                proj.grant_ids_for_subject(&agent_id),
+            )
+        };
+        submit_revoke_agent_keys(state, &session, &realm, &agent_id, &key_ids, None).await?;
+        submit_revoke_agent_grants(state, &session, &realm, &grant_ids).await?;
     }
     // Persist the lifecycle state transition on the agent_principal row so
     // list/get reflect the new status (the durable event drives the reducer
@@ -538,6 +566,32 @@ pub(super) async fn lifecycle_transition(
         ok: true,
         status: new_state,
     })
+}
+
+/// Active sidecar Circles owned by `controller` created strictly after
+/// `since`. `since=None` (missing/unparsable pause timestamp) fails closed by
+/// treating every sidecar circle as new, forcing an explicit ack.
+fn controller_sidecar_circles_since(
+    state: &AppState,
+    controller: &str,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+) -> Vec<String> {
+    let projection = state.projection.lock();
+    projection
+        .circles
+        .values()
+        .filter(|circle| {
+            circle.created_by == controller
+                && circle.directory_visibility == "members"
+                && circle.state == crate::reducer::CircleLifecycleState::Active
+                && circle.title
+                    == super::sidecar::sidecar_short_name(
+                        &super::sidecar::controller_agent_circle_key(&circle.realm_id, controller),
+                    )
+                && since.is_none_or(|since| circle.created_at > since)
+        })
+        .map(|circle| circle.circle_id.clone())
+        .collect()
 }
 
 #[endpoint(
@@ -631,36 +685,6 @@ pub(super) async fn deactivate_agent(
         )
         .await?,
     )
-}
-
-#[endpoint(
-    operation_id = "ak.self.agent.command.rotate_key",
-    tags("agents"),
-    summary = "Rotate the agent runtime key (revoke + authorize chain)",
-    status_codes(200, 400, 401, 403, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.rotate_key"))]
-pub(super) async fn rotate_agent_key(
-    aa: AuthArgs,
-    agent_id: PathParam<String>,
-    body: JsonBody<AgentRotateKeyRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AgentRotateKeyOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_id.into_inner();
-    require_agent_controller(state, &session, &agent_id).await?;
-    let body = body.into_inner();
-    let _replacement_kid = body
-        .replacement_key
-        .get("kid")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| AppError::invalid_param("replacement_key.kid is required"))?;
-    Err(AppError::unsupported_feature(
-        "agent key rotation requires a durable revoke + authorize event chain and is not available",
-    ))
 }
 
 #[endpoint(

@@ -767,6 +767,7 @@ mod tests {
                     invited_at: None,
                     joined_at: now,
                     updated_at: now,
+                    reason: None,
                 },
             );
         }

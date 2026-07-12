@@ -12,7 +12,7 @@
 //! the canonical payload bytes.
 
 use arkret_sdk::canonical;
-use chrono::{Duration, SecondsFormat, Utc};
+use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
 
 use super::SessionRecord;
@@ -303,14 +303,15 @@ pub(super) async fn fanout_provision_subevents(
     // 2. Accountability grant (`ak.identity.accountability_grant`), issuer = controller, subject =
     //    agent. Resolves to `state_payload`.
     let now_utc = Utc::now();
+    // Longevity-safe: no expires_at — the controller self-endorsement is
+    // governed by grant_status revocation and controller lifecycle cascade
+    // (actor.md §3.3.1), never by a silent timer.
     let accountability_payload = json!({
         "value": {
             "issuer": controller,
             "subject": agent_id,
             "accountability_scope": controller,
             "not_before": now_utc.to_rfc3339_opts(SecondsFormat::Secs, true),
-            "expires_at": (now_utc + Duration::days(365))
-                .to_rfc3339_opts(SecondsFormat::Secs, true),
             "grant_status": "active",
         },
     });
@@ -581,10 +582,10 @@ pub(super) async fn submit_durable_key_authorize(
             ],
             "resources": [{ "kind": "realm", "realm_id": realm_id }],
         },
+        // Longevity-safe: no expires_at — the key authorization is governed
+        // solely by revocation (key-management.md §3.6.1).
         "audience": [state.config.service_id.clone()],
         "issued_at": now_utc.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "expires_at": (now_utc + Duration::days(90))
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
         "approval_evidence": {
             "kind": "approval_event",
             "ref": format!("ak:event:{}", uuid::Uuid::now_v7()),
@@ -697,8 +698,9 @@ pub(super) async fn submit_durable_agent_lifecycle(
     submit_agent_fanout_event(state, session, realm_id, event_kind, payload).await
 }
 
-/// AKP-0008 §4.11 — on deactivate, fan-out `ak.agent.key.revoke` for the
-/// agent's authorized key(s). Best-effort over the keys the reducer
+/// AKP-0008 §4.11 — fan-out `ak.agent.key.revoke` for the agent's authorized
+/// key(s): on deactivate (no reason) and on runtime replacement re-pairing
+/// (reason=`superseded_by_repairing`). Best-effort over the keys the reducer
 /// projected; revoking with no known key still emits a tombstone-safe
 /// revoke for the canonical `key_id`.
 pub(super) async fn submit_revoke_agent_keys(
@@ -707,6 +709,7 @@ pub(super) async fn submit_revoke_agent_keys(
     realm_id: &str,
     agent_id: &str,
     key_ids: &[String],
+    reason: Option<&str>,
 ) -> Result<(), AppError> {
     let revoked_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let targets: Vec<String> = if key_ids.is_empty() {
@@ -715,12 +718,18 @@ pub(super) async fn submit_revoke_agent_keys(
         key_ids.to_vec()
     };
     for key_id in targets {
-        let payload = json!({
+        let mut payload = json!({
             "agent_id": agent_id,
             "key_id": key_id,
             "revoked_by": session.actor.clone(),
             "revoked_at": revoked_at,
         });
+        if let Some(reason) = reason {
+            payload
+                .as_object_mut()
+                .expect("payload object")
+                .insert("reason".to_owned(), json!(reason));
+        }
         submit_agent_fanout_event(state, session, realm_id, "ak.agent.key.revoke", payload).await?;
     }
     Ok(())
@@ -749,6 +758,27 @@ pub(super) fn default_agent_key_id(agent_id: &str) -> String {
     hasher.update(agent_id.as_bytes());
     let digest = hasher.finalize();
     format!("ak:agent_key:{}", hex::encode(&digest[..16]))
+}
+
+/// Key id for a dev pairing, derived from the verification-method fragment so
+/// distinct runtime keys get distinct key ids. Runtime replacement re-pairing
+/// relies on this to supersede the old key without revoking the new one; a
+/// runtime that reuses the same fragment lands on the same key id, which is
+/// exactly the same-key re-authorization override (key-management.md §3.6).
+pub(super) fn agent_key_id_for_pairing(agent_id: &str, verification_method: &str) -> String {
+    match verification_method.split_once('#') {
+        Some((_, fragment)) if !fragment.is_empty() => {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(b"ak:agent_key:dev:v1:");
+            hasher.update(agent_id.as_bytes());
+            hasher.update(b"#");
+            hasher.update(fragment.as_bytes());
+            let digest = hasher.finalize();
+            format!("ak:agent_key:{}", hex::encode(&digest[..16]))
+        }
+        _ => default_agent_key_id(agent_id),
+    }
 }
 
 #[cfg(test)]

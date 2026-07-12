@@ -510,7 +510,7 @@ pub struct SendMessageRequestBody {
 // AKP-0008 / AKP-0009 — Personal Agent operations. Every request/response
 // DTO is the SDK-authoritative `arkret_sdk::models::Agent*` shape (spec
 // `agent-operations.schema.json`): `agent_view`/`agent_list` carry the spec
-// `agent_projection`; `agent_key_pair`/`rotate_key` outcomes are
+// `agent_projection`; the `agent_key_pair` outcome is
 // `{ok, authorized_event_ref}`; grant attach/detach outcomes are
 // `{ok, grant_id}` / `{ok, revoked_at}`; sidecar ensure carries the typed
 // `private_circle_id`/`private_strand_id`/`private_relation_id`. The lifecycle
@@ -528,8 +528,7 @@ pub struct SendMessageRequestBody {
 pub use arkret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
-    AgentPauseRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
-    AgentRotateKeyRequestBody, AgentSidecarThreadEnsureOutcome,
+    AgentPauseRequestBody, AgentResumeRequestBody, AgentSidecarThreadEnsureOutcome,
     AgentSidecarThreadEnsureRequestBody, AgentView, CallMediaTokenExchangeRequestBody,
 };
 // Key-backup replace/delete outcomes are the SDK server-side DTOs
@@ -941,14 +940,13 @@ pub fn describe(
             // handler. soland mounts the handler unconditionally, and also
             // claims the required `ak.profile.webrtc_media.v1` dependency above.
             profiles.push("ak.profile.media_service_binding.v1".to_owned());
-            // PROF-1 — `ak.profile.accountable_principals.strict_reject.v1` is
-            // gated by `SOLAND_ACCOUNTABLE_TO_STRICT_REJECT=true`.
-            if matches!(
-                std::env::var("SOLAND_ACCOUNTABLE_TO_STRICT_REJECT").as_deref(),
-                Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
-            ) {
-                profiles.push("ak.profile.accountable_principals.strict_reject.v1".to_owned());
-            }
+            // `ak.profile.accountable_principals.strict_reject.v1` — the
+            // reducer accountability policy unconditionally rejects events
+            // carrying unverified accountable_principal_ids
+            // (accountability.rs, reason=accountability_grant_missing), so
+            // the strict-reject choice MUST be advertised wire-visibly
+            // (actor.md §3.3.1) rather than gated behind local config.
+            profiles.push("ak.profile.accountable_principals.strict_reject.v1".to_owned());
             profiles
         },
         plaintext_visibility,

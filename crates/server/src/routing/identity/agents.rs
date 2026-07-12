@@ -14,7 +14,6 @@
 //! - `POST   /_arkret/self/agents/{id}/pause`                  — `ak.self.agent.command.pause`
 //! - `POST   /_arkret/self/agents/{id}/resume`                 — `ak.self.agent.command.resume`
 //! - `POST   /_arkret/self/agents/{id}/deactivate`             — `ak.self.agent.command.deactivate`
-//! - `POST   /_arkret/self/agents/{id}/rotate-key`             — `ak.self.agent.command.rotate_key`
 //! - `POST   /_arkret/self/agents/{id}/grants`                 —
 //!   `ak.self.agent.grant.command.attach`
 //! - `DELETE /_arkret/self/agents/{id}/grants/{grant_id}`      —
@@ -37,12 +36,11 @@ use arkret_sdk::models::{
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
     AgentProjection, AgentProvisionOutcome, AgentProvisionRequestBody,
-    AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
-    AgentRotateKeyRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
-    AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody,
-    AgentSidecarContextRef, AgentSidecarExposureAck, AgentSidecarThreadEnsureOutcome,
-    AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView, PublicKey,
-    effective_participation, validate_agent_slug, validate_selection_within_ceiling,
+    AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRuntimeApprovalOutcome,
+    AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
+    AgentRuntimeApprovalStatusRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
+    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView,
+    PublicKey, effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
 use arkret_sdk::{
     BlobRef, CircleId, Did, EventId, GrantId, Hash, Operation, OperationId, RealmId, RelationId,
@@ -96,7 +94,6 @@ pub(super) fn protocol_router() -> Router {
                 .push(Router::with_path("{agent_id}/pause").post(pause_agent))
                 .push(Router::with_path("{agent_id}/resume").post(resume_agent))
                 .push(Router::with_path("{agent_id}/deactivate").post(deactivate_agent))
-                .push(Router::with_path("{agent_id}/rotate-key").post(rotate_agent_key))
                 .push(
                     Router::with_path("{agent_id}/grants")
                         .post(attach_agent_grant)

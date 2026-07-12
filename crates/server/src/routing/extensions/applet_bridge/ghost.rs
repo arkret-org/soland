@@ -165,7 +165,10 @@ pub(super) async fn build_ghost_accountability_grant_event(
             format!("tenant:{}", provision.tenant),
         ]),
         now - chrono::Duration::seconds(1),
-        now + chrono::Duration::days(365),
+        // Longevity-safe default: no expiry cliff; the grant is governed by
+        // grant_status revocation and Applet registration lifecycle
+        // (actor.md §3.3.1).
+        None,
         proof,
     );
     grant.validate_lifecycle_at(now).map_err(|error| {

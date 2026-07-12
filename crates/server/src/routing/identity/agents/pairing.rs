@@ -322,8 +322,15 @@ pub(super) async fn agent_key_pair(
     let event_id = if state.config.development_mode {
         let controller_session = controller_dev_session(&session.actor, state);
         let realm = ensure_self_realm(state, &controller_session).await?;
-        let key_id = dev_fanout::default_agent_key_id(agent_id);
-        submit_durable_key_authorize(
+        // Snapshot the keys authorized before this pairing: on runtime
+        // replacement re-pairing every prior active key is superseded in the
+        // same accepted fan-out batch (key-management.md §3.6.1).
+        let prior_key_ids = {
+            let proj = state.projection.lock();
+            proj.authorized_key_ids_for(agent_id)
+        };
+        let key_id = dev_fanout::agent_key_id_for_pairing(agent_id, &body.verification_method);
+        let event_id = submit_durable_key_authorize(
             state,
             &controller_session,
             &realm,
@@ -331,7 +338,23 @@ pub(super) async fn agent_key_pair(
             &body.verification_method,
             &key_id,
         )
-        .await?
+        .await?;
+        let superseded: Vec<String> = prior_key_ids
+            .into_iter()
+            .filter(|prior| prior != &key_id)
+            .collect();
+        if !superseded.is_empty() {
+            dev_fanout::submit_revoke_agent_keys(
+                state,
+                &controller_session,
+                &realm,
+                agent_id,
+                &superseded,
+                Some(arkret_wire_base::error_codes::REASON_SUPERSEDED_BY_REPAIRING),
+            )
+            .await?;
+        }
+        event_id
     } else {
         submit_production_key_authorize_event(
             state,

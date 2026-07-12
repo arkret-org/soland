@@ -251,6 +251,7 @@ impl ProjectionState {
                 invited_at: Some(now),
                 joined_at: now,
                 updated_at: now,
+                reason: None,
             },
         );
 

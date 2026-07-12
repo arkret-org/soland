@@ -175,6 +175,7 @@ fn project_invite_accept_membership(
                 .or(Some(invite_created_at)),
             joined_at,
             updated_at: operation.created_at,
+            reason: None,
         },
     );
     if let Ok(cell_id) = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{member}")) {
@@ -659,6 +660,7 @@ fn project_invited_delivery_binding(
             invited_at,
             joined_at,
             updated_at: operation.created_at,
+            reason: None,
         },
     );
 }

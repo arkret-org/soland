@@ -26,6 +26,7 @@ fn seed_state(history_visibility: &str) -> (ProjectionState, ServerHlc, chrono::
                 invited_at: None,
                 joined_at: base,
                 updated_at: base,
+                reason: None,
             },
         );
     }

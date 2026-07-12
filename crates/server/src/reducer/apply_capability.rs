@@ -261,6 +261,72 @@ fn validate_grant_body_scope(body: &Value) -> Result<(), &'static str> {
     validate_grant_resources(body)
 }
 
+/// capabilities.md §8 — grants whose subject is an agent principal must carry
+/// every registry-required typed constraint, and any `risk_tier=high` action
+/// (or an action whose registry `required_constraints` list `expires_at`)
+/// additionally requires a finite effective expiry. Low/medium-risk agent
+/// grants may be non-expiring (revocation-governed, longevity-safe). Actions
+/// absent from the registry default to high (registry fail-closed rule).
+fn validate_agent_subject_grant_constraints(
+    body: &Value,
+    subject_is_agent: impl Fn(&str) -> bool,
+) -> Result<(), &'static str> {
+    use arkret_sdk::schema::CapabilityRiskTier;
+
+    let Some(subject) = body.get("subject").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if !subject_is_agent(subject) {
+        return Ok(());
+    }
+    let Some(actions) = body.get("actions").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    let has_finite_expiry = body_effective_expires_at(body).is_some();
+    for action in actions.iter().filter_map(Value::as_str) {
+        let descriptor = arkret_sdk::schema::embedded_capability_action(action)
+            .ok()
+            .flatten();
+        let (risk_tier, required_constraints) = match descriptor {
+            Some(descriptor) => (
+                descriptor.risk_tier,
+                descriptor.required_constraints.as_slice(),
+            ),
+            // Unregistered action: registry_rules default it to high.
+            None => (CapabilityRiskTier::High, &[] as &[String]),
+        };
+        let expiry_required = risk_tier == CapabilityRiskTier::High
+            || required_constraints
+                .iter()
+                .any(|constraint| constraint == "expires_at");
+        if expiry_required && !has_finite_expiry {
+            return Err("agent_grant_expiry_required");
+        }
+        for required in required_constraints {
+            if required == "expires_at" {
+                continue;
+            }
+            if !grant_has_constraint(body, required) {
+                return Err("agent_grant_constraint_missing");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A registry `required_constraints` token is satisfied when some declared
+/// constraint object either carries a field of that name or names it as its
+/// `constraint_type`.
+fn grant_has_constraint(body: &Value, token: &str) -> bool {
+    let Some(constraints) = body.get("constraints").and_then(Value::as_array) else {
+        return false;
+    };
+    constraints.iter().any(|constraint| {
+        constraint.get(token).is_some()
+            || constraint.get("constraint_type").and_then(Value::as_str) == Some(token)
+    })
+}
+
 fn validate_grant_actions(body: &Value) -> Result<Vec<String>, &'static str> {
     let Some(actions) = body.get("actions").and_then(Value::as_array) else {
         return Err("capability_grant_actions_empty");
@@ -653,6 +719,15 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
+        if let Err(reason) =
+            validate_agent_subject_grant_constraints(grant_body(&operation.payload), |subject| {
+                self.agent_lifecycles.contains_key(subject)
+            })
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         if let Err(reason) = self.validate_grant_issuer_upper_bound(operation) {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
@@ -786,6 +861,13 @@ impl ProjectionState {
             };
         }
         if let Err(reason) = validate_grant_body_scope(body) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        if let Err(reason) = validate_agent_subject_grant_constraints(body, |subject| {
+            self.agent_lifecycles.contains_key(subject)
+        }) {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
             };

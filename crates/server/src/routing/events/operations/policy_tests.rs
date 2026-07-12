@@ -521,7 +521,6 @@ async fn register_agent_selection(
         .put(json!({
             "agent_id": agent_id,
             "controller_id": "did:web:alice.example",
-            "agent_id": "summary",
             "display_name": "Summary",
             "agent_slug": "summary",
             "state": "active",
@@ -2081,6 +2080,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
                 invited_at: Some(now),
                 joined_at: now,
                 updated_at: now,
+                reason: None,
             },
         );
     }

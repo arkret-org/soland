@@ -184,6 +184,12 @@ impl ProjectionState {
                 invited_at,
                 joined_at,
                 updated_at: now,
+                reason: operation
+                    .payload
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToOwned::to_owned),
             },
         );
         if matches!(new_state, "leave" | "ban") {
@@ -248,6 +254,7 @@ impl ProjectionState {
                 invited_at: None,
                 joined_at: now,
                 updated_at: now,
+                reason: None,
             },
         );
         if let Ok(cell_id) =
@@ -343,6 +350,10 @@ impl ProjectionState {
                     delivery_binding_frontier: None,
                     membership_event_ref: membership_frontier.first().cloned(),
                     updated_at: now,
+                    reason: Some(
+                        arkret_wire_base::error_codes::REASON_CONTROLLER_MEMBERSHIP_ENDED
+                            .to_owned(),
+                    ),
                     ..previous
                 },
             );
