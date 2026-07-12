@@ -128,12 +128,88 @@ pub(super) async fn ensure_self_realm(
     session: &SessionRecord,
 ) -> Result<String, AppError> {
     let realm_id = self_realm_for_controller(&session.actor);
-    if crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
-        return Ok(realm_id);
+    if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
+        let payload =
+            self_realm_create_payload(&session.actor, &state.config.service_id, &realm_id);
+        submit_agent_fanout_event(state, session, &realm_id, "ak.realm.create", payload).await?;
     }
-    let payload = self_realm_create_payload(&session.actor, &state.config.service_id, &realm_id);
-    submit_agent_fanout_event(state, session, &realm_id, "ak.realm.create", payload).await?;
+
+    // The Realm directory index and reducer projection are separate caches.
+    // Repair the reducer-side owner from the durable Realm metadata before
+    // issuing the initial grant so this aggregate stays correct even when a
+    // running process has an indexed self Realm but a stale projection cache.
+    // Startup hydration normally provides the same state, but correctness of
+    // provisioning must not depend on a restart having rebuilt every cache.
+    let meta = state
+        .persistence
+        .realm_meta()
+        .get(&realm_id)
+        .await
+        .map_err(|err| AppError::internal(format!("self Realm metadata lookup failed: {err}")))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "self Realm is indexed without durable metadata",
+            )
+            .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+            .with_reason_code("self_realm_metadata_missing")
+        })?;
+    reconcile_self_realm_owner_projection(state, &realm_id, &session.actor, &meta)?;
     Ok(realm_id)
+}
+
+fn reconcile_self_realm_owner_projection(
+    state: &AppState,
+    realm_id: &str,
+    controller_id: &str,
+    meta: &crate::state::RealmMetaRecord,
+) -> Result<(), AppError> {
+    if meta.owner != controller_id {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "self Realm owner does not match the authenticated controller",
+        )
+        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("self_realm_owner_mismatch"));
+    }
+
+    let mut projection = state.projection.lock();
+    match projection.realm_states.get_mut(realm_id) {
+        Some(realm) => match realm.owner.as_deref() {
+            Some(owner) if owner != controller_id => {
+                return Err(AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "self Realm projection owner does not match durable metadata",
+                )
+                .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+                .with_reason_code("self_realm_owner_mismatch"));
+            }
+            Some(_) => {}
+            None => realm.owner = Some(controller_id.to_owned()),
+        },
+        None => {
+            projection.realm_states.insert(
+                realm_id.to_owned(),
+                crate::reducer::SolandRealmState {
+                    realm_id: realm_id.to_owned(),
+                    owner: Some(controller_id.to_owned()),
+                    title: None,
+                    deleted: meta.deleted,
+                    archived: false,
+                    frozen: false,
+                    freeze_expires_at: None,
+                    created_at: meta.created_at,
+                    updated_at: meta.updated_at,
+                    trust_domain: None,
+                    terminal_state: None,
+                    successor_realm_id: None,
+                    default_strand_id: None,
+                    active_profiles: Vec::new(),
+                },
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Minimal `realm_create_payload` for a controller self realm. Mirrors the
@@ -677,9 +753,35 @@ pub(super) fn default_agent_key_id(agent_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use serde_json::json;
+    use soland_data::Db;
 
     use super::*;
+    use crate::state::RealmMetaRecord;
+
+    fn realm_meta(owner: &str) -> RealmMetaRecord {
+        let now = chrono::Utc::now();
+        RealmMetaRecord {
+            owner: owner.to_owned(),
+            deleted: false,
+            discoverability: "invite_only".to_owned(),
+            history_visibility: "shared".to_owned(),
+            history_sharing_policy: None,
+            history_sharing_policy_digest: None,
+            preview_policy: None,
+            preview_policy_digest: None,
+            asset_privacy_policy: None,
+            asset_privacy_policy_digest: None,
+            encryption_profile: None,
+            plaintext_visible_services: BTreeSet::new(),
+            plaintext_visible_service_classes: BTreeMap::new(),
+            minimal_metadata_realm: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
 
     #[test]
     fn reducer_rejection_keeps_failed_precondition_reason() {
@@ -698,6 +800,47 @@ mod tests {
         assert_eq!(
             error.http_status(),
             salvo::http::StatusCode::PRECONDITION_FAILED
+        );
+    }
+
+    #[test]
+    fn self_realm_owner_reconciles_before_capability_fanout() {
+        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+        let realm_id = "ak:realm:019f5548-2d3c-751b-90d6-f262c6feacea";
+        let controller = "did:webvh:z6mkfixture:example.test:users:alice";
+
+        reconcile_self_realm_owner_projection(
+            &state,
+            realm_id,
+            controller,
+            &realm_meta(controller),
+        )
+        .expect("durable owner should repair the missing projection");
+
+        let projection = state.projection.lock();
+        assert!(projection.issuer_has_projected_capability(
+            controller,
+            realm_id,
+            ACTION_MESSAGE_CREATE,
+            realm_id,
+        ));
+    }
+
+    #[test]
+    fn self_realm_owner_reconciliation_fails_closed_on_mismatch() {
+        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+        let error = reconcile_self_realm_owner_projection(
+            &state,
+            "ak:realm:019f5548-2d3c-751b-90d6-f262c6feacea",
+            "did:webvh:z6mkfixture:example.test:users:alice",
+            &realm_meta("did:webvh:z6mkfixture:example.test:users:bob"),
+        )
+        .expect_err("mismatched durable ownership must not be overwritten");
+
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some("self_realm_owner_mismatch")
         );
     }
 
