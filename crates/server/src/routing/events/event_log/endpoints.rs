@@ -635,9 +635,12 @@ async fn events_frontier(
         });
     }
 
-    // Actor selector → `{actor_id, actor_seq, event_id}`: highest accepted
-    // actor_seq among events visible to the caller.
+    // Actor selector → `{actor_id, actor_seq, event_id?}`: highest accepted
+    // actor_seq among events visible to the caller. An empty frontier is a
+    // successful genesis state rather than an expected-error probe.
     let actor = actor_id.expect("selector presence checked above");
+    let actor_id = Did::new(actor.clone())
+        .map_err(|_| AppError::invalid_param("actor_id must be a valid DID"))?;
     let events = state
         .persistence
         .events()
@@ -656,15 +659,18 @@ async fn events_frontier(
             best = Some((record.actor_seq, record.event_id.clone()));
         }
     }
-    let Some((actor_seq, event_id)) = best else {
-        // Same code regardless of "unknown actor" vs "nothing visible":
-        // private DIDs must not leak through the frontier surface.
-        return Err(AppError::not_found("no visible events for actor"));
+    let (actor_seq, event_id) = match best {
+        Some((actor_seq, event_id)) => (
+            actor_seq,
+            Some(
+                EventId::new(event_id)
+                    .map_err(|_| AppError::internal("stored event_id is invalid"))?,
+            ),
+        ),
+        // Unknown, invisible, and genuinely empty actors deliberately share
+        // the same response so this surface does not disclose existence.
+        None => (0, None),
     };
-    let actor_id =
-        Did::new(actor).map_err(|_| AppError::invalid_param("actor_id must be a valid DID"))?;
-    let event_id =
-        EventId::new(event_id).map_err(|_| AppError::internal("stored event_id is invalid"))?;
     crate::result::json_ok(EventsFrontierAccountClientState {
         frontier: EventsFrontierView::Actor(ActorFrontierView {
             actor_id,
