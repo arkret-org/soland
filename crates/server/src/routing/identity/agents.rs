@@ -69,7 +69,7 @@ mod dev_fanout;
 use dev_fanout::{
     attach_agent_grant_event, ensure_self_realm, fanout_provision_subevents, fanout_renewal_grants,
     materialize_capability_grant, revoke_capability_grant, submit_durable_agent_lifecycle,
-    submit_durable_key_authorize, submit_revoke_agent_grants, submit_revoke_agent_keys,
+    submit_revoke_agent_grants, submit_revoke_agent_keys,
 };
 
 mod common;
@@ -294,7 +294,15 @@ mod tests {
                     .encode(signature.to_bytes()),
             }),
             runtime_attestation: None,
-            authorize_event: Value::Null,
+            authorize_event: arkret_sdk::Event::new(
+                "ak.agent.key.authorize",
+                arkret_sdk::RealmId::new("ak:realm:01999999-0000-7000-8000-00000000feed").unwrap(),
+                arkret_sdk::Did::new("did:web:agent.example").unwrap(),
+                1,
+                arkret_sdk::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
+                json!({}),
+            )
+            .unwrap(),
         }
     }
 
@@ -326,7 +334,7 @@ mod tests {
 
     #[test]
     fn agent_view_projects_spec_shape_dropping_internal_columns() {
-        let view = agent_view_from_record(&json!({
+        let record = json!({
             "agent_id": "did:webvh:z6mkfixture:agent.example",
             "controller_id": "did:webvh:example.com:users:alice",
             "display_name": "Summary Assistant",
@@ -334,7 +342,14 @@ mod tests {
             "state": "active",
             "created_at": "2026-06-11T00:00:00.000Z",
             "updated_at": "2026-06-11T00:00:00.000Z"
-        }));
+        });
+        let key_state = agent_key_state_from_record(&record, Vec::new());
+        let view = AgentView {
+            agent: serde_json::to_value(agent_projection_from_record(&record)).unwrap(),
+            status: "active".to_owned(),
+            grants: Vec::new(),
+            key_state,
+        };
         // spec `agent_view` = `{agent: <agent_projection>, status, ...}`.
         assert_eq!(view.status, "active");
         let agent = serde_json::to_value(&view).expect("view serializes");
@@ -557,7 +572,7 @@ mod tests {
             "proof_of_possession": { "challenge": "agent_pairing_request:01999999-0000-7000-8000-00000000feed" }
         });
 
-        let key_state = agent_key_state_from_record(&record);
+        let key_state = agent_key_state_from_record(&record, Vec::new());
 
         assert_eq!(
             key_state["approval_request_id"],

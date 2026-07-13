@@ -92,6 +92,7 @@ CREATE TABLE public.agent_principals (
     provision_event_refs jsonb,
     pairing_request_id text,
     paired_pairing_request_id text,
+    paired_request_digest text,
     pairing_code text,
     pairing_expires_at timestamp with time zone,
     approval_request_id text,

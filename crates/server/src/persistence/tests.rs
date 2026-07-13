@@ -67,6 +67,7 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
         approval_request_id: "agent_runtime_approval:test".to_owned(),
         runtime_key_binding_digest: "sha256:binding-a".to_owned(),
         pairing_request_id: first.pairing_request_id,
+        paired_request_digest: "sha256:request".to_owned(),
         authorized_event_ref: "ak:event:01964137-0000-7000-8000-000000000003".to_owned(),
         authorized_verification_method: "did:web:agent.example#runtime".to_owned(),
         authorized_public_key_digest: "sha256:public".to_owned(),
@@ -84,6 +85,27 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
             .await
             .unwrap()
     );
+    let activated = store.get(&activation.agent_id).await.unwrap().unwrap();
+    assert_eq!(
+        activated["approval_request_id"], "agent_runtime_approval:test",
+        "terminal notification correlation must survive activation"
+    );
+    assert_eq!(
+        activated["approval_notification_id"],
+        "ak:notification:01964137-0000-7000-8000-000000000001"
+    );
+    assert!(
+        store
+            .clear_runtime_approval_notification_if_current(
+                &activation.agent_id,
+                &activation.approval_request_id,
+            )
+            .await
+            .unwrap()
+    );
+    let cleaned = store.get(&activation.agent_id).await.unwrap().unwrap();
+    assert!(cleaned["approval_request_id"].is_null());
+    assert!(cleaned["approval_notification_id"].is_null());
     assert!(
         store
             .put_runtime_approval_if_compatible(&runtime_approval_write("sha256:binding-a"))

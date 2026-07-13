@@ -171,7 +171,8 @@ pub struct ProjectionState {
     /// `ak.agent.key.revoke`). The capability evaluator reads this to decide
     /// whether `effective_after_first_authorized_key` grants have activated:
     /// an agent with at least one entry has completed runtime pairing.
-    pub agent_authorized_keys: BTreeMap<String, BTreeSet<String>>,
+    /// Agent id -> (active key id -> accepted authorize Event id).
+    pub agent_authorized_keys: BTreeMap<String, BTreeMap<String, String>>,
     /// R3 spec-sync — `ak.call.state.session_focus` write-once projection
     /// keyed by `call_id`. Once a focus is committed for a call, the
     /// reducer rejects any subsequent write with

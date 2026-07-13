@@ -252,6 +252,10 @@ pub(crate) fn projection_operation_from_event(
             .entry("effects".to_owned())
             .or_insert_with(|| effects.clone());
     }
+    payload_object.insert(
+        "accepted_event_id".to_owned(),
+        Value::String(parsed.event_id.clone()),
+    );
     let Some(operation_id) = event_operation_id(envelope, &parsed.event_id) else {
         tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, "projection: event_operation_id failed");
         return None;

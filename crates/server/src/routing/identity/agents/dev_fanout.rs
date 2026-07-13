@@ -22,8 +22,11 @@ use crate::ids;
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
 
+#[cfg(test)]
 const SCOPE_EVENTS_QUERY_SCAN: &str = "ak.self.events.query.scan";
+#[cfg(test)]
 const SCOPE_EVENTS_STREAM_SUBSCRIBE: &str = "ak.self.events.stream.subscribe";
+#[cfg(test)]
 const SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ak.self.events.command.submit";
 const ACTION_EVENT_READ: &str = "ak.event.read";
 const ACTION_MESSAGE_CREATE: &str = "ak.message.create";
@@ -557,49 +560,6 @@ pub(super) async fn attach_agent_grant_event(
     materialize_grant(state, session, realm_id, payload).await
 }
 
-/// AKP-0008 §4.5 / D3 — submit the durable `ak.agent.key.authorize` event
-/// authored by the controller. The payload satisfies
-/// `agent_key_authorize_payload` (all required fields). The soland reducer
-/// projects it into the agent-key state cell and clears
-/// `effective_after_first_authorized_key` on the agent's pending grants.
-pub(super) async fn submit_durable_key_authorize(
-    state: &AppState,
-    session: &SessionRecord,
-    realm_id: &str,
-    agent_id: &str,
-    verification_method: &str,
-    key_id: &str,
-) -> Result<String, AppError> {
-    let controller = session.actor.clone();
-    let now_utc = Utc::now();
-    let payload = json!({
-        "agent_id": agent_id,
-        "key_id": key_id,
-        "verification_method": verification_method,
-        "accountable_principal_id": controller,
-        "agent_key_scope": {
-            "actions": [
-                SCOPE_EVENTS_STREAM_SUBSCRIBE,
-                SCOPE_EVENTS_QUERY_SCAN,
-                SCOPE_EVENTS_COMMAND_SUBMIT,
-                ACTION_EVENT_READ,
-                ACTION_MESSAGE_CREATE,
-                ACTION_REACTION_ADD,
-            ],
-            "resources": [{ "kind": "realm", "realm_id": realm_id }],
-        },
-        // Longevity-safe: no expires_at — the key authorization is governed
-        // solely by revocation (key-management.md §3.6.1).
-        "audience": [state.config.service_id.clone()],
-        "issued_at": now_utc.to_rfc3339_opts(SecondsFormat::Secs, true),
-        "approval_evidence": {
-            "kind": "approval_event",
-            "evidence_ref": format!("ak:event:{}", uuid::Uuid::now_v7()),
-        },
-    });
-    submit_agent_fanout_event(state, session, realm_id, "ak.agent.key.authorize", payload).await
-}
-
 /// AKP-0016 — materialise a participation `effective=true` decision into a
 /// durable reply/reaction capability grant for the agent over the scope
 /// resource. Idempotent on the deterministic `grant_id` derived from the
@@ -758,27 +718,6 @@ pub(super) fn default_agent_key_id(agent_id: &str) -> String {
     hasher.update(agent_id.as_bytes());
     let digest = hasher.finalize();
     format!("ak:agent_key:{}", hex::encode(&digest[..16]))
-}
-
-/// Key id for a dev pairing, derived from the verification-method fragment so
-/// distinct runtime keys get distinct key ids. Runtime replacement re-pairing
-/// relies on this to supersede the old key without revoking the new one; a
-/// runtime that reuses the same fragment lands on the same key id, which is
-/// exactly the same-key re-authorization override (key-management.md §3.6).
-pub(super) fn agent_key_id_for_pairing(agent_id: &str, verification_method: &str) -> String {
-    match verification_method.split_once('#') {
-        Some((_, fragment)) if !fragment.is_empty() => {
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(b"ak:agent_key:dev:v1:");
-            hasher.update(agent_id.as_bytes());
-            hasher.update(b"#");
-            hasher.update(fragment.as_bytes());
-            let digest = hasher.finalize();
-            format!("ak:agent_key:{}", hex::encode(&digest[..16]))
-        }
-        _ => default_agent_key_id(agent_id),
-    }
 }
 
 #[cfg(test)]

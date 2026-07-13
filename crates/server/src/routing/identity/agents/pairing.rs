@@ -356,6 +356,14 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     else {
         return Ok(agent_record);
     };
+    let Some(expected_realm_id) = agent_record
+        .get("self_realm_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(agent_record);
+    };
+    let expected_authorization_ref = format!("{agent_id}#managed-controller");
     let expected_request_digest = pairing_request_binding_digest(
         &agent_record,
         &controller_id,
@@ -380,10 +388,9 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         let payload = envelope.get("payload").unwrap_or(&Value::Null);
         let evidence = payload.get("approval_evidence").unwrap_or(&Value::Null);
         envelope.get("executed_by").and_then(Value::as_str) == Some(controller_id.as_str())
-            && envelope
-                .get("authorization_ref")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty())
+            && envelope.get("authorization_ref").and_then(Value::as_str)
+                == Some(expected_authorization_ref.as_str())
+            && envelope.get("realm_id").and_then(Value::as_str) == Some(expected_realm_id.as_str())
             && payload.get("agent_id").and_then(Value::as_str) == Some(agent_id.as_str())
             && payload.get("verification_method").and_then(Value::as_str)
                 == Some(verification_method.as_str())
@@ -400,6 +407,8 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let Some(accepted) = accepted else {
         return Ok(agent_record);
     };
+    let paired_request_digest =
+        paired_request_digest_from_record_event(&agent_record, &accepted.envelope)?;
 
     let terminal_notification = account_notification_context(&agent_record);
     let activation = crate::persistence::AgentRuntimeActivation {
@@ -411,6 +420,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             .unwrap_or_default()
             .to_owned(),
         pairing_request_id,
+        paired_request_digest,
         authorized_event_ref: accepted.event_id,
         authorized_verification_method: verification_method,
         authorized_public_key_digest: public_key_digest,
@@ -442,7 +452,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             });
     }
     if let Some(context) = terminal_notification {
-        persist_terminal_account_notification(state, context, "approved").await?;
+        finalize_terminal_account_notification(state, &agent_id, context, "approved").await?;
     }
     tracing::info!(
         agent_id,
@@ -527,10 +537,6 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     })
 }
 
-/// AKP-0008 (dev option B) — synthesize a controller-authored
-/// `SessionRecord` so the server-side fan-out can author durable sub-events
-/// as the controller (`actor_id == session.actor`). Only used under
-/// `development_mode`; the resulting session is never persisted or returned.
 #[endpoint(
     operation_id = "ak.gate.account.command.pair_agent_key",
     tags("agents"),
@@ -545,8 +551,31 @@ pub(super) async fn agent_key_pair(
     req: &mut Request,
 ) -> JsonResult<AgentKeyPairOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
+    let event_id = body.authorize_event.event_id.as_str();
+    let idempotency_key = req
+        .headers()
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
+    if idempotency_key != event_id {
+        return Err(
+            AppError::conflict("Idempotency-Key must equal authorize_event.event_id")
+                .with_wire_code("duplicate_conflict"),
+        );
+    }
+    let service_authorized = agent_projection_service_authorized(state, req);
+    let session = if service_authorized {
+        let controller_id = body.authorize_event.executed_by.as_ref().ok_or_else(|| {
+            AppError::capability_denied(
+                "authorize_event.executed_by is required for delegated pairing",
+            )
+        })?;
+        controller_service_session(controller_id.as_str(), state)
+    } else {
+        aa.authenticated_session(state, req).await?
+    };
     let agent_id = body.agent_id.as_str();
     validate_agent_id(agent_id)?;
     if body.verification_method.trim().is_empty() {
@@ -558,78 +587,67 @@ pub(super) async fn agent_key_pair(
         ));
     }
     let agent_record = require_agent_controller(state, &session, agent_id).await?;
+    let paired_request_digest = agent_key_pair_request_digest(&body)?;
+    if agent_record
+        .get("authorized_event_ref")
+        .and_then(Value::as_str)
+        == Some(event_id)
+    {
+        let same_request = agent_record
+            .get("paired_pairing_request_id")
+            .and_then(Value::as_str)
+            == Some(body.pairing_request_id.as_str())
+            && agent_record
+                .get("paired_request_digest")
+                .and_then(Value::as_str)
+                == Some(paired_request_digest.as_str());
+        if !same_request {
+            return Err(AppError::conflict(
+                "authorize_event.event_id was already accepted for a different pairing request",
+            )
+            .with_wire_code("duplicate_conflict"));
+        }
+        if let Some(context) = account_notification_context(&agent_record) {
+            finalize_terminal_account_notification(state, agent_id, context, "approved").await?;
+        }
+        return json_ok(AgentKeyPairOutcome {
+            ok: true,
+            authorized_event_ref: body.authorize_event.event_id.clone(),
+        });
+    }
     ensure_pairing_request_open(&agent_record)?;
     ensure_pairing_request_id_matches(&agent_record, &body.pairing_request_id)?;
     let runtime_public_key_digest =
         runtime_public_key_digest(&body.public_key, &body.verification_method)?;
     verify_runtime_key_pair_proof_of_possession(&body, agent_id, &state.config.service_id)?;
-    // The runtime-attestation verifier is not wired yet. Refuse every
-    // supplied attestation fail-closed instead of accepting a shape-only
-    // `self_asserted` placeholder as if it were a verified binding.
     if let Some(attestation) = body.runtime_attestation.as_ref() {
         let kind = attestation
             .get("kind")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        return Err(AppError::unsupported_feature(format!(
-            "runtime_attestation verifier is not wired; refusing kind `{kind}` fail-closed"
-        )));
+        if kind != "self_asserted" {
+            return Err(AppError::unsupported_feature(format!(
+                "runtime_attestation kind `{kind}` is not supported"
+            )));
+        }
     }
     ensure_current_runtime_key_request_matches(&agent_record, &body)?;
+    let authorize_event_value = serde_json::to_value(&body.authorize_event)
+        .map_err(|error| AppError::invalid_param(format!("authorize_event invalid: {error}")))?;
     let authorized_at = chrono::Utc::now();
-    // AKP-0008 §4.5 / D3: the runtime key may become active only after a
-    // reducer-visible `ak.agent.key.authorize` event exists. Development mode
-    // still materializes the event with the local dev-proof path; production
-    // requires inkson/coauth to provide a controller-signed durable event and
-    // soland submits + rechecks it here.
-    let event_id = if state.config.development_mode {
-        let controller_session = controller_dev_session(&session.actor, state);
-        let realm = ensure_self_realm(state, &controller_session).await?;
-        // Snapshot the keys authorized before this pairing: on runtime
-        // replacement re-pairing every prior active key is superseded in the
-        // same accepted fan-out batch (key-management.md §3.6.1).
-        let prior_key_ids = {
-            let proj = state.projection.lock();
-            proj.authorized_key_ids_for(agent_id)
-        };
-        let key_id = dev_fanout::agent_key_id_for_pairing(agent_id, &body.verification_method);
-        let event_id = submit_durable_key_authorize(
-            state,
-            &controller_session,
-            &realm,
-            agent_id,
-            &body.verification_method,
-            &key_id,
-        )
-        .await?;
-        let superseded: Vec<String> = prior_key_ids
-            .into_iter()
-            .filter(|prior| prior != &key_id)
-            .collect();
-        if !superseded.is_empty() {
-            dev_fanout::submit_revoke_agent_keys(
-                state,
-                &controller_session,
-                &realm,
-                agent_id,
-                &superseded,
-                Some(arkret_wire_base::error_codes::REASON_SUPERSEDED_BY_REPAIRING),
-            )
-            .await?;
-        }
-        event_id
-    } else {
-        submit_production_key_authorize_event(
-            state,
-            &session,
-            &body.authorize_event,
-            &agent_record,
-            agent_id,
-            &body.verification_method,
-            &runtime_public_key_digest,
-        )
-        .await?
-    };
+    // Development and production consume the exact controller-signed Event
+    // supplied by the client. A server-generated substitute would break the
+    // Agent-PCR authorship and idempotency contract.
+    let event_id = submit_production_key_authorize_event(
+        state,
+        &session,
+        &authorize_event_value,
+        &agent_record,
+        agent_id,
+        &body.verification_method,
+        &runtime_public_key_digest,
+    )
+    .await?;
     let authorized_event_ref = EventId::new(event_id)
         .map_err(|err| AppError::internal(format!("authorize event id invalid: {err}")))?;
     // Pairing semantics: a provisioned agent starts `pending_runtime_key`;
@@ -647,6 +665,7 @@ pub(super) async fn agent_key_pair(
         )?
         .to_owned(),
         pairing_request_id: body.pairing_request_id.clone(),
+        paired_request_digest,
         authorized_event_ref: authorized_event_ref.as_str().to_owned(),
         authorized_verification_method: body.verification_method.clone(),
         authorized_public_key_digest: runtime_public_key_digest.clone(),
@@ -667,7 +686,7 @@ pub(super) async fn agent_key_pair(
         ));
     }
     if let Some(context) = terminal_notification {
-        persist_terminal_account_notification(state, context, "approved").await?;
+        finalize_terminal_account_notification(state, agent_id, context, "approved").await?;
     }
     json_ok(AgentKeyPairOutcome {
         ok: true,
@@ -782,6 +801,32 @@ pub(super) async fn persist_terminal_account_notification(
     Ok(())
 }
 
+/// Persist the terminal notification delta before clearing the correlation
+/// retained by the activation compare-and-set. If the process crashes after
+/// either write, an exact pairing retry observes the accepted Event, repeats
+/// the idempotent remove delta, and then clears the same approval id. This
+/// prevents a durable activation from leaving a permanently visible approval.
+async fn finalize_terminal_account_notification(
+    state: &AppState,
+    agent_id: &str,
+    context: AccountNotificationContext,
+    reason: &str,
+) -> Result<(), AppError> {
+    let approval_request_id = context.approval_request_id.clone();
+    persist_terminal_account_notification(state, context, reason).await?;
+    state
+        .persistence
+        .agents()
+        .clear_runtime_approval_notification_if_current(agent_id, &approval_request_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "terminal approval correlation cleanup failed: {error}"
+            ))
+        })?;
+    Ok(())
+}
+
 pub(super) async fn submit_production_key_authorize_event(
     state: &AppState,
     session: &SessionRecord,
@@ -800,7 +845,8 @@ pub(super) async fn submit_production_key_authorize_event(
         runtime_public_key_digest,
         &state.config.service_id,
     )?;
-    let outcome = submit_event_value(state, session, envelope.clone())
+    let delegated_session = delegated_agent_session(session, agent_id);
+    let outcome = submit_event_value(state, &delegated_session, envelope.clone())
         .await
         .map_err(|error| {
             AppError::invalid_param(format!(
@@ -837,13 +883,26 @@ pub(super) fn ensure_key_authorize_event_matches_request(
             "authorize_event.executed_by must match the authenticated controller",
         ));
     }
-    if envelope
-        .get("authorization_ref")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
+    let expected_authorization_ref = format!("{agent_id}#managed-controller");
+    if envelope.get("authorization_ref").and_then(Value::as_str)
+        != Some(expected_authorization_ref.as_str())
     {
         return Err(AppError::capability_denied(
-            "authorize_event.authorization_ref must prove managed-controller delegation",
+            "authorize_event.authorization_ref must match the Agent DID controller delegation",
+        ));
+    }
+    let expected_realm_id = agent_record
+        .get("self_realm_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::capability_denied(
+                "Agent has no authoritative Principal Control Realm binding",
+            )
+        })?;
+    if envelope.get("realm_id").and_then(Value::as_str) != Some(expected_realm_id) {
+        return Err(AppError::capability_denied(
+            "authorize_event.realm_id must match the Agent Principal Control Realm",
         ));
     }
     let payload = envelope
@@ -881,17 +940,18 @@ pub(super) fn ensure_key_authorize_event_matches_request(
             "authorize_event.payload.audience must include this principal server",
         ));
     }
-    let expires_at = payload
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .ok_or_else(|| {
-            AppError::invalid_param("authorize_event.payload.expires_at must be rfc3339")
-        })?;
-    if expires_at.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
-        return Err(pairing_failed_precondition(
-            "authorize_event payload has expired",
-        ));
+    if let Some(expires_at) = payload.get("expires_at") {
+        let expires_at = expires_at
+            .as_str()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .ok_or_else(|| {
+                AppError::invalid_param("authorize_event.payload.expires_at must be rfc3339")
+            })?;
+        if expires_at.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
+            return Err(pairing_failed_precondition(
+                "authorize_event payload has expired",
+            ));
+        }
     }
     if payload.get("public_key_digest").and_then(Value::as_str) != Some(runtime_public_key_digest) {
         return Err(AppError::invalid_param(
@@ -939,6 +999,36 @@ pub(super) fn ensure_key_authorize_event_matches_request(
         ));
     }
     Ok(())
+}
+
+fn agent_key_pair_request_digest(body: &AgentKeyPairRequestBody) -> Result<String, AppError> {
+    let value = serde_json::to_value(body)
+        .map_err(|error| AppError::invalid_param(format!("pairing request invalid: {error}")))?;
+    let canonical = arkret_sdk::canonical::canonical_json_bytes(&value).map_err(|error| {
+        AppError::invalid_param(format!("pairing request canonicalization failed: {error}"))
+    })?;
+    Ok(arkret_sdk::canonical::sha256_digest(&canonical))
+}
+
+fn paired_request_digest_from_record_event(
+    agent_record: &Value,
+    authorize_event: &Value,
+) -> Result<String, AppError> {
+    let mut request = agent_record
+        .get("runtime_key_request")
+        .and_then(Value::as_object)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::internal("accepted Agent authorization has no persisted runtime request")
+        })?;
+    request.insert("authorize_event".to_owned(), authorize_event.clone());
+    let canonical =
+        arkret_sdk::canonical::canonical_json_bytes(&Value::Object(request)).map_err(|error| {
+            AppError::internal(format!(
+                "accepted pairing request canonicalization failed: {error}"
+            ))
+        })?;
+    Ok(arkret_sdk::canonical::sha256_digest(&canonical))
 }
 
 pub(super) fn ensure_pairing_request_open(agent_record: &Value) -> Result<(), AppError> {
@@ -1035,7 +1125,15 @@ pub(super) fn agent_key_pair_body_from_runtime_approval(
         public_key: body.public_key.clone(),
         proof_of_possession: body.proof_of_possession.clone(),
         runtime_attestation: body.runtime_attestation.clone(),
-        authorize_event: Value::Null,
+        authorize_event: arkret_sdk::Event::new(
+            "ak.agent.key.authorize",
+            arkret_sdk::RealmId::new("ak:realm:01999999-0000-7000-8000-00000000feed").unwrap(),
+            arkret_sdk::Did::new("did:web:agent.example").unwrap(),
+            1,
+            arkret_sdk::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
+            json!({}),
+        )
+        .unwrap(),
     }
 }
 

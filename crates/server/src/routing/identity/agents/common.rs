@@ -1,10 +1,13 @@
 use super::*;
 
-pub(super) fn controller_dev_session(controller_id: &str, state: &AppState) -> SessionRecord {
+/// Narrow internal execution context used only after the caller has authenticated
+/// the deployment S2S credential and the handler has re-validated the claimed
+/// controller against the authoritative Agent record.
+pub(super) fn controller_service_session(controller_id: &str, state: &AppState) -> SessionRecord {
     SessionRecord {
-        token_hash: format!("agent-dev-fanout:{controller_id}"),
+        token_hash: format!("agent-pair-commit:{controller_id}"),
         actor: controller_id.to_owned(),
-        device_id: "agent-dev-fanout".to_owned(),
+        device_id: "agent-pair-commit".to_owned(),
         audience: state.config.service_id.clone(),
         session_public_key: None,
         agent_session: None,
@@ -12,6 +15,23 @@ pub(super) fn controller_dev_session(controller_id: &str, state: &AppState) -> S
         created_at: now(),
         revoked_at: None,
     }
+}
+
+/// Submit a controller-signed delegated Event through the normal Event
+/// admission pipeline with the Agent as the envelope actor. The pairing
+/// handler validates the controller/delegation/PCR bindings before creating
+/// this context; signature validation still runs in the shared pipeline.
+pub(super) fn delegated_agent_session(
+    controller_session: &SessionRecord,
+    agent_id: &str,
+) -> SessionRecord {
+    let mut session = controller_session.clone();
+    session.token_hash = format!(
+        "agent-delegated-event:{}:{agent_id}",
+        controller_session.token_hash
+    );
+    session.actor = agent_id.to_owned();
+    session
 }
 
 pub(super) fn validate_agent_id(value: &str) -> Result<(), AppError> {
@@ -158,13 +178,18 @@ pub(super) fn agent_projection_from_record(record: &Value) -> AgentProjection {
 /// The `agent`/`status` pair is required. `grants` defaults empty here — the
 /// `get_agent` read path overlays it from the authz projection
 /// (`grants_for_subject_all_realms`) so the controller UI sees live grants.
-pub(super) fn agent_view_from_record(record: &Value) -> AgentView {
+pub(super) fn agent_view_from_record(state: &AppState, record: &Value) -> AgentView {
     let status = record
         .get("state")
         .and_then(Value::as_str)
         .unwrap_or("active")
         .to_owned();
-    let key_state = agent_key_state_from_record(record);
+    let agent_id = record
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let active_authorizations = active_agent_key_authorizations(state, agent_id);
+    let key_state = agent_key_state_from_record(record, active_authorizations);
     AgentView {
         agent: serde_json::to_value(agent_projection_from_record(record)).unwrap_or(Value::Null),
         status,
@@ -173,68 +198,108 @@ pub(super) fn agent_view_from_record(record: &Value) -> AgentView {
     }
 }
 
-pub(super) fn agent_key_state_from_record(record: &Value) -> Value {
+pub(super) fn agent_key_state_from_record(
+    record: &Value,
+    active_authorizations: Vec<Value>,
+) -> Value {
     let status = record
         .get("state")
         .and_then(Value::as_str)
         .unwrap_or("active");
-    let mut state = serde_json::Map::new();
-    state.insert("status".to_owned(), json!(status));
+    let mut key_state = serde_json::Map::new();
+    key_state.insert("status".to_owned(), json!(status));
+    let agent_id = record
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let controller_id = record
+        .get("controller_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    key_state.insert("agent_id".to_owned(), json!(agent_id));
+    key_state.insert("controller_id".to_owned(), json!(controller_id));
+    if let Some(realm_id) = record.get("self_realm_id").and_then(Value::as_str) {
+        key_state.insert("principal_control_realm_id".to_owned(), json!(realm_id));
+    }
+    key_state.insert(
+        "controller_authorization_ref".to_owned(),
+        json!(format!("{agent_id}#managed-controller")),
+    );
     if let Some(value) = record
         .get("requested_scope")
         .filter(|value| !value.is_null())
     {
-        state.insert("requested_scope".to_owned(), value.clone());
+        key_state.insert("requested_scope".to_owned(), value.clone());
     }
     if let Some(value) = record
         .get("pairing_request_id")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
     {
-        state.insert("pairing_request_id".to_owned(), json!(value));
+        key_state.insert("pairing_request_id".to_owned(), json!(value));
     }
     if let Some(value) = record
         .get("pairing_code")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
     {
-        state.insert("pairing_code".to_owned(), json!(value));
+        key_state.insert("pairing_code".to_owned(), json!(value));
     }
     if let Some(value) = record
         .get("pairing_expires_at")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
     {
-        state.insert("pairing_expires_at".to_owned(), json!(value));
+        key_state.insert("pairing_expires_at".to_owned(), json!(value));
     }
-    if let Some(value) = record
-        .get("approval_request_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    {
-        state.insert("approval_request_id".to_owned(), json!(value));
-    }
-    if let Some(value) = record
+    let pending_runtime_key_request = record
         .get("runtime_key_request")
-        .filter(|value| !value.is_null())
-    {
-        state.insert("pending_runtime_key_request".to_owned(), value.clone());
-    }
-    if let Some(value) = record
-        .get("approval_requested_at")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    {
-        state.insert("approval_requested_at".to_owned(), json!(value));
+        .filter(|value| value.is_object());
+    if let Some(value) = pending_runtime_key_request {
+        key_state.insert("pending_runtime_key_request".to_owned(), value.clone());
+        if let Some(value) = record
+            .get("approval_request_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            key_state.insert("approval_request_id".to_owned(), json!(value));
+        }
+        if let Some(value) = record
+            .get("approval_requested_at")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            key_state.insert("approval_requested_at".to_owned(), json!(value));
+        }
     }
     if let Some(value) = record
         .get("authorized_event_ref")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
     {
-        state.insert("authorized_event_ref".to_owned(), json!(value));
+        key_state.insert("authorized_event_ref".to_owned(), json!(value));
     }
-    Value::Object(state)
+    key_state.insert(
+        "active_authorizations".to_owned(),
+        Value::Array(active_authorizations),
+    );
+    Value::Object(key_state)
+}
+
+fn active_agent_key_authorizations(state: &AppState, agent_id: &str) -> Vec<Value> {
+    state
+        .projection
+        .lock()
+        .active_agent_key_authorizations(agent_id)
+        .into_iter()
+        .map(|(key_id, authorized_event_ref)| {
+            json!({
+                "verification_method": key_id,
+                "key_id": key_id,
+                "authorized_event_ref": authorized_event_ref,
+            })
+        })
+        .collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────

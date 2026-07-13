@@ -411,7 +411,7 @@ pub(super) async fn get_agent(
     } else {
         record
     };
-    let mut view = agent_view_from_record(&record);
+    let mut view = agent_view_from_record(state, &record);
     if service_authorized {
         if let Some(key_state) = view.key_state.as_object_mut() {
             key_state.remove("pairing_code");

@@ -987,10 +987,73 @@ impl ProjectionState {
                 reason: "agent_key_authorize_missing_key_id".to_owned(),
             };
         };
-        self.agent_authorized_keys
+        let Some(authorized_event_ref) = operation
+            .payload
+            .get("accepted_event_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_key_authorize_missing_accepted_event_id".to_owned(),
+            };
+        };
+        let active = self
+            .agent_authorized_keys
+            .get(&agent_id)
+            .cloned()
+            .unwrap_or_default();
+        let supersedes = match operation.payload.get("supersedes") {
+            None => Vec::new(),
+            Some(Value::Array(values)) => {
+                let mut parsed = Vec::with_capacity(values.len());
+                for value in values {
+                    let Some(key_id) = value.get("key_id").and_then(Value::as_str) else {
+                        return ProjectionEffect::Rejected {
+                            reason: "agent_key_supersedes_invalid".to_owned(),
+                        };
+                    };
+                    let Some(event_ref) = value.get("authorized_event_ref").and_then(Value::as_str)
+                    else {
+                        return ProjectionEffect::Rejected {
+                            reason: "agent_key_supersedes_invalid".to_owned(),
+                        };
+                    };
+                    parsed.push((key_id.to_owned(), event_ref.to_owned()));
+                }
+                parsed
+            }
+            Some(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: "agent_key_supersedes_invalid".to_owned(),
+                };
+            }
+        };
+        let replacing_other_keys = active.keys().any(|active_key| active_key != &key_id);
+        if replacing_other_keys {
+            let expected: std::collections::BTreeSet<_> = active
+                .iter()
+                .filter(|(active_key, _)| *active_key != &key_id)
+                .map(|(active_key, event_ref)| (active_key.clone(), event_ref.clone()))
+                .collect();
+            let supplied: std::collections::BTreeSet<_> = supersedes.iter().cloned().collect();
+            if supplied.len() != supersedes.len() || supplied != expected {
+                return ProjectionEffect::Rejected {
+                    reason: "agent_key_supersedes_state_mismatch".to_owned(),
+                };
+            }
+        } else if !supersedes.is_empty() {
+            return ProjectionEffect::Rejected {
+                reason: "agent_key_supersedes_state_mismatch".to_owned(),
+            };
+        }
+        let active = self
+            .agent_authorized_keys
             .entry(agent_id.clone())
-            .or_default()
-            .insert(key_id.clone());
+            .or_default();
+        for (superseded_key, _) in supersedes {
+            active.remove(&superseded_key);
+        }
+        active.insert(key_id.clone(), authorized_event_ref);
         let cleared_grant_ids = self.clear_pending_grant_flags_for(&agent_id);
         ProjectionEffect::AgentKeyAuthorizeProjected {
             agent_id,
@@ -1124,7 +1187,18 @@ impl ProjectionState {
     pub fn authorized_key_ids_for(&self, agent_id: &str) -> Vec<String> {
         self.agent_authorized_keys
             .get(agent_id)
-            .map(|keys| keys.iter().cloned().collect())
+            .map(|keys| keys.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn active_agent_key_authorizations(&self, agent_id: &str) -> Vec<(String, String)> {
+        self.agent_authorized_keys
+            .get(agent_id)
+            .map(|keys| {
+                keys.iter()
+                    .map(|(key_id, event_ref)| (key_id.clone(), event_ref.clone()))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -1314,7 +1388,11 @@ mod agent_key_flag_tests {
         // Pairing: ak.agent.key.authorize clears the flag for the agent.
         let effect = state.apply_agent_key_authorize(&op(
             "agent_key_authorize",
-            json!({ "agent_id": AGENT, "key_id": "ak:agent_key:dev1" }),
+            json!({
+                "agent_id": AGENT,
+                "key_id": "ak:agent_key:dev1",
+                "accepted_event_id": "ak:event:01970000-0000-7000-8000-000000000001"
+            }),
         ));
         match effect {
             crate::reducer::ProjectionEffect::AgentKeyAuthorizeProjected {
@@ -1336,6 +1414,67 @@ mod agent_key_flag_tests {
             json!({ "agent_id": AGENT, "key_id": "ak:agent_key:dev1" }),
         ));
         assert!(!state.agent_has_authorized_key(AGENT));
+    }
+
+    #[test]
+    fn runtime_replacement_requires_exact_supersedes_and_is_atomic() {
+        let mut state = ProjectionState::default();
+        let old_event = "ak:event:01970000-0000-7000-8000-000000000011";
+        let new_event = "ak:event:01970000-0000-7000-8000-000000000012";
+        let old_key = "ak:agent_key:old";
+        let new_key = "ak:agent_key:new";
+
+        assert!(matches!(
+            state.apply_agent_key_authorize(&op(
+                "agent_key_authorize",
+                json!({
+                    "agent_id": AGENT,
+                    "key_id": old_key,
+                    "accepted_event_id": old_event,
+                }),
+            )),
+            crate::reducer::ProjectionEffect::AgentKeyAuthorizeProjected { .. }
+        ));
+
+        let rejected = state.apply_agent_key_authorize(&op(
+            "agent_key_authorize",
+            json!({
+                "agent_id": AGENT,
+                "key_id": new_key,
+                "accepted_event_id": new_event,
+            }),
+        ));
+        assert!(matches!(
+            rejected,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "agent_key_supersedes_state_mismatch"
+        ));
+        assert_eq!(
+            state.active_agent_key_authorizations(AGENT),
+            vec![(old_key.to_owned(), old_event.to_owned())],
+            "a rejected replacement must not partially alter active authorization state"
+        );
+
+        let accepted = state.apply_agent_key_authorize(&op(
+            "agent_key_authorize",
+            json!({
+                "agent_id": AGENT,
+                "key_id": new_key,
+                "accepted_event_id": new_event,
+                "supersedes": [{
+                    "key_id": old_key,
+                    "authorized_event_ref": old_event,
+                }],
+            }),
+        ));
+        assert!(matches!(
+            accepted,
+            crate::reducer::ProjectionEffect::AgentKeyAuthorizeProjected { .. }
+        ));
+        assert_eq!(
+            state.active_agent_key_authorizations(AGENT),
+            vec![(new_key.to_owned(), new_event.to_owned())]
+        );
     }
 
     #[test]
