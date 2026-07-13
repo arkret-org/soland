@@ -355,7 +355,7 @@ pub(super) async fn list_agents(
 #[endpoint(
     operation_id = "ak.self.agent.resource.get",
     tags("agents"),
-    summary = "Get a personal agent by id (controller-self only)",
+    summary = "Get a personal agent by id (controller or policy-authorized service)",
     status_codes(200, 401, 403, 404, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.resource.get"))]
@@ -393,6 +393,11 @@ pub(super) async fn get_agent(
         record
     };
     let mut view = agent_view_from_record(&record);
+    if service_authorized {
+        if let Some(key_state) = view.key_state.as_object_mut() {
+            key_state.remove("pairing_code");
+        }
+    }
     // Surface the agent's effective capability grants from the authz
     // projection so the controller UI can list and revoke them; the
     // persisted record itself never carries grants.

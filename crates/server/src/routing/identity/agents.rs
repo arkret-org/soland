@@ -61,8 +61,8 @@ use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::accept_local_operations;
-use crate::routing::system::util::bearer_token;
 use crate::routing::events::event_log::submit_event_value;
+use crate::routing::system::util::bearer_token;
 use crate::state::{AppState, SessionRecord};
 
 mod dev_fanout;
@@ -91,8 +91,7 @@ fn agent_projection_service_authorized(state: &AppState, req: &Request) -> bool 
     let Some(presented) = bearer_token(req) else {
         return false;
     };
-    expected.len() == presented.len()
-        && bool::from(expected.as_bytes().ct_eq(presented.as_bytes()))
+    expected.len() == presented.len() && bool::from(expected.as_bytes().ct_eq(presented.as_bytes()))
 }
 
 /// Mounted under `/_arkret/self`.
