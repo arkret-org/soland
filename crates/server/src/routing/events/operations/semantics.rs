@@ -781,6 +781,14 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 requirements: AGENT_DEACTIVATE_REQUIREMENTS,
                 validate: None,
             },
+            // Agent runtime keys are reducer inputs backed by the SDK payload
+            // schemas. Register both kinds here so accepted Events are converted
+            // into Operations and reach the reducer dispatch table.
+            arkret_sdk::events::kinds::AGENT_KEY_AUTHORIZE
+            | arkret_sdk::events::kinds::AGENT_KEY_REVOKE => OperationPayloadSchema {
+                requirements: &[],
+                validate: Some(validate_operation_payload_against_sdk_artifact),
+            },
             // R3 spec-sync — actor_private_event kinds (reducer_input=false).
             arkret_sdk::events::kinds::AGENT_DRAFT_PROPOSE => OperationPayloadSchema {
                 requirements: AGENT_DRAFT_PROPOSE_REQUIREMENTS,

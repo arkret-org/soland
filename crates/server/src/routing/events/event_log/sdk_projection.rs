@@ -252,10 +252,12 @@ pub(crate) fn projection_operation_from_event(
             .entry("effects".to_owned())
             .or_insert_with(|| effects.clone());
     }
-    payload_object.insert(
-        "accepted_event_id".to_owned(),
-        Value::String(parsed.event_id.clone()),
-    );
+    if parsed.kind == arkret_sdk::events::kinds::AGENT_KEY_AUTHORIZE {
+        payload_object.insert(
+            "accepted_event_id".to_owned(),
+            Value::String(parsed.event_id.clone()),
+        );
+    }
     let Some(operation_id) = event_operation_id(envelope, &parsed.event_id) else {
         tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, "projection: event_operation_id failed");
         return None;
@@ -345,6 +347,59 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     }
     let suffix = event_id.strip_prefix("ak:event:")?;
     OperationId::new(format!("ak:operation:{suffix}")).ok()
+}
+
+#[cfg(test)]
+mod accepted_event_id_projection_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn parsed(kind: &str) -> ValidatedEventEnvelope {
+        ValidatedEventEnvelope {
+            event_id: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
+            actor_id: "did:web:alice.example".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
+            actor_seq: 1,
+            realm_id: "ak:realm:01904100-0000-7000-8000-000000000003".to_owned(),
+            kind: kind.to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
+            prev_refs: Vec::new(),
+            authorized_refs: Vec::new(),
+            canonical_digest: "sha256:test".to_owned(),
+            canonical_bytes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn accepted_event_id_is_only_projected_for_agent_key_authorize() {
+        let agent_key = projection_operation_from_event(
+            &parsed(arkret_sdk::events::kinds::AGENT_KEY_AUTHORIZE),
+            &json!({ "payload": { "agent_id": "did:web:agent.example", "key_id": "ak:agent_key:test" } }),
+        )
+        .unwrap();
+        assert_eq!(
+            agent_key
+                .payload
+                .get("accepted_event_id")
+                .and_then(Value::as_str),
+            Some("ak:event:01904100-0000-7000-8000-000000000001")
+        );
+
+        let device_authorize = projection_operation_from_event(
+            &parsed(arkret_sdk::events::kinds::DEVICE_AUTHORIZE),
+            &json!({ "payload": {} }),
+        )
+        .unwrap();
+        assert!(device_authorize.payload.get("accepted_event_id").is_none());
+
+        let agent_key_revoke = projection_operation_from_event(
+            &parsed(arkret_sdk::events::kinds::AGENT_KEY_REVOKE),
+            &json!({ "payload": {} }),
+        )
+        .unwrap();
+        assert!(agent_key_revoke.payload.get("accepted_event_id").is_none());
+    }
 }
 
 /// AKP-0007 — resolve the canonical `effective_scope` for an Event

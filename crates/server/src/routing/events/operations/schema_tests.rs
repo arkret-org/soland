@@ -286,12 +286,18 @@ mod read_receipt_policy_schema_tests {
         let operation = op(json!({
             "disclosure": "required",
             "event_id": "ak:event:01904100-0000-7000-8000-000000000702",
+            "accepted_event_id": "ak:event:01904100-0000-7000-8000-000000000702",
             "sender": "did:web:alice.example",
             "hlc": "2026-06-14T10:00:00Z/node/1",
             "seal_ref": "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
         }));
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
+        validate_operation_payload_schema(
+            arkret_sdk::events::kinds::REALM_READ_RECEIPT_POLICY,
+            &operation,
+        )
+        .unwrap();
     }
 }
 
@@ -375,6 +381,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 "mode": "narrow_only",
                 "max_depth": 1,
                 "event_id": "ak:event:01904100-0000-7000-8000-000000000904",
+                "accepted_event_id": "ak:event:01904100-0000-7000-8000-000000000904",
                 "sender": "did:web:alice.example",
                 "hlc": "2026-07-06T00:00:00Z/node/1"
             }),
@@ -1001,7 +1008,8 @@ mod derived_relation_and_morph_immutability_tests {
                 "sender": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
                 "hlc": "019eefcb7d18-0000-8adcfdb5",
                 "executed_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-                "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
+                "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority",
+                "accepted_event_id": "ak:event:019eefcb-7fb2-7890-bffd-1f2035356fbf"
             }),
         );
         validate_device_authorize_payload(&operation).unwrap();

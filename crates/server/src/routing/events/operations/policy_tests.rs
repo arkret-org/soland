@@ -85,7 +85,8 @@ fn service_attested_device_authorize_binding_accepts_projection_metadata() {
         "sender": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
         "hlc": "019eefcb7d18-0000-8adcfdb5",
         "executed_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-        "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
+        "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority",
+        "accepted_event_id": "ak:event:019eefcb-7fb2-7890-bffd-1f2035356fbf"
     });
 
     crate::routing::identity::cross_signing::validate_device_authorize_binding(&state, &payload)
