@@ -36,7 +36,11 @@ fn active_series_payload() -> Value {
                 "issued_at"
             ],
             "ssk_generation": 2
-        }
+        },
+        "event_id": "ak:event:01964137-1000-7000-8000-000000000099",
+        "sender": ACTOR,
+        "hlc": "019641371000-0001-00000001",
+        "accepted_event_id": "ak:event:01964137-1000-7000-8000-000000000099"
     })
 }
 
@@ -77,6 +81,11 @@ fn key_backup_active_series_projects_pointer_and_cell() {
     ))
     .expect("active series cell ref");
     assert!(state.cell_value(&cell).is_some());
+    assert!(
+        state
+            .cell_value(&cell)
+            .is_some_and(|value| value.get("accepted_event_id").is_none())
+    );
 }
 
 #[test]

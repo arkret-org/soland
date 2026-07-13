@@ -314,7 +314,11 @@ fn operation_kind_has_sdk_payload_validator(kind: &str) -> Result<bool, &'static
 }
 
 fn operation_kind_prefers_projection_schema(kind: &str) -> bool {
-    matches!(kind, arkret_sdk::events::kinds::REALM_INHERITANCE_POLICY)
+    matches!(
+        kind,
+        arkret_sdk::events::kinds::REALM_INHERITANCE_POLICY
+            | arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES
+    )
 }
 
 pub(crate) fn validate_operation_payload_schema(
@@ -457,6 +461,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             arkret_sdk::events::kinds::MLS_KEYPACKAGE => OperationPayloadSchema {
                 requirements: MLS_KEYPACKAGE_REQUIREMENTS,
                 validate: None,
+            },
+            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES => OperationPayloadSchema {
+                requirements: &[],
+                validate: Some(validate_key_backup_active_series_payload),
             },
             arkret_sdk::events::kinds::VIEW_CREATE
             | arkret_sdk::events::kinds::VIEW_UPDATE

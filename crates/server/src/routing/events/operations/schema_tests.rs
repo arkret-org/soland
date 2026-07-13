@@ -127,6 +127,63 @@ mod invite_create_schema_tests {
     }
 }
 
+mod key_backup_active_series_schema_tests {
+    use arkret_sdk::Operation;
+    use serde_json::json;
+
+    use super::super::*;
+
+    #[test]
+    fn projection_schema_accepts_context_augmented_active_series_payload() {
+        let operation = Operation::create(
+            arkret_sdk::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-0000000007a1".to_owned(),
+            )
+            .unwrap(),
+            arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a1".to_owned())
+                .unwrap(),
+            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            json!({
+                "schema": "ak.schema.key_backup_active_series.v1",
+                "actor_id": "did:web:alice.example",
+                "backup_class": "mls_history",
+                "active_series_id": "ak:backup_series:01904100-0000-7000-8000-0000000007a1",
+                "series_pointer_version": 1,
+                "previous_series_ids": [],
+                "frontier_ref": {
+                    "frontier_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                    "ssk_generation": 1
+                },
+                "issued_at": "2026-07-14T00:00:00Z",
+                "auth_data": {
+                    "verification_method": "did:web:alice.example#ssk-1",
+                    "signature_algorithm": "Ed25519",
+                    "signature": "c2lnbmF0dXJl",
+                    "signed_fields": [
+                        "schema",
+                        "actor_id",
+                        "backup_class",
+                        "active_series_id",
+                        "series_pointer_version",
+                        "previous_series_ids",
+                        "frontier_ref",
+                        "issued_at"
+                    ],
+                    "ssk_generation": 1
+                },
+                "event_id": "ak:event:01904100-0000-7000-8000-0000000007a1",
+                "sender": "did:web:alice.example",
+                "hlc": "019041000000-0001-00000001",
+                "accepted_event_id": "ak:event:01904100-0000-7000-8000-0000000007a1"
+            }),
+        );
+
+        let schema = operation_schema_for_kind(arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES)
+            .expect("active-series projection schema");
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+}
+
 mod realm_key_share_schema_tests {
     use arkret_sdk::Operation;
     use serde_json::json;

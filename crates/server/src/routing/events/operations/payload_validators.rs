@@ -77,6 +77,16 @@ pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
     wire_payload
 }
 
+pub(crate) fn validate_key_backup_active_series_payload(
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    serde_json::from_value::<arkret_sdk::KeyBackupActiveSeries>(
+        projection_context_stripped_payload(&operation.payload),
+    )
+    .map(|_| ())
+    .map_err(|_| "ak.key_backup.active_series payload violates SDK artifact schema")
+}
+
 fn validate_invite_create_known_fields(payload: &Value) -> Result<(), &'static str> {
     let object = payload
         .as_object()

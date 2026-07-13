@@ -668,12 +668,29 @@ async fn events_frontier(
         .snapshot_all()
         .await
         .unwrap_or_default();
+    let managed_actor_pcr = state
+        .persistence
+        .agents()
+        .get(&actor)
+        .await
+        .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
+        .filter(|record| record.controller_id == session.actor && record.state != "deactivated")
+        .map(|record| record.principal_control_realm_id);
     let mut best: Option<(u64, String)> = None;
     for record in &events {
         if record.actor_id != actor {
             continue;
         }
-        if !event_visible_to_session(state, record, &session).await {
+        let record_realm_id = record
+            .envelope
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .or(record.realm_id.as_deref());
+        let managed_actor_event_visible = managed_actor_pcr
+            .as_deref()
+            .is_some_and(|pcr_id| record_realm_id == Some(pcr_id));
+        if !managed_actor_event_visible && !event_visible_to_session(state, record, &session).await
+        {
             continue;
         }
         if best.as_ref().is_none_or(|(seq, _)| record.actor_seq > *seq) {

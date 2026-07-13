@@ -26,8 +26,10 @@ impl ProjectionState {
             return ProjectionEffect::Ignored;
         }
 
+        let wire_payload =
+            crate::routing::events::projection_context_stripped_payload(&operation.payload);
         let record: arkret_sdk::KeyBackupActiveSeries =
-            match serde_json::from_value(operation.payload.clone()) {
+            match serde_json::from_value(wire_payload.clone()) {
                 Ok(record) => record,
                 Err(_) => {
                     return ProjectionEffect::Rejected {
@@ -92,8 +94,7 @@ impl ProjectionState {
         if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
             "ak:cell:{KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY}:{subject}"
         )) {
-            self.cells
-                .insert(cell_id, CellState::Value(operation.payload.clone()));
+            self.cells.insert(cell_id, CellState::Value(wire_payload));
         }
         self.key_backup_active_series
             .insert(pointer_key, projection);
