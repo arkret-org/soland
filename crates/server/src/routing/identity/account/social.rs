@@ -1111,32 +1111,30 @@ async fn contact_list_rows(
         else {
             continue;
         };
-        if record.get("state").and_then(Value::as_str) != Some("active") {
+        if record.state != "active" {
             continue;
         }
-        let Some(controller) = record
-            .get("controller_id")
-            .and_then(Value::as_str)
-            .filter(|controller| *controller != actor)
-            .and_then(|controller| Did::new(controller.to_owned()).ok())
-        else {
+        if record.controller_id == actor {
+            continue;
+        }
+        let Some(controller) = Did::new(record.controller_id.clone()).ok() else {
             continue;
         };
         let display_name = record
-            .get("display_name")
-            .and_then(Value::as_str)
+            .display_name
+            .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
         let agent_slug = record
-            .get("agent_slug")
-            .and_then(Value::as_str)
+            .agent_slug
+            .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
         let avatar_blob_ref = record
-            .get("avatar_blob_ref")
-            .and_then(Value::as_str)
+            .avatar_blob_ref
+            .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .and_then(|value| BlobRef::new(value.to_owned()).ok());

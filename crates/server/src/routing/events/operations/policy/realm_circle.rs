@@ -215,9 +215,7 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
         return false;
     };
     let record_matches = records.iter().any(|record| {
-        record.get("agent_id").and_then(Value::as_str) == Some(target)
-            && record.get("controller_id").and_then(Value::as_str) == Some(controller)
-            && record.get("state").and_then(Value::as_str) == Some("active")
+        record.id == target && record.controller_id == controller && record.state == "active"
     });
     if !record_matches {
         return false;

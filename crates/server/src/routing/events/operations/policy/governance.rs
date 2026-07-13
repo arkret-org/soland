@@ -191,8 +191,7 @@ async fn native_agent_controlled_by(
     let Ok(Some(record)) = state.persistence.agents().get(agent_id).await else {
         return false;
     };
-    record.get("controller_id").and_then(Value::as_str) == Some(controller_id)
-        && (!require_active || record.get("state").and_then(Value::as_str) == Some("active"))
+    record.controller_id == controller_id && (!require_active || record.state == "active")
 }
 
 /// COT-06-004 — capability gate for `ak.realm.set_default_strand`. Mirrors the

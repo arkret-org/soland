@@ -337,10 +337,7 @@ pub(crate) async fn dispatch_message_notifications(
         }
         // AKP-0016 §9.4.5 — agent third-party mention gate.
         if let Ok(Some(agent_record)) = state.persistence.agents().get(&subject).await {
-            let controller = agent_record
-                .get("controller_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            let controller = agent_record.controller_id.as_str();
             if sender != controller
                 && !agent_accepts_third_party_mention(
                     state,

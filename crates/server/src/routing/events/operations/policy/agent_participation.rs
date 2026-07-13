@@ -255,12 +255,7 @@ pub(super) async fn agent_lifecycle_rejection_reason(
         .get(agent_id)
         .await
         .map_err(|_| "agent_principal_lookup_unavailable")?
-        .and_then(|record| {
-            record
-                .get("state")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        });
+        .map(|record| record.state);
     match record_state.as_deref() {
         Some("paused") => return Ok(Some("agent_paused")),
         Some("deactivated") => return Ok(Some("agent_deactivated")),

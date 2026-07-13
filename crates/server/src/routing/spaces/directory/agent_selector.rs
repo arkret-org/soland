@@ -176,20 +176,17 @@ pub(super) async fn resolve_agent_selector(
         .list_for_controller(controller_subject)
         .await
         .map_err(|err| AppError::internal(format!("agent selector lookup failed: {err}")))?;
-    let matches: Vec<&Value> = records
+    let matches: Vec<_> = records
         .iter()
         .filter(|record| {
-            record.get("agent_slug").and_then(Value::as_str) == Some(body.agent_slug.as_str())
-                && record.get("state").and_then(Value::as_str) == Some("active")
+            record.agent_slug.as_deref() == Some(body.agent_slug.as_str())
+                && record.state == "active"
         })
         .collect();
     if matches.len() != 1 {
         return Err(selector_not_found());
     }
-    let subject = matches[0]
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .ok_or_else(selector_not_found)?;
+    let subject = matches[0].id.as_str();
     if body
         .expected_agent_did
         .as_ref()

@@ -246,10 +246,8 @@ pub(super) async fn eligible_sidecar_agents(
         .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
     let mut eligible = BTreeSet::new();
     for record in records {
-        if let Some(agent_id) = record.get("agent_id").and_then(Value::as_str)
-            && agent_record_is_sidecar_eligible(state, realm_id, controller, &record)
-        {
-            eligible.insert(agent_id.to_owned());
+        if agent_record_is_sidecar_eligible(state, realm_id, controller, &record) {
+            eligible.insert(record.id.clone());
         }
     }
     for addressed in addressed_agents {
@@ -267,19 +265,13 @@ pub(super) fn agent_record_is_sidecar_eligible(
     state: &AppState,
     realm_id: &str,
     controller: &str,
-    record: &Value,
+    record: &AgentPrincipalRecord,
 ) -> bool {
-    let Some(agent_id) = record.get("agent_id").and_then(Value::as_str) else {
-        return false;
-    };
-    if record.get("controller_id").and_then(Value::as_str) != Some(controller) {
+    let agent_id = record.id.as_str();
+    if record.controller_id != controller {
         return false;
     }
-    if record
-        .get("state")
-        .and_then(Value::as_str)
-        .is_some_and(|state| state != "active")
-    {
+    if record.state != "active" {
         return false;
     }
     if !realm_member_joined(state, realm_id, agent_id) {
