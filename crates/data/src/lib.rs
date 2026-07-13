@@ -16,8 +16,10 @@
 //! Request routing, reducers, authorization, realtime notifications, background
 //! workers, object storage policy, and `AppState` orchestration stay in
 //! `soland-server`.
+pub mod agent_principal;
 pub mod db;
 pub mod query_rows;
 pub mod schema;
 
+pub use agent_principal::AgentPrincipalRecord;
 pub use db::{Db, PgPool};

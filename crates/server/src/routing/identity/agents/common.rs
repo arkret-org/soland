@@ -42,25 +42,21 @@ pub(super) fn validate_agent_id(value: &str) -> Result<(), AppError> {
 }
 
 pub(super) fn ensure_agent_record_controller(
-    record: &Value,
+    record: &AgentPrincipalRecord,
     agent_id: &str,
     session: &SessionRecord,
 ) -> Result<(), AppError> {
-    if record.get("agent_id").and_then(Value::as_str) != Some(agent_id) {
+    if record.id != agent_id {
         return Err(AppError::capability_denied(
             "agent principal record does not match the requested principal",
         ));
     }
-    let Some(controller_id) = record
-        .get("controller_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    else {
+    if record.controller_id.trim().is_empty() {
         return Err(AppError::capability_denied(
             "agent principal has no controller binding",
         ));
-    };
-    if controller_id != session.actor.as_str() {
+    }
+    if record.controller_id != session.actor {
         return Err(AppError::capability_denied(
             "agent principal is not controlled by the authenticated session",
         ));
@@ -72,7 +68,7 @@ pub(super) async fn require_agent_controller(
     state: &AppState,
     session: &SessionRecord,
     agent_id: &str,
-) -> Result<Value, AppError> {
+) -> Result<AgentPrincipalRecord, AppError> {
     validate_agent_id(agent_id)?;
     let record = state
         .persistence
@@ -139,15 +135,8 @@ pub(super) fn generate_agent_principal_did(service_id: &str) -> String {
 /// Soland-internal columns (`controller_id`, `pairing_*`) are NOT
 /// part of the protocol projection and are dropped at the wire boundary; the
 /// persistence `state` column carries the `agent_status` enum value verbatim.
-pub(super) fn agent_projection_from_record(record: &Value) -> AgentProjection {
-    let str_field = |key: &str| record.get(key).and_then(Value::as_str);
-    let parse_ts = |key: &str| {
-        str_field(key)
-            .filter(|value| !value.is_empty())
-            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-            .map(|ts| ts.with_timezone(&chrono::Utc))
-    };
-    let status = match str_field("state").unwrap_or("active") {
+pub(super) fn agent_projection_from_record(record: &AgentPrincipalRecord) -> AgentProjection {
+    let status = match record.state.as_str() {
         "pending_runtime_key" => AgentStatus::PendingRuntimeKey,
         "pairing_expired" => AgentStatus::PairingExpired,
         "paused" => AgentStatus::Paused,
@@ -155,21 +144,18 @@ pub(super) fn agent_projection_from_record(record: &Value) -> AgentProjection {
         _ => AgentStatus::Active,
     };
     AgentProjection {
-        agent_id: Did::new(str_field("agent_id").unwrap_or_default())
+        agent_id: Did::new(record.id.clone())
             .unwrap_or_else(|_| Did::new("did:webvh:invalid:invalid").expect("static did")),
-        display_name: str_field("display_name")
+        display_name: record.display_name.clone().filter(|value| !value.is_empty()),
+        slug: record.agent_slug.clone().unwrap_or_default(),
+        avatar_blob_ref: record
+            .avatar_blob_ref
+            .as_ref()
             .filter(|value| !value.is_empty())
-            .map(str::to_owned),
-        slug: str_field("agent_slug")
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .unwrap_or_default(),
-        avatar_blob_ref: str_field("avatar_blob_ref")
-            .filter(|value| !value.is_empty())
-            .and_then(|value| BlobRef::new(value.to_owned()).ok()),
+            .and_then(|value| BlobRef::new(value.clone()).ok()),
         status,
-        created_at: parse_ts("created_at"),
-        updated_at: parse_ts("updated_at"),
+        created_at: Some(record.created_at),
+        updated_at: Some(record.updated_at),
     }
 }
 
@@ -180,30 +166,14 @@ pub(super) fn agent_projection_from_record(record: &Value) -> AgentProjection {
 /// (`grants_for_subject_all_realms`) so the controller UI sees live grants.
 pub(super) async fn agent_view_from_record(
     state: &AppState,
-    record: &Value,
+    record: &AgentPrincipalRecord,
 ) -> Result<AgentView, AppError> {
     let agent = agent_projection_from_record(record);
-    let agent_id = record
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let active_authorizations = active_agent_key_authorizations(state, agent_id);
-    let mut key_state = agent_key_state_from_record(record, active_authorizations);
-    key_state.as_object_mut().expect("key state object").insert(
-        "pcr_recovery".to_owned(),
-        serde_json::to_value(
-            crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, record)
-                .await?,
-        )
-        .map_err(|error| {
-            AppError::internal(format!(
-                "Agent PCR recovery projection encode failed: {error}"
-            ))
-        })?,
-    );
-    let key_state: KeyState = serde_json::from_value(key_state).map_err(|error| {
-        AppError::internal(format!("persisted Agent key_state is invalid: {error}"))
-    })?;
+    let active_authorizations = active_agent_key_authorizations(state, &record.id)?;
+    let pcr_recovery =
+        crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, record)
+            .await?;
+    let key_state = agent_key_state_from_record(record, pcr_recovery, active_authorizations)?;
     Ok(AgentView {
         status: agent.status,
         agent,
@@ -213,112 +183,75 @@ pub(super) async fn agent_view_from_record(
 }
 
 pub(super) fn agent_key_state_from_record(
-    record: &Value,
-    active_authorizations: Vec<Value>,
-) -> Value {
-    let status = record
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or("active");
-    let mut key_state = serde_json::Map::new();
-    key_state.insert("status".to_owned(), json!(status));
-    let agent_id = record
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let controller_id = record
-        .get("controller_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    key_state.insert("agent_id".to_owned(), json!(agent_id));
-    key_state.insert("controller_id".to_owned(), json!(controller_id));
-    if let Some(realm_id) = record
-        .get("principal_control_realm_id")
-        .and_then(Value::as_str)
-    {
-        key_state.insert("principal_control_realm_id".to_owned(), json!(realm_id));
-    }
-    if let Some(authorization_ref) = record
-        .get("controller_authorization_ref")
-        .and_then(Value::as_str)
-    {
-        key_state.insert(
-            "controller_authorization_ref".to_owned(),
-            json!(authorization_ref),
-        );
-    }
-    if let Some(value) = record
-        .get("requested_scope")
-        .filter(|value| !value.is_null())
-    {
-        key_state.insert("requested_scope".to_owned(), value.clone());
-    }
-    if let Some(value) = record
-        .get("pairing_request_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    {
-        key_state.insert("pairing_request_id".to_owned(), json!(value));
-    }
-    if let Some(value) = record
-        .get("pairing_code")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    {
-        key_state.insert("pairing_code".to_owned(), json!(value));
-    }
-    if let Some(value) = record
-        .get("pairing_expires_at")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    {
-        key_state.insert("pairing_expires_at".to_owned(), json!(value));
-    }
-    let pending_runtime_key_request = record
-        .get("runtime_key_request")
-        .filter(|value| value.is_object());
-    if let Some(value) = pending_runtime_key_request {
-        key_state.insert("pending_runtime_key_request".to_owned(), value.clone());
-        if let Some(value) = record
-            .get("approval_request_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
-            key_state.insert("approval_request_id".to_owned(), json!(value));
-        }
-        if let Some(value) = record
-            .get("approval_requested_at")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
-            key_state.insert("approval_requested_at".to_owned(), json!(value));
-        }
-    }
-    if let Some(value) = record
-        .get("authorized_event_ref")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    {
-        key_state.insert("authorized_event_ref".to_owned(), json!(value));
-    }
-    key_state.insert(
-        "active_authorizations".to_owned(),
-        Value::Array(active_authorizations),
-    );
-    Value::Object(key_state)
+    record: &AgentPrincipalRecord,
+    pcr_recovery: arkret_sdk::AgentPcrRecoveryState,
+    active_authorizations: Vec<arkret_sdk::AgentKeyAuthorizationState>,
+) -> Result<KeyState, AppError> {
+    let requested_scope = record
+        .requested_scope
+        .clone()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("persisted Agent scope is invalid: {error}")))?;
+    let authorized_event_ref = record
+        .authorized_event_ref
+        .as_ref()
+        .map(|value| EventId::new(value.clone()))
+        .transpose()
+        .map_err(|error| {
+            AppError::internal(format!("persisted Agent authorization Event is invalid: {error}"))
+        })?;
+    Ok(KeyState {
+        agent_id: Did::new(record.id.clone())
+            .map_err(|error| AppError::internal(format!("persisted Agent DID is invalid: {error}")))?,
+        controller_id: Did::new(record.controller_id.clone()).map_err(|error| {
+            AppError::internal(format!("persisted Agent controller DID is invalid: {error}"))
+        })?,
+        principal_control_realm_id: RealmId::new(record.principal_control_realm_id.clone())
+            .map_err(|error| AppError::internal(format!("persisted Agent PCR is invalid: {error}")))?,
+        controller_authorization_ref: record.controller_authorization_ref.clone(),
+        status: agent_projection_from_record(record).status,
+        pcr_recovery,
+        requested_scope,
+        pairing_request_id: record.pairing_request_id.clone(),
+        pairing_code: record.pairing_code.clone(),
+        pairing_expires_at: record.pairing_expires_at,
+        approval_request_id: record
+            .runtime_key_request
+            .as_ref()
+            .filter(|value| value.is_object())
+            .and(record.approval_request_id.clone()),
+        pending_runtime_key_request: record
+            .runtime_key_request
+            .clone()
+            .filter(|value| value.is_object()),
+        approval_requested_at: record
+            .runtime_key_request
+            .as_ref()
+            .filter(|value| value.is_object())
+            .and(record.approval_requested_at),
+        authorized_event_ref,
+        active_authorizations,
+    })
 }
 
-fn active_agent_key_authorizations(state: &AppState, agent_id: &str) -> Vec<Value> {
+fn active_agent_key_authorizations(
+    state: &AppState,
+    agent_id: &str,
+) -> Result<Vec<arkret_sdk::AgentKeyAuthorizationState>, AppError> {
     state
         .projection
         .lock()
         .active_agent_key_authorizations(agent_id)
         .into_iter()
         .map(|(key_id, authorized_event_ref)| {
-            json!({
-                "verification_method": key_id,
-                "key_id": key_id,
-                "authorized_event_ref": authorized_event_ref,
+            Ok(arkret_sdk::AgentKeyAuthorizationState {
+                verification_method: key_id.clone(),
+                key_id,
+                authorized_event_ref: EventId::new(authorized_event_ref).map_err(|error| {
+                    AppError::internal(format!("projected Agent authorization Event is invalid: {error}"))
+                })?,
+                expires_at: None,
             })
         })
         .collect()

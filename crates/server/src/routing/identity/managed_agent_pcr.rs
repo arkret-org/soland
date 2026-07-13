@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use crate::error::{AppError, ErrorCode};
+use crate::persistence::AgentPrincipalRecord;
 use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
 
 const PCR_SERVICE_TYPE: &str = "ArkretPrincipalControlRealm";
@@ -225,12 +226,12 @@ pub(crate) async fn validate_managed_agent_key_backup(
 
 pub(crate) async fn project_agent_pcr_recovery(
     state: &AppState,
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
 ) -> Result<AgentPcrRecoveryState, AppError> {
-    let agent_id = record_str(agent_record, "agent_id")?;
-    let controller_id = record_str(agent_record, "controller_id")?;
-    let pcr_id = record_str(agent_record, "principal_control_realm_id")?;
-    let authorization_ref = record_str(agent_record, "controller_authorization_ref")?;
+    let agent_id = agent_record.id.as_str();
+    let controller_id = agent_record.controller_id.as_str();
+    let pcr_id = agent_record.principal_control_realm_id.as_str();
+    let authorization_ref = agent_record.controller_authorization_ref.as_str();
     let backups = state
         .persistence
         .key_backups()
@@ -354,23 +355,18 @@ pub(crate) async fn resolve_agent_pcr_for_principal(
         .get(principal_id)
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR lookup failed: {error}")))?
-        .and_then(|record| {
-            record
-                .get("principal_control_realm_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        }))
+        .map(|record| record.principal_control_realm_id))
 }
 
 pub(crate) async fn validate_agent_controller_binding(
     state: &AppState,
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
     accepted_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
-    let agent_id = record_str(agent_record, "agent_id")?;
-    let controller_id = record_str(agent_record, "controller_id")?;
-    let pcr_id = record_str(agent_record, "principal_control_realm_id")?;
-    let authorization_ref = record_str(agent_record, "controller_authorization_ref")?;
+    let agent_id = agent_record.id.as_str();
+    let controller_id = agent_record.controller_id.as_str();
+    let pcr_id = agent_record.principal_control_realm_id.as_str();
+    let authorization_ref = agent_record.controller_authorization_ref.as_str();
     let document = agent_did_document_at(state, agent_id, accepted_at).await?;
     validate_agent_did_document_binding(
         &document,
@@ -391,12 +387,12 @@ pub(crate) async fn validate_delegated_agent_envelope(
         .and_then(Value::as_str)
         .ok_or_else(|| schema_error("delegated Agent Event actor_id is missing"))?;
     let record = managed_agent_record(state, agent_id).await?;
-    if record_str(&record, "controller_id")? != controller_id
+    if record.controller_id != controller_id
         || envelope.get("executed_by").and_then(Value::as_str) != Some(controller_id)
         || envelope.get("realm_id").and_then(Value::as_str)
-            != Some(record_str(&record, "principal_control_realm_id")?)
+            != Some(record.principal_control_realm_id.as_str())
         || envelope.get("authorization_ref").and_then(Value::as_str)
-            != Some(record_str(&record, "controller_authorization_ref")?)
+            != Some(record.controller_authorization_ref.as_str())
     {
         return Err(failed_precondition(
             "delegated Agent Event does not match the controller/PCR binding",
@@ -554,7 +550,10 @@ async fn current_managed_frontier(
     }))
 }
 
-async fn managed_agent_record(state: &AppState, agent_id: &str) -> Result<Value, AppError> {
+async fn managed_agent_record(
+    state: &AppState,
+    agent_id: &str,
+) -> Result<AgentPrincipalRecord, AppError> {
     state
         .persistence
         .agents()
@@ -566,19 +565,19 @@ async fn managed_agent_record(state: &AppState, agent_id: &str) -> Result<Value,
 
 async fn validate_binding_against_record(
     state: &AppState,
-    record: &Value,
+    record: &AgentPrincipalRecord,
     binding: &ManagedPrincipalBinding,
     accepted_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
-    let agent_id = record_str(record, "agent_id")?;
-    let controller_id = record_str(record, "controller_id")?;
-    let pcr_id = record_str(record, "principal_control_realm_id")?;
-    let authorization_ref = record_str(record, "controller_authorization_ref")?;
+    let agent_id = record.id.as_str();
+    let controller_id = record.controller_id.as_str();
+    let pcr_id = record.principal_control_realm_id.as_str();
+    let authorization_ref = record.controller_authorization_ref.as_str();
     if binding.managed_principal_id.as_str() != agent_id
         || binding.controller_id.as_str() != controller_id
         || binding.principal_control_realm_id.as_str() != pcr_id
         || binding.authorization_ref != authorization_ref
-        || record.get("state").and_then(Value::as_str) == Some("deactivated")
+        || record.state == "deactivated"
     {
         return Err(schema_error(
             "managed_principal_binding does not match the current active Agent controller/PCR binding",
@@ -747,14 +746,6 @@ fn canonical_binding_bytes(binding: &ManagedPrincipalBinding) -> Result<Vec<u8>,
         .map_err(|error| AppError::internal(format!("managed binding encode failed: {error}")))?;
     arkret_sdk::canonical::canonical_json_bytes(&value)
         .map_err(|error| schema_error(format!("managed binding canonicalization failed: {error}")))
-}
-
-fn record_str<'a>(record: &'a Value, field: &str) -> Result<&'a str, AppError> {
-    record
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::internal(format!("Agent record missing {field}")))
 }
 
 fn schema_error(message: impl Into<String>) -> AppError {

@@ -65,7 +65,7 @@ pub(super) async fn provision_agent(
         *record = lazily_expire_pairing(state, &session, record.clone()).await?;
     }
     if existing.iter().any(|record| {
-        record.get("agent_slug").and_then(Value::as_str) == Some(agent_slug.as_str())
+        record.agent_slug.as_deref() == Some(agent_slug.as_str())
             && agent_record_reserves_selector_slug(record, &now_utc)
     }) {
         return Err(AppError::invalid_param(
@@ -77,7 +77,6 @@ pub(super) async fn provision_agent(
         crate::routing::identity::managed_agent_pcr::allocate_principal_control_realm_id()?;
     let controller_authorization_ref =
         crate::routing::identity::managed_agent_pcr::controller_authorization_ref(&agent_id);
-    let timestamp = now_utc.to_rfc3339_opts(SecondsFormat::Millis, true);
     let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
     let pairing_code = generate_pairing_code();
     let pairing_ttl_ms = body
@@ -128,29 +127,29 @@ pub(super) async fn provision_agent(
         .await
         .map_err(|error| AppError::internal(format!("controller account lookup failed: {error}")))?
         .ok_or_else(|| AppError::internal("controller account is missing"))?;
+    let mut principal = AgentPrincipalRecord::new(
+        agent_id.clone(),
+        controller_id.clone(),
+        principal_control_realm_id.as_str().to_owned(),
+        controller_authorization_ref.clone(),
+        "pending_runtime_key".to_owned(),
+        now_utc,
+    );
+    principal.controller_account_id = Some(ids::typed_uuid_part_expect_internal(&controller_account.id));
+    principal.recipient_service_id = Some(state.config.service_id.clone());
+    principal.display_name = display_name.clone();
+    principal.agent_slug = Some(agent_slug.clone());
+    principal.avatar_blob_ref = avatar_blob_ref.clone();
+    principal.requested_scope = (!requested_scope.is_null()).then_some(requested_scope);
+    principal.accountability = (!body.accountability.is_null()).then_some(body.accountability);
+    principal.provision_event_refs = Some(provision_event_refs);
+    principal.pairing_request_id = Some(pairing_request_id.clone());
+    principal.pairing_code = Some(pairing_code.clone());
+    principal.pairing_expires_at = Some(expires_at);
     state
         .persistence
         .agents()
-        .put(json!({
-            "agent_id": agent_id,
-            "controller_id": controller_id,
-            "principal_control_realm_id": principal_control_realm_id,
-            "controller_authorization_ref": controller_authorization_ref,
-            "controller_account_id": controller_account.id,
-            "recipient_service_id": state.config.service_id,
-            "display_name": display_name,
-            "agent_slug": agent_slug.clone(),
-            "avatar_blob_ref": avatar_blob_ref,
-            "requested_scope": requested_scope,
-            "accountability": body.accountability,
-            "state": "pending_runtime_key",
-            "provision_event_refs": provision_event_refs,
-            "pairing_request_id": pairing_request_id,
-            "pairing_code": pairing_code,
-            "pairing_expires_at": expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-            "created_at": timestamp,
-            "updated_at": timestamp,
-        }))
+        .put(principal)
         .await
         .map_err(|err| AppError::internal(format!("agent persist failed: {err}")))?;
     append_audit_log(
@@ -221,10 +220,10 @@ pub(super) async fn renew_agent_pairing(
     // Lazy-expire first so a stale pending record renews through the same
     // path (grants already revoked) as an observed-expired one.
     let record = lazily_expire_pairing(state, &session, record).await?;
-    let bootstrap_reopen = match record.get("state").and_then(Value::as_str) {
-        Some("pending_runtime_key" | "pairing_expired") => true,
-        Some("active" | "paused") => false,
-        Some("deactivated") => {
+    let bootstrap_reopen = match record.state.as_str() {
+        "pending_runtime_key" | "pairing_expired" => true,
+        "active" | "paused" => false,
+        "deactivated" => {
             return Err(pairing_failed_precondition(
                 "agent is deactivated; deactivation is terminal",
             )
@@ -246,11 +245,7 @@ pub(super) async fn renew_agent_pairing(
     // `pairing_expired` does not reserve the slug, so a replacement agent may
     // have claimed it since. Renewing would then produce two open agents with
     // the same selector slug for one controller — reject like provision does.
-    let agent_slug = record
-        .get("agent_slug")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
+    let agent_slug = record.agent_slug.clone().unwrap_or_default();
     if !agent_slug.is_empty() {
         let siblings = state
             .persistence
@@ -261,8 +256,8 @@ pub(super) async fn renew_agent_pairing(
                 AppError::internal(format!("agent slug conflict check failed: {err}"))
             })?;
         if siblings.iter().any(|sibling| {
-            sibling.get("agent_id").and_then(Value::as_str) != Some(agent_id.as_str())
-                && sibling.get("agent_slug").and_then(Value::as_str) == Some(agent_slug.as_str())
+            sibling.id != agent_id
+                && sibling.agent_slug.as_deref() == Some(agent_slug.as_str())
                 && agent_record_reserves_selector_slug(sibling, &now_utc)
         }) {
             return Err(pairing_failed_precondition(
@@ -282,10 +277,7 @@ pub(super) async fn renew_agent_pairing(
             .collect::<Vec<_>>()
     };
     let grant_ids = if bootstrap_reopen && live_grant_ids.is_empty() {
-        let requested_scope = record
-            .get("requested_scope")
-            .cloned()
-            .unwrap_or(Value::Null);
+        let requested_scope = record.requested_scope.clone().unwrap_or(Value::Null);
         fanout_renewal_grants(state, &session, &agent_id, &requested_scope).await?
     } else {
         live_grant_ids
@@ -297,43 +289,29 @@ pub(super) async fn renew_agent_pairing(
         .unwrap_or(15 * 60 * 1000)
         .min(24 * 60 * 60 * 1000);
     let expires_at = now_utc + chrono::Duration::milliseconds(pairing_ttl_ms as i64);
-    let timestamp = now_utc.to_rfc3339_opts(SecondsFormat::Millis, true);
     let terminal_notification = account_notification_context(&record);
     let mut record = record;
-    {
-        let obj = record
-            .as_object_mut()
-            .ok_or_else(|| AppError::internal("agent record is not an object"))?;
-        if bootstrap_reopen {
-            obj.insert("state".to_owned(), json!("pending_runtime_key"));
-        }
-        // Runtime replacement is not a state transition: active/paused stay
-        // as-is while the fresh handle is open.
-        obj.insert(
-            "pairing_request_id".to_owned(),
-            json!(pairing_request_id.clone()),
-        );
-        obj.insert("pairing_code".to_owned(), json!(pairing_code.clone()));
-        obj.insert(
-            "pairing_expires_at".to_owned(),
-            json!(expires_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
-        );
-        // A runtime-key request submitted against the dead handle must not
-        // survive into the renewed pairing.
-        obj.insert("approval_request_id".to_owned(), Value::Null);
-        obj.insert("runtime_key_request".to_owned(), Value::Null);
-        obj.insert("approval_requested_at".to_owned(), Value::Null);
-        obj.insert("runtime_key_binding_digest".to_owned(), Value::Null);
-        obj.insert("runtime_public_key_digest".to_owned(), Value::Null);
-        obj.insert("runtime_attestation_digest".to_owned(), Value::Null);
-        obj.insert("approval_notification_id".to_owned(), Value::Null);
-        obj.insert("updated_at".to_owned(), json!(timestamp));
-        if let Some(refs) = obj
-            .get_mut("provision_event_refs")
-            .and_then(Value::as_object_mut)
-        {
-            refs.insert("initial_capability_grant_ids".to_owned(), json!(grant_ids));
-        }
+    if bootstrap_reopen {
+        record.state = "pending_runtime_key".to_owned();
+        record.state_changed_at = Some(now_utc);
+    }
+    // Runtime replacement is not a state transition: active/paused stay
+    // as-is while the fresh handle is open.
+    record.pairing_request_id = Some(pairing_request_id.clone());
+    record.pairing_code = Some(pairing_code.clone());
+    record.pairing_expires_at = Some(expires_at);
+    // A runtime-key request submitted against the dead handle must not
+    // survive into the renewed pairing.
+    record.approval_request_id = None;
+    record.runtime_key_request = None;
+    record.approval_requested_at = None;
+    record.runtime_key_binding_digest = None;
+    record.runtime_public_key_digest = None;
+    record.runtime_attestation_digest = None;
+    record.approval_notification_id = None;
+    record.updated_at = now_utc;
+    if let Some(refs) = record.provision_event_refs.as_mut().and_then(Value::as_object_mut) {
+        refs.insert("initial_capability_grant_ids".to_owned(), json!(grant_ids));
     }
     state
         .persistence
@@ -360,19 +338,9 @@ pub(super) async fn renew_agent_pairing(
     .await;
     let agent_principal_did = arkret_sdk::Did::new(agent_id)
         .map_err(|err| AppError::internal(format!("persisted agent DID invalid: {err}")))?;
-    let principal_control_realm_id = RealmId::new(
-        record
-            .get("principal_control_realm_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::internal("Agent record missing principal_control_realm_id"))?
-            .to_owned(),
-    )
+    let principal_control_realm_id = RealmId::new(record.principal_control_realm_id.clone())
     .map_err(|error| AppError::internal(format!("persisted Agent PCR invalid: {error}")))?;
-    let controller_authorization_ref = record
-        .get("controller_authorization_ref")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::internal("Agent record missing controller_authorization_ref"))?
-        .to_owned();
+    let controller_authorization_ref = record.controller_authorization_ref.clone();
     let pcr_recovery =
         crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, &record)
             .await?;
@@ -460,7 +428,7 @@ pub(super) async fn get_agent(
         .ok_or_else(|| AppError::not_found("agent not found"))?;
     // Controller-self only: hide others' agents behind 404 to avoid enumeration.
     if let Some(session) = session.as_ref() {
-        if record.get("controller_id").and_then(Value::as_str) != Some(session.actor.as_str()) {
+        if record.controller_id != session.actor {
             return Err(AppError::not_found("agent not found"));
         }
     }
@@ -504,29 +472,20 @@ pub(super) async fn get_agent(
 pub(super) async fn lazily_expire_pairing(
     state: &AppState,
     session: &SessionRecord,
-    mut record: Value,
-) -> Result<Value, AppError> {
+    mut record: AgentPrincipalRecord,
+) -> Result<AgentPrincipalRecord, AppError> {
     if !agent_pairing_handle_is_open(&record) {
         return Ok(record);
     }
     let expired = record
-        .get("pairing_expires_at")
-        .and_then(Value::as_str)
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|expires| chrono::Utc::now() > expires.with_timezone(&chrono::Utc))
+        .pairing_expires_at
+        .map(|expires| chrono::Utc::now() > expires)
         .unwrap_or(false);
     if !expired {
         return Ok(record);
     }
-    let Some(agent_id) = record
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(record);
-    };
-    let bootstrap_expired =
-        record.get("state").and_then(Value::as_str) == Some("pending_runtime_key");
+    let agent_id = record.id.clone();
+    let bootstrap_expired = record.state == "pending_runtime_key";
     if bootstrap_expired && state.config.development_mode {
         let grant_locations = {
             let proj = state.projection.lock();
@@ -535,25 +494,19 @@ pub(super) async fn lazily_expire_pairing(
         submit_revoke_agent_grants(state, session, &grant_locations).await?;
     }
     let terminal_notification = account_notification_context(&record);
-    if let Some(obj) = record.as_object_mut() {
-        if bootstrap_expired {
-            obj.insert(
-                "state".to_owned(),
-                Value::String("pairing_expired".to_owned()),
-            );
-        }
-        obj.insert("approval_request_id".to_owned(), Value::Null);
-        obj.insert("runtime_key_request".to_owned(), Value::Null);
-        obj.insert("approval_requested_at".to_owned(), Value::Null);
-        obj.insert("runtime_key_binding_digest".to_owned(), Value::Null);
-        obj.insert("runtime_public_key_digest".to_owned(), Value::Null);
-        obj.insert("runtime_attestation_digest".to_owned(), Value::Null);
-        obj.insert("approval_notification_id".to_owned(), Value::Null);
-        obj.insert(
-            "updated_at".to_owned(),
-            json!(chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)),
-        );
+    let now = chrono::Utc::now();
+    if bootstrap_expired {
+        record.state = "pairing_expired".to_owned();
+        record.state_changed_at = Some(now);
     }
+    record.approval_request_id = None;
+    record.runtime_key_request = None;
+    record.approval_requested_at = None;
+    record.runtime_key_binding_digest = None;
+    record.runtime_public_key_digest = None;
+    record.runtime_attestation_digest = None;
+    record.approval_notification_id = None;
+    record.updated_at = now;
     state
         .persistence
         .agents()
@@ -602,14 +555,7 @@ pub(super) async fn lifecycle_transition(
     // eligibility set on resume, so the controller MUST explicitly
     // re-acknowledge them; silent resume is forbidden.
     if event_kind == "ak.self.agent.resume" {
-        let paused_at = record
-            .get("updated_at")
-            .and_then(Value::as_str)
-            .and_then(|value| {
-                chrono::DateTime::parse_from_rfc3339(value)
-                    .ok()
-                    .map(|parsed| parsed.with_timezone(&chrono::Utc))
-            });
+        let paused_at = Some(record.updated_at);
         let new_sidecar_ids = controller_sidecar_circles_since(state, &session.actor, paused_at);
         if !new_sidecar_ids.is_empty() {
             let acked: std::collections::BTreeSet<String> = sidecar_exposure_ack
@@ -640,31 +586,17 @@ pub(super) async fn lifecycle_transition(
             }
         }
     }
-    let status_changed_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let status_changed_at = chrono::Utc::now();
     // Read the current persisted state so the durable transition carries the
     // accurate `previous_status` (resume comes from `paused`, etc.).
-    let previous_status = record
-        .get("state")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| "active".to_owned());
+    let previous_status = record.state.clone();
     // AKP-0008 §4.11 (dev option B): drive the FSM reducer with the durable
     // `ak.self.agent.{pause,resume,deactivate}` event authored as the Agent
     // and executed/signed by its controller, and on deactivate fan-out the revocation chain
     // (`ak.agent.key.revoke` + `ak.capability.revoke` for every grant the
     // agent holds). Production fails closed above.
-    let realm = record
-        .get("principal_control_realm_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::internal("Agent record missing principal_control_realm_id"))?
-        .to_owned();
-    let authorization_ref = record
-        .get("controller_authorization_ref")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::internal("Agent record missing controller_authorization_ref"))?
-        .to_owned();
+    let realm = record.principal_control_realm_id.clone();
+    let authorization_ref = record.controller_authorization_ref.clone();
     submit_durable_agent_lifecycle(
         state,
         &session,
@@ -701,18 +633,17 @@ pub(super) async fn lifecycle_transition(
     // list/get reflect the new status (the durable event drives the reducer
     // FSM; this row is the read-side projection consumed by the HTTP API).
     let mut updated_record = record;
-    if let Some(object) = updated_record.as_object_mut() {
-        object.insert("state".to_owned(), json!(new_state.as_wire_str()));
-        object.insert("updated_at".to_owned(), json!(status_changed_at));
-        if event_kind == "ak.self.agent.deactivate" {
-            object.insert("approval_request_id".to_owned(), Value::Null);
-            object.insert("runtime_key_request".to_owned(), Value::Null);
-            object.insert("approval_requested_at".to_owned(), Value::Null);
-            object.insert("runtime_key_binding_digest".to_owned(), Value::Null);
-            object.insert("runtime_public_key_digest".to_owned(), Value::Null);
-            object.insert("runtime_attestation_digest".to_owned(), Value::Null);
-            object.insert("approval_notification_id".to_owned(), Value::Null);
-        }
+    updated_record.state = new_state.as_wire_str().to_owned();
+    updated_record.state_changed_at = Some(status_changed_at);
+    updated_record.updated_at = status_changed_at;
+    if event_kind == "ak.self.agent.deactivate" {
+        updated_record.approval_request_id = None;
+        updated_record.runtime_key_request = None;
+        updated_record.approval_requested_at = None;
+        updated_record.runtime_key_binding_digest = None;
+        updated_record.runtime_public_key_digest = None;
+        updated_record.runtime_attestation_digest = None;
+        updated_record.approval_notification_id = None;
     }
     state
         .persistence

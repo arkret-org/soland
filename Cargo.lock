@@ -4742,12 +4742,14 @@ name = "soland-data"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "deadpool",
  "diesel",
  "diesel-async",
  "diesel_migrations",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

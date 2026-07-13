@@ -18,7 +18,7 @@ pub(crate) use diesel_async::pooled_connection::deadpool::Object;
 pub(crate) use diesel_async::{AsyncPgConnection, RunQueryDsl};
 pub(crate) use parking_lot::Mutex;
 pub(crate) use serde_json::Value;
-pub(crate) use soland_data::PgPool;
+pub(crate) use soland_data::{AgentPrincipalRecord, PgPool};
 pub(crate) use soland_data::query_rows::{
     ClaimSeqRow, CountRow, ExistsRow, JsonPayloadRow, MaxSeqRow,
 };

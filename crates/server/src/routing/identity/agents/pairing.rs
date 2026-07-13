@@ -41,7 +41,7 @@ pub(super) async fn resolve_agent_pairing(
         .ok_or_else(agent_pairing_not_found)?;
     let record = lookup_pairing_record(state, pairing_request_id, pairing_code, None).await?;
     ensure_pairing_request_open(&record).map_err(|_| agent_pairing_not_found())?;
-    let agent_id = pairing_record_string(&record, "agent_id")?;
+    let agent_id = record.id.as_str();
     let pairing_expires_at = pairing_record_timestamp(&record, "pairing_expires_at")?;
     let bootstrap = AgentPairingBootstrap {
         arkret_base_url: state
@@ -122,9 +122,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         &attestation_digest,
     )
     .map_err(|error| AppError::invalid_param(format!("runtime key binding invalid: {error}")))?;
-    let existing_binding = agent_record
-        .get("runtime_key_binding_digest")
-        .and_then(Value::as_str);
+    let existing_binding = agent_record.runtime_key_binding_digest.as_deref();
     if existing_binding.is_some_and(|existing| existing != binding_digest.as_str()) {
         return Err(AppError::new(
             ErrorCode::Conflict,
@@ -134,7 +132,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         .with_wire_code("agent_runtime_request_conflict"));
     }
 
-    let controller_id = pairing_record_string(&agent_record, "controller_id")?.to_owned();
+    let controller_id = agent_record.controller_id.clone();
     let account = state
         .persistence
         .accounts()
@@ -143,22 +141,18 @@ pub(super) async fn submit_agent_runtime_key_request(
         .map_err(|error| AppError::internal(format!("controller account lookup failed: {error}")))?
         .ok_or_else(|| AppError::internal("controller account is missing"))?;
     let proposed_approval_request_id = agent_record
-        .get("approval_request_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
+        .approval_request_id
+        .clone()
         .unwrap_or_else(|| format!("agent_runtime_approval:{}", uuid::Uuid::now_v7()));
     let proposed_notification_id = agent_record
-        .get("approval_notification_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
+        .approval_notification_id
+        .map(|id| ids::format_typed_uuid("notification", &id))
         .unwrap_or_else(|| ids::generate("notification"));
     let proposed_requested_at = agent_record
-        .get("approval_requested_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc))
+        .approval_requested_at
         .unwrap_or_else(chrono::Utc::now);
-    let expires_at = pairing_record_string(&agent_record, "pairing_expires_at")?.to_owned();
+    let expires_at = pairing_record_timestamp(&agent_record, "pairing_expires_at")?
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
     let write = crate::persistence::AgentRuntimeApprovalWrite {
         agent_id: agent_id.to_owned(),
         pairing_request_id: body.pairing_request_id.clone(),
@@ -186,9 +180,24 @@ pub(super) async fn submit_agent_runtime_key_request(
             .with_status(StatusCode::CONFLICT)
             .with_wire_code("agent_runtime_request_conflict")
         })?;
-    let approval_request_id = pairing_record_string(&stored, "approval_request_id")?.to_owned();
-    let notification_id = pairing_record_string(&stored, "approval_notification_id")?.to_owned();
-    let requested_at = pairing_record_string(&stored, "approval_requested_at")?.to_owned();
+    let approval_request_id = stored.approval_request_id.clone().ok_or_else(|| {
+        pairing_failed_precondition("agent pairing metadata is incomplete")
+            .with_reason_detail("missing approval_request_id")
+    })?;
+    let notification_id = stored
+        .approval_notification_id
+        .map(|id| ids::format_typed_uuid("notification", &id))
+        .ok_or_else(|| {
+            pairing_failed_precondition("agent pairing metadata is incomplete")
+                .with_reason_detail("missing approval_notification_id")
+        })?;
+    let requested_at = stored
+        .approval_requested_at
+        .ok_or_else(|| {
+            pairing_failed_precondition("agent pairing metadata is incomplete")
+                .with_reason_detail("missing approval_requested_at")
+        })?
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
     let projection_action = if existing_binding.is_none()
         && approval_request_id == proposed_approval_request_id
         && notification_id == proposed_notification_id
@@ -273,7 +282,7 @@ async fn lookup_pairing_record(
     pairing_request_id: &str,
     pairing_code: &str,
     agent_id: Option<&str>,
-) -> Result<Value, AppError> {
+) -> Result<AgentPrincipalRecord, AppError> {
     if pairing_request_id.trim().is_empty() || pairing_code.trim().is_empty() {
         return Err(agent_pairing_not_found());
     }
@@ -285,10 +294,8 @@ async fn lookup_pairing_record(
         .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
         .ok_or_else(agent_pairing_not_found)?;
     let record = reconcile_accepted_agent_authorization(state, record).await?;
-    if record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code)
-        || agent_id.is_some_and(|expected| {
-            record.get("agent_id").and_then(Value::as_str) != Some(expected)
-        })
+    if record.pairing_code.as_deref() != Some(pairing_code)
+        || agent_id.is_some_and(|expected| record.id != expected)
     {
         return Err(agent_pairing_not_found());
     }
@@ -297,40 +304,17 @@ async fn lookup_pairing_record(
 
 pub(super) async fn reconcile_accepted_agent_authorization(
     state: &AppState,
-    agent_record: Value,
-) -> Result<Value, AppError> {
-    let Some(approval_request_id) = agent_record
-        .get("approval_request_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
+    agent_record: AgentPrincipalRecord,
+) -> Result<AgentPrincipalRecord, AppError> {
+    let Some(approval_request_id) = agent_record.approval_request_id.clone() else {
         return Ok(agent_record);
     };
-    let Some(runtime_request) = agent_record
-        .get("runtime_key_request")
-        .filter(|value| value.is_object())
-    else {
+    let Some(runtime_request) = agent_record.runtime_key_request.as_ref().filter(|value| value.is_object()) else {
         return Ok(agent_record);
     };
-    let Some(agent_id) = agent_record
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(agent_record);
-    };
-    let Some(controller_id) = agent_record
-        .get("controller_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(agent_record);
-    };
-    let Some(pairing_request_id) = agent_record
-        .get("pairing_request_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
+    let agent_id = agent_record.id.clone();
+    let controller_id = agent_record.controller_id.clone();
+    let Some(pairing_request_id) = agent_record.pairing_request_id.clone() else {
         return Ok(agent_record);
     };
     let Some(verification_method) = runtime_request
@@ -340,27 +324,11 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     else {
         return Ok(agent_record);
     };
-    let Some(public_key_digest) = agent_record
-        .get("runtime_public_key_digest")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
+    let Some(public_key_digest) = agent_record.runtime_public_key_digest.clone() else {
         return Ok(agent_record);
     };
-    let Some(expected_realm_id) = agent_record
-        .get("principal_control_realm_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(agent_record);
-    };
-    let Some(expected_authorization_ref) = agent_record
-        .get("controller_authorization_ref")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(agent_record);
-    };
+    let expected_realm_id = agent_record.principal_control_realm_id.clone();
+    let expected_authorization_ref = agent_record.controller_authorization_ref.clone();
     let expected_request_digest = pairing_request_binding_digest(
         &agent_record,
         &controller_id,
@@ -369,10 +337,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         &public_key_digest,
         &state.config.service_id,
     )?;
-    let expected_scope = agent_record
-        .get("requested_scope")
-        .filter(|scope| !scope.is_null())
-        .cloned();
+    let expected_scope = agent_record.requested_scope.clone();
     let events = state
         .persistence
         .events()
@@ -431,11 +396,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let activation = crate::persistence::AgentRuntimeActivation {
         agent_id: agent_id.clone(),
         approval_request_id: approval_request_id.clone(),
-        runtime_key_binding_digest: agent_record
-            .get("runtime_key_binding_digest")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
+        runtime_key_binding_digest: agent_record.runtime_key_binding_digest.clone().unwrap_or_default(),
         pairing_request_id,
         paired_request_digest,
         authorized_event_ref: accepted.event_id,
@@ -497,7 +458,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
 /// whose `pairing_expires_at` has passed is reported as `pairing_expired`
 /// without waiting for the lazy-expiry write.
 pub(super) fn agent_runtime_key_request_status_outcome(
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
     body: &AgentRuntimeApprovalStatusRequestBody,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<AgentRuntimeApprovalStatusOutcome, AppError> {
@@ -505,42 +466,37 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     if pairing_code.is_empty() {
         return Err(agent_pairing_not_found());
     }
-    if agent_record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code) {
+    if agent_record.pairing_code.as_deref() != Some(pairing_code) {
         return Err(agent_pairing_not_found());
     }
-    if agent_record.get("agent_id").and_then(Value::as_str) != Some(body.agent_id.as_str()) {
+    if agent_record.id != body.agent_id.as_str() {
         return Err(agent_pairing_not_found());
     }
-    let status = match agent_record.get("state").and_then(Value::as_str) {
-        Some("pending_runtime_key") => {
-            let expired = pairing_record_timestamp(agent_record, "pairing_expires_at")
-                .map(|expires_at| expires_at <= now)
-                .unwrap_or(true);
+    let status = match agent_record.state.as_str() {
+        "pending_runtime_key" => {
+            let expired = agent_record
+                .pairing_expires_at
+                .is_none_or(|expires_at| expires_at <= now);
             if expired {
                 AgentStatus::PairingExpired
             } else {
                 AgentStatus::PendingRuntimeKey
             }
         }
-        Some("active") => AgentStatus::Active,
-        Some("paused") => AgentStatus::Paused,
-        Some("deactivated") => AgentStatus::Deactivated,
-        Some("pairing_expired") => AgentStatus::PairingExpired,
+        "active" => AgentStatus::Active,
+        "paused" => AgentStatus::Paused,
+        "deactivated" => AgentStatus::Deactivated,
+        "pairing_expired" => AgentStatus::PairingExpired,
         _ => return Err(agent_pairing_not_found()),
     };
-    let record_string = |key: &str| {
-        agent_record
-            .get(key)
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned)
-    };
     let approval_request_id = if status == AgentStatus::PendingRuntimeKey {
-        record_string("approval_request_id")
+        agent_record.approval_request_id.clone()
     } else {
         None
     };
-    let authorized_event_ref = record_string("authorized_event_ref")
+    let authorized_event_ref = agent_record
+        .authorized_event_ref
+        .as_deref()
         .map(EventId::new)
         .transpose()
         .map_err(|err| AppError::internal(format!("authorized event ref invalid: {err}")))?;
@@ -549,8 +505,8 @@ pub(super) fn agent_runtime_key_request_status_outcome(
         status,
         approval_request_id,
         authorized_event_ref,
-        authorized_verification_method: record_string("authorized_verification_method"),
-        authorized_public_key_digest: record_string("authorized_public_key_digest"),
+        authorized_verification_method: agent_record.authorized_verification_method.clone(),
+        authorized_public_key_digest: agent_record.authorized_public_key_digest.clone(),
     })
 }
 
@@ -605,19 +561,10 @@ pub(super) async fn agent_key_pair(
     }
     let agent_record = require_agent_controller(state, &session, agent_id).await?;
     let paired_request_digest = agent_key_pair_request_digest(&body)?;
-    if agent_record
-        .get("authorized_event_ref")
-        .and_then(Value::as_str)
-        == Some(event_id)
-    {
-        let same_request = agent_record
-            .get("paired_pairing_request_id")
-            .and_then(Value::as_str)
+    if agent_record.authorized_event_ref.as_deref() == Some(event_id) {
+        let same_request = agent_record.paired_pairing_request_id.as_deref()
             == Some(body.pairing_request_id.as_str())
-            && agent_record
-                .get("paired_request_digest")
-                .and_then(Value::as_str)
-                == Some(paired_request_digest.as_str());
+            && agent_record.paired_request_digest.as_deref() == Some(paired_request_digest.as_str());
         if !same_request {
             return Err(AppError::conflict(
                 "authorize_event.event_id was already accepted for a different pairing request",
@@ -682,13 +629,12 @@ pub(super) async fn agent_key_pair(
     let terminal_notification = account_notification_context(&agent_record);
     let activation = crate::persistence::AgentRuntimeActivation {
         agent_id: agent_id.to_owned(),
-        approval_request_id: pairing_record_string(&agent_record, "approval_request_id")?
-            .to_owned(),
-        runtime_key_binding_digest: pairing_record_string(
-            &agent_record,
-            "runtime_key_binding_digest",
-        )?
-        .to_owned(),
+        approval_request_id: agent_record.approval_request_id.clone().ok_or_else(|| {
+            pairing_failed_precondition("agent pairing approval metadata is incomplete")
+        })?,
+        runtime_key_binding_digest: agent_record.runtime_key_binding_digest.clone().ok_or_else(
+            || pairing_failed_precondition("agent runtime key binding metadata is incomplete"),
+        )?,
         pairing_request_id: body.pairing_request_id.clone(),
         paired_request_digest,
         authorized_event_ref: authorized_event_ref.as_str().to_owned(),
@@ -720,11 +666,12 @@ pub(super) async fn agent_key_pair(
 }
 
 fn ensure_current_runtime_key_request_matches(
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
     body: &AgentKeyPairRequestBody,
 ) -> Result<(), AppError> {
     let current = agent_record
-        .get("runtime_key_request")
+        .runtime_key_request
+        .as_ref()
         .filter(|value| value.is_object())
         .ok_or_else(|| pairing_failed_precondition("runtime key request is no longer pending"))?;
     let runtime_attestation = runtime_attestation_value(body.runtime_attestation.as_ref())?;
@@ -754,10 +701,7 @@ fn ensure_current_runtime_key_request_matches(
         runtime_attestation.as_ref(),
     )
     .map_err(|error| AppError::invalid_param(format!("runtime key binding invalid: {error}")))?;
-    if agent_record
-        .get("runtime_key_binding_digest")
-        .and_then(Value::as_str)
-        != Some(current_binding.as_str())
+    if agent_record.runtime_key_binding_digest.as_deref() != Some(current_binding.as_str())
     {
         return Err(pairing_failed_precondition(
             "runtime key binding changed after controller discovery",
@@ -775,20 +719,14 @@ pub(super) struct AccountNotificationContext {
 }
 
 pub(super) fn account_notification_context(
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
 ) -> Option<AccountNotificationContext> {
-    let string = |key: &str| {
-        agent_record
-            .get(key)
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-    };
     Some(AccountNotificationContext {
-        notification_id: string("approval_notification_id")?,
-        recipient_id: string("controller_id")?,
-        controller_account_id: string("controller_account_id")?,
-        recipient_service_id: string("recipient_service_id")?,
-        approval_request_id: string("approval_request_id")?,
+        notification_id: agent_record.approval_notification_id?.to_string(),
+        recipient_id: agent_record.controller_id.clone(),
+        controller_account_id: agent_record.controller_account_id?.to_string(),
+        recipient_service_id: agent_record.recipient_service_id.clone()?,
+        approval_request_id: agent_record.approval_request_id.clone()?,
     })
 }
 
@@ -857,7 +795,7 @@ pub(super) async fn submit_production_key_authorize_event(
     state: &AppState,
     session: &SessionRecord,
     envelope: &Value,
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
     agent_id: &str,
     verification_method: &str,
     runtime_public_key_digest: &str,
@@ -888,7 +826,7 @@ pub(super) async fn submit_production_key_authorize_event(
 pub(super) fn ensure_key_authorize_event_matches_request(
     envelope: &Value,
     controller: &str,
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
     agent_id: &str,
     verification_method: &str,
     runtime_public_key_digest: &str,
@@ -909,26 +847,24 @@ pub(super) fn ensure_key_authorize_event_matches_request(
             "authorize_event.executed_by must match the authenticated controller",
         ));
     }
-    let expected_authorization_ref = agent_record
-        .get("controller_authorization_ref")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::capability_denied("Agent has no controller delegation binding"))?;
+    let expected_authorization_ref = agent_record.controller_authorization_ref.as_str();
+    if expected_authorization_ref.is_empty() {
+        return Err(AppError::capability_denied(
+            "Agent has no controller delegation binding",
+        ));
+    }
     if envelope.get("authorization_ref").and_then(Value::as_str) != Some(expected_authorization_ref)
     {
         return Err(AppError::capability_denied(
             "authorize_event.authorization_ref must match the Agent DID controller delegation",
         ));
     }
-    let expected_realm_id = agent_record
-        .get("principal_control_realm_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AppError::capability_denied(
-                "Agent has no authoritative Principal Control Realm binding",
-            )
-        })?;
+    let expected_realm_id = agent_record.principal_control_realm_id.as_str();
+    if expected_realm_id.is_empty() {
+        return Err(AppError::capability_denied(
+            "Agent has no authoritative Principal Control Realm binding",
+        ));
+    }
     if envelope.get("realm_id").and_then(Value::as_str) != Some(expected_realm_id) {
         return Err(AppError::capability_denied(
             "authorize_event.realm_id must match the Agent Principal Control Realm",
@@ -1045,11 +981,12 @@ fn agent_key_pair_request_digest(body: &AgentKeyPairRequestBody) -> Result<Strin
 }
 
 fn paired_request_digest_from_record_event(
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
     authorize_event: &Value,
 ) -> Result<String, AppError> {
     let mut request = agent_record
-        .get("runtime_key_request")
+        .runtime_key_request
+        .as_ref()
         .and_then(Value::as_object)
         .cloned()
         .ok_or_else(|| {
@@ -1065,13 +1002,15 @@ fn paired_request_digest_from_record_event(
     Ok(arkret_sdk::canonical::sha256_digest(&canonical))
 }
 
-pub(super) fn ensure_pairing_request_open(agent_record: &Value) -> Result<(), AppError> {
-    match agent_record.get("state").and_then(Value::as_str) {
-        Some("pending_runtime_key") => {}
-        Some("pairing_expired") => {
+pub(super) fn ensure_pairing_request_open(
+    agent_record: &AgentPrincipalRecord,
+) -> Result<(), AppError> {
+    match agent_record.state.as_str() {
+        "pending_runtime_key" => {}
+        "pairing_expired" => {
             return Err(pairing_failed_precondition("pairing request has expired"));
         }
-        Some("active" | "paused") => {
+        "active" | "paused" => {
             // Runtime replacement re-pairing (key-management.md §3.6.1): an
             // agent that already holds an authorized key MAY re-open pairing
             // in place (status unchanged, zero downtime); completing the fresh
@@ -1086,7 +1025,7 @@ pub(super) fn ensure_pairing_request_open(agent_record: &Value) -> Result<(), Ap
                 ));
             }
         }
-        Some("deactivated") => {
+        "deactivated" => {
             return Err(pairing_failed_precondition(
                 "agent is not accepting runtime key pairing",
             ));
@@ -1109,35 +1048,29 @@ pub(super) fn ensure_pairing_request_open(agent_record: &Value) -> Result<(), Ap
 /// it consumed; renew_pairing installs a fresh `pairing_request_id` without
 /// touching that stamp. A current handle that differs from the last consumed
 /// one is therefore a live, single-use pairing handle.
-pub(super) fn agent_pairing_handle_is_open(agent_record: &Value) -> bool {
-    let current = agent_record
-        .get("pairing_request_id")
-        .and_then(Value::as_str);
-    let consumed = agent_record
-        .get("paired_pairing_request_id")
-        .and_then(Value::as_str);
+pub(super) fn agent_pairing_handle_is_open(agent_record: &AgentPrincipalRecord) -> bool {
+    let current = agent_record.pairing_request_id.as_deref();
+    let consumed = agent_record.paired_pairing_request_id.as_deref();
     current.is_some() && current != consumed
 }
 
 pub(super) fn agent_record_reserves_selector_slug(
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
     now: &chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    match agent_record.get("state").and_then(Value::as_str) {
-        Some("active" | "paused") => true,
-        Some("pending_runtime_key") => agent_record
-            .get("pairing_expires_at")
-            .and_then(Value::as_str)
-            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-            .map(|expires_at| expires_at.with_timezone(&chrono::Utc) > now.clone())
+    match agent_record.state.as_str() {
+        "active" | "paused" => true,
+        "pending_runtime_key" => agent_record
+            .pairing_expires_at
+            .map(|expires_at| expires_at > *now)
             .unwrap_or(true),
-        Some("pairing_expired" | "deactivated") => false,
+        "pairing_expired" | "deactivated" => false,
         _ => true,
     }
 }
 
 pub(super) fn ensure_pairing_request_id_matches(
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
     supplied_pairing_request_id: &str,
 ) -> Result<(), AppError> {
     let expected = pairing_record_string(agent_record, "pairing_request_id")?;
@@ -1298,10 +1231,24 @@ pub(super) fn pairing_failed_precondition(reason: &'static str) -> AppError {
         .with_reason_detail(reason)
 }
 
-pub(super) fn pairing_record_string<'a>(record: &'a Value, key: &str) -> Result<&'a str, AppError> {
-    record
-        .get(key)
-        .and_then(Value::as_str)
+pub(super) fn pairing_record_string<'a>(
+    record: &'a AgentPrincipalRecord,
+    key: &str,
+) -> Result<&'a str, AppError> {
+    let value = match key {
+        "agent_id" => Some(record.id.as_str()),
+        "controller_id" => Some(record.controller_id.as_str()),
+        "principal_control_realm_id" => Some(record.principal_control_realm_id.as_str()),
+        "controller_authorization_ref" => Some(record.controller_authorization_ref.as_str()),
+        "pairing_request_id" => record.pairing_request_id.as_deref(),
+        "paired_pairing_request_id" => record.paired_pairing_request_id.as_deref(),
+        "pairing_code" => record.pairing_code.as_deref(),
+        "approval_request_id" => record.approval_request_id.as_deref(),
+        "runtime_key_binding_digest" => record.runtime_key_binding_digest.as_deref(),
+        "authorized_event_ref" => record.authorized_event_ref.as_deref(),
+        _ => None,
+    };
+    value
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| {
             pairing_failed_precondition("agent pairing metadata is incomplete")
@@ -1310,13 +1257,18 @@ pub(super) fn pairing_record_string<'a>(record: &'a Value, key: &str) -> Result<
 }
 
 pub(super) fn pairing_record_timestamp(
-    record: &Value,
+    record: &AgentPrincipalRecord,
     key: &str,
 ) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
-    let value = pairing_record_string(record, key)?;
-    chrono::DateTime::parse_from_rfc3339(value)
-        .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
-        .map_err(|_| AppError::invalid_param(format!("agent pairing metadata {key} is invalid")))
+    match key {
+        "pairing_expires_at" => record.pairing_expires_at,
+        "approval_requested_at" => record.approval_requested_at,
+        _ => None,
+    }
+    .ok_or_else(|| {
+        pairing_failed_precondition("agent pairing metadata is incomplete")
+            .with_reason_detail(format!("missing {key}"))
+    })
 }
 
 pub(super) fn runtime_public_key_digest(
@@ -1330,7 +1282,7 @@ pub(super) fn runtime_public_key_digest(
 }
 
 pub(super) fn ensure_authorize_event_scope_matches_requested(
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
     payload: &Value,
 ) -> Result<(), AppError> {
     let scope = payload.get("agent_key_scope").ok_or_else(|| {
@@ -1351,9 +1303,7 @@ pub(super) fn ensure_authorize_event_scope_matches_requested(
             "authorize_event.payload.agent_key_scope.actions must be non-empty strings",
         ));
     }
-    if let Some(expected) = agent_record
-        .get("requested_scope")
-        .filter(|value| !value.is_null())
+    if let Some(expected) = agent_record.requested_scope.as_ref()
         && scope != expected
     {
         return Err(AppError::invalid_param(
@@ -1364,7 +1314,7 @@ pub(super) fn ensure_authorize_event_scope_matches_requested(
 }
 
 pub(super) fn pairing_request_binding_digest(
-    agent_record: &Value,
+    agent_record: &AgentPrincipalRecord,
     controller: &str,
     agent_id: &str,
     verification_method: &str,
@@ -1373,7 +1323,8 @@ pub(super) fn pairing_request_binding_digest(
 ) -> Result<String, AppError> {
     let pairing_request_id = pairing_record_string(agent_record, "pairing_request_id")?;
     let pairing_code = pairing_record_string(agent_record, "pairing_code")?;
-    let expires_at = pairing_record_string(agent_record, "pairing_expires_at")?;
+    let expires_at = pairing_record_timestamp(agent_record, "pairing_expires_at")?
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let controller = Did::new(controller.to_owned())
         .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;
     let agent_id = Did::new(agent_id.to_owned())
@@ -1387,7 +1338,7 @@ pub(super) fn pairing_request_binding_digest(
         &runtime_public_key_digest,
         pairing_request_id,
         pairing_code,
-        expires_at,
+        &expires_at,
         service_id,
     )
     .map(|digest| digest.as_str().to_owned())

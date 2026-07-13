@@ -1,4 +1,8 @@
 use super::*;
+use diesel::dsl::case_when;
+use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper};
+use diesel::PgExpressionMethods;
+use soland_data::schema::agent_principals;
 
 /// AKP-0010 — agent participation policy persistence. Controller
 /// selections (`ak.agent.participation.v1`) and the governance ceiling
@@ -324,18 +328,21 @@ pub struct AgentRuntimeApprovalWrite {
 
 #[async_trait]
 pub trait AgentStore: Send + Sync {
-    async fn put(&self, record: Value) -> PersistenceResult<()>;
-    async fn get(&self, agent_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn put(&self, record: AgentPrincipalRecord) -> PersistenceResult<()>;
+    async fn get(&self, agent_id: &str) -> PersistenceResult<Option<AgentPrincipalRecord>>;
     async fn get_by_pairing_request_id(
         &self,
         pairing_request_id: &str,
-    ) -> PersistenceResult<Option<Value>>;
-    async fn list_for_controller(&self, controller_id: &str) -> PersistenceResult<Vec<Value>>;
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>>;
+    async fn list_for_controller(
+        &self,
+        controller_id: &str,
+    ) -> PersistenceResult<Vec<AgentPrincipalRecord>>;
     async fn set_state(
         &self,
         agent_id: &str,
         state: &str,
-        changed_at: &str,
+        changed_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<bool>;
     async fn activate_runtime_if_current(
         &self,
@@ -352,12 +359,12 @@ pub trait AgentStore: Send + Sync {
     async fn put_runtime_approval_if_compatible(
         &self,
         write: &AgentRuntimeApprovalWrite,
-    ) -> PersistenceResult<Option<Value>>;
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>>;
 }
 
 #[derive(Default)]
 pub(crate) struct MemoryAgentStore {
-    data: Mutex<std::collections::BTreeMap<String, Value>>,
+    data: Mutex<std::collections::BTreeMap<String, AgentPrincipalRecord>>,
 }
 
 impl MemoryAgentStore {
@@ -368,28 +375,13 @@ impl MemoryAgentStore {
 
 #[async_trait]
 impl AgentStore for MemoryAgentStore {
-    async fn put(&self, record: Value) -> PersistenceResult<()> {
-        let Some(id) = record
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-        else {
-            return Err(PersistenceError::Internal(
-                "agent record missing agent_id".to_owned(),
-            ));
-        };
+    async fn put(&self, record: AgentPrincipalRecord) -> PersistenceResult<()> {
+        let id = record.id.clone();
         let mut data = self.data.lock();
         if let Some(existing) = data.get(&id)
-            && [
-                "controller_id",
-                "principal_control_realm_id",
-                "controller_authorization_ref",
-            ]
-            .into_iter()
-            .any(|field| {
-                existing.get(field).and_then(Value::as_str)
-                    != record.get(field).and_then(Value::as_str)
-            })
+            && (existing.controller_id != record.controller_id
+                || existing.principal_control_realm_id != record.principal_control_realm_id
+                || existing.controller_authorization_ref != record.controller_authorization_ref)
         {
             return Err(PersistenceError::Conflict(format!(
                 "Agent `{id}` controller/PCR authorization binding is immutable"
@@ -399,30 +391,31 @@ impl AgentStore for MemoryAgentStore {
         Ok(())
     }
 
-    async fn get(&self, agent_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get(&self, agent_id: &str) -> PersistenceResult<Option<AgentPrincipalRecord>> {
         Ok(self.data.lock().get(agent_id).cloned())
     }
 
     async fn get_by_pairing_request_id(
         &self,
         pairing_request_id: &str,
-    ) -> PersistenceResult<Option<Value>> {
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>> {
         Ok(self
             .data
             .lock()
             .values()
-            .find(|record| {
-                record.get("pairing_request_id").and_then(Value::as_str) == Some(pairing_request_id)
-            })
+            .find(|record| record.pairing_request_id.as_deref() == Some(pairing_request_id))
             .cloned())
     }
 
-    async fn list_for_controller(&self, controller_id: &str) -> PersistenceResult<Vec<Value>> {
+    async fn list_for_controller(
+        &self,
+        controller_id: &str,
+    ) -> PersistenceResult<Vec<AgentPrincipalRecord>> {
         Ok(self
             .data
             .lock()
             .values()
-            .filter(|r| r.get("controller_id").and_then(Value::as_str) == Some(controller_id))
+            .filter(|record| record.controller_id == controller_id)
             .cloned()
             .collect())
     }
@@ -431,17 +424,13 @@ impl AgentStore for MemoryAgentStore {
         &self,
         agent_id: &str,
         state: &str,
-        changed_at: &str,
+        changed_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<bool> {
         let mut guard = self.data.lock();
         if let Some(record) = guard.get_mut(agent_id) {
-            if let Some(obj) = record.as_object_mut() {
-                obj.insert("state".to_owned(), Value::String(state.to_owned()));
-                obj.insert(
-                    "updated_at".to_owned(),
-                    Value::String(changed_at.to_owned()),
-                );
-            }
+            record.state = state.to_owned();
+            record.state_changed_at = Some(changed_at);
+            record.updated_at = changed_at;
             Ok(true)
         } else {
             Ok(false)
@@ -456,70 +445,34 @@ impl AgentStore for MemoryAgentStore {
         let Some(record) = guard.get_mut(&activation.agent_id) else {
             return Ok(false);
         };
-        if record.get("approval_request_id").and_then(Value::as_str)
-            != Some(activation.approval_request_id.as_str())
-            || !matches!(
-                record.get("state").and_then(Value::as_str),
-                Some("pending_runtime_key" | "active" | "paused")
-            )
-            || record
-                .get("runtime_key_binding_digest")
-                .and_then(Value::as_str)
-                != Some(activation.runtime_key_binding_digest.as_str())
-            || record.get("pairing_request_id").and_then(Value::as_str)
-                != Some(activation.pairing_request_id.as_str())
+        if record.approval_request_id.as_deref() != Some(&activation.approval_request_id)
+            || !matches!(record.state.as_str(), "pending_runtime_key" | "active" | "paused")
+            || record.runtime_key_binding_digest.as_deref()
+                != Some(&activation.runtime_key_binding_digest)
+            || record.pairing_request_id.as_deref() != Some(&activation.pairing_request_id)
         {
             return Ok(false);
         }
-        let Some(object) = record.as_object_mut() else {
-            return Err(PersistenceError::Internal(
-                "agent record is not an object".to_owned(),
-            ));
-        };
-        if object.get("state").and_then(Value::as_str) != Some("paused") {
-            object.insert("state".to_owned(), Value::String("active".to_owned()));
+        if record.state != "paused" {
+            record.state = "active".to_owned();
         }
-        object.insert(
-            "updated_at".to_owned(),
-            Value::String(
-                activation
-                    .authorized_at
-                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            ),
-        );
-        object.insert(
-            "authorized_event_ref".to_owned(),
-            Value::String(activation.authorized_event_ref.clone()),
-        );
-        object.insert(
-            "authorized_verification_method".to_owned(),
-            Value::String(activation.authorized_verification_method.clone()),
-        );
-        object.insert(
-            "authorized_public_key_digest".to_owned(),
-            Value::String(activation.authorized_public_key_digest.clone()),
-        );
-        object.insert(
-            "paired_pairing_request_id".to_owned(),
-            Value::String(activation.pairing_request_id.clone()),
-        );
-        object.insert(
-            "paired_request_digest".to_owned(),
-            Value::String(activation.paired_request_digest.clone()),
-        );
+        record.updated_at = activation.authorized_at;
+        record.authorized_event_ref = Some(activation.authorized_event_ref.clone());
+        record.authorized_verification_method =
+            Some(activation.authorized_verification_method.clone());
+        record.authorized_public_key_digest =
+            Some(activation.authorized_public_key_digest.clone());
+        record.paired_pairing_request_id = Some(activation.pairing_request_id.clone());
+        record.paired_request_digest = Some(activation.paired_request_digest.clone());
         // Keep the approval and notification ids until the terminal account
         // delta is durable. They are internal correlation state and are not
         // exposed for an active/paused Agent. A retry can therefore finish the
         // notification cleanup after a crash without replaying activation.
-        for key in [
-            "runtime_key_request",
-            "approval_requested_at",
-            "runtime_key_binding_digest",
-            "runtime_public_key_digest",
-            "runtime_attestation_digest",
-        ] {
-            object.insert(key.to_owned(), Value::Null);
-        }
+        record.runtime_key_request = None;
+        record.approval_requested_at = None;
+        record.runtime_key_binding_digest = None;
+        record.runtime_public_key_digest = None;
+        record.runtime_attestation_digest = None;
         Ok(true)
     }
 
@@ -532,235 +485,54 @@ impl AgentStore for MemoryAgentStore {
         let Some(record) = guard.get_mut(agent_id) else {
             return Ok(false);
         };
-        if record.get("approval_request_id").and_then(Value::as_str) != Some(approval_request_id)
-            || record
-                .get("authorized_event_ref")
-                .and_then(Value::as_str)
-                .is_none()
+        if record.approval_request_id.as_deref() != Some(approval_request_id)
+            || record.authorized_event_ref.is_none()
         {
             return Ok(false);
         }
-        let Some(object) = record.as_object_mut() else {
-            return Err(PersistenceError::Internal(
-                "agent record is not an object".to_owned(),
-            ));
-        };
-        object.insert("approval_request_id".to_owned(), Value::Null);
-        object.insert("approval_notification_id".to_owned(), Value::Null);
+        record.approval_request_id = None;
+        record.approval_notification_id = None;
+        record.updated_at = Utc::now();
         Ok(true)
     }
 
     async fn put_runtime_approval_if_compatible(
         &self,
         write: &AgentRuntimeApprovalWrite,
-    ) -> PersistenceResult<Option<Value>> {
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>> {
         let mut guard = self.data.lock();
         let Some(record) = guard.get_mut(&write.agent_id) else {
             return Ok(None);
         };
-        let pairing_handle_was_consumed = record
-            .get("paired_pairing_request_id")
-            .and_then(Value::as_str)
-            == Some(write.pairing_request_id.as_str());
-        if record.get("pairing_request_id").and_then(Value::as_str)
-            != Some(write.pairing_request_id.as_str())
+        let pairing_handle_was_consumed =
+            record.paired_pairing_request_id.as_deref() == Some(&write.pairing_request_id);
+        if record.pairing_request_id.as_deref() != Some(&write.pairing_request_id)
             || pairing_handle_was_consumed
-            || !matches!(
-                record.get("state").and_then(Value::as_str),
-                Some("pending_runtime_key" | "active" | "paused")
-            )
-            || record
-                .get("runtime_key_binding_digest")
-                .and_then(Value::as_str)
+            || !matches!(record.state.as_str(), "pending_runtime_key" | "active" | "paused")
+            || record.runtime_key_binding_digest.as_deref()
                 .is_some_and(|digest| digest != write.runtime_key_binding_digest)
         {
             return Ok(None);
         }
-        let Some(object) = record.as_object_mut() else {
-            return Err(PersistenceError::Internal(
-                "agent record is not an object".to_owned(),
-            ));
-        };
-        object
-            .entry("approval_request_id".to_owned())
-            .or_insert_with(|| Value::String(write.approval_request_id.clone()));
-        if object
-            .get("approval_request_id")
-            .is_some_and(Value::is_null)
-        {
-            object.insert(
-                "approval_request_id".to_owned(),
-                Value::String(write.approval_request_id.clone()),
-            );
-        }
-        object
-            .entry("approval_notification_id".to_owned())
-            .or_insert_with(|| Value::String(write.approval_notification_id.clone()));
-        if object
-            .get("approval_notification_id")
-            .is_some_and(Value::is_null)
-        {
-            object.insert(
-                "approval_notification_id".to_owned(),
-                Value::String(write.approval_notification_id.clone()),
-            );
-        }
-        object
-            .entry("approval_requested_at".to_owned())
-            .or_insert_with(|| {
-                Value::String(
-                    write
-                        .approval_requested_at
-                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                )
-            });
-        if object
-            .get("approval_requested_at")
-            .is_some_and(Value::is_null)
-        {
-            object.insert(
-                "approval_requested_at".to_owned(),
-                Value::String(
-                    write
-                        .approval_requested_at
-                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                ),
-            );
-        }
-        for (key, value) in [
-            ("controller_account_id", write.controller_account_id.clone()),
-            ("recipient_service_id", write.recipient_service_id.clone()),
-            (
-                "runtime_key_binding_digest",
-                write.runtime_key_binding_digest.clone(),
-            ),
-            (
-                "runtime_public_key_digest",
-                write.runtime_public_key_digest.clone(),
-            ),
-            (
-                "runtime_attestation_digest",
-                write.runtime_attestation_digest.clone(),
-            ),
-        ] {
-            object.insert(key.to_owned(), Value::String(value));
-        }
-        object.insert(
-            "runtime_key_request".to_owned(),
-            write.runtime_key_request.clone(),
-        );
+        record
+            .approval_request_id
+            .get_or_insert_with(|| write.approval_request_id.clone());
+        record.approval_notification_id.get_or_insert_with(|| {
+            ids::typed_uuid_part_expect_internal(&write.approval_notification_id)
+        });
+        record
+            .approval_requested_at
+            .get_or_insert(write.approval_requested_at);
+        record.controller_account_id = Some(ids::typed_uuid_part_expect_internal(
+            &write.controller_account_id,
+        ));
+        record.recipient_service_id = Some(write.recipient_service_id.clone());
+        record.runtime_key_binding_digest = Some(write.runtime_key_binding_digest.clone());
+        record.runtime_public_key_digest = Some(write.runtime_public_key_digest.clone());
+        record.runtime_attestation_digest = Some(write.runtime_attestation_digest.clone());
+        record.runtime_key_request = Some(write.runtime_key_request.clone());
+        record.updated_at = Utc::now();
         Ok(Some(record.clone()))
-    }
-}
-
-#[derive(QueryableByName)]
-struct AgentPrincipalRow {
-    #[diesel(sql_type = Text)]
-    agent_id: String,
-    #[diesel(sql_type = Text)]
-    controller_id: String,
-    #[diesel(sql_type = Text)]
-    principal_control_realm_id: String,
-    #[diesel(sql_type = Text)]
-    controller_authorization_ref: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    display_name: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    agent_slug: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    avatar_blob_ref: Option<String>,
-    #[diesel(sql_type = Text)]
-    state: String,
-    #[diesel(sql_type = Nullable<Jsonb>)]
-    requested_scope: Option<Value>,
-    #[diesel(sql_type = Nullable<Jsonb>)]
-    accountability: Option<Value>,
-    #[diesel(sql_type = Nullable<Jsonb>)]
-    provision_event_refs: Option<Value>,
-    #[diesel(sql_type = Nullable<Text>)]
-    pairing_request_id: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    paired_pairing_request_id: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    paired_request_digest: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    pairing_code: Option<String>,
-    #[diesel(sql_type = Nullable<Timestamptz>)]
-    pairing_expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[diesel(sql_type = Nullable<Text>)]
-    approval_request_id: Option<String>,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    controller_account_id: Option<Uuid>,
-    #[diesel(sql_type = Nullable<Text>)]
-    recipient_service_id: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    runtime_key_binding_digest: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    runtime_public_key_digest: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    runtime_attestation_digest: Option<String>,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    approval_notification_id: Option<Uuid>,
-    #[diesel(sql_type = Nullable<Jsonb>)]
-    runtime_key_request: Option<Value>,
-    #[diesel(sql_type = Nullable<Timestamptz>)]
-    approval_requested_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[diesel(sql_type = Nullable<Text>)]
-    authorized_event_ref: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    authorized_verification_method: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    authorized_public_key_digest: Option<String>,
-    #[diesel(sql_type = Timestamptz)]
-    created_at: chrono::DateTime<chrono::Utc>,
-    #[diesel(sql_type = Timestamptz)]
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-const AGENT_COLUMNS: &str = "id AS agent_id, controller_id, principal_control_realm_id, controller_authorization_ref, display_name, \
-     agent_slug, avatar_blob_ref, state, requested_scope, accountability, provision_event_refs, \
-     pairing_request_id, paired_pairing_request_id, paired_request_digest, pairing_code, pairing_expires_at, approval_request_id, \
-     controller_account_id, recipient_service_id, runtime_key_binding_digest, \
-     runtime_public_key_digest, runtime_attestation_digest, approval_notification_id, \
-     runtime_key_request, approval_requested_at, authorized_event_ref, \
-     authorized_verification_method, authorized_public_key_digest, created_at, updated_at";
-
-impl From<AgentPrincipalRow> for Value {
-    fn from(row: AgentPrincipalRow) -> Self {
-        serde_json::json!({
-            "agent_id": row.agent_id,
-            "controller_id": row.controller_id,
-            "principal_control_realm_id": row.principal_control_realm_id,
-            "controller_authorization_ref": row.controller_authorization_ref,
-            "display_name": row.display_name,
-            "agent_slug": row.agent_slug,
-            "avatar_blob_ref": row.avatar_blob_ref,
-            "state": row.state,
-            "requested_scope": row.requested_scope,
-            "accountability": row.accountability,
-            "provision_event_refs": row.provision_event_refs,
-            "pairing_request_id": row.pairing_request_id,
-            "paired_pairing_request_id": row.paired_pairing_request_id,
-            "paired_request_digest": row.paired_request_digest,
-            "pairing_code": row.pairing_code,
-            "pairing_expires_at": row.pairing_expires_at
-                .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
-            "approval_request_id": row.approval_request_id,
-            "controller_account_id": row.controller_account_id.map(|id| ids::format_typed_uuid("account", &id)),
-            "recipient_service_id": row.recipient_service_id,
-            "runtime_key_binding_digest": row.runtime_key_binding_digest,
-            "runtime_public_key_digest": row.runtime_public_key_digest,
-            "runtime_attestation_digest": row.runtime_attestation_digest,
-            "approval_notification_id": row.approval_notification_id.map(|id| ids::format_typed_uuid("notification", &id)),
-            "runtime_key_request": row.runtime_key_request,
-            "approval_requested_at": row.approval_requested_at
-                .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
-            "authorized_event_ref": row.authorized_event_ref,
-            "authorized_verification_method": row.authorized_verification_method,
-            "authorized_public_key_digest": row.authorized_public_key_digest,
-            "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "updated_at": row.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        })
     }
 }
 
@@ -770,269 +542,95 @@ pub(crate) struct PgAgentStore {
 
 #[async_trait]
 impl AgentStore for PgAgentStore {
-    async fn put(&self, record: Value) -> PersistenceResult<()> {
+    async fn put(&self, mut principal: AgentPrincipalRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        let get_str = |key: &str| -> PersistenceResult<String> {
-            record
-                .get(key)
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| PersistenceError::Internal(format!("agent record missing {key}")))
-        };
-        let agent_id = get_str("agent_id")?;
-        let controller_id = get_str("controller_id")?;
-        let principal_control_realm_id = get_str("principal_control_realm_id")?;
-        let controller_authorization_ref = get_str("controller_authorization_ref")?;
-        let display_name = record
-            .get("display_name")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let agent_slug = record
-            .get("agent_slug")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let avatar_blob_ref = record
-            .get("avatar_blob_ref")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let state = record
-            .get("state")
-            .and_then(Value::as_str)
-            .unwrap_or("active")
-            .to_owned();
-        let requested_scope = record
-            .get("requested_scope")
-            .cloned()
-            .filter(|value| !value.is_null());
-        let accountability = record
-            .get("accountability")
-            .cloned()
-            .filter(|value| !value.is_null());
-        let provision_event_refs = record
-            .get("provision_event_refs")
-            .cloned()
-            .filter(|value| !value.is_null());
-        let pairing_request_id = record
-            .get("pairing_request_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let paired_pairing_request_id = record
-            .get("paired_pairing_request_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let paired_request_digest = record
-            .get("paired_request_digest")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let pairing_code = record
-            .get("pairing_code")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let pairing_expires_at = record
-            .get("pairing_expires_at")
-            .and_then(Value::as_str)
-            .map(|value| {
-                chrono::DateTime::parse_from_rfc3339(value)
-                    .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
-                    .map_err(|err| {
-                        PersistenceError::Internal(format!(
-                            "agent record pairing_expires_at invalid: {err}"
-                        ))
-                    })
-            })
-            .transpose()?;
-        let approval_request_id = record
-            .get("approval_request_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let controller_account_id = record
-            .get("controller_account_id")
-            .and_then(Value::as_str)
-            .map(|value| ids::typed_uuid_part_expect_internal(value));
-        let recipient_service_id = record
-            .get("recipient_service_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let runtime_key_binding_digest = record
-            .get("runtime_key_binding_digest")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let runtime_public_key_digest = record
-            .get("runtime_public_key_digest")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let runtime_attestation_digest = record
-            .get("runtime_attestation_digest")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let approval_notification_id = record
-            .get("approval_notification_id")
-            .and_then(Value::as_str)
-            .map(|value| ids::typed_uuid_part_expect_internal(value));
-        let runtime_key_request = record
-            .get("runtime_key_request")
-            .cloned()
-            .filter(|value| !value.is_null());
-        let approval_requested_at = record
-            .get("approval_requested_at")
-            .and_then(Value::as_str)
-            .map(|value| {
-                chrono::DateTime::parse_from_rfc3339(value)
-                    .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
-                    .map_err(|err| {
-                        PersistenceError::Internal(format!(
-                            "agent record approval_requested_at invalid: {err}"
-                        ))
-                    })
-            })
-            .transpose()?;
-        let authorized_event_ref = record
-            .get("authorized_event_ref")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let authorized_verification_method = record
-            .get("authorized_verification_method")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let authorized_public_key_digest = record
-            .get("authorized_public_key_digest")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        sql_query(
-            "INSERT INTO agent_principals \
-             (id, controller_id, principal_control_realm_id, controller_authorization_ref, display_name, agent_slug, avatar_blob_ref, state, requested_scope, \
-              accountability, provision_event_refs, pairing_request_id, \
-              paired_pairing_request_id, paired_request_digest, pairing_code, pairing_expires_at, approval_request_id, controller_account_id, \
-              recipient_service_id, runtime_key_binding_digest, runtime_public_key_digest, \
-              runtime_attestation_digest, approval_notification_id, runtime_key_request, \
-              approval_requested_at, authorized_event_ref, authorized_verification_method, \
-              authorized_public_key_digest, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, NOW(), NOW()) \
-             ON CONFLICT (id) DO UPDATE SET \
-             display_name = EXCLUDED.display_name, agent_slug = EXCLUDED.agent_slug, \
-             avatar_blob_ref = EXCLUDED.avatar_blob_ref, \
-             state = EXCLUDED.state, requested_scope = EXCLUDED.requested_scope, \
-             accountability = EXCLUDED.accountability, \
-             provision_event_refs = EXCLUDED.provision_event_refs, \
-             pairing_request_id = EXCLUDED.pairing_request_id, pairing_code = EXCLUDED.pairing_code, \
-             paired_pairing_request_id = EXCLUDED.paired_pairing_request_id, \
-             paired_request_digest = EXCLUDED.paired_request_digest, \
-             pairing_expires_at = EXCLUDED.pairing_expires_at, \
-             approval_request_id = EXCLUDED.approval_request_id, \
-             controller_account_id = EXCLUDED.controller_account_id, \
-             recipient_service_id = EXCLUDED.recipient_service_id, \
-             runtime_key_binding_digest = EXCLUDED.runtime_key_binding_digest, \
-             runtime_public_key_digest = EXCLUDED.runtime_public_key_digest, \
-             runtime_attestation_digest = EXCLUDED.runtime_attestation_digest, \
-             approval_notification_id = EXCLUDED.approval_notification_id, \
-             runtime_key_request = EXCLUDED.runtime_key_request, \
-             approval_requested_at = EXCLUDED.approval_requested_at, \
-             authorized_event_ref = EXCLUDED.authorized_event_ref, \
-             authorized_verification_method = EXCLUDED.authorized_verification_method, \
-             authorized_public_key_digest = EXCLUDED.authorized_public_key_digest, updated_at = NOW() \
-             WHERE agent_principals.controller_id = EXCLUDED.controller_id \
-               AND agent_principals.principal_control_realm_id = EXCLUDED.principal_control_realm_id \
-               AND agent_principals.controller_authorization_ref = EXCLUDED.controller_authorization_ref",
-        )
-        .bind::<Text, _>(&agent_id)
-        .bind::<Text, _>(&controller_id)
-        .bind::<Text, _>(&principal_control_realm_id)
-        .bind::<Text, _>(&controller_authorization_ref)
-        .bind::<Nullable<Text>, _>(&display_name)
-        .bind::<Nullable<Text>, _>(&agent_slug)
-        .bind::<Nullable<Text>, _>(&avatar_blob_ref)
-        .bind::<Text, _>(&state)
-        .bind::<Nullable<Jsonb>, _>(&requested_scope)
-        .bind::<Nullable<Jsonb>, _>(&accountability)
-        .bind::<Nullable<Jsonb>, _>(&provision_event_refs)
-        .bind::<Nullable<Text>, _>(&pairing_request_id)
-        .bind::<Nullable<Text>, _>(&paired_pairing_request_id)
-        .bind::<Nullable<Text>, _>(&paired_request_digest)
-        .bind::<Nullable<Text>, _>(&pairing_code)
-        .bind::<Nullable<Timestamptz>, _>(&pairing_expires_at)
-        .bind::<Nullable<Text>, _>(&approval_request_id)
-        .bind::<Nullable<SqlUuid>, _>(&controller_account_id)
-        .bind::<Nullable<Text>, _>(&recipient_service_id)
-        .bind::<Nullable<Text>, _>(&runtime_key_binding_digest)
-        .bind::<Nullable<Text>, _>(&runtime_public_key_digest)
-        .bind::<Nullable<Text>, _>(&runtime_attestation_digest)
-        .bind::<Nullable<SqlUuid>, _>(&approval_notification_id)
-        .bind::<Nullable<Jsonb>, _>(&runtime_key_request)
-        .bind::<Nullable<Timestamptz>, _>(&approval_requested_at)
-        .bind::<Nullable<Text>, _>(&authorized_event_ref)
-        .bind::<Nullable<Text>, _>(&authorized_verification_method)
-        .bind::<Nullable<Text>, _>(&authorized_public_key_digest)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::from)
-        .and_then(|affected| {
-            if affected == 1 {
-                Ok(())
-            } else {
-                Err(PersistenceError::Conflict(format!(
-                    "Agent `{agent_id}` controller/PCR authorization binding is immutable"
-                )))
-            }
-        })
+        let agent_id = principal.id.clone();
+        principal.updated_at = Utc::now();
+        let upsert = diesel::insert_into(agent_principals::table)
+            .values(&principal)
+            .on_conflict(agent_principals::id)
+            .do_update()
+            .set(&principal);
+        let affected = diesel::query_dsl::methods::FilterDsl::filter(
+            upsert,
+                agent_principals::controller_id
+                    .eq(&principal.controller_id)
+                    .and(
+                        agent_principals::principal_control_realm_id
+                            .eq(&principal.principal_control_realm_id),
+                    )
+                    .and(
+                        agent_principals::controller_authorization_ref
+                            .eq(&principal.controller_authorization_ref),
+                    ),
+            )
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::from)?;
+        if affected == 1 {
+            Ok(())
+        } else {
+            Err(PersistenceError::Conflict(format!(
+                "Agent `{agent_id}` controller/PCR authorization binding is immutable"
+            )))
+        }
     }
 
-    async fn get(&self, agent_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get(&self, agent_id: &str) -> PersistenceResult<Option<AgentPrincipalRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(format!(
-            "SELECT {AGENT_COLUMNS} FROM agent_principals WHERE id = $1"
-        ))
-        .bind::<Text, _>(agent_id)
-        .get_result::<AgentPrincipalRow>(&mut *conn)
-        .await
-        .optional()
-        .map(|row| row.map(Value::from))
-        .map_err(PersistenceError::from)
+        agent_principals::table
+            .find(agent_id)
+            .select(AgentPrincipalRecord::as_select())
+            .first::<AgentPrincipalRecord>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::from)
     }
 
     async fn get_by_pairing_request_id(
         &self,
         pairing_request_id: &str,
-    ) -> PersistenceResult<Option<Value>> {
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(format!(
-            "SELECT {AGENT_COLUMNS} FROM agent_principals WHERE pairing_request_id = $1"
-        ))
-        .bind::<Text, _>(pairing_request_id)
-        .get_result::<AgentPrincipalRow>(&mut *conn)
-        .await
-        .optional()
-        .map(|row| row.map(Value::from))
-        .map_err(PersistenceError::from)
+        agent_principals::table
+            .filter(agent_principals::pairing_request_id.eq(pairing_request_id))
+            .select(AgentPrincipalRecord::as_select())
+            .first::<AgentPrincipalRecord>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::from)
     }
 
-    async fn list_for_controller(&self, controller_id: &str) -> PersistenceResult<Vec<Value>> {
+    async fn list_for_controller(
+        &self,
+        controller_id: &str,
+    ) -> PersistenceResult<Vec<AgentPrincipalRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(format!(
-            "SELECT {AGENT_COLUMNS} FROM agent_principals WHERE controller_id = $1 ORDER BY created_at"
-        ))
-        .bind::<Text, _>(controller_id)
-        .load::<AgentPrincipalRow>(&mut *conn)
-        .await
-        .map(|rows| rows.into_iter().map(Value::from).collect())
-        .map_err(PersistenceError::from)
+        agent_principals::table
+            .filter(agent_principals::controller_id.eq(controller_id))
+            .order(agent_principals::created_at.asc())
+            .select(AgentPrincipalRecord::as_select())
+            .load::<AgentPrincipalRecord>(&mut *conn)
+            .await
+            .map_err(PersistenceError::from)
     }
 
     async fn set_state(
         &self,
         agent_id: &str,
         state: &str,
-        _changed_at: &str,
+        changed_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        let updated = sql_query(
-            "UPDATE agent_principals SET state = $2, state_changed_at = NOW(), updated_at = NOW() \
-             WHERE id = $1",
-        )
-        .bind::<Text, _>(agent_id)
-        .bind::<Text, _>(state)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::from)?;
+        let updated = diesel::update(agent_principals::table.find(agent_id))
+            .set((
+                agent_principals::state.eq(state),
+                agent_principals::state_changed_at.eq(changed_at),
+                agent_principals::updated_at.eq(changed_at),
+            ))
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::from)?;
         Ok(updated > 0)
     }
 
@@ -1041,27 +639,44 @@ impl AgentStore for PgAgentStore {
         activation: &AgentRuntimeActivation,
     ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(
-            "UPDATE agent_principals SET \
-             state = CASE WHEN state = 'paused' THEN 'paused' ELSE 'active' END, \
-             updated_at = $9, authorized_event_ref = $6, \
-             authorized_verification_method = $7, authorized_public_key_digest = $8, \
-             paired_pairing_request_id = $4, paired_request_digest = $5, \
-             runtime_key_request = NULL, approval_requested_at = NULL, \
-             runtime_key_binding_digest = NULL, runtime_public_key_digest = NULL, \
-             runtime_attestation_digest = NULL \
-             WHERE id = $1 AND state IN ('pending_runtime_key', 'active', 'paused') AND approval_request_id = $2 \
-               AND runtime_key_binding_digest = $3 AND pairing_request_id = $4",
+        diesel::update(
+            agent_principals::table
+                .filter(agent_principals::id.eq(&activation.agent_id))
+                .filter(agent_principals::state.eq_any([
+                    "pending_runtime_key",
+                    "active",
+                    "paused",
+                ]))
+                .filter(
+                    agent_principals::approval_request_id.eq(&activation.approval_request_id),
+                )
+                .filter(
+                    agent_principals::runtime_key_binding_digest
+                        .eq(&activation.runtime_key_binding_digest),
+                )
+                .filter(agent_principals::pairing_request_id.eq(&activation.pairing_request_id)),
         )
-        .bind::<Text, _>(&activation.agent_id)
-        .bind::<Text, _>(&activation.approval_request_id)
-        .bind::<Text, _>(&activation.runtime_key_binding_digest)
-        .bind::<Text, _>(&activation.pairing_request_id)
-        .bind::<Text, _>(&activation.paired_request_digest)
-        .bind::<Text, _>(&activation.authorized_event_ref)
-        .bind::<Text, _>(&activation.authorized_verification_method)
-        .bind::<Text, _>(&activation.authorized_public_key_digest)
-        .bind::<Timestamptz, _>(activation.authorized_at)
+        .set((
+            agent_principals::state.eq(case_when::<_, _, Text>(
+                agent_principals::state.eq("paused"),
+                "paused",
+            )
+            .otherwise("active")),
+            agent_principals::updated_at.eq(activation.authorized_at),
+            agent_principals::authorized_event_ref.eq(&activation.authorized_event_ref),
+            agent_principals::authorized_verification_method
+                .eq(&activation.authorized_verification_method),
+            agent_principals::authorized_public_key_digest
+                .eq(&activation.authorized_public_key_digest),
+            agent_principals::paired_pairing_request_id.eq(&activation.pairing_request_id),
+            agent_principals::paired_request_digest.eq(&activation.paired_request_digest),
+            agent_principals::runtime_key_request.eq(None::<Value>),
+            agent_principals::approval_requested_at
+                .eq(None::<chrono::DateTime<chrono::Utc>>),
+            agent_principals::runtime_key_binding_digest.eq(None::<String>),
+            agent_principals::runtime_public_key_digest.eq(None::<String>),
+            agent_principals::runtime_attestation_digest.eq(None::<String>),
+        ))
         .execute(&mut *conn)
         .await
         .map(|rows| rows == 1)
@@ -1074,14 +689,17 @@ impl AgentStore for PgAgentStore {
         approval_request_id: &str,
     ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(
-            "UPDATE agent_principals SET approval_request_id = NULL, \
-             approval_notification_id = NULL, updated_at = NOW() \
-             WHERE id = $1 AND approval_request_id = $2 \
-               AND authorized_event_ref IS NOT NULL",
+        diesel::update(
+            agent_principals::table
+                .filter(agent_principals::id.eq(agent_id))
+                .filter(agent_principals::approval_request_id.eq(approval_request_id))
+                .filter(agent_principals::authorized_event_ref.is_not_null()),
         )
-        .bind::<Text, _>(agent_id)
-        .bind::<Text, _>(approval_request_id)
+        .set((
+            agent_principals::approval_request_id.eq(None::<String>),
+            agent_principals::approval_notification_id.eq(None::<Uuid>),
+            agent_principals::updated_at.eq(Utc::now()),
+        ))
         .execute(&mut *conn)
         .await
         .map(|rows| rows == 1)
@@ -1091,40 +709,59 @@ impl AgentStore for PgAgentStore {
     async fn put_runtime_approval_if_compatible(
         &self,
         write: &AgentRuntimeApprovalWrite,
-    ) -> PersistenceResult<Option<Value>> {
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(format!(
-            "UPDATE agent_principals SET \
-             approval_request_id = COALESCE(approval_request_id, $3), \
-             approval_notification_id = COALESCE(approval_notification_id, $4), \
-             approval_requested_at = COALESCE(approval_requested_at, $5), \
-             controller_account_id = $6, recipient_service_id = $7, \
-             runtime_key_binding_digest = $8, runtime_public_key_digest = $9, \
-             runtime_attestation_digest = $10, runtime_key_request = $11, updated_at = NOW() \
-             WHERE id = $1 AND state IN ('pending_runtime_key', 'active', 'paused') AND pairing_request_id = $2 \
-               AND paired_pairing_request_id IS DISTINCT FROM $2 \
-               AND (runtime_key_binding_digest IS NULL OR runtime_key_binding_digest = $8) \
-             RETURNING {AGENT_COLUMNS}"
+        let approval_notification_id =
+            ids::typed_uuid_part_expect_internal(&write.approval_notification_id);
+        let controller_account_id = ids::typed_uuid_part_expect_internal(&write.controller_account_id);
+        diesel::update(
+            agent_principals::table
+                .filter(agent_principals::id.eq(&write.agent_id))
+                .filter(agent_principals::state.eq_any([
+                    "pending_runtime_key",
+                    "active",
+                    "paused",
+                ]))
+                .filter(agent_principals::pairing_request_id.eq(&write.pairing_request_id))
+                .filter(
+                    agent_principals::paired_pairing_request_id
+                        .is_distinct_from(&write.pairing_request_id),
+                )
+                .filter(
+                    agent_principals::runtime_key_binding_digest
+                        .is_null()
+                        .or(agent_principals::runtime_key_binding_digest
+                            .eq(&write.runtime_key_binding_digest)),
+                ),
+        )
+        .set((
+            agent_principals::approval_request_id.eq(case_when::<_, _, Nullable<Text>>(
+                agent_principals::approval_request_id.is_null(),
+                Some(write.approval_request_id.as_str()),
+            )
+            .otherwise(agent_principals::approval_request_id)),
+            agent_principals::approval_notification_id.eq(case_when::<_, _, Nullable<SqlUuid>>(
+                agent_principals::approval_notification_id.is_null(),
+                Some(approval_notification_id),
+            )
+            .otherwise(agent_principals::approval_notification_id)),
+            agent_principals::approval_requested_at.eq(case_when::<_, _, Nullable<Timestamptz>>(
+                agent_principals::approval_requested_at.is_null(),
+                Some(write.approval_requested_at),
+            )
+            .otherwise(agent_principals::approval_requested_at)),
+            agent_principals::controller_account_id.eq(controller_account_id),
+            agent_principals::recipient_service_id.eq(&write.recipient_service_id),
+            agent_principals::runtime_key_binding_digest.eq(&write.runtime_key_binding_digest),
+            agent_principals::runtime_public_key_digest.eq(&write.runtime_public_key_digest),
+            agent_principals::runtime_attestation_digest.eq(&write.runtime_attestation_digest),
+            agent_principals::runtime_key_request.eq(&write.runtime_key_request),
+            agent_principals::updated_at.eq(Utc::now()),
         ))
-        .bind::<Text, _>(&write.agent_id)
-        .bind::<Text, _>(&write.pairing_request_id)
-        .bind::<Text, _>(&write.approval_request_id)
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
-            &write.approval_notification_id,
-        ))
-        .bind::<Timestamptz, _>(write.approval_requested_at)
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
-            &write.controller_account_id,
-        ))
-        .bind::<Text, _>(&write.recipient_service_id)
-        .bind::<Text, _>(&write.runtime_key_binding_digest)
-        .bind::<Text, _>(&write.runtime_public_key_digest)
-        .bind::<Text, _>(&write.runtime_attestation_digest)
-        .bind::<Jsonb, _>(&write.runtime_key_request)
-        .get_result::<AgentPrincipalRow>(&mut *conn)
+        .returning(AgentPrincipalRecord::as_returning())
+        .get_result::<AgentPrincipalRecord>(&mut *conn)
         .await
         .optional()
-        .map(|record| record.map(Value::from))
         .map_err(PersistenceError::from)
     }
 }

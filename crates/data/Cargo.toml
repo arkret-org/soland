@@ -11,9 +11,11 @@ description = "Soland data persistence layer and database bootstrap helpers."
 
 [dependencies]
 anyhow = {workspace = true}
+chrono = {workspace = true}
 deadpool = {workspace = true, features = ["rt_tokio_1"]}
 diesel = {workspace = true,features = ["postgres", "serde_json", "chrono", "uuid", "pq-src"]}
 diesel-async = {workspace = true,features = ["postgres", "deadpool", "async-connection-wrapper"]}
 diesel_migrations = {workspace = true,features = ["postgres"]}
 serde_json = {workspace = true}
 tokio = {workspace = true,features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"]}
+uuid = {workspace = true}

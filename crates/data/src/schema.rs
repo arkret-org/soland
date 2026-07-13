@@ -11,6 +11,42 @@ diesel::table! {
 }
 
 diesel::table! {
+    agent_principals (id) {
+        id -> Text,
+        controller_id -> Text,
+        principal_control_realm_id -> Text,
+        controller_authorization_ref -> Text,
+        display_name -> Nullable<Text>,
+        agent_slug -> Nullable<Text>,
+        avatar_blob_ref -> Nullable<Text>,
+        state -> Text,
+        requested_scope -> Nullable<Jsonb>,
+        accountability -> Nullable<Jsonb>,
+        provision_event_refs -> Nullable<Jsonb>,
+        pairing_request_id -> Nullable<Text>,
+        paired_pairing_request_id -> Nullable<Text>,
+        paired_request_digest -> Nullable<Text>,
+        pairing_code -> Nullable<Text>,
+        pairing_expires_at -> Nullable<Timestamptz>,
+        approval_request_id -> Nullable<Text>,
+        controller_account_id -> Nullable<Uuid>,
+        recipient_service_id -> Nullable<Text>,
+        runtime_key_binding_digest -> Nullable<Text>,
+        runtime_public_key_digest -> Nullable<Text>,
+        runtime_attestation_digest -> Nullable<Text>,
+        approval_notification_id -> Nullable<Uuid>,
+        runtime_key_request -> Nullable<Jsonb>,
+        approval_requested_at -> Nullable<Timestamptz>,
+        authorized_event_ref -> Nullable<Text>,
+        authorized_verification_method -> Nullable<Text>,
+        authorized_public_key_digest -> Nullable<Text>,
+        state_changed_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     account_localparts (id) {
         id -> Uuid,
         account_id -> Uuid,
@@ -692,6 +728,7 @@ diesel::table! {
 
 diesel::allow_tables_to_appear_in_same_query!(
     accounts,
+    agent_principals,
     account_localparts,
     handle_releases,
     organizations,
