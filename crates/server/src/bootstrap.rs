@@ -160,17 +160,21 @@ async fn mint_local_service_identity(
     let mut seed = [0u8; 32];
     crate::state::getrandom_seed(&mut seed);
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
-    let prepared = arkret_sdk::webvh::prepare_service_inception(
+    let service_signing_seed = bootstrap_service_signing_seed(config)?;
+    let prepared = arkret_sdk::webvh::prepare_service_inception_with_did_key_seed(
         &mut rng,
         &arkret_sdk::webvh::ServiceInceptionInput {
             principal_endpoint: &endpoint,
             local_id: "service",
             also_known_as: &[],
             version_time: chrono::Utc::now(),
-            did_key_fragment: None,
+            did_key_fragment: Some("notary-key"),
         },
+        &service_signing_seed,
     )
     .map_err(|error| anyhow::anyhow!("service DID inception failed: {error}"))?;
+
+    persist_bootstrap_service_signing_seed(config, &prepared.did, &service_signing_seed)?;
 
     let now = chrono::Utc::now();
     let did_document = prepared
@@ -226,11 +230,10 @@ async fn mint_local_service_identity(
             service_id: prepared.did.clone(),
             provenance: "bootstrapped_local".to_owned(),
             did_document,
-            // The update-key seed is NOT persisted yet: soland has no at-rest
-            // encrypter, so storing it plaintext in the DB would be worse than
-            // deferring rotation. The service DID itself is durable (read from
-            // this row on every boot); persisting the rotation key through the
-            // platform KeyStore is a follow-up (identity-did.md §3.7).
+            // The update-key seed is not persisted in the database because it
+            // has no at-rest encryption. The service assertion/notary seed is
+            // independently durable through the configured secret source or
+            // platform KeyStore.
             update_key_seed_multibase: None,
             created_at: now,
         })
@@ -239,8 +242,108 @@ async fn mint_local_service_identity(
 
     tracing::warn!(
         service_id = %prepared.did,
-        "self-bootstrapped a fresh did:webvh service identity; the rotation key is ephemeral \
-         (not yet persisted through the KeyStore)",
+        "self-bootstrapped a fresh did:webvh service identity with the durable notary key \
+         published as #notary-key; the separate WebVH rotation key is not yet persisted",
     );
     Ok(prepared.did.clone())
+}
+
+fn bootstrap_service_signing_seed(config: &AppConfig) -> anyhow::Result<[u8; 32]> {
+    if let Some(seed) = config.notary_signing_key_seed {
+        return Ok(seed);
+    }
+    if !config.use_keystore {
+        anyhow::bail!(
+            "service identity bootstrap requires SOLAND_NOTARY_SIGNING_KEY or \
+             SOLAND_USE_KEYSTORE=true; the service DID assertion key and notary Seal key must \
+             be the same durable identity (identity-did.md §3.7)"
+        );
+    }
+
+    let mut seed = [0u8; 32];
+    crate::state::getrandom_seed(&mut seed);
+    Ok(seed)
+}
+
+fn persist_bootstrap_service_signing_seed(
+    config: &AppConfig,
+    service_id: &str,
+    seed: &[u8; 32],
+) -> anyhow::Result<()> {
+    if !config.use_keystore || config.notary_signing_key_seed.is_some() {
+        return Ok(());
+    }
+
+    let app_id = format!("soland.{service_id}");
+    let key_id = format!("arkret:signer:soland-notary:{service_id}");
+    let store = arkret_sdk::durable_platform_keystore(&app_id)
+        .map_err(|error| anyhow::anyhow!("opening service identity KeyStore failed: {error}"))?;
+    store.store(&key_id, seed).map_err(|error| {
+        anyhow::anyhow!("persisting bootstrapped service signing key failed: {error}")
+    })?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use ed25519_dalek::SigningKey;
+
+    use super::*;
+
+    #[test]
+    fn bootstrap_rejects_ephemeral_service_signing_key() {
+        let config = AppConfig::test_default();
+        let error = bootstrap_service_signing_seed(&config).expect_err("ephemeral key must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("SOLAND_NOTARY_SIGNING_KEY or SOLAND_USE_KEYSTORE=true"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn minted_service_document_publishes_notary_signing_key() {
+        let signing_seed = [0x39u8; 32];
+        let config = AppConfig {
+            public_base_url: "https://soland.example".to_owned(),
+            notary_signing_key_seed: Some(signing_seed),
+            ..AppConfig::test_default()
+        };
+        let persistence = SolandMemoryPersistenceStore::new();
+
+        let did = mint_local_service_identity(&persistence, &config)
+            .await
+            .expect("service identity mint");
+        let document = persistence
+            .webvh()
+            .get_document(&did)
+            .await
+            .expect("document lookup")
+            .expect("minted document");
+        let expected_key = arkret_sdk::ed25519_pubkey_to_did_key_multibase(
+            SigningKey::from_bytes(&signing_seed)
+                .verifying_key()
+                .as_bytes(),
+        );
+
+        assert_eq!(
+            document.did_document["verificationMethod"][0]["id"],
+            format!("{did}#notary-key")
+        );
+        assert_eq!(
+            document.did_document["verificationMethod"][0]["publicKeyMultibase"],
+            expected_key
+        );
+        assert_eq!(
+            persistence
+                .service_identity()
+                .get()
+                .await
+                .expect("service identity lookup")
+                .expect("service identity")
+                .service_id,
+            did
+        );
+    }
 }

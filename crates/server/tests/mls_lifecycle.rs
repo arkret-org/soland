@@ -30,7 +30,7 @@ use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::service;
 use soland::state::AppState;
 use soland_data::Db;
@@ -345,6 +345,7 @@ async fn mls_lifecycle_end_to_end() {
 
     let bob_did = "did:web:bob.example";
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b0e0000001";
+    let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
     let group_id = "ak:mls_group:abc";
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
     let frontier_ref = "ak:event:01904100-0000-7000-8000-00000000f00d";
@@ -361,6 +362,8 @@ async fn mls_lifecycle_end_to_end() {
         "next_epoch": 0,
         "membership_frontier": [frontier_ref],
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
         "binding_profile": soland::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
         "reducer_profile": soland::kinds::MLS_REDUCER_PROFILE_V1
     });
@@ -432,7 +435,12 @@ async fn mls_lifecycle_end_to_end() {
         .json(&genesis)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(genesis_resp.status_code, Some(StatusCode::OK));
+    let genesis_status = genesis_resp.status_code;
+    if genesis_status != Some(StatusCode::OK) {
+        let mut genesis_resp = genesis_resp;
+        let error: Value = genesis_resp.take_json().await.unwrap_or(Value::Null);
+        panic!("MLS Genesis failed with {genesis_status:?}: {error}");
+    }
     assert_eq!(
         state
             .persistence
@@ -532,6 +540,8 @@ async fn mls_lifecycle_end_to_end() {
         "next_epoch": 1,
         "membership_frontier": [frontier_ref],
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
         "binding_profile": soland::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
         "reducer_profile": soland::kinds::MLS_REDUCER_PROFILE_V1
     });
@@ -571,7 +581,6 @@ async fn mls_lifecycle_end_to_end() {
     );
 
     // ── 4. Bob sees the Welcome on the standard to-device queue ─
-    let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
     let device_messages_resp = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .send(&app_from_state(state.clone()))
@@ -589,7 +598,7 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(device_message["recipient_principal_id"], json!(bob_did));
     assert_eq!(device_message["recipient_device_id"], json!(bob_device));
     assert_eq!(device_message["expires_at"], json!("2100-01-01T00:00:00Z"));
-    assert_eq!(device_message["content"]["group_id"], json!(group_id));
+    assert_eq!(device_message["content"]["mls_group_id"], json!(group_id));
     assert_eq!(device_message["content"]["epoch"], json!(1));
     assert_eq!(
         device_message["content"]["recipient_principal_id"],
@@ -600,12 +609,24 @@ async fn mls_lifecycle_end_to_end() {
         json!(bob_device)
     );
     assert_eq!(
-        device_message["content"]["welcome"],
+        device_message["content"]["ciphertext"],
         json!(URL_SAFE_NO_PAD.encode(b"opaque-mls-welcome"))
     );
     assert_eq!(
-        device_message["content"]["welcome_hash"],
+        device_message["content"]["governance_binding"],
+        governance_binding
+    );
+    assert_eq!(
+        device_message["content"]["claim_ref"]["claim_id"],
+        json!(claim_id)
+    );
+    assert_eq!(
+        device_message["content"]["claim_envelope"]["welcome_digest"],
         json!(arkret_sdk::canonical::sha256_digest(b"opaque-mls-welcome"))
+    );
+    assert_eq!(
+        device_message["content"]["commit_ref"],
+        json!("ak:event:01904100-0000-7000-8000-00000000e2e3")
     );
     assert_eq!(
         device_message["unsigned"]["mls_welcome_id"],

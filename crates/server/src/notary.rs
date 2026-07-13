@@ -555,11 +555,10 @@ impl NotaryWorker {
     /// '.' || BASE64URL(canonical_bytes)`) byte-for-byte.
     ///
     /// The verification_method id is `<service_id>#notary-key`; the
-    /// matching DID Document MUST publish that key for the production
-    /// JWS verifier to round-trip the signature. Until the DID document
-    /// publishing pipeline lands, production deployments rely on
-    /// `select_jws_verifier`'s shape-only path under
-    /// `development_mode=true`.
+    /// matching DID Document publishes the same durable key during service
+    /// identity bootstrap. Config-adopted identities must already publish
+    /// the configured key before they can be used as an authoritative
+    /// production identity.
     fn signature_for(
         &self,
         state: &AppState,
