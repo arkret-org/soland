@@ -2,9 +2,10 @@
 //! agent provisioning / lifecycle surface (architecture option B).
 //!
 //! Soland materialises the durable sub-events required by the personal-agent
-//! aggregate surfaces. Every event authored here uses the controller's own
-//! authenticated session as the author, so the envelope passes
-//! `actor_id == session.actor` and the controller realm-membership check.
+//! aggregate surfaces. Controller-owned accountability, selector and grant
+//! events use the controller as `actor_id`; Agent control events retain the
+//! Agent as `actor_id` and carry the controller as `executed_by` under the
+//! exact DID-document delegation reference.
 //!
 //! The dev-proof envelope shape is the one accepted by
 //! `validate_event_proofs` (event_log/validation.rs): `type="dev-proof"`,
@@ -92,6 +93,7 @@ async fn submit_managed_agent_control_event(
     session: &SessionRecord,
     realm_id: &str,
     agent_id: &str,
+    authorization_ref: &str,
     kind: &str,
     payload: Value,
 ) -> Result<String, AppError> {
@@ -107,8 +109,6 @@ async fn submit_managed_agent_control_event(
     let event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
     let payload_bytes = canonical::canonical_json_bytes(&payload).unwrap_or_default();
     let payload_digest = canonical::sha256_digest(&payload_bytes);
-    let authorization_ref =
-        crate::routing::identity::managed_agent_pcr::controller_authorization_ref(agent_id);
     let envelope = json!({
         "event_id": event_id,
         "kind": kind,
@@ -718,6 +718,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
     session: &SessionRecord,
     realm_id: &str,
     agent_id: &str,
+    authorization_ref: &str,
     event_kind: &str,
     previous_status: &str,
     reason: Option<&str>,
@@ -751,8 +752,16 @@ pub(super) async fn submit_durable_agent_lifecycle(
             .expect("payload object")
             .insert("sidecar_exposure_ack".to_owned(), ack.clone());
     }
-    submit_managed_agent_control_event(state, session, realm_id, agent_id, event_kind, payload)
-        .await
+    submit_managed_agent_control_event(
+        state,
+        session,
+        realm_id,
+        agent_id,
+        authorization_ref,
+        event_kind,
+        payload,
+    )
+    .await
 }
 
 /// AKP-0008 §4.11 — fan-out `ak.agent.key.revoke` for the agent's authorized
@@ -763,6 +772,7 @@ pub(super) async fn submit_revoke_agent_keys(
     session: &SessionRecord,
     realm_id: &str,
     agent_id: &str,
+    authorization_ref: &str,
     key_ids: &[String],
     reason: Option<&str>,
 ) -> Result<(), AppError> {
@@ -785,6 +795,7 @@ pub(super) async fn submit_revoke_agent_keys(
             session,
             realm_id,
             agent_id,
+            authorization_ref,
             "ak.agent.key.revoke",
             payload,
         )

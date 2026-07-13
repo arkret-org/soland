@@ -105,22 +105,13 @@ pub(super) async fn submit_agent_runtime_key_request(
         agent_id,
         &state.config.service_id,
     )?;
-    if let Some(attestation) = body.runtime_attestation.as_ref() {
-        let kind = attestation
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        return Err(AppError::unsupported_feature(format!(
-            "runtime_attestation verifier is not wired; refusing kind `{kind}` fail-closed"
-        )));
-    }
-
     let agent_did = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
     let public_key_digest = arkret_sdk::agent_runtime_public_key_digest(&body.public_key)
         .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?;
+    let runtime_attestation = runtime_attestation_value(body.runtime_attestation.as_ref())?;
     let attestation_digest = arkret_sdk::agent_runtime_attestation_digest(
-        body.runtime_attestation.as_ref(),
+        runtime_attestation.as_ref(),
     )
     .map_err(|error| AppError::invalid_param(format!("runtime_attestation invalid: {error}")))?;
     let binding_digest = arkret_sdk::agent_runtime_key_binding_digest_from_digests(
@@ -646,17 +637,6 @@ pub(super) async fn agent_key_pair(
     let runtime_public_key_digest =
         runtime_public_key_digest(&body.public_key, &body.verification_method)?;
     verify_runtime_key_pair_proof_of_possession(&body, agent_id, &state.config.service_id)?;
-    if let Some(attestation) = body.runtime_attestation.as_ref() {
-        let kind = attestation
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if kind != "self_asserted" {
-            return Err(AppError::unsupported_feature(format!(
-                "runtime_attestation kind `{kind}` is not supported"
-            )));
-        }
-    }
     ensure_current_runtime_key_request_matches(&agent_record, &body)?;
     let pcr_recovery = crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(
         state,
@@ -747,6 +727,7 @@ fn ensure_current_runtime_key_request_matches(
         .get("runtime_key_request")
         .filter(|value| value.is_object())
         .ok_or_else(|| pairing_failed_precondition("runtime key request is no longer pending"))?;
+    let runtime_attestation = runtime_attestation_value(body.runtime_attestation.as_ref())?;
     let fields_match = current.get("pairing_request_id").and_then(Value::as_str)
         == Some(body.pairing_request_id.as_str())
         && current.get("agent_id").and_then(Value::as_str) == Some(body.agent_id.as_str())
@@ -757,7 +738,7 @@ fn ensure_current_runtime_key_request_matches(
         && current
             .get("runtime_attestation")
             .filter(|value| !value.is_null())
-            == body.runtime_attestation.as_ref();
+            == runtime_attestation.as_ref();
     if !fields_match {
         return Err(pairing_failed_precondition(
             "controller approval does not match the current runtime key request",
@@ -770,7 +751,7 @@ fn ensure_current_runtime_key_request_matches(
         &body.pairing_request_id,
         &body.verification_method,
         &body.public_key,
-        body.runtime_attestation.as_ref(),
+        runtime_attestation.as_ref(),
     )
     .map_err(|error| AppError::invalid_param(format!("runtime key binding invalid: {error}")))?;
     if agent_record
@@ -1201,6 +1182,15 @@ pub(super) fn runtime_key_request_for_controller(body: &AgentRuntimeApprovalRequ
     })
 }
 
+fn runtime_attestation_value(
+    runtime_attestation: Option<&arkret_sdk::AgentKeyAuthorizePayloadRuntimeAttestation>,
+) -> Result<Option<Value>, AppError> {
+    runtime_attestation
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| AppError::invalid_param(format!("runtime_attestation invalid: {error}")))
+}
+
 #[derive(serde::Deserialize)]
 struct AgentKeyPairProofOfPossession {
     challenge: String,
@@ -1264,7 +1254,7 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
         &agent_id,
         &body.verification_method,
         &body.public_key,
-        body.runtime_attestation.as_ref(),
+        runtime_attestation_value(body.runtime_attestation.as_ref())?.as_ref(),
     )
     .map_err(|error| {
         AppError::invalid_param(format!(

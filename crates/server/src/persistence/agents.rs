@@ -378,20 +378,18 @@ impl AgentStore for MemoryAgentStore {
                 "agent record missing agent_id".to_owned(),
             ));
         };
-        let immutable_binding = |value: &Value| {
-            (
-                value.get("controller_id").and_then(Value::as_str),
-                value
-                    .get("principal_control_realm_id")
-                    .and_then(Value::as_str),
-                value
-                    .get("controller_authorization_ref")
-                    .and_then(Value::as_str),
-            )
-        };
         let mut data = self.data.lock();
         if let Some(existing) = data.get(&id)
-            && immutable_binding(existing) != immutable_binding(&record)
+            && [
+                "controller_id",
+                "principal_control_realm_id",
+                "controller_authorization_ref",
+            ]
+            .into_iter()
+            .any(|field| {
+                existing.get(field).and_then(Value::as_str)
+                    != record.get(field).and_then(Value::as_str)
+            })
         {
             return Err(PersistenceError::Conflict(format!(
                 "Agent `{id}` controller/PCR authorization binding is immutable"
@@ -560,8 +558,13 @@ impl AgentStore for MemoryAgentStore {
         let Some(record) = guard.get_mut(&write.agent_id) else {
             return Ok(None);
         };
+        let pairing_handle_was_consumed = record
+            .get("paired_pairing_request_id")
+            .and_then(Value::as_str)
+            == Some(write.pairing_request_id.as_str());
         if record.get("pairing_request_id").and_then(Value::as_str)
             != Some(write.pairing_request_id.as_str())
+            || pairing_handle_was_consumed
             || !matches!(
                 record.get("state").and_then(Value::as_str),
                 Some("pending_runtime_key" | "active" | "paused")
@@ -1099,6 +1102,7 @@ impl AgentStore for PgAgentStore {
              runtime_key_binding_digest = $8, runtime_public_key_digest = $9, \
              runtime_attestation_digest = $10, runtime_key_request = $11, updated_at = NOW() \
              WHERE id = $1 AND state IN ('pending_runtime_key', 'active', 'paused') AND pairing_request_id = $2 \
+               AND paired_pairing_request_id IS DISTINCT FROM $2 \
                AND (runtime_key_binding_digest IS NULL OR runtime_key_binding_digest = $8) \
              RETURNING {AGENT_COLUMNS}"
         ))

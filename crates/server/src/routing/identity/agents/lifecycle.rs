@@ -649,8 +649,8 @@ pub(super) async fn lifecycle_transition(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| "active".to_owned());
     // AKP-0008 §4.11 (dev option B): drive the FSM reducer with the durable
-    // `ak.self.agent.{pause,resume,deactivate}` event authored by the
-    // controller, and on deactivate fan-out the revocation chain
+    // `ak.self.agent.{pause,resume,deactivate}` event authored as the Agent
+    // and executed/signed by its controller, and on deactivate fan-out the revocation chain
     // (`ak.agent.key.revoke` + `ak.capability.revoke` for every grant the
     // agent holds). Production fails closed above.
     let realm = record
@@ -659,11 +659,18 @@ pub(super) async fn lifecycle_transition(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::internal("Agent record missing principal_control_realm_id"))?
         .to_owned();
+    let authorization_ref = record
+        .get("controller_authorization_ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::internal("Agent record missing controller_authorization_ref"))?
+        .to_owned();
     submit_durable_agent_lifecycle(
         state,
         &session,
         &realm,
         &agent_id,
+        &authorization_ref,
         event_kind,
         &previous_status,
         reason.as_deref(),
@@ -678,7 +685,16 @@ pub(super) async fn lifecycle_transition(
                 proj.unrevoked_grant_locations_for_subject(&agent_id),
             )
         };
-        submit_revoke_agent_keys(state, &session, &realm, &agent_id, &key_ids, None).await?;
+        submit_revoke_agent_keys(
+            state,
+            &session,
+            &realm,
+            &agent_id,
+            &authorization_ref,
+            &key_ids,
+            None,
+        )
+        .await?;
         submit_revoke_agent_grants(state, &session, &grant_locations).await?;
     }
     // Persist the lifecycle state transition on the agent_principal row so

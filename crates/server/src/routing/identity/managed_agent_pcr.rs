@@ -613,14 +613,9 @@ async fn agent_did_document_at(
     }) {
         return Ok(document);
     }
-    state
-        .persistence
-        .webvh()
-        .get_document(agent_id)
-        .await
-        .map_err(|error| AppError::internal(format!("Agent DID document lookup failed: {error}")))?
-        .map(|record| record.did_document)
-        .ok_or_else(|| schema_error("managed Agent DID document is unavailable"))
+    Err(schema_error(
+        "managed Agent DID accepted history is unavailable at the evaluation time",
+    ))
 }
 
 fn validate_agent_did_document_binding(
@@ -678,10 +673,13 @@ fn validate_agent_did_document_binding(
         .flatten()
         .filter_map(Value::as_str)
         .collect::<BTreeSet<_>>();
-    if delegation
-        .get("delegated_controller")
-        .and_then(Value::as_str)
-        != Some(controller_id)
+    if delegation.get("type").and_then(Value::as_str)
+        != Some("ArkretManagedPrincipalControllerDelegation")
+        || delegation.get("controller").and_then(Value::as_str) != Some(agent_id)
+        || delegation
+            .get("delegated_controller")
+            .and_then(Value::as_str)
+            != Some(controller_id)
         || CONTROLLER_DELEGATION_PURPOSES
             .iter()
             .any(|purpose| !purposes.contains(purpose))
@@ -835,6 +833,19 @@ mod tests {
         assert!(
             validate_agent_did_document_binding(&duplicate, AGENT, CONTROLLER, PCR, AUTHORIZATION,)
                 .is_err()
+        );
+
+        let mut wrong_delegation_controller = did_document();
+        wrong_delegation_controller["capabilityDelegation"][0]["controller"] = json!(CONTROLLER);
+        assert!(
+            validate_agent_did_document_binding(
+                &wrong_delegation_controller,
+                AGENT,
+                CONTROLLER,
+                PCR,
+                AUTHORIZATION,
+            )
+            .is_err()
         );
     }
 

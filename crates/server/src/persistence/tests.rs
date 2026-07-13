@@ -116,6 +116,26 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
             .is_none(),
         "an already-active Agent must not accept a stale runtime approval request"
     );
+
+    let mut replacement_record = store.get(&activation.agent_id).await.unwrap().unwrap();
+    replacement_record["pairing_request_id"] =
+        serde_json::json!("agent_pairing_request:replacement");
+    store.put(replacement_record).await.unwrap();
+    let replacement = AgentRuntimeApprovalWrite {
+        pairing_request_id: "agent_pairing_request:replacement".to_owned(),
+        approval_request_id: "agent_runtime_approval:replacement".to_owned(),
+        approval_notification_id: "ak:notification:01964137-0000-7000-8000-000000000004".to_owned(),
+        runtime_key_binding_digest: "sha256:binding-replacement".to_owned(),
+        ..runtime_approval_write("sha256:binding-replacement")
+    };
+    assert!(
+        store
+            .put_runtime_approval_if_compatible(&replacement)
+            .await
+            .unwrap()
+            .is_some(),
+        "an active Agent must accept an approval request for a fresh replacement handle"
+    );
 }
 
 #[tokio::test]
