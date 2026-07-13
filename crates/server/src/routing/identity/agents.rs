@@ -35,9 +35,9 @@ use arkret_sdk::models::{
     AgentPairingResolveRequestBody, AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
-    AgentProjection, AgentProvisionOutcome, AgentProvisionPcrRecovery,
-    AgentProvisionRequestBody, AgentRenewPairingOutcome, AgentRenewPairingRequestBody,
-    AgentResumeRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
+    AgentProjection, AgentProvisionOutcome, AgentProvisionPcrRecovery, AgentProvisionRequestBody,
+    AgentRenewPairingOutcome, AgentRenewPairingRequestBody, AgentResumeRequestBody,
+    AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
     AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody,
     AgentSidecarContextRef, AgentSidecarExposureAck, AgentSidecarThreadEnsureOutcome,
     AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView, GrantSnapshot, KeyState,
@@ -177,6 +177,8 @@ mod tests {
         json!({
             "agent_id": agent_id,
             "controller_id": controller_id,
+            "principal_control_realm_id": "ak:realm:01999999-0000-7000-8000-00000000feed",
+            "controller_authorization_ref": format!("{agent_id}#managed-controller"),
             "display_name": "Test Agent",
             "state": "pending_runtime_key",
             "requested_scope": requested_scope,
@@ -195,7 +197,13 @@ mod tests {
                 "ak.event.read",
                 "ak.message.create"
             ],
-            "resources": [{ "kind": "service", "service_id": "did:web:soland.local" }]
+            "resources": [
+                {
+                    "kind": "realm",
+                    "realm_id": "ak:realm:01999999-0000-7000-8000-000000000099"
+                },
+                { "kind": "service", "service_id": "did:web:soland.local" }
+            ]
         })
     }
 
@@ -220,7 +228,10 @@ mod tests {
         json!({
             "event_id": "ak:event:01999999-0000-7000-8000-000000000001",
             "kind": "ak.agent.key.authorize",
-            "actor_id": controller,
+            "actor_id": agent_id,
+            "executed_by": controller,
+            "authorization_ref": record["controller_authorization_ref"],
+            "realm_id": record["principal_control_realm_id"],
             "payload": {
                 "agent_id": agent_id,
                 "key_id": "ak:agent_key:01999999000070008000000000000001",
@@ -322,16 +333,6 @@ mod tests {
             verification_method_principal("did:web:agent.example?versionId=1#key-1"),
             "did:web:agent.example"
         );
-    }
-
-    #[test]
-    fn detach_revoke_only_targets_capability_grants() {
-        assert!(is_capability_grant_id(
-            "ak:grant:01999999-0000-7000-8000-000000000001"
-        ));
-        assert!(!is_capability_grant_id(
-            "ak:accountability_grant:01999999-0000-7000-8000-000000000001"
-        ));
     }
 
     #[test]
@@ -788,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn key_authorize_event_rejects_wrong_controller_actor() {
+    fn key_authorize_event_rejects_wrong_controller_executor() {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
@@ -822,10 +823,52 @@ mod tests {
             public_key_digest,
             service_id,
         )
-        .expect_err("authorize_event actor must match authenticated controller");
+        .expect_err("authorize_event executor must match authenticated controller");
 
         assert_eq!(err.wire_code(), "capability_denied");
-        assert!(err.message.contains("actor_id"));
+        assert!(err.message.contains("executed_by"));
+    }
+
+    #[test]
+    fn key_authorize_event_rejects_wrong_approval_principal() {
+        let controller = "did:web:controller.example";
+        let agent = "did:web:agent.example";
+        let verification_method = "did:web:agent.example#runtime-key-1";
+        let service_id = "did:web:soland.local";
+        let public_key_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let scope = requested_agent_scope();
+        let record = pending_pairing_record(
+            agent,
+            controller,
+            scope.clone(),
+            "12345678",
+            "2999-01-01T00:00:00Z",
+        );
+        let mut envelope = key_authorize_envelope(
+            &record,
+            controller,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_id,
+            scope,
+        );
+        envelope["payload"]["approval_evidence"]["approved_by"] = json!("did:web:mallory.example");
+
+        let err = ensure_key_authorize_event_matches_request(
+            &envelope,
+            controller,
+            &record,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_id,
+        )
+        .expect_err("approval evidence must be issued by the authenticated controller");
+
+        assert_eq!(err.wire_code(), "capability_denied");
+        assert!(err.message.contains("approved_by"));
     }
 
     #[test]

@@ -53,6 +53,7 @@ pub(super) async fn provision_agent(
         .with_status(StatusCode::PRECONDITION_FAILED)
         .with_reason_code("recovery_policy_required"));
     }
+    let controller_realm = require_controller_principal_control_realm(state, &session).await?;
     let existing = state
         .persistence
         .agents()
@@ -61,7 +62,7 @@ pub(super) async fn provision_agent(
         .map_err(|err| AppError::internal(format!("agent slug conflict check failed: {err}")))?;
     let mut existing = existing;
     for record in existing.iter_mut() {
-        *record = lazily_expire_pairing(state, &session, record.clone()).await;
+        *record = lazily_expire_pairing(state, &session, record.clone()).await?;
     }
     if existing.iter().any(|record| {
         record.get("agent_slug").and_then(Value::as_str) == Some(agent_slug.as_str())
@@ -71,7 +72,6 @@ pub(super) async fn provision_agent(
             "slug is already bound to an active or open agent for this controller",
         ));
     }
-    let controller_realm = require_controller_principal_control_realm(state, &session).await?;
     let agent_id = generate_agent_principal_did(&state.config.service_id);
     let principal_control_realm_id =
         crate::routing::identity::managed_agent_pcr::allocate_principal_control_realm_id()?;
@@ -220,7 +220,7 @@ pub(super) async fn renew_agent_pairing(
     let record = require_agent_controller(state, &session, &agent_id).await?;
     // Lazy-expire first so a stale pending record renews through the same
     // path (grants already revoked) as an observed-expired one.
-    let record = lazily_expire_pairing(state, &session, record).await;
+    let record = lazily_expire_pairing(state, &session, record).await?;
     let bootstrap_reopen = match record.get("state").and_then(Value::as_str) {
         Some("pending_runtime_key" | "pairing_expired") => true,
         Some("active" | "paused") => false,
@@ -276,7 +276,10 @@ pub(super) async fn renew_agent_pairing(
     // the agent principal, not the key.
     let live_grant_ids = {
         let proj = state.projection.lock();
-        proj.grant_ids_for_subject(&agent_id)
+        proj.unrevoked_grant_locations_for_subject(&agent_id)
+            .into_iter()
+            .map(|(grant_id, _)| grant_id)
+            .collect::<Vec<_>>()
     };
     let grant_ids = if bootstrap_reopen && live_grant_ids.is_empty() {
         let requested_scope = record
@@ -415,7 +418,7 @@ pub(super) async fn list_agents(
     let mut agents = Vec::with_capacity(records.len());
     for record in records {
         let record = reconcile_accepted_agent_authorization(state, record).await?;
-        let record = lazily_expire_pairing(state, &session, record).await;
+        let record = lazily_expire_pairing(state, &session, record).await?;
         agents.push(agent_projection_from_record(&record));
     }
     // spec `agent_list` = `{agents: [agent_projection], next_cursor?, has_more}`.
@@ -463,7 +466,7 @@ pub(super) async fn get_agent(
     }
     let record = reconcile_accepted_agent_authorization(state, record).await?;
     let record = if let Some(session) = session.as_ref() {
-        lazily_expire_pairing(state, session, record).await
+        lazily_expire_pairing(state, session, record).await?
     } else {
         record
     };
@@ -502,9 +505,9 @@ pub(super) async fn lazily_expire_pairing(
     state: &AppState,
     session: &SessionRecord,
     mut record: Value,
-) -> Value {
+) -> Result<Value, AppError> {
     if !agent_pairing_handle_is_open(&record) {
-        return record;
+        return Ok(record);
     }
     let expired = record
         .get("pairing_expires_at")
@@ -513,27 +516,23 @@ pub(super) async fn lazily_expire_pairing(
         .map(|expires| chrono::Utc::now() > expires.with_timezone(&chrono::Utc))
         .unwrap_or(false);
     if !expired {
-        return record;
+        return Ok(record);
     }
     let Some(agent_id) = record
         .get("agent_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
     else {
-        return record;
+        return Ok(record);
     };
     let bootstrap_expired =
         record.get("state").and_then(Value::as_str) == Some("pending_runtime_key");
-    if bootstrap_expired
-        && state.config.development_mode
-        && let Ok(realm) = require_controller_principal_control_realm(state, session).await
-    {
-        let grant_ids = {
+    if bootstrap_expired && state.config.development_mode {
+        let grant_locations = {
             let proj = state.projection.lock();
-            Some(proj.grant_ids_for_subject(&agent_id))
-        }
-        .unwrap_or_default();
-        let _ = submit_revoke_agent_grants(state, session, &realm, &grant_ids).await;
+            proj.unrevoked_grant_locations_for_subject(&agent_id)
+        };
+        submit_revoke_agent_grants(state, session, &grant_locations).await?;
     }
     let terminal_notification = account_notification_context(&record);
     if let Some(obj) = record.as_object_mut() {
@@ -555,16 +554,20 @@ pub(super) async fn lazily_expire_pairing(
             json!(chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)),
         );
     }
-    if let Err(error) = state.persistence.agents().put(record.clone()).await {
-        tracing::error!(%error, agent_id, "failed to persist expired Agent pairing");
-        return record;
-    }
+    state
+        .persistence
+        .agents()
+        .put(record.clone())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("failed to persist expired Agent pairing: {error}"))
+        })?;
     if let Some(context) = terminal_notification
         && let Err(error) = persist_terminal_account_notification(state, context, "expired").await
     {
         tracing::error!(message = %error.message, agent_id, "failed to persist expired Agent approval notification");
     }
-    record
+    Ok(record)
 }
 
 pub(super) async fn lifecycle_transition(
@@ -668,16 +671,15 @@ pub(super) async fn lifecycle_transition(
     )
     .await?;
     if event_kind == "ak.self.agent.deactivate" {
-        let (key_ids, grant_ids) = {
+        let (key_ids, grant_locations) = {
             let proj = state.projection.lock();
             (
                 proj.authorized_key_ids_for(&agent_id),
-                proj.grant_ids_for_subject(&agent_id),
+                proj.unrevoked_grant_locations_for_subject(&agent_id),
             )
         };
         submit_revoke_agent_keys(state, &session, &realm, &agent_id, &key_ids, None).await?;
-        let controller_realm = require_controller_principal_control_realm(state, &session).await?;
-        submit_revoke_agent_grants(state, &session, &controller_realm, &grant_ids).await?;
+        submit_revoke_agent_grants(state, &session, &grant_locations).await?;
     }
     // Persist the lifecycle state transition on the agent_principal row so
     // list/get reflect the new status (the durable event drives the reducer
@@ -852,41 +854,26 @@ pub(super) async fn attach_agent_grant(
     let agent_id = agent_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
-    // spec `agent_grant_attach_request_body` = `{grant: object}`.
-    if !body.grant.is_object() {
-        return Err(AppError::invalid_param("grant must be an object"));
-    }
-    // spec `agent_grant_attach_outcome.grant_id` MUST be a `ak:grant:<uuidv7>`.
-    let grant_id_str = ids::generate_grant_id();
-    let grant_id = GrantId::new(grant_id_str.clone())
-        .map_err(|err| AppError::internal(format!("generated grant id invalid: {err}")))?;
-    // AKP-0008 §4.11 (dev option B): write the real `ak.capability.grant`
-    // authored by the controller. Production submits this from inkson.
-    if state.config.development_mode {
-        let realm = require_controller_principal_control_realm(state, &session).await?;
-        attach_agent_grant_event(
-            state,
-            &session,
-            &realm,
-            &agent_id,
-            &grant_id_str,
-            &body.grant,
+    if !state.config.development_mode {
+        return Err(AppError::unsupported_feature(
+            "production Agent grant attachment requires protocol-valid Event authoring",
         )
-        .await?;
-    } else {
-        append_audit_log(
-            state,
-            Some(&session.actor),
-            "ak.self.agent.grant.command.attach",
-            json!({
-                "agent_id": agent_id,
-                "grant_id": grant_id,
-                "grant": body.grant,
-            }),
-            "accepted",
-        )
-        .await;
+        .with_wire_code("agent_grant_fanout_unavailable"));
     }
+    let grant_id = body.grant.id.clone();
+    attach_agent_grant_event(state, &session, &agent_id, &body.grant).await?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "ak.self.agent.grant.command.attach",
+        json!({
+            "agent_id": agent_id,
+            "grant_id": grant_id,
+            "realm_id": body.grant.realm_id,
+        }),
+        "accepted",
+    )
+    .await;
     res.status_code(StatusCode::CREATED);
     // spec `agent_grant_attach_outcome` = `{ok, grant_id}`.
     json_ok(AgentGrantAttachOutcome { ok: true, grant_id })
@@ -911,11 +898,26 @@ pub(super) async fn detach_agent_grant(
     let agent_id = agent_id.into_inner();
     let grant_id = grant_id.into_inner();
     require_agent_controller(state, &session, &agent_id).await?;
-    if !grant_id.starts_with("ak:accountability_grant:") && !grant_id.starts_with("ak:grant:") {
-        return Err(AppError::invalid_param(
-            "grant_id must be a ak:accountability_grant:<uuidv7> or ak:grant:<uuidv7> typed id",
-        ));
+    let typed_grant_id = GrantId::new(grant_id.clone())
+        .map_err(|error| AppError::invalid_param(format!("grant_id is invalid: {error}")))?;
+    if !state.config.development_mode {
+        return Err(AppError::unsupported_feature(
+            "production Agent grant detachment requires protocol-valid Event authoring",
+        )
+        .with_wire_code("agent_grant_fanout_unavailable"));
     }
+    let locations = {
+        let projection = state.projection.lock();
+        projection
+            .grant_locations_for_subject(&agent_id)
+            .into_iter()
+            .filter(|(candidate, _)| candidate == typed_grant_id.as_str())
+            .collect::<Vec<_>>()
+    };
+    let [(matched_grant_id, realm_id)] = locations.as_slice() else {
+        return Err(AppError::not_found("Agent capability grant not found"));
+    };
+    revoke_capability_grant(state, &session, realm_id, matched_grant_id).await?;
     let revoked_at = now();
     append_audit_log(
         state,
@@ -923,19 +925,12 @@ pub(super) async fn detach_agent_grant(
         "ak.self.agent.grant.resource.delete",
         json!({
             "agent_id": agent_id,
-            "grant_id": grant_id,
+            "grant_id": typed_grant_id,
+            "realm_id": realm_id,
         }),
         "accepted",
     )
     .await;
-    // AKP-0008 §4.11 (dev option B): detach of a capability grant MUST emit
-    // the real revoke event so the authz projection and cache converge. An
-    // accountability-grant detach is a separate governance object, so it stays
-    // audit-only here until that cell family is introduced.
-    if state.config.development_mode && is_capability_grant_id(&grant_id) {
-        let realm = require_controller_principal_control_realm(state, &session).await?;
-        revoke_capability_grant(state, &session, &realm, &grant_id).await?;
-    }
     // spec `agent_grant_detach_outcome` = `{ok, revoked_at}`.
     json_ok(AgentGrantDetachOutcome {
         ok: true,

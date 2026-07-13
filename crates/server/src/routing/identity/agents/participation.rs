@@ -188,10 +188,6 @@ pub(super) fn participation_scope_resource(scope: &AgentParticipationScope) -> V
     }
 }
 
-pub(super) fn is_capability_grant_id(grant_id: &str) -> bool {
-    grant_id.starts_with("ak:grant:")
-}
-
 pub(super) fn normalize_sidecar_exposure_ack(
     value: Option<Value>,
     controller_id: &str,

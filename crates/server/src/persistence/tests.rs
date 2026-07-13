@@ -23,6 +23,8 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
         .put(serde_json::json!({
             "agent_id": "did:web:agent.example",
             "controller_id": "did:web:controller.example",
+            "principal_control_realm_id": "ak:realm:01964137-0000-7000-8000-000000000010",
+            "controller_authorization_ref": "did:web:agent.example#managed-controller",
             "state": "pending_runtime_key",
             "pairing_request_id": "agent_pairing_request:test",
         }))
@@ -114,6 +116,27 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
             .is_none(),
         "an already-active Agent must not accept a stale runtime approval request"
     );
+}
+
+#[tokio::test]
+async fn memory_agent_controller_pcr_binding_is_immutable() {
+    let store = MemoryAgentStore::new();
+    let record = serde_json::json!({
+        "agent_id": "did:web:agent.example",
+        "controller_id": "did:web:controller.example",
+        "principal_control_realm_id": "ak:realm:01964137-0000-7000-8000-000000000010",
+        "controller_authorization_ref": "did:web:agent.example#managed-controller",
+        "state": "pending_runtime_key",
+    });
+    store.put(record.clone()).await.unwrap();
+
+    let mut changed = record;
+    changed["principal_control_realm_id"] =
+        serde_json::json!("ak:realm:01964137-0000-7000-8000-000000000011");
+    assert!(matches!(
+        store.put(changed).await,
+        Err(PersistenceError::Conflict(message)) if message.contains("immutable")
+    ));
 }
 
 #[tokio::test]

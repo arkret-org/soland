@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{
-    AgentPcrRecoveryState, BackupClass, KeyBackup, KeyBackupRecipientMethod,
-    ManagedFrontierRef, ManagedPrincipalBinding, RealmId,
+    AgentPcrRecoveryState, BackupClass, KeyBackup, KeyBackupRecipientMethod, ManagedFrontierRef,
+    ManagedPrincipalBinding, RealmId,
 };
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -116,6 +116,7 @@ pub(crate) async fn persist_managed_agent_did_binding(
 pub(crate) async fn validate_managed_agent_key_backup(
     state: &AppState,
     backup: &KeyBackup,
+    accepted_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
     let managed_items = backup
         .contents
@@ -188,13 +189,7 @@ pub(crate) async fn validate_managed_agent_key_backup(
             ));
         }
         let record = managed_agent_record(state, binding.managed_principal_id.as_str()).await?;
-        validate_binding_against_record(state, &record, binding, backup.created_at).await?;
-        if !backup_is_after_current_pcr_events(state, &record, backup).await? {
-            return Err(failed_precondition(
-                "managed Agent PCR backup predates the current accepted PCR event frontier",
-                "backup_frontier_stale",
-            ));
-        }
+        validate_binding_against_record(state, &record, binding, accepted_at).await?;
         let current = current_managed_frontier(state, binding.principal_control_realm_id.as_str())
             .await?
             .ok_or_else(|| {
@@ -225,7 +220,7 @@ pub(crate) async fn validate_managed_agent_key_backup(
             ));
         }
     }
-    validate_current_recovery_recipient(state, backup).await
+    validate_current_recovery_recipient(state, backup, accepted_at).await
 }
 
 pub(crate) async fn project_agent_pcr_recovery(
@@ -335,10 +330,9 @@ pub(crate) async fn project_agent_pcr_recovery(
         })
     });
     if !policy_matches
-        || validate_current_recovery_recipient(state, tail)
+        || validate_current_recovery_recipient(state, tail, Utc::now())
             .await
             .is_err()
-        || !backup_is_after_current_pcr_events(state, agent_record, tail).await?
     {
         return Ok(stale());
     }
@@ -429,13 +423,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
             "managed_agent_delegation_scope",
         ));
     }
-    let accepted_at = envelope
-        .get("created_at")
-        .and_then(Value::as_str)
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))
-        .ok_or_else(|| schema_error("delegated Agent Event created_at is invalid"))?;
-    validate_agent_controller_binding(state, &record, accepted_at).await
+    validate_agent_controller_binding(state, &record, Utc::now()).await
 }
 
 pub(crate) fn validate_agent_pcr_genesis_object(
@@ -708,6 +696,7 @@ fn validate_agent_did_document_binding(
 async fn validate_current_recovery_recipient(
     state: &AppState,
     backup: &KeyBackup,
+    evaluated_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
     let policy = state
         .persistence
@@ -739,12 +728,12 @@ async fn validate_current_recovery_recipient(
                     .get("not_before")
                     .and_then(Value::as_str)
                     .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                    .is_some_and(|time| time.with_timezone(&Utc) <= backup.created_at)
+                    .is_some_and(|time| time.with_timezone(&Utc) <= evaluated_at)
                 && entry
                     .get("expires_at")
                     .and_then(Value::as_str)
                     .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                    .is_some_and(|time| time.with_timezone(&Utc) > backup.created_at)
+                    .is_some_and(|time| time.with_timezone(&Utc) > evaluated_at)
         });
     if !current {
         return Err(failed_precondition(
@@ -753,35 +742,6 @@ async fn validate_current_recovery_recipient(
         ));
     }
     Ok(())
-}
-
-async fn backup_is_after_current_pcr_events(
-    state: &AppState,
-    agent_record: &Value,
-    backup: &KeyBackup,
-) -> Result<bool, AppError> {
-    let realm_id = record_str(agent_record, "principal_control_realm_id")?;
-    let events = state
-        .persistence
-        .events()
-        .snapshot_all()
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("Agent authorization lookup failed: {error}"))
-        })?;
-    let accepted_at = events
-        .iter()
-        .filter(|event| {
-            event
-                .envelope
-                .get("realm_id")
-                .and_then(Value::as_str)
-                .or(event.realm_id.as_deref())
-                == Some(realm_id)
-        })
-        .map(|event| event.received_at)
-        .max();
-    Ok(accepted_at.is_none_or(|accepted_at| backup.created_at > accepted_at))
 }
 
 fn canonical_binding_bytes(binding: &ManagedPrincipalBinding) -> Result<Vec<u8>, AppError> {
@@ -807,4 +767,85 @@ fn failed_precondition(message: impl Into<String>, reason: &str) -> AppError {
     AppError::new(ErrorCode::FailedPrecondition, message)
         .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
         .with_reason_code(reason)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const AGENT: &str = "did:web:agent.example";
+    const CONTROLLER: &str = "did:web:controller.example";
+    const PCR: &str = "ak:realm:01999999-0000-7000-8000-00000000feed";
+    const AUTHORIZATION: &str = "did:web:agent.example#managed-controller";
+
+    fn did_document() -> Value {
+        json!({
+            "id": AGENT,
+            "capabilityDelegation": [{
+                "id": AUTHORIZATION,
+                "type": "ArkretManagedPrincipalControllerDelegation",
+                "controller": AGENT,
+                "delegated_controller": CONTROLLER,
+                "purposes": CONTROLLER_DELEGATION_PURPOSES,
+            }],
+            "service": [{
+                "id": format!("{AGENT}#{PCR_SERVICE_FRAGMENT}"),
+                "type": PCR_SERVICE_TYPE,
+                "serviceEndpoint": {
+                    "realm_id": PCR,
+                    "controller_did": CONTROLLER,
+                    "authorization_ref": AUTHORIZATION,
+                },
+            }],
+        })
+    }
+
+    fn pcr_genesis() -> Value {
+        json!({
+            "id": PCR,
+            "created_by": AGENT,
+            "fields": { "purpose": "principal_control" },
+            "schema_refs": ["ak.profile.principal_control_realm.v1"],
+            "history_visibility": "restricted",
+            "encryption_profile": "mls_rfc9420",
+            "content_encryption_floor": "e2ee_required",
+            "metadata_encryption_floor": "e2ee_required",
+            "notary_profile": "single_did",
+            "notary": AGENT,
+            "security_class": "high_assurance",
+        })
+    }
+
+    #[test]
+    fn did_binding_requires_one_exact_agent_pcr_service() {
+        validate_agent_did_document_binding(&did_document(), AGENT, CONTROLLER, PCR, AUTHORIZATION)
+            .expect("exact managed Agent DID binding must pass");
+
+        let mut wrong_pcr = did_document();
+        wrong_pcr["service"][0]["serviceEndpoint"]["realm_id"] =
+            json!("ak:realm:01999999-0000-7000-8000-00000000bad0");
+        assert!(
+            validate_agent_did_document_binding(&wrong_pcr, AGENT, CONTROLLER, PCR, AUTHORIZATION,)
+                .is_err()
+        );
+
+        let mut duplicate = did_document();
+        let service = duplicate["service"][0].clone();
+        duplicate["service"].as_array_mut().unwrap().push(service);
+        assert!(
+            validate_agent_did_document_binding(&duplicate, AGENT, CONTROLLER, PCR, AUTHORIZATION,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn agent_pcr_genesis_requires_restricted_mls_e2ee_profile() {
+        validate_agent_pcr_genesis_object(&pcr_genesis(), AGENT, PCR)
+            .expect("strict Agent PCR genesis must pass");
+
+        let mut ordinary_realm = pcr_genesis();
+        ordinary_realm["history_visibility"] = json!("shared");
+        ordinary_realm["encryption_profile"] = json!("none");
+        assert!(validate_agent_pcr_genesis_object(&ordinary_realm, AGENT, PCR).is_err());
+    }
 }

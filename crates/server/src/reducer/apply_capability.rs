@@ -1028,8 +1028,26 @@ impl ProjectionState {
                 };
             }
         };
+        let pairing_replacement = operation
+            .payload
+            .get("approval_evidence")
+            .and_then(|evidence| evidence.get("kind"))
+            .and_then(Value::as_str)
+            == Some("pairing_request")
+            && !active.is_empty();
         let replacing_other_keys = active.keys().any(|active_key| active_key != &key_id);
-        if replacing_other_keys {
+        if pairing_replacement {
+            let expected: std::collections::BTreeSet<_> = active
+                .iter()
+                .map(|(active_key, event_ref)| (active_key.clone(), event_ref.clone()))
+                .collect();
+            let supplied: std::collections::BTreeSet<_> = supersedes.iter().cloned().collect();
+            if supplied.len() != supersedes.len() || supplied != expected {
+                return ProjectionEffect::Rejected {
+                    reason: "agent_key_supersedes_state_mismatch".to_owned(),
+                };
+            }
+        } else if replacing_other_keys {
             let expected: std::collections::BTreeSet<_> = active
                 .iter()
                 .filter(|(active_key, _)| *active_key != &key_id)
@@ -1099,8 +1117,18 @@ impl ProjectionState {
     /// deactivate fan-out can idempotently re-revoke). Used by the lifecycle
     /// deactivate path to fan-out `ak.capability.revoke`.
     pub fn grant_ids_for_subject(&self, subject_did: &str) -> Vec<String> {
+        self.grant_locations_for_subject(subject_did)
+            .into_iter()
+            .map(|(grant_id, _)| grant_id)
+            .collect()
+    }
+
+    /// Every persisted capability grant for `subject_did`, paired with the
+    /// Realm that governs its grant cell. Revocation must be submitted in
+    /// this Realm; a controller PCR is not a cross-Realm revocation surface.
+    pub fn grant_locations_for_subject(&self, subject_did: &str) -> Vec<(String, String)> {
         let cell_prefix = "ak:cell:ak.component.capability.grant.v1:";
-        let mut ids = Vec::new();
+        let mut locations = std::collections::BTreeSet::new();
         for (cell_ref, cell_state) in &self.cells {
             if !cell_ref.as_str().starts_with(cell_prefix) {
                 continue;
@@ -1120,13 +1148,31 @@ impl ProjectionState {
                         .get("grant_id")
                         .or_else(|| body.get("id"))
                         .and_then(Value::as_str)
-                    && !ids.iter().any(|existing| existing == grant_id)
+                    && let Some(realm_id) = body.get("realm_id").and_then(Value::as_str)
                 {
-                    ids.push(grant_id.to_owned());
+                    locations.insert((grant_id.to_owned(), realm_id.to_owned()));
                 }
             }
         }
-        ids
+        locations.into_iter().collect()
+    }
+
+    /// Non-terminal grants for `subject_did`, including pending Agent grants
+    /// that are durable but not yet in the effective authz index.
+    pub fn unrevoked_grant_locations_for_subject(
+        &self,
+        subject_did: &str,
+    ) -> Vec<(String, String)> {
+        self.grant_locations_for_subject(subject_did)
+            .into_iter()
+            .filter(|(grant_id, _)| {
+                let Some(cell_ref) = Self::capability_grant_cell_ref(grant_id) else {
+                    return false;
+                };
+                let items = self.capability_cell_items(&cell_ref);
+                !items.is_empty() && !Self::capability_cell_has_revoked_item(&items)
+            })
+            .collect()
     }
 
     /// `sync/federation.md` §4.4 Capability Revoke Fanout — the set of peer
@@ -1474,6 +1520,67 @@ mod agent_key_flag_tests {
         assert_eq!(
             state.active_agent_key_authorizations(AGENT),
             vec![(new_key.to_owned(), new_event.to_owned())]
+        );
+    }
+
+    #[test]
+    fn pairing_replacement_of_same_key_requires_exact_supersedes() {
+        let mut state = ProjectionState::default();
+        let old_event = "ak:event:01970000-0000-7000-8000-000000000021";
+        let new_event = "ak:event:01970000-0000-7000-8000-000000000022";
+        let key_id = "ak:agent_key:stable";
+
+        assert!(matches!(
+            state.apply_agent_key_authorize(&op(
+                "agent_key_authorize",
+                json!({
+                    "agent_id": AGENT,
+                    "key_id": key_id,
+                    "accepted_event_id": old_event,
+                }),
+            )),
+            crate::reducer::ProjectionEffect::AgentKeyAuthorizeProjected { .. }
+        ));
+
+        let rejected = state.apply_agent_key_authorize(&op(
+            "agent_key_authorize",
+            json!({
+                "agent_id": AGENT,
+                "key_id": key_id,
+                "accepted_event_id": new_event,
+                "approval_evidence": { "kind": "pairing_request" },
+            }),
+        ));
+        assert!(matches!(
+            rejected,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "agent_key_supersedes_state_mismatch"
+        ));
+        assert_eq!(
+            state.active_agent_key_authorizations(AGENT),
+            vec![(key_id.to_owned(), old_event.to_owned())]
+        );
+
+        let accepted = state.apply_agent_key_authorize(&op(
+            "agent_key_authorize",
+            json!({
+                "agent_id": AGENT,
+                "key_id": key_id,
+                "accepted_event_id": new_event,
+                "approval_evidence": { "kind": "pairing_request" },
+                "supersedes": [{
+                    "key_id": key_id,
+                    "authorized_event_ref": old_event,
+                }],
+            }),
+        ));
+        assert!(matches!(
+            accepted,
+            crate::reducer::ProjectionEffect::AgentKeyAuthorizeProjected { .. }
+        ));
+        assert_eq!(
+            state.active_agent_key_authorizations(AGENT),
+            vec![(key_id.to_owned(), new_event.to_owned())]
         );
     }
 

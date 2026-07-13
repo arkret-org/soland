@@ -239,7 +239,7 @@ pub(super) async fn submit_agent_runtime_key_request(
     json_ok(AgentRuntimeApprovalOutcome {
         ok: true,
         approval_request_id,
-        status: AgentStatus::PendingRuntimeKey,
+        status: agent_projection_from_record(&stored).status,
     })
 }
 
@@ -378,6 +378,10 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         &public_key_digest,
         &state.config.service_id,
     )?;
+    let expected_scope = agent_record
+        .get("requested_scope")
+        .filter(|scope| !scope.is_null())
+        .cloned();
     let events = state
         .persistence
         .events()
@@ -402,7 +406,23 @@ pub(super) async fn reconcile_accepted_agent_authorization(
                 == Some(verification_method.as_str())
             && payload.get("public_key_digest").and_then(Value::as_str)
                 == Some(public_key_digest.as_str())
+            && payload
+                .get("accountable_principal_id")
+                .and_then(Value::as_str)
+                == Some(controller_id.as_str())
+            && expected_scope
+                .as_ref()
+                .is_none_or(|scope| payload.get("agent_key_scope") == Some(scope))
+            && payload
+                .get("audience")
+                .and_then(Value::as_array)
+                .is_some_and(|audience| {
+                    audience
+                        .iter()
+                        .any(|entry| entry.as_str() == Some(state.config.service_id.as_str()))
+                })
             && evidence.get("kind").and_then(Value::as_str) == Some("pairing_request")
+            && evidence.get("approved_by").and_then(Value::as_str) == Some(controller_id.as_str())
             && evidence.get("pairing_request_id").and_then(Value::as_str)
                 == Some(pairing_request_id.as_str())
             && evidence
@@ -654,7 +674,7 @@ pub(super) async fn agent_key_pair(
     crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
         state,
         &agent_record,
-        body.authorize_event.created_at,
+        chrono::Utc::now(),
     )
     .await?;
     let authorize_event_value = serde_json::to_value(&body.authorize_event)
@@ -913,8 +933,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::capability_denied("Agent has no controller delegation binding"))?;
-    if envelope.get("authorization_ref").and_then(Value::as_str)
-        != Some(expected_authorization_ref)
+    if envelope.get("authorization_ref").and_then(Value::as_str) != Some(expected_authorization_ref)
     {
         return Err(AppError::capability_denied(
             "authorize_event.authorization_ref must match the Agent DID controller delegation",
@@ -1006,6 +1025,11 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     if approval_evidence.get("evidence_ref").is_some() {
         return Err(AppError::invalid_param(
             "authorize_event.payload.approval_evidence.ref must be absent for pairing_request evidence",
+        ));
+    }
+    if approval_evidence.get("approved_by").and_then(Value::as_str) != Some(controller) {
+        return Err(AppError::capability_denied(
+            "authorize_event.payload.approval_evidence.approved_by must match the authenticated controller",
         ));
     }
     let pairing_request_id = pairing_record_string(agent_record, "pairing_request_id")?;

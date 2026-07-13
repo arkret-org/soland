@@ -280,8 +280,12 @@ pub(super) async fn put_key_backup(
     }
     enforce_key_backup_series_chain_typed(state, &session.actor, &backup).await?;
     enforce_recovery_policy_ref_typed(state, &session.actor, &backup).await?;
-    crate::routing::identity::managed_agent_pcr::validate_managed_agent_key_backup(state, &backup)
-        .await?;
+    crate::routing::identity::managed_agent_pcr::validate_managed_agent_key_backup(
+        state,
+        &backup,
+        chrono::Utc::now(),
+    )
+    .await?;
     let ciphertext_digest = backup.ciphertext_digest.clone();
     let backup_value = key_backup_to_value(&backup)?;
     let store = state.persistence.key_backups();

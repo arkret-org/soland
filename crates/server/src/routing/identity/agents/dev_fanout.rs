@@ -628,51 +628,32 @@ async fn materialize_grant(
     .await
 }
 
-/// AKP-0008 §4.11 (dev option B) — attach a controller-supplied capability
-/// grant (`POST /_arkret/self/agents/{id}/grants`). The supplied body is
-/// normalised into a schema-valid embedded `grant` (filling required id /
-/// schema / issuer / subject / resources / proofs when the caller omitted
-/// them) under the canonical `{grant_id, grant}` wrapper, then submitted as
-/// `ak.capability.grant` authored by the controller.
+/// Submit the exact controller-supplied, signed Capability Grant under the
+/// canonical `{grant_id, grant}` Event payload wrapper.
 pub(super) async fn attach_agent_grant_event(
     state: &AppState,
     session: &SessionRecord,
-    realm_id: &str,
     agent_id: &str,
-    grant_id: &str,
-    supplied_grant: &Value,
+    supplied_grant: &arkret_sdk::CapabilityGrant,
 ) -> Result<String, AppError> {
-    let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let mut grant = supplied_grant.clone();
-    let obj = grant
-        .as_object_mut()
-        .ok_or_else(|| AppError::invalid_param("grant must be an object"))?;
-    obj.insert("id".to_owned(), Value::String(grant_id.to_owned()));
-    obj.entry("schema".to_owned())
-        .or_insert_with(|| Value::String("ak.schema.capability.v1".to_owned()));
-    obj.insert("realm_id".to_owned(), Value::String(realm_id.to_owned()));
-    obj.entry("issuer".to_owned())
-        .or_insert_with(|| Value::String(session.actor.clone()));
-    obj.entry("subject".to_owned())
-        .or_insert_with(|| Value::String(agent_id.to_owned()));
-    obj.entry("actions".to_owned())
-        .or_insert_with(|| json!(["ak.event.read"]));
-    obj.entry("resources".to_owned())
-        .or_insert_with(|| json!([{ "kind": "realm", "realm_id": realm_id }]));
-    obj.entry("issued_at".to_owned())
-        .or_insert_with(|| Value::String(issued_at.clone()));
-    obj.entry("proofs".to_owned()).or_insert_with(|| {
-        json!([{
-            "kind": "detached_jws",
-            "verification_method": format!("{}#dev", session.actor),
-            "alg": "EdDSA",
-            "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            "created_at": issued_at,
-            "jws": "a..b",
-        }])
-    });
-    let payload = json!({ "grant_id": grant_id, "grant": grant });
-    materialize_grant(state, session, realm_id, payload).await
+    let realm_id = supplied_grant
+        .realm_id
+        .as_ref()
+        .ok_or_else(|| AppError::invalid_param("grant.realm_id is required"))?;
+    if supplied_grant.issuer.as_str() != session.actor {
+        return Err(AppError::capability_denied(
+            "grant.issuer must match the authenticated controller",
+        ));
+    }
+    let grant = serde_json::to_value(supplied_grant)
+        .map_err(|error| AppError::invalid_param(format!("grant is invalid: {error}")))?;
+    if grant.get("subject").and_then(Value::as_str) != Some(agent_id) {
+        return Err(AppError::capability_denied(
+            "grant.subject must match the managed Agent principal",
+        ));
+    }
+    let payload = json!({ "grant_id": supplied_grant.id, "grant": grant });
+    materialize_grant(state, session, realm_id.as_str(), payload).await
 }
 
 /// AKP-0016 — materialise a participation `effective=true` decision into a
@@ -775,10 +756,8 @@ pub(super) async fn submit_durable_agent_lifecycle(
 }
 
 /// AKP-0008 §4.11 — fan-out `ak.agent.key.revoke` for the agent's authorized
-/// key(s): on deactivate (no reason) and on runtime replacement re-pairing
-/// (reason=`superseded_by_repairing`). Best-effort over the keys the reducer
-/// projected; revoking with no known key still emits a tombstone-safe
-/// revoke for the canonical `key_id`.
+/// key(s) on deactivate. An Agent with no accepted key needs no synthetic
+/// tombstone for an invented key id.
 pub(super) async fn submit_revoke_agent_keys(
     state: &AppState,
     session: &SessionRecord,
@@ -788,12 +767,7 @@ pub(super) async fn submit_revoke_agent_keys(
     reason: Option<&str>,
 ) -> Result<(), AppError> {
     let revoked_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let targets: Vec<String> = if key_ids.is_empty() {
-        vec![default_agent_key_id(agent_id)]
-    } else {
-        key_ids.to_vec()
-    };
-    for key_id in targets {
+    for key_id in key_ids {
         let mut payload = json!({
             "agent_id": agent_id,
             "key_id": key_id,
@@ -824,24 +798,12 @@ pub(super) async fn submit_revoke_agent_keys(
 pub(super) async fn submit_revoke_agent_grants(
     state: &AppState,
     session: &SessionRecord,
-    realm_id: &str,
-    grant_ids: &[String],
+    grant_locations: &[(String, String)],
 ) -> Result<(), AppError> {
-    for grant_id in grant_ids {
+    for (grant_id, realm_id) in grant_locations {
         revoke_capability_grant(state, session, realm_id, grant_id).await?;
     }
     Ok(())
-}
-
-/// Deterministic default agent key id used by the dev pairing fan-out so
-/// authorize / revoke target the same key without a key inventory table.
-pub(super) fn default_agent_key_id(agent_id: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(b"ak:agent_key:dev:v1:");
-    hasher.update(agent_id.as_bytes());
-    let digest = hasher.finalize();
-    format!("ak:agent_key:{}", hex::encode(&digest[..16]))
 }
 
 #[cfg(test)]

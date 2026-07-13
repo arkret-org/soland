@@ -378,7 +378,26 @@ impl AgentStore for MemoryAgentStore {
                 "agent record missing agent_id".to_owned(),
             ));
         };
-        self.data.lock().insert(id, record);
+        let immutable_binding = |value: &Value| {
+            (
+                value.get("controller_id").and_then(Value::as_str),
+                value
+                    .get("principal_control_realm_id")
+                    .and_then(Value::as_str),
+                value
+                    .get("controller_authorization_ref")
+                    .and_then(Value::as_str),
+            )
+        };
+        let mut data = self.data.lock();
+        if let Some(existing) = data.get(&id)
+            && immutable_binding(existing) != immutable_binding(&record)
+        {
+            return Err(PersistenceError::Conflict(format!(
+                "Agent `{id}` controller/PCR authorization binding is immutable"
+            )));
+        }
+        data.insert(id, record);
         Ok(())
     }
 
@@ -543,7 +562,10 @@ impl AgentStore for MemoryAgentStore {
         };
         if record.get("pairing_request_id").and_then(Value::as_str)
             != Some(write.pairing_request_id.as_str())
-            || record.get("state").and_then(Value::as_str) != Some("pending_runtime_key")
+            || !matches!(
+                record.get("state").and_then(Value::as_str),
+                Some("pending_runtime_key" | "active" | "paused")
+            )
             || record
                 .get("runtime_key_binding_digest")
                 .and_then(Value::as_str)
@@ -884,9 +906,6 @@ impl AgentStore for PgAgentStore {
               authorized_public_key_digest, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, NOW(), NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
-             controller_id = EXCLUDED.controller_id, \
-             principal_control_realm_id = EXCLUDED.principal_control_realm_id, \
-             controller_authorization_ref = EXCLUDED.controller_authorization_ref, \
              display_name = EXCLUDED.display_name, agent_slug = EXCLUDED.agent_slug, \
              avatar_blob_ref = EXCLUDED.avatar_blob_ref, \
              state = EXCLUDED.state, requested_scope = EXCLUDED.requested_scope, \
@@ -907,7 +926,10 @@ impl AgentStore for PgAgentStore {
              approval_requested_at = EXCLUDED.approval_requested_at, \
              authorized_event_ref = EXCLUDED.authorized_event_ref, \
              authorized_verification_method = EXCLUDED.authorized_verification_method, \
-             authorized_public_key_digest = EXCLUDED.authorized_public_key_digest, updated_at = NOW()",
+             authorized_public_key_digest = EXCLUDED.authorized_public_key_digest, updated_at = NOW() \
+             WHERE agent_principals.controller_id = EXCLUDED.controller_id \
+               AND agent_principals.principal_control_realm_id = EXCLUDED.principal_control_realm_id \
+               AND agent_principals.controller_authorization_ref = EXCLUDED.controller_authorization_ref",
         )
         .bind::<Text, _>(&agent_id)
         .bind::<Text, _>(&controller_id)
@@ -939,8 +961,16 @@ impl AgentStore for PgAgentStore {
         .bind::<Nullable<Text>, _>(&authorized_public_key_digest)
         .execute(&mut *conn)
         .await
-        .map(|_| ())
         .map_err(PersistenceError::from)
+        .and_then(|affected| {
+            if affected == 1 {
+                Ok(())
+            } else {
+                Err(PersistenceError::Conflict(format!(
+                    "Agent `{agent_id}` controller/PCR authorization binding is immutable"
+                )))
+            }
+        })
     }
 
     async fn get(&self, agent_id: &str) -> PersistenceResult<Option<Value>> {
@@ -1068,7 +1098,7 @@ impl AgentStore for PgAgentStore {
              controller_account_id = $6, recipient_service_id = $7, \
              runtime_key_binding_digest = $8, runtime_public_key_digest = $9, \
              runtime_attestation_digest = $10, runtime_key_request = $11, updated_at = NOW() \
-             WHERE id = $1 AND state = 'pending_runtime_key' AND pairing_request_id = $2 \
+             WHERE id = $1 AND state IN ('pending_runtime_key', 'active', 'paused') AND pairing_request_id = $2 \
                AND (runtime_key_binding_digest IS NULL OR runtime_key_binding_digest = $8) \
              RETURNING {AGENT_COLUMNS}"
         ))
