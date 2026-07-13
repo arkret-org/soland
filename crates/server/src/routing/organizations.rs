@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use arkret_sdk::{
     REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY,
     REALM_MODERATION_POLICY_MERGE_STRATEGY_MOST_RESTRICTIVE,
-    REALM_MODERATION_POLICY_WIRE_CODE_REQUIRES_ORGANIZATION_APPROVAL,
+    REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL,
 };
 use chrono::Utc;
 use salvo::http::StatusCode;
@@ -20,7 +20,7 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::validate_did;
 use crate::state::{
@@ -1125,7 +1125,28 @@ fn safe_id_fragment(value: &str) -> String {
 }
 
 pub(crate) fn requires_organization_approval_error() -> AppError {
-    AppError::capability_denied(REALM_MODERATION_POLICY_WIRE_CODE_REQUIRES_ORGANIZATION_APPROVAL)
-        .with_status(StatusCode::FORBIDDEN)
-        .with_wire_code(REALM_MODERATION_POLICY_WIRE_CODE_REQUIRES_ORGANIZATION_APPROVAL)
+    AppError::new(
+        ErrorCode::FailedPrecondition,
+        "realm moderation policy override requires organization approval",
+    )
+    .with_status(StatusCode::CONFLICT)
+    .with_reason_code(REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn organization_approval_rejection_uses_failed_precondition_layering() {
+        let error = requires_organization_approval_error();
+
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(error.http_status(), StatusCode::CONFLICT);
+        assert_eq!(error.wire_code(), "failed_precondition");
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL)
+        );
+    }
 }

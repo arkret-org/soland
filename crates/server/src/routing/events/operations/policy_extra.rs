@@ -1,5 +1,5 @@
 use arkret_sdk::{
-    Operation, REALM_MODERATION_POLICY_WIRE_CODE_REQUIRES_ORGANIZATION_APPROVAL, ReadReceiptPolicy,
+    Operation, REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL, ReadReceiptPolicy,
     ReadReceiptPolicyChildViolation,
 };
 use serde_json::Value;
@@ -700,7 +700,7 @@ pub(crate) async fn validate_realm_moderation_policy(
     )
     .await;
     if requires_approval && !has_approval {
-        return Err(REALM_MODERATION_POLICY_WIRE_CODE_REQUIRES_ORGANIZATION_APPROVAL);
+        return Err(REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL);
     }
     Ok(())
 }
