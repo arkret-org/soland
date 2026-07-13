@@ -353,7 +353,12 @@ impl NotificationStore for PgNotificationStore {
               WHERE controller_account_id IS NOT NULL DO UPDATE SET \
               projection_action = EXCLUDED.projection_action, \
               projection_data = EXCLUDED.projection_data, \
-              projection_position = nextval('notification_projection_position_seq'), \
+              projection_position = CASE \
+                WHEN notifications.projection_action IS DISTINCT FROM EXCLUDED.projection_action \
+                  OR notifications.projection_data IS DISTINCT FROM EXCLUDED.projection_data \
+                THEN nextval('notification_projection_position_seq') \
+                ELSE notifications.projection_position \
+              END, \
               updated_at = NOW()",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&notification_id))

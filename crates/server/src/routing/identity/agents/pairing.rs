@@ -90,7 +90,7 @@ pub(super) async fn submit_agent_runtime_key_request(
             "verification_method DID must match agent_id",
         ));
     }
-    let mut agent_record = lookup_pairing_record(
+    let agent_record = lookup_pairing_record(
         state,
         &body.pairing_request_id,
         pairing_code,
@@ -151,73 +151,61 @@ pub(super) async fn submit_agent_runtime_key_request(
         .await
         .map_err(|error| AppError::internal(format!("controller account lookup failed: {error}")))?
         .ok_or_else(|| AppError::internal("controller account is missing"))?;
-    let approval_request_id = agent_record
+    let proposed_approval_request_id = agent_record
         .get("approval_request_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("agent_runtime_approval:{}", uuid::Uuid::now_v7()));
-    let notification_id = agent_record
+    let proposed_notification_id = agent_record
         .get("approval_notification_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| ids::generate("notification"));
-    let requested_at = agent_record
+    let proposed_requested_at = agent_record
         .get("approval_requested_at")
         .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or_else(chrono::Utc::now);
     let expires_at = pairing_record_string(&agent_record, "pairing_expires_at")?.to_owned();
-    let projection_action = if existing_binding.is_some() {
-        "update"
-    } else {
-        "add"
+    let write = crate::persistence::AgentRuntimeApprovalWrite {
+        agent_id: agent_id.to_owned(),
+        pairing_request_id: body.pairing_request_id.clone(),
+        approval_request_id: proposed_approval_request_id.clone(),
+        approval_notification_id: proposed_notification_id.clone(),
+        approval_requested_at: proposed_requested_at,
+        controller_account_id: account.id.clone(),
+        recipient_service_id: state.config.service_id.clone(),
+        runtime_key_binding_digest: binding_digest.as_str().to_owned(),
+        runtime_public_key_digest: public_key_digest.as_str().to_owned(),
+        runtime_attestation_digest: attestation_digest.as_str().to_owned(),
+        runtime_key_request: runtime_key_request_for_controller(&body),
     };
-    if let Some(object) = agent_record.as_object_mut() {
-        object.insert(
-            "approval_request_id".to_owned(),
-            json!(approval_request_id.clone()),
-        );
-        object.insert(
-            "runtime_key_request".to_owned(),
-            runtime_key_request_for_controller(&body),
-        );
-        object.insert(
-            "approval_requested_at".to_owned(),
-            json!(requested_at.clone()),
-        );
-        object.insert(
-            "controller_account_id".to_owned(),
-            json!(account.id.clone()),
-        );
-        object.insert(
-            "recipient_service_id".to_owned(),
-            json!(state.config.service_id.clone()),
-        );
-        object.insert(
-            "runtime_key_binding_digest".to_owned(),
-            json!(binding_digest.as_str()),
-        );
-        object.insert(
-            "runtime_public_key_digest".to_owned(),
-            json!(public_key_digest.as_str()),
-        );
-        object.insert(
-            "runtime_attestation_digest".to_owned(),
-            json!(attestation_digest.as_str()),
-        );
-        object.insert(
-            "approval_notification_id".to_owned(),
-            json!(notification_id.clone()),
-        );
-    }
-    state
+    let stored = state
         .persistence
         .agents()
-        .put(agent_record)
+        .put_runtime_approval_if_compatible(&write)
         .await
-        .map_err(|err| {
-            AppError::internal(format!("runtime approval request save failed: {err}"))
+        .map_err(|err| AppError::internal(format!("runtime approval request save failed: {err}")))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::Conflict,
+                "a different runtime key binding is already pending for this pairing request",
+            )
+            .with_status(StatusCode::CONFLICT)
+            .with_wire_code("agent_runtime_request_conflict")
         })?;
+    let approval_request_id = pairing_record_string(&stored, "approval_request_id")?.to_owned();
+    let notification_id = pairing_record_string(&stored, "approval_notification_id")?.to_owned();
+    let requested_at = pairing_record_string(&stored, "approval_requested_at")?.to_owned();
+    let projection_action = if existing_binding.is_none()
+        && approval_request_id == proposed_approval_request_id
+        && notification_id == proposed_notification_id
+    {
+        "add"
+    } else {
+        "update"
+    };
     state
         .persistence
         .notifications()
@@ -305,6 +293,7 @@ async fn lookup_pairing_record(
         .await
         .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
         .ok_or_else(agent_pairing_not_found)?;
+    let record = reconcile_accepted_agent_authorization(state, record).await?;
     if record.get("pairing_code").and_then(Value::as_str) != Some(pairing_code)
         || agent_id.is_some_and(|expected| {
             record.get("agent_id").and_then(Value::as_str) != Some(expected)
@@ -313,6 +302,164 @@ async fn lookup_pairing_record(
         return Err(agent_pairing_not_found());
     }
     Ok(record)
+}
+
+pub(super) async fn reconcile_accepted_agent_authorization(
+    state: &AppState,
+    agent_record: Value,
+) -> Result<Value, AppError> {
+    let Some(approval_request_id) = agent_record
+        .get("approval_request_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(agent_record);
+    };
+    let Some(runtime_request) = agent_record
+        .get("runtime_key_request")
+        .filter(|value| value.is_object())
+    else {
+        return Ok(agent_record);
+    };
+    let Some(agent_id) = agent_record
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(agent_record);
+    };
+    let Some(controller_id) = agent_record
+        .get("controller_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(agent_record);
+    };
+    let Some(pairing_request_id) = agent_record
+        .get("pairing_request_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(agent_record);
+    };
+    let Some(verification_method) = runtime_request
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(agent_record);
+    };
+    let Some(public_key_digest) = agent_record
+        .get("runtime_public_key_digest")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(agent_record);
+    };
+    let expected_request_digest = pairing_request_binding_digest(
+        &agent_record,
+        &controller_id,
+        &agent_id,
+        &verification_method,
+        &public_key_digest,
+        &state.config.service_id,
+    )?;
+    let events = state
+        .persistence
+        .events()
+        .snapshot_all()
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("authorization reconciliation failed: {error}"))
+        })?;
+    let accepted = events.into_iter().find(|event| {
+        if event.kind != "ak.agent.key.authorize" || event.actor_id != agent_id {
+            return false;
+        }
+        let envelope = &event.envelope;
+        let payload = envelope.get("payload").unwrap_or(&Value::Null);
+        let evidence = payload.get("approval_evidence").unwrap_or(&Value::Null);
+        envelope.get("executed_by").and_then(Value::as_str) == Some(controller_id.as_str())
+            && envelope
+                .get("authorization_ref")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+            && payload.get("agent_id").and_then(Value::as_str) == Some(agent_id.as_str())
+            && payload.get("verification_method").and_then(Value::as_str)
+                == Some(verification_method.as_str())
+            && payload.get("public_key_digest").and_then(Value::as_str)
+                == Some(public_key_digest.as_str())
+            && evidence.get("kind").and_then(Value::as_str) == Some("pairing_request")
+            && evidence.get("pairing_request_id").and_then(Value::as_str)
+                == Some(pairing_request_id.as_str())
+            && evidence
+                .get("request_canonical_digest")
+                .and_then(Value::as_str)
+                == Some(expected_request_digest.as_str())
+    });
+    let Some(accepted) = accepted else {
+        return Ok(agent_record);
+    };
+
+    let terminal_notification = account_notification_context(&agent_record);
+    let activation = crate::persistence::AgentRuntimeActivation {
+        agent_id: agent_id.clone(),
+        approval_request_id: approval_request_id.clone(),
+        runtime_key_binding_digest: agent_record
+            .get("runtime_key_binding_digest")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        pairing_request_id,
+        authorized_event_ref: accepted.event_id,
+        authorized_verification_method: verification_method,
+        authorized_public_key_digest: public_key_digest,
+        authorized_at: accepted.received_at,
+    };
+    let activated = state
+        .persistence
+        .agents()
+        .activate_runtime_if_current(&activation)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "authorization reconciliation persist failed: {error}"
+            ))
+        })?;
+    if !activated {
+        return state
+            .persistence
+            .agents()
+            .get(&agent_id)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "authorization reconciliation reload failed: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                AppError::internal("Agent disappeared during authorization reconciliation")
+            });
+    }
+    if let Some(context) = terminal_notification {
+        persist_terminal_account_notification(state, context, "approved").await?;
+    }
+    tracing::info!(
+        agent_id,
+        approval_request_id,
+        "reconciled accepted Agent authorization into activation projection"
+    );
+    state
+        .persistence
+        .agents()
+        .get(&agent_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "authorization reconciliation reload failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| AppError::internal("Agent disappeared after authorization reconciliation"))
 }
 
 /// Pure decision core for the open runtime-key-request status poll.
@@ -429,7 +576,7 @@ pub(super) async fn agent_key_pair(
         )));
     }
     ensure_current_runtime_key_request_matches(&agent_record, &body)?;
-    let authorized_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let authorized_at = chrono::Utc::now();
     // AKP-0008 §4.5 / D3: the runtime key may become active only after a
     // reducer-visible `ak.agent.key.authorize` event exists. Development mode
     // still materializes the event with the local dev-proof path; production
@@ -490,47 +637,35 @@ pub(super) async fn agent_key_pair(
     // accepted (a failed submit above propagates via `?` and MUST NOT leave
     // the agent flipped to active).
     let terminal_notification = account_notification_context(&agent_record);
-    let mut updated_record = agent_record;
-    if let Some(object) = updated_record.as_object_mut() {
-        object.insert("state".to_owned(), json!("active"));
-        object.insert("updated_at".to_owned(), json!(authorized_at));
-        object.insert(
-            "authorized_event_ref".to_owned(),
-            json!(authorized_event_ref.as_str()),
-        );
-        // Retained so the open runtime-key-request status poll can hand the
-        // runtime the exact key binding the controller approved; a polling
-        // runtime whose key digest differs must treat the pairing as taken
-        // by another runtime.
-        object.insert(
-            "authorized_verification_method".to_owned(),
-            json!(body.verification_method),
-        );
-        object.insert(
-            "authorized_public_key_digest".to_owned(),
-            json!(runtime_public_key_digest),
-        );
-        // Consume the one-time pairing handle: a subsequent pair attempt on the
-        // now-active agent is rejected until renew_pairing installs a fresh
-        // `pairing_request_id` (runtime replacement re-pairing, §3.6.1).
-        object.insert(
-            "paired_pairing_request_id".to_owned(),
-            json!(body.pairing_request_id),
-        );
-        object.remove("approval_request_id");
-        object.remove("runtime_key_request");
-        object.remove("approval_requested_at");
-        object.remove("runtime_key_binding_digest");
-        object.remove("runtime_public_key_digest");
-        object.remove("runtime_attestation_digest");
-        object.remove("approval_notification_id");
-    }
-    state
+    let activation = crate::persistence::AgentRuntimeActivation {
+        agent_id: agent_id.to_owned(),
+        approval_request_id: pairing_record_string(&agent_record, "approval_request_id")?
+            .to_owned(),
+        runtime_key_binding_digest: pairing_record_string(
+            &agent_record,
+            "runtime_key_binding_digest",
+        )?
+        .to_owned(),
+        pairing_request_id: body.pairing_request_id.clone(),
+        authorized_event_ref: authorized_event_ref.as_str().to_owned(),
+        authorized_verification_method: body.verification_method.clone(),
+        authorized_public_key_digest: runtime_public_key_digest.clone(),
+        authorized_at,
+    };
+    // The compare-and-set below records the authorized binding fields for the
+    // open status poll and consumes this approval for the current pairing
+    // request atomically (including runtime replacement re-pairing, §3.6.1).
+    let activated = state
         .persistence
         .agents()
-        .put(updated_record)
+        .activate_runtime_if_current(&activation)
         .await
         .map_err(|err| AppError::internal(format!("agent state activation failed: {err}")))?;
+    if !activated {
+        return Err(pairing_failed_precondition(
+            "runtime approval was already consumed or changed",
+        ));
+    }
     if let Some(context) = terminal_notification {
         persist_terminal_account_notification(state, context, "approved").await?;
     }

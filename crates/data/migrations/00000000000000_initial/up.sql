@@ -91,6 +91,7 @@ CREATE TABLE public.agent_principals (
     self_realm_id text,
     provision_event_refs jsonb,
     pairing_request_id text,
+    paired_pairing_request_id text,
     pairing_code text,
     pairing_expires_at timestamp with time zone,
     approval_request_id text,
@@ -745,6 +746,96 @@ CREATE TABLE public.notifications (
     CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_id IS NULL) AND (recipient_service_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_id IS NOT NULL) AND (recipient_service_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL))),
     CONSTRAINT notifications_projection_action_check CHECK ((projection_action IS NULL) OR (projection_action = ANY (ARRAY['add'::text, 'update'::text, 'remove'::text])))
 );
+
+CREATE FUNCTION public.project_agent_runtime_approval_notification() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    delta_action text;
+    terminal_reason text;
+    notification_id uuid;
+    account_id uuid;
+    service_id text;
+    recipient_id text;
+    artifact_id text;
+    notification_data jsonb;
+BEGIN
+    IF NEW.approval_request_id IS NOT NULL
+       AND NEW.approval_notification_id IS NOT NULL
+       AND NEW.controller_account_id IS NOT NULL
+       AND NEW.recipient_service_id IS NOT NULL THEN
+        delta_action := CASE
+            WHEN TG_OP = 'INSERT' OR OLD.approval_request_id IS NULL THEN 'add'
+            ELSE 'update'
+        END;
+        notification_id := NEW.approval_notification_id;
+        account_id := NEW.controller_account_id;
+        service_id := NEW.recipient_service_id;
+        recipient_id := NEW.controller_id;
+        artifact_id := NEW.approval_request_id;
+        notification_data := jsonb_build_object(
+            'kind', 'agent_runtime_approval',
+            'approval_request_id', NEW.approval_request_id,
+            'agent_id', NEW.id,
+            'requested_at', to_char(NEW.approval_requested_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'expires_at', to_char(NEW.pairing_expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+        );
+    ELSIF TG_OP = 'UPDATE'
+          AND OLD.approval_request_id IS NOT NULL
+          AND NEW.approval_request_id IS NULL THEN
+        terminal_reason := CASE
+            WHEN NEW.state = 'deactivated' THEN 'deactivated'
+            WHEN NEW.state = 'pairing_expired' THEN 'expired'
+            WHEN NEW.authorized_event_ref IS DISTINCT FROM OLD.authorized_event_ref
+                 AND NEW.authorized_event_ref IS NOT NULL THEN 'approved'
+            WHEN NEW.pairing_request_id IS DISTINCT FROM OLD.pairing_request_id THEN 'renewed'
+            ELSE 'superseded'
+        END;
+        delta_action := 'remove';
+        notification_id := OLD.approval_notification_id;
+        account_id := OLD.controller_account_id;
+        service_id := OLD.recipient_service_id;
+        recipient_id := OLD.controller_id;
+        artifact_id := OLD.approval_request_id;
+        notification_data := jsonb_build_object(
+            'kind', 'agent_runtime_approval',
+            'reason', terminal_reason
+        );
+    ELSE
+        RETURN NEW;
+    END IF;
+
+    INSERT INTO public.notifications (
+        id, recipient_id, controller_account_id, recipient_service_id,
+        source_account_artifact_kind, source_account_artifact_id,
+        notification_type, priority, state, projection_action,
+        projection_data, created_at, updated_at
+    ) VALUES (
+        notification_id, recipient_id, account_id, service_id,
+        'agent_runtime_approval', artifact_id,
+        'agent', 'normal', 'unread', delta_action,
+        notification_data, now(), now()
+    )
+    ON CONFLICT (controller_account_id, recipient_service_id,
+                 source_account_artifact_kind, source_account_artifact_id)
+        WHERE controller_account_id IS NOT NULL
+    DO UPDATE SET
+        projection_action = EXCLUDED.projection_action,
+        projection_data = EXCLUDED.projection_data,
+        projection_position = CASE
+            WHEN notifications.projection_action IS DISTINCT FROM EXCLUDED.projection_action
+              OR notifications.projection_data IS DISTINCT FROM EXCLUDED.projection_data
+            THEN nextval('public.notification_projection_position_seq')
+            ELSE notifications.projection_position
+        END,
+        updated_at = now();
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER agent_runtime_approval_notification_projection
+AFTER INSERT OR UPDATE ON public.agent_principals
+FOR EACH ROW EXECUTE FUNCTION public.project_agent_runtime_approval_notification();
 
 CREATE TABLE public.pending_agent_drafts (
     id uuid NOT NULL,

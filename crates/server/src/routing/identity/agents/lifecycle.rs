@@ -358,6 +358,7 @@ pub(super) async fn list_agents(
     // grants are revoked on first observation.
     let mut agents = Vec::with_capacity(records.len());
     for record in records {
+        let record = reconcile_accepted_agent_authorization(state, record).await?;
         let record = lazily_expire_pairing(state, &session, record).await;
         agents.push(agent_projection_from_record(&record));
     }
@@ -404,6 +405,7 @@ pub(super) async fn get_agent(
             return Err(AppError::not_found("agent not found"));
         }
     }
+    let record = reconcile_accepted_agent_authorization(state, record).await?;
     let record = if let Some(session) = session.as_ref() {
         lazily_expire_pairing(state, session, record).await
     } else {
@@ -611,11 +613,26 @@ pub(super) async fn lifecycle_transition(
     // Persist the lifecycle state transition on the agent_principal row so
     // list/get reflect the new status (the durable event drives the reducer
     // FSM; this row is the read-side projection consumed by the HTTP API).
-    let _ = state
+    let mut updated_record = record;
+    if let Some(object) = updated_record.as_object_mut() {
+        object.insert("state".to_owned(), json!(new_state.as_wire_str()));
+        object.insert("updated_at".to_owned(), json!(status_changed_at));
+        if event_kind == "ak.self.agent.deactivate" {
+            object.insert("approval_request_id".to_owned(), Value::Null);
+            object.insert("runtime_key_request".to_owned(), Value::Null);
+            object.insert("approval_requested_at".to_owned(), Value::Null);
+            object.insert("runtime_key_binding_digest".to_owned(), Value::Null);
+            object.insert("runtime_public_key_digest".to_owned(), Value::Null);
+            object.insert("runtime_attestation_digest".to_owned(), Value::Null);
+            object.insert("approval_notification_id".to_owned(), Value::Null);
+        }
+    }
+    state
         .persistence
         .agents()
-        .set_state(&agent_id, new_state.as_wire_str(), &status_changed_at)
-        .await;
+        .put(updated_record)
+        .await
+        .map_err(|error| AppError::internal(format!("agent lifecycle persist failed: {error}")))?;
     if let Some(context) = terminal_notification {
         persist_terminal_account_notification(state, context, "deactivated").await?;
     }

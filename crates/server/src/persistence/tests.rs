@@ -1,5 +1,149 @@
 use super::*;
 
+fn runtime_approval_write(binding: &str) -> AgentRuntimeApprovalWrite {
+    AgentRuntimeApprovalWrite {
+        agent_id: "did:web:agent.example".to_owned(),
+        pairing_request_id: "agent_pairing_request:test".to_owned(),
+        approval_request_id: "agent_runtime_approval:test".to_owned(),
+        approval_notification_id: "ak:notification:01964137-0000-7000-8000-000000000001".to_owned(),
+        approval_requested_at: Utc::now(),
+        controller_account_id: "ak:account:01964137-0000-7000-8000-000000000002".to_owned(),
+        recipient_service_id: "did:web:soland.example".to_owned(),
+        runtime_key_binding_digest: binding.to_owned(),
+        runtime_public_key_digest: "sha256:public".to_owned(),
+        runtime_attestation_digest: "sha256:attestation".to_owned(),
+        runtime_key_request: serde_json::json!({"verification_method": "did:web:agent.example#runtime"}),
+    }
+}
+
+#[tokio::test]
+async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
+    let store = MemoryAgentStore::new();
+    store
+        .put(serde_json::json!({
+            "agent_id": "did:web:agent.example",
+            "controller_id": "did:web:controller.example",
+            "state": "pending_runtime_key",
+            "pairing_request_id": "agent_pairing_request:test",
+        }))
+        .await
+        .unwrap();
+
+    let first = runtime_approval_write("sha256:binding-a");
+    let stored = store
+        .put_runtime_approval_if_compatible(&first)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored["approval_request_id"], "agent_runtime_approval:test");
+    let retry = AgentRuntimeApprovalWrite {
+        approval_request_id: "agent_runtime_approval:retry".to_owned(),
+        approval_notification_id: "ak:notification:01964137-0000-7000-8000-000000000099".to_owned(),
+        ..first.clone()
+    };
+    let retried = store
+        .put_runtime_approval_if_compatible(&retry)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        retried["approval_request_id"],
+        stored["approval_request_id"]
+    );
+    assert_eq!(
+        retried["approval_notification_id"],
+        stored["approval_notification_id"]
+    );
+    assert!(
+        store
+            .put_runtime_approval_if_compatible(&runtime_approval_write("sha256:binding-b"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let activation = AgentRuntimeActivation {
+        agent_id: first.agent_id,
+        approval_request_id: "agent_runtime_approval:test".to_owned(),
+        runtime_key_binding_digest: "sha256:binding-a".to_owned(),
+        pairing_request_id: first.pairing_request_id,
+        authorized_event_ref: "ak:event:01964137-0000-7000-8000-000000000003".to_owned(),
+        authorized_verification_method: "did:web:agent.example#runtime".to_owned(),
+        authorized_public_key_digest: "sha256:public".to_owned(),
+        authorized_at: Utc::now(),
+    };
+    assert!(
+        store
+            .activate_runtime_if_current(&activation)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .activate_runtime_if_current(&activation)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .put_runtime_approval_if_compatible(&runtime_approval_write("sha256:binding-a"))
+            .await
+            .unwrap()
+            .is_none(),
+        "an already-active Agent must not accept a stale runtime approval request"
+    );
+}
+
+#[tokio::test]
+async fn memory_account_notification_positions_recover_missed_wakes_and_isolate_accounts() {
+    let store = MemoryNotificationStore::new();
+    let base = serde_json::json!({
+        "notification_id": "ak:notification:01964137-0000-7000-8000-000000000001",
+        "recipient_id": "did:web:controller.example",
+        "controller_account_id": "ak:account:01964137-0000-7000-8000-000000000002",
+        "recipient_service_id": "did:web:soland.example",
+        "source_account_artifact_id": "agent_runtime_approval:test",
+        "projection_action": "add",
+        "projection_data": {"kind": "agent_runtime_approval"},
+    });
+    store.put_account_delta(base.clone()).await.unwrap();
+    let first = store
+        .list_for_account(
+            "ak:account:01964137-0000-7000-8000-000000000002",
+            "did:web:soland.example",
+            None,
+        )
+        .await
+        .unwrap();
+    let first_position = first[0]["projection_position"].as_i64().unwrap();
+    assert!(
+        store
+            .list_for_account(
+                "ak:account:01964137-0000-7000-8000-000000000099",
+                "did:web:soland.example",
+                None,
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut update = base;
+    update["projection_action"] = Value::String("update".to_owned());
+    store.put_account_delta(update).await.unwrap();
+    let after = store
+        .list_for_account(
+            "ak:account:01964137-0000-7000-8000-000000000002",
+            "did:web:soland.example",
+            Some(first_position),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0]["projection_action"], "update");
+    assert!(after[0]["projection_position"].as_i64().unwrap() > first_position);
+}
+
 #[tokio::test]
 async fn memory_account_store_crud() {
     let localparts = MemoryAccountLocalpartStore::new();
