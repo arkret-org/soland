@@ -68,6 +68,7 @@ pub use admission::{
 };
 
 mod endpoints;
+mod governance_proof;
 pub(in crate::routing::events) use endpoints::router;
 
 mod inception;

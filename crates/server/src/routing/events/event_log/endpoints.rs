@@ -12,6 +12,10 @@ pub(in crate::routing::events) fn router() -> Router {
         .push(Router::with_path("events/query").post(super::super::sync::events_query_post))
         .push(Router::with_path("events/resolve").post(resolve_events))
         .push(Router::with_path("events/frontier").get(events_frontier))
+        .push(
+            Router::with_path("events/mls-governance-proof")
+                .post(super::governance_proof::mls_governance_proof),
+        )
         .push(Router::with_path("events/{event_id}").get(get_event))
 }
 

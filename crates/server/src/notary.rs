@@ -39,7 +39,7 @@ use anyhow::Result;
 use arkret_sdk::lattice::{CellState, SealedOp};
 use arkret_sdk::state_res::{
     StoreError, apply_seal, compute_state_root, control_event_set_root, effective_seal_view,
-    effective_state_at, verify_move,
+    effective_state_at, leaf_union_proof, verify_move,
 };
 use arkret_sdk::{
     CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId,
@@ -60,6 +60,13 @@ pub struct NotaryOutcome {
     pub accepted_move_ids: Vec<MoveId>,
     pub rejected_moves: Vec<(MoveId, String)>,
     pub post_state_root: Hash,
+}
+
+#[derive(Clone, Debug)]
+pub struct MaterializedEventSealView {
+    pub trust_anchor_seal_id: SealId,
+    pub accepted_seal: Seal,
+    pub seal_path: Vec<Seal>,
 }
 
 /// All the ways the notary can fail to make progress.
@@ -711,6 +718,7 @@ pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {
 /// create a Realm's first Seal (notary signing pass, frontier seal-head read)
 /// serialize through this lock and re-check the leaf set inside it.
 static GENESIS_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());
+static EVENT_SEAL_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Return the Realm's current Seal leaves, materializing the empty Genesis
 /// Seal first when none exists yet.
@@ -783,6 +791,155 @@ pub fn ensure_realm_seal_head(
         }
     }
     Ok(head)
+}
+
+/// Materialize accepted Control Event envelopes into a signed compaction Seal.
+///
+/// The legacy MoveStore rail and the canonical Event Envelope rail share the
+/// same digest-shaped Seal accumulator but are separate ingress surfaces. This
+/// helper closes the canonical Event side: the caller replays accepted Event
+/// effects, supplies the complete digest set and joined state root, and this
+/// function advances the local Seal DAG while writing the corresponding
+/// SealedOps to CellStore. Existing coverage must be a subset of the supplied
+/// complete set; otherwise mixing an unrelated legacy Move rail would make the
+/// claimed proof incomplete and the operation fails closed.
+pub fn ensure_materialized_event_seal(
+    state: &AppState,
+    realm_id: &RealmId,
+    covered_event_digests: &[MoveId],
+    state_root: &Hash,
+    event_ops: &[(CellRef, SealedOp)],
+) -> Result<MaterializedEventSealView, NotaryError> {
+    ensure_realm_seal_head(state, realm_id)?
+        .ok_or_else(|| NotaryError::NotAuthorized(realm_id.to_string()))?;
+
+    let _guard = EVENT_SEAL_MATERIALIZE_LOCK.lock();
+    let leaves = state.seal_store.list_leaves(realm_id)?;
+    if leaves.len() != 1 {
+        return Err(NotaryError::Construction(format!(
+            "event Seal materialization requires one Realm leaf, found {}",
+            leaves.len()
+        )));
+    }
+    let head_id = leaves[0].clone();
+    let head = state
+        .seal_store
+        .get(&head_id)?
+        .ok_or_else(|| NotaryError::Store(format!("Seal head {head_id} is missing")))?;
+    let current = leaf_union_proof(std::slice::from_ref(&head_id), state.seal_store.as_ref())
+        .map_err(|error| NotaryError::Store(format!("read Seal coverage: {error}")))?
+        .into_iter()
+        .flat_map(|proof| proof.covered_event_digests)
+        .collect::<BTreeSet<_>>();
+    let target = covered_event_digests
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if target.len() != covered_event_digests.len() {
+        return Err(NotaryError::Construction(
+            "covered Event digest manifest contains duplicates".to_owned(),
+        ));
+    }
+    if !current.is_subset(&target) {
+        return Err(NotaryError::Construction(
+            "existing Seal coverage is not a subset of canonical Event coverage".to_owned(),
+        ));
+    }
+    if current == target {
+        if &head.state_root != state_root {
+            return Err(NotaryError::Construction(
+                "existing Seal state_root differs for the same Event coverage".to_owned(),
+            ));
+        }
+        return materialized_event_seal_view(state, head);
+    }
+
+    let delta = target.difference(&current).cloned().collect::<Vec<_>>();
+    let control_root = control_event_set_root(&target)
+        .map_err(|error| NotaryError::Construction(format!("Event coverage root: {error}")))?;
+    let zero_id = SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
+        .expect("zero Seal id is well-formed");
+    let mut seal = Seal {
+        id: zero_id,
+        realm_id: realm_id.clone(),
+        predecessor_refs: vec![head_id],
+        delta,
+        control_event_set_root: control_root.clone(),
+        state_root: state_root.clone(),
+        completeness_root: control_root,
+        notary_seq: head.notary_seq.saturating_add(1),
+        data_view_root: None,
+        data_event_set_root: None,
+        availability_root: None,
+        coverage_scope: None,
+        covered_event_digests: target.iter().cloned().collect(),
+        previous_state_root: None,
+        previous_digest_algorithm: None,
+        notary_signature: NotarySig::Single(zero_notary_sig_placeholder()?),
+        sealed_at: chrono::Utc::now(),
+        hlc: Hlc::new(state.hlc.now())
+            .map_err(|error| NotaryError::Construction(format!("invalid HLC: {error}")))?,
+        kind: arkret_sdk::SealKind::Compaction,
+    };
+    seal.validate_structural()
+        .map_err(|error| NotaryError::Construction(format!("Event Seal structure: {error}")))?;
+    let canonical_bytes = seal
+        .canonical_bytes_for_id()
+        .map_err(|error| NotaryError::Construction(format!("Event Seal bytes: {error}")))?;
+    seal.id = Seal::id_from_canonical_bytes(&canonical_bytes)
+        .map_err(|error| NotaryError::Construction(format!("Event Seal id: {error}")))?;
+    let worker = NotaryWorker::for_service(state.config.service_id.clone());
+    seal.notary_signature = NotarySig::Single(worker.signature_for(state, &canonical_bytes)?);
+
+    let delta_set = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
+    let new_ops = event_ops
+        .iter()
+        .filter(|(_, op)| delta_set.contains(&op.move_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    state
+        .cell_store
+        .append_sealed_effects(realm_id, &seal.id, &new_ops)?;
+    if let Err(error) = state.seal_store.put(&seal) {
+        let _ = state.cell_store.rollback_seal(realm_id, &seal.id);
+        return Err(error.into());
+    }
+    materialized_event_seal_view(state, seal)
+}
+
+fn materialized_event_seal_view(
+    state: &AppState,
+    accepted_seal: Seal,
+) -> Result<MaterializedEventSealView, NotaryError> {
+    let mut path = Vec::new();
+    let mut cursor = accepted_seal.clone();
+    loop {
+        let predecessors = cursor.predecessor_refs.clone();
+        path.push(cursor);
+        match predecessors.as_slice() {
+            [] => break,
+            [predecessor] => {
+                cursor = state.seal_store.get(predecessor)?.ok_or_else(|| {
+                    NotaryError::Store(format!("Seal predecessor {predecessor} is missing"))
+                })?;
+            }
+            _ => {
+                return Err(NotaryError::Construction(
+                    "event proof bootstrap does not support a multi-parent Seal path".to_owned(),
+                ));
+            }
+        }
+    }
+    path.reverse();
+    let trust_anchor_seal_id = path
+        .first()
+        .map(|seal| seal.id.clone())
+        .ok_or_else(|| NotaryError::Store("empty Seal path".to_owned()))?;
+    Ok(MaterializedEventSealView {
+        trust_anchor_seal_id,
+        accepted_seal,
+        seal_path: path,
+    })
 }
 
 /// Convenience: trigger a single signing pass and report a structured

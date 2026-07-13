@@ -142,7 +142,11 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
     let payload = json!({
         "media_service_decrypts": true,
         "plaintext_visible_services": [
-            {"purpose": "media_plaintext", "service_id": service_id}
+            {
+                "service_id": service_id,
+                "data_classes": ["media_plaintext"],
+                "purposes": ["conference media processing"]
+            }
         ]
     });
 
@@ -168,6 +172,48 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
     let err =
         realm_policy_components_check(&payload, &[], true, true, Some("not-a-hash")).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
+}
+
+#[test]
+fn media_plaintext_authority_requires_matching_service_and_data_class() {
+    let service_id = "did:web:soland.local";
+    assert!(payload_declares_media_plaintext_service(
+        &json!({
+            "plaintext_visible_services": [{
+                "service_id": service_id,
+                "data_classes": ["media_plaintext"],
+                "purposes": ["human-readable only"]
+            }]
+        }),
+        service_id,
+    ));
+    for payload in [
+        json!({"plaintext_visible_services": [service_id]}),
+        json!({"plaintext_visible_services": ["media_plaintext"]}),
+        json!({
+            "plaintext_visible_services": [{
+                "service_id": service_id,
+                "purpose": "media_plaintext"
+            }]
+        }),
+        json!({
+            "plaintext_visible_services": [{
+                "service_id": "did:web:other.example",
+                "data_classes": ["media_plaintext"]
+            }]
+        }),
+        json!({
+            "plaintext_visible_services": [{
+                "service_id": service_id,
+                "data_classes": ["message_content"],
+                "purposes": ["media_plaintext"]
+            }]
+        }),
+    ] {
+        assert!(!payload_declares_media_plaintext_service(
+            &payload, service_id
+        ));
+    }
 }
 
 #[test]

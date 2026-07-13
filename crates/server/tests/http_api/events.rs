@@ -639,6 +639,152 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             .member(&realm_id, "did:web:alice.example")
             .is_some_and(|member| member.state == "join")
     );
+
+    let proof_request = serde_json::json!({
+        "realm_id": realm_id,
+        "effective_scope": {"kind": "realm", "realm_id": realm_id},
+        "mls_group_id": "YXJrcmV0LW1scy1wcm9vZi10ZXN0",
+        "previous_epoch": 0,
+        "next_epoch": 1,
+        "binding_profile": "ak.profile.mls_governance_binding.full.v1",
+        "reducer_profile": "ak.reducer.v1"
+    });
+    let mut proof_response =
+        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&proof_request)
+            .send(&app_from_state(state.clone()))
+            .await;
+    let proof_status = proof_response.status_code.expect("proof status");
+    let proof_body: Value = proof_response.take_json().await.expect("proof body");
+    assert_eq!(
+        proof_status,
+        StatusCode::CONFLICT,
+        "legacy envelope must fail closed: {proof_body}"
+    );
+    assert_eq!(proof_body["error"]["code"], "state_mismatch");
+}
+
+#[tokio::test]
+async fn canonical_control_event_materializes_verifiable_mls_governance_proof() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let seeded = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Canonical governance proof Realm",
+        None,
+        "listed",
+        &[],
+        &[],
+    )
+    .await;
+    let realm_id = seeded["realm_id"].as_str().unwrap().to_owned();
+    let typed_realm = RealmId::new(realm_id.clone()).unwrap();
+    let actor = Did::new("did:web:alice.example").unwrap();
+    let mut event = arkret_sdk::Event::new(
+        arkret_sdk::events::kinds::MEMBER_STATE,
+        typed_realm.clone(),
+        actor,
+        1,
+        arkret_sdk::Hlc::new("01980b44cc00-0000-aabbccdd").unwrap(),
+        serde_json::json!({
+            "actor_id": "did:web:alice.example",
+            "membership": "join"
+        }),
+    )
+    .unwrap();
+    event.effective_scope = Some(arkret_sdk::models::EffectiveScope::Realm {
+        realm_id: typed_realm.clone(),
+    });
+    event.effects = vec![arkret_sdk::Effect {
+        cell: arkret_sdk::CellRef::new(
+            "ak:cell:ak.component.member.state.v1:did.web.alice.example",
+        )
+        .unwrap(),
+        op: arkret_sdk::LatticeOp {
+            op_type: arkret_sdk::LatticeOpType::Transition,
+            tag: None,
+            value: None,
+            from: Some(serde_json::json!("invite")),
+            to: Some(serde_json::json!("join")),
+            reason: None,
+            issuer_seq: None,
+        },
+    }];
+    let digest = arkret_sdk::Hash::new(event.event_digest().unwrap()).unwrap();
+    event.proofs.push(arkret_sdk::Proof {
+        kind: "detached_jws".to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method: "did:web:alice.example#device-key".to_owned(),
+        event_digest: digest.clone(),
+        created_at: event.created_at,
+        domain: None,
+        audience: None,
+        jws: "AAAA.BBBB.CCCC".to_owned(),
+    });
+    let envelope = serde_json::to_value(&event).unwrap();
+    state
+        .persistence
+        .events()
+        .put(soland::state::CanonicalEventRecord {
+            event_id: event.event_id.to_string(),
+            actor_id: event.actor_id.to_string(),
+            actor_seq: event.actor_seq,
+            realm_id: Some(realm_id.clone()),
+            kind: event.kind.as_str().to_owned(),
+            schema_id: "ak.schema.event_envelope.v1".to_owned(),
+            canonical_digest: digest.to_string(),
+            canonical_bytes: arkret_sdk::canonical::canonical_json_bytes(&event).unwrap(),
+            envelope,
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let proof_request = serde_json::json!({
+        "realm_id": realm_id,
+        "effective_scope": {"kind": "realm", "realm_id": realm_id},
+        "mls_group_id": "YXJrcmV0LW1scy1wcm9vZi10ZXN0",
+        "previous_epoch": 0,
+        "next_epoch": 1,
+        "binding_profile": "ak.profile.mls_governance_binding.full.v1",
+        "reducer_profile": "ak.reducer.v1"
+    });
+    let mut proof_response =
+        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&proof_request)
+            .send(&app_from_state(state.clone()))
+            .await;
+    let proof_status = proof_response.status_code.expect("proof status");
+    let proof_body: Value = proof_response.take_json().await.expect("proof body");
+    assert_eq!(proof_status, StatusCode::OK, "proof response: {proof_body}");
+    let bundle: arkret_sdk::MlsGovernanceProofBundle =
+        serde_json::from_value(proof_body).expect("typed proof bundle");
+    let verified = arkret_sdk::verify_mls_governance_proof_bundle(
+        &bundle,
+        &bundle.governance_binding,
+        &bundle.trust_anchor_seal_id,
+        |_| Ok(()),
+        |_| Ok(()),
+    )
+    .expect("server proof verifies with SDK");
+    assert_eq!(verified.accepted_seal_id, bundle.accepted_seal_id);
+
+    let second_bundle: arkret_sdk::MlsGovernanceProofBundle =
+        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&proof_request)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .expect("second proof body");
+    assert_eq!(
+        second_bundle.accepted_seal_id, bundle.accepted_seal_id,
+        "unchanged Event coverage must reuse the accepted Seal"
+    );
 }
 
 #[tokio::test]

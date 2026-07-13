@@ -326,7 +326,7 @@ pub fn realm_policy_components_check(
                 ErrorCode::FailedPrecondition,
                 "media_service_decrypts=true requires the SFU/MCU service DID \
                  to be listed in plaintext_visible_services[] with \
-                 purpose=media_plaintext"
+                 data_classes[] containing media_plaintext"
                     .to_owned(),
             ));
         }
@@ -380,13 +380,9 @@ pub fn realm_policy_components_check(
 /// treat that as a fail-closed mismatch.
 ///
 /// The recomputed value mirrors §10.5.1 rule 1 (`media_service_decrypts`) and
-/// rule 2 (the `purpose=media_plaintext` service DIDs in
-/// `plaintext_visible_services[]`). Service-ID extraction matches the shapes
-/// [`payload_declares_media_plaintext_service`] already accepts (bare string,
-/// `media_plaintext` sentinel, or `{purpose, service_id|did}` object) so the
-/// digest input is consistent with the rule-2 presence gate; non-DID / sentinel
-/// entries that carry no concrete DID are skipped because the SDK digest is
-/// defined over concrete service DIDs.
+/// rule 2 (service DIDs whose `data_classes[]` contains `media_plaintext` in
+/// `plaintext_visible_services[]`). Free-text purposes do not grant authority
+/// and are excluded from the digest input.
 fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_sdk::Hash> {
     use arkret_sdk::models::{
         MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
@@ -403,24 +399,19 @@ fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_sdk
         .and_then(Value::as_array)
     {
         for service in services {
-            let did_str = match service {
-                // A bare string entry is the service DID itself; the
-                // `media_plaintext` sentinel carries no concrete DID.
-                Value::String(value) if value != "media_plaintext" => Some(value.as_str()),
-                Value::Object(object) => {
-                    let purpose_ok =
-                        object.get("purpose").and_then(Value::as_str) == Some("media_plaintext");
-                    if purpose_ok {
-                        object
-                            .get("service_id")
-                            .or_else(|| object.get("did"))
-                            .and_then(Value::as_str)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
+            let did_str = service.as_object().and_then(|object| {
+                let authorizes_media = object
+                    .get("data_classes")
+                    .and_then(Value::as_array)
+                    .is_some_and(|classes| {
+                        classes
+                            .iter()
+                            .any(|class| class.as_str() == Some("media_plaintext"))
+                    });
+                authorizes_media
+                    .then(|| object.get("service_id").and_then(Value::as_str))
+                    .flatten()
+            });
             if let Some(did_str) = did_str
                 && let Ok(service_id) = arkret_sdk::Did::new(did_str.to_owned())
             {

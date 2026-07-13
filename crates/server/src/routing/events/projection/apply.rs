@@ -871,28 +871,17 @@ async fn project_mls_welcome_to_device(
         return;
     }
 
-    let epoch = operation
-        .payload
-        .get("epoch")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
     let expires_at = operation
         .payload
         .get("expires_at")
         .cloned()
         .unwrap_or_else(|| json!(operation.created_at + chrono::Duration::hours(1)));
+    let welcome_content = operation.payload.clone();
     let content = json!({
         "kind": "ak.mls.welcome",
         "sender_device_id": sender_device_id,
         "expires_at": expires_at,
-        "content": {
-            "group_id": record.group_id,
-            "epoch": epoch,
-            "recipient_principal_id": record.recipient_actor_id,
-            "recipient_device_id": record.recipient_device_id,
-            "welcome": URL_SAFE_NO_PAD.encode(&record.welcome_bytes),
-            "welcome_hash": arkret_sdk::canonical::sha256_digest(&record.welcome_bytes),
-        },
+        "content": welcome_content,
         "unsigned": {
             "source_event_id": operation.operation_id,
             "mls_welcome_id": welcome_id,
