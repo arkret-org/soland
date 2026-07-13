@@ -11,10 +11,15 @@ use tokio::signal;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
+fn main() -> anyhow::Result<()> {
+    soland::config::prepare_process_environment()?;
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run())
+}
 
+async fn run() -> anyhow::Result<()> {
     // P5 (5.5) — `soland healthcheck` subcommand. Distroless / minimal
     // runtime images cannot rely on an external `curl` binary for the
     // Docker HEALTHCHECK. Detect the subcommand BEFORE we initialize

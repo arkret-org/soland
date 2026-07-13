@@ -1,9 +1,106 @@
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_TO_DEVICE_QUEUE_CAPACITY: usize = 10_000;
 pub const PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV: &str = "SOLAND_PQ_TLS_DEPLOYMENT_PROBE";
+
+const CONFIG_ARG: &str = "--config";
+const NO_ENV_OVERRIDES_ARG: &str = "--no-env-overrides";
+
+/// Apply the common Arkret server configuration-source contract before any
+/// worker threads are created.
+///
+/// Without an explicit `--config`, the historical development behaviour is
+/// preserved and a nearby `.env` file may populate missing values. With an
+/// explicit config, the file is authoritative: ambient `SOLAND_*` and
+/// `DATABASE_URL` values are removed, `.env` is not loaded, and only values in
+/// the selected env-file are installed before ambient environment overrides.
+/// `--no-env-overrides` selects the hermetic file-only mode used by tests.
+pub fn prepare_process_environment() -> anyhow::Result<()> {
+    let args = std::env::args().collect::<Vec<_>>();
+    let Some(config_path) = config_path_from_args(&args)? else {
+        dotenvy::dotenv().ok();
+        return Ok(());
+    };
+
+    let no_env_overrides = args.iter().any(|arg| arg == NO_ENV_OVERRIDES_ARG);
+    let ambient = relevant_environment();
+    clear_relevant_environment();
+    let file_values = read_config_environment(&config_path)?;
+    install_environment(file_values);
+    if !no_env_overrides {
+        install_environment(ambient);
+    }
+    Ok(())
+}
+
+fn config_path_from_args(args: &[String]) -> anyhow::Result<Option<PathBuf>> {
+    let mut index = 1;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == CONFIG_ARG {
+            let value = args
+                .get(index + 1)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("--config requires a file path"))?;
+            return Ok(Some(PathBuf::from(value)));
+        }
+        if let Some(value) = arg.strip_prefix("--config=") {
+            if value.trim().is_empty() {
+                anyhow::bail!("--config requires a file path");
+            }
+            return Ok(Some(PathBuf::from(value)));
+        }
+        index += 1;
+    }
+    Ok(None)
+}
+
+fn read_config_environment(path: &Path) -> anyhow::Result<Vec<(String, String)>> {
+    let mut values = Vec::new();
+    for entry in dotenvy::from_path_iter(path)
+        .map_err(|error| anyhow::anyhow!("failed to read config {}: {error}", path.display()))?
+    {
+        let (key, value) = entry.map_err(|error| {
+            anyhow::anyhow!("failed to parse config {}: {error}", path.display())
+        })?;
+        if !is_allowed_config_key(&key) {
+            anyhow::bail!(
+                "config {} contains unsupported key {key}; expected SOLAND_*, DATABASE_URL, or RUST_LOG",
+                path.display()
+            );
+        }
+        values.push((key, value));
+    }
+    Ok(values)
+}
+
+fn is_allowed_config_key(key: &str) -> bool {
+    key.starts_with("SOLAND_") || matches!(key, "DATABASE_URL" | "RUST_LOG")
+}
+
+fn relevant_environment() -> Vec<(String, String)> {
+    std::env::vars()
+        .filter(|(key, _)| is_allowed_config_key(key))
+        .collect()
+}
+
+fn clear_relevant_environment() {
+    for (key, _) in relevant_environment() {
+        // SAFETY: `main` calls this function before constructing the Tokio
+        // runtime, so no other thread can read or mutate the process env.
+        unsafe { std::env::remove_var(key) };
+    }
+}
+
+fn install_environment(values: Vec<(String, String)>) {
+    for (key, value) in values {
+        // SAFETY: `main` calls this function before constructing the Tokio
+        // runtime, so no other thread can read or mutate the process env.
+        unsafe { std::env::set_var(key, value) };
+    }
+}
 
 /// Built-in placeholder `service_id` used only when `SOLAND_SERVICE_ID` is
 /// unset. It is deliberately a globally-shared, non-routable identity so a
