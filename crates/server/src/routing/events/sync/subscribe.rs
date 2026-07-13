@@ -405,7 +405,7 @@ fn delta_is_empty(response: &arkret_sdk::models::SyncOutcome) -> bool {
         && response.to_device.is_empty()
         && response.to_device_lost != Some(true)
         && response.presence.is_empty()
-        && notifications_delta_is_empty(&response.notifications)
+        && response.notifications.items.is_empty()
 }
 
 fn account_subscribe_notification_is_presence(
@@ -423,30 +423,31 @@ async fn account_subscribe_notification_should_wake(
     session: Option<&SessionRecord>,
     after_cursor: &SyncCursor,
 ) -> bool {
+    if let crate::state::EventNotificationKind::Account {
+        account_id,
+        recipient_service_id,
+    } = &notification.kind
+    {
+        let Some(session) = session else {
+            return false;
+        };
+        if recipient_service_id != &state.config.service_id {
+            return false;
+        }
+        return state
+            .persistence
+            .accounts()
+            .get(&session.actor)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|account| account.id == *account_id);
+    }
     if realm_id_accessible(state, &notification.realm_id, session).await {
         return true;
     }
-    let (invite_notifications, _) =
-        pending_invite_notification_delta(state, session, after_cursor, true).await;
-    invite_notifications.iter().any(|invite| {
-        invite
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .is_some_and(|realm_id| realm_id == notification.realm_id)
-    })
-}
-
-fn notifications_delta_is_empty(value: &Value) -> bool {
-    if value.is_null() {
-        return true;
-    }
-    if let Some(events) = value.get("events").and_then(Value::as_array) {
-        return events.is_empty();
-    }
-    if let Some(items) = value.get("items").and_then(Value::as_array) {
-        return items.is_empty();
-    }
-    value.as_array().is_some_and(Vec::is_empty)
+    let _ = after_cursor;
+    false
 }
 
 fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {

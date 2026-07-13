@@ -1018,6 +1018,7 @@ pub fn describe(
             "org.arkret.soland.feature.sync.bound_cursor".to_owned(),
             "org.arkret.soland.feature.sync.incremental_since".to_owned(),
             "org.arkret.soland.feature.sync.typing".to_owned(),
+            "ak.feature.agent_runtime_approval_notifications.v1".to_owned(),
             "org.arkret.soland.feature.personal_productivity.scheduled_send_wake_only".to_owned(),
             "org.arkret.soland.feature.personal_productivity.reminder_snooze_private_wake"
                 .to_owned(),

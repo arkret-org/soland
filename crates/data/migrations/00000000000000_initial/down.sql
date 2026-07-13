@@ -56,6 +56,7 @@ DROP TABLE IF EXISTS retention_policies CASCADE;
 DROP TABLE IF EXISTS retention_tombstones CASCADE;
 DROP TABLE IF EXISTS multisig_pending CASCADE;
 DROP TABLE IF EXISTS notifications CASCADE;
+DROP SEQUENCE IF EXISTS notification_projection_position_seq CASCADE;
 DROP TABLE IF EXISTS pending_agent_drafts CASCADE;
 DROP TABLE IF EXISTS policy_documents CASCADE;
 DROP TABLE IF EXISTS presence CASCADE;

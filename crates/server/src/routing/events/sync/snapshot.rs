@@ -96,35 +96,8 @@ pub(crate) async fn build_sync_snapshot(
     let mut timeline_positions = BTreeMap::new();
     let mut account_positions = BTreeMap::new();
     let is_incremental = body.after.is_some();
-    let (invite_notifications, invite_positions) =
-        pending_invite_notification_delta(state, session, after_cursor, is_incremental).await;
-    let (mut account_notifications, notification_positions) =
-        persisted_notification_delta(state, session, after_cursor, is_incremental, &projection)
-            .await;
-    account_notifications.extend(invite_notifications);
-    account_notifications.sort_by(|left, right| {
-        let left_timestamp = left
-            .get("timestamp")
-            .or_else(|| left.get("created_at"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let right_timestamp = right
-            .get("timestamp")
-            .or_else(|| right.get("created_at"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        left_timestamp.cmp(right_timestamp).then_with(|| {
-            left.get("notification_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .cmp(
-                    right
-                        .get("notification_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                )
-        })
-    });
+    let (account_notifications, notification_position) =
+        account_notification_delta(state, session, after_cursor, is_incremental).await;
     for (realm_id, title, summary, tags, category, members) in visible_realms {
         let strand =
             strand_projection_for_realm(state, &realm_id, &title, summary.as_deref()).await;
@@ -260,9 +233,6 @@ pub(crate) async fn build_sync_snapshot(
         );
     }
     drop(projection);
-    merge_account_position_max(&mut account_positions, invite_positions);
-    merge_account_position_max(&mut account_positions, notification_positions);
-
     let mut to_device_position = after_cursor.to_device_position;
     let mut to_device_ack_token = None;
     let mut to_device_limited = false;
@@ -313,7 +283,7 @@ pub(crate) async fn build_sync_snapshot(
                 .flatten();
             if to_device_limited {
                 to_device_next_cursor = Some(
-                    sync_token_for_client_sync(
+                    sync_token_for_client_sync_with_notification_position(
                         state,
                         Some(session),
                         filter_value.as_ref(),
@@ -321,6 +291,7 @@ pub(crate) async fn build_sync_snapshot(
                         BTreeMap::new(),
                         BTreeMap::new(),
                         to_device_position,
+                        after_cursor.notification_position,
                     )
                     .await,
                 );
@@ -357,7 +328,7 @@ pub(crate) async fn build_sync_snapshot(
     };
 
     arkret_sdk::models::SyncOutcome {
-        cursor: sync_token_for_client_sync(
+        cursor: sync_token_for_client_sync_with_notification_position(
             state,
             session,
             filter_value.as_ref(),
@@ -365,6 +336,7 @@ pub(crate) async fn build_sync_snapshot(
             account_positions,
             device_list_positions,
             to_device_position,
+            notification_position,
         )
         .await,
         realms: sync_realms,
@@ -377,7 +349,7 @@ pub(crate) async fn build_sync_snapshot(
         device_lists,
         account_data,
         presence,
-        notifications: notifications_delta_value(account_notifications),
+        notifications: account_notifications,
         partial: false,
     }
 }
@@ -394,12 +366,67 @@ fn merge_account_position_max(
     }
 }
 
-fn notifications_delta_value(events: Vec<Value>) -> Value {
-    if events.is_empty() {
-        Value::Null
-    } else {
-        json!({ "events": events })
+async fn account_notification_delta(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    after_cursor: &SyncCursor,
+    is_incremental: bool,
+) -> (arkret_sdk::NotificationContainer, i64) {
+    let Some(session) = session else {
+        return (arkret_sdk::NotificationContainer::default(), 0);
+    };
+    let Some(account) = state
+        .persistence
+        .accounts()
+        .get(&session.actor)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return (
+            arkret_sdk::NotificationContainer::default(),
+            after_cursor.notification_position,
+        );
+    };
+    let rows = state
+        .persistence
+        .notifications()
+        .list_for_account(
+            &account.id,
+            &state.config.service_id,
+            is_incremental.then_some(after_cursor.notification_position),
+        )
+        .await
+        .unwrap_or_default();
+    let mut position = after_cursor.notification_position;
+    let mut items = Vec::new();
+    for row in rows {
+        position = position.max(
+            row.get("projection_position")
+                .and_then(Value::as_i64)
+                .unwrap_or_default(),
+        );
+        let action = row
+            .get("projection_action")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !is_incremental && action == "remove" {
+            continue;
+        }
+        let mut delta = json!({
+            "id": row.get("notification_id").cloned().unwrap_or(Value::Null),
+            "type": "agent",
+            "action": if is_incremental { action } else { "add" },
+        });
+        if let Some(data) = row.get("projection_data").filter(|value| !value.is_null()) {
+            delta["data"] = data.clone();
+        }
+        match serde_json::from_value::<arkret_sdk::NotificationDelta>(delta) {
+            Ok(delta) => items.push(delta),
+            Err(error) => tracing::error!(%error, "ignored invalid persisted account notification"),
+        }
     }
+    (arkret_sdk::NotificationContainer { items }, position)
 }
 
 async fn persisted_notification_delta(

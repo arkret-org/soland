@@ -17,6 +17,8 @@ pub struct SyncCursor {
     /// Device-list aggregate frontier per tracked principal.
     pub device_list_positions: BTreeMap<String, i64>,
     pub to_device_position: i64,
+    /// Account-private notification projection high-water position.
+    pub notification_position: i64,
     /// `ctx.issued_at_ms` from the stateful handle. Used for forward-progress
     /// pruning of older handles after a client proves it persisted a cursor.
     /// Per-Realm account projection freshness lives in `account_positions`,
@@ -63,6 +65,29 @@ pub async fn sync_token_for_client_sync(
     device_list_positions: BTreeMap<String, i64>,
     to_device_position: i64,
 ) -> String {
+    sync_token_for_client_sync_with_notification_position(
+        state,
+        session,
+        filter,
+        realms_positions,
+        account_realms_positions,
+        device_list_positions,
+        to_device_position,
+        0,
+    )
+    .await
+}
+
+pub async fn sync_token_for_client_sync_with_notification_position(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    filter: Option<&serde_json::Value>,
+    realms_positions: BTreeMap<String, i64>,
+    account_realms_positions: BTreeMap<String, i64>,
+    device_list_positions: BTreeMap<String, i64>,
+    to_device_position: i64,
+    notification_position: i64,
+) -> String {
     let issued_at = chrono::Utc::now();
     let expires_at = issued_at + ChronoDuration::hours(1);
     let (principal_id, device_id) = cursor_principal_device(session);
@@ -75,13 +100,14 @@ pub async fn sync_token_for_client_sync(
         "account_realms": account_realms_positions,
         "device_lists": device_list_positions,
         "devices": device_positions,
-        "to_device": to_device_position
+        "to_device": to_device_position,
+        "notifications": notification_position
     });
     // Deterministic handle: HMAC over the binding content (positions
     // included, per-mint `devices` wall-clock stamp excluded), so an
     // unchanged frontier re-mints the SAME handle and the upsert only
     // refreshes the row's expiry instead of growing the table.
-    let binding = stream_cursor_handle_binding(
+    let binding = stream_cursor_handle_binding_with_notification_position(
         &principal_id,
         &device_id,
         &state.config.service_id,
@@ -90,6 +116,7 @@ pub async fn sync_token_for_client_sync(
         &account_realms_positions,
         &device_list_positions,
         to_device_position,
+        notification_position,
     );
     let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, &binding);
     upsert_sync_cursor_record(
@@ -251,6 +278,30 @@ pub(crate) fn stream_cursor_handle_binding(
     device_list_positions: &BTreeMap<String, i64>,
     to_device_position: i64,
 ) -> Vec<u8> {
+    stream_cursor_handle_binding_with_notification_position(
+        principal_id,
+        device_id,
+        service_id,
+        filter_digest,
+        realms_positions,
+        account_realms_positions,
+        device_list_positions,
+        to_device_position,
+        0,
+    )
+}
+
+pub(crate) fn stream_cursor_handle_binding_with_notification_position(
+    principal_id: &str,
+    device_id: &str,
+    service_id: &str,
+    filter_digest: &str,
+    realms_positions: &BTreeMap<String, i64>,
+    account_realms_positions: &BTreeMap<String, i64>,
+    device_list_positions: &BTreeMap<String, i64>,
+    to_device_position: i64,
+    notification_position: i64,
+) -> Vec<u8> {
     let binding = json!({
         "principal_id": principal_id,
         "device_id": device_id,
@@ -261,6 +312,7 @@ pub(crate) fn stream_cursor_handle_binding(
         "account_realms": account_realms_positions,
         "device_lists": device_list_positions,
         "to_device": to_device_position,
+        "notifications": notification_position,
     });
     arkret_sdk::canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
@@ -602,12 +654,17 @@ pub async fn parse_and_validate_sync_cursor(
         .get("to_device")
         .and_then(|position| position.as_i64())
         .unwrap_or_default();
+    let notification_position = positions_value
+        .get("notifications")
+        .and_then(|position| position.as_i64())
+        .unwrap_or_default();
     let issued_at_ms = ctx.get("issued_at_ms").and_then(|value| value.as_i64());
     Ok(SyncCursor {
         positions,
         account_positions,
         device_list_positions,
         to_device_position,
+        notification_position,
         issued_at_ms,
     })
 }

@@ -379,6 +379,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 EventNotificationKind::Ephemeral { .. } => {
                                     continue;
                                 }
+                                EventNotificationKind::Account { .. } => continue,
                             };
                             yield Ok(ndjson_line(&frame));
                             if terminal {

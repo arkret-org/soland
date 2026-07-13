@@ -94,6 +94,12 @@ CREATE TABLE public.agent_principals (
     pairing_code text,
     pairing_expires_at timestamp with time zone,
     approval_request_id text,
+    controller_account_id uuid,
+    recipient_service_id text,
+    runtime_key_binding_digest text,
+    runtime_public_key_digest text,
+    runtime_attestation_digest text,
+    approval_notification_id uuid,
     runtime_key_request jsonb,
     approval_requested_at timestamp with time zone,
     authorized_event_ref text,
@@ -710,11 +716,17 @@ CREATE TABLE public.multisig_pending (
     expires_at timestamp with time zone DEFAULT (now() + '01:00:00'::interval) NOT NULL
 );
 
+CREATE SEQUENCE public.notification_projection_position_seq AS bigint;
+
 CREATE TABLE public.notifications (
     id uuid NOT NULL,
     recipient_id text NOT NULL,
-    realm_id uuid NOT NULL,
-    source_event_id text NOT NULL,
+    realm_id uuid,
+    source_event_id text,
+    controller_account_id uuid,
+    recipient_service_id text,
+    source_account_artifact_kind text,
+    source_account_artifact_id text,
     source_ref text,
     strand_id text,
     track_name text,
@@ -724,9 +736,14 @@ CREATE TABLE public.notifications (
     priority text DEFAULT 'normal'::text NOT NULL,
     state text DEFAULT 'unread'::text NOT NULL,
     preview jsonb,
+    projection_action text,
+    projection_data jsonb,
+    projection_position bigint DEFAULT nextval('public.notification_projection_position_seq'::regclass) NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
-    read_at timestamp with time zone
+    read_at timestamp with time zone,
+    CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_id IS NULL) AND (recipient_service_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_id IS NOT NULL) AND (recipient_service_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL))),
+    CONSTRAINT notifications_projection_action_check CHECK ((projection_action IS NULL) OR (projection_action = ANY (ARRAY['add'::text, 'update'::text, 'remove'::text])))
 );
 
 CREATE TABLE public.pending_agent_drafts (
@@ -1342,9 +1359,6 @@ ALTER TABLE ONLY public.multisig_pending
 ALTER TABLE ONLY public.notifications
     ADD CONSTRAINT notifications_pkey PRIMARY KEY (id);
 
-ALTER TABLE ONLY public.notifications
-    ADD CONSTRAINT notifications_recipient_source_type_key UNIQUE (recipient_id, source_event_id, notification_type);
-
 ALTER TABLE ONLY public.pending_agent_drafts
     ADD CONSTRAINT pending_agent_drafts_pkey PRIMARY KEY (id);
 
@@ -1605,6 +1619,12 @@ CREATE INDEX multisig_pending_expires_idx ON public.multisig_pending USING btree
 CREATE INDEX multisig_pending_space_idx ON public.multisig_pending USING btree (realm_id);
 
 CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (recipient_id, created_at DESC);
+
+CREATE UNIQUE INDEX notifications_event_source_key ON public.notifications USING btree (recipient_id, source_event_id, notification_type) WHERE (source_event_id IS NOT NULL);
+
+CREATE UNIQUE INDEX notifications_account_artifact_key ON public.notifications USING btree (controller_account_id, recipient_service_id, source_account_artifact_kind, source_account_artifact_id) WHERE (controller_account_id IS NOT NULL);
+
+CREATE INDEX notifications_account_position_idx ON public.notifications USING btree (controller_account_id, recipient_service_id, projection_position) WHERE (controller_account_id IS NOT NULL);
 
 CREATE INDEX notifications_source_idx ON public.notifications USING btree (source_event_id);
 

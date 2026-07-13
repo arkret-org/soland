@@ -14,6 +14,7 @@
 use arkret_sdk::canonical;
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::SessionRecord;
 use crate::error::{AppError, ErrorCode};
@@ -28,13 +29,18 @@ const ACTION_EVENT_READ: &str = "ak.event.read";
 const ACTION_MESSAGE_CREATE: &str = "ak.message.create";
 const ACTION_REACTION_ADD: &str = "ak.reaction.add";
 
-/// Deterministic self realm for a controller principal. Reuses the
-/// principal-control realm derivation so the realm id is a stable
-/// UUIDv7-shaped value and `realm_has_member_by_id` already treats the
-/// controller as a member (no separate account -> self_realm mapping
-/// table is required).
-pub(super) fn self_realm_for_controller(controller_id: &str) -> String {
-    crate::routing::identity::recovery::principal_control_realm_for_did(controller_id)
+/// Development-only fan-out Realm. Its domain-separated identifier is never
+/// a controller or Agent Principal Control Realm identifier.
+pub(super) fn development_agent_realm_for_controller(controller_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"ak.development.agent_fanout_realm.v1\0");
+    hasher.update(controller_id.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x70;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!("ak:realm:{}", uuid::Uuid::from_bytes(bytes))
 }
 
 /// Build a server-authored envelope for `session.actor` and submit it via the
@@ -127,7 +133,7 @@ pub(super) async fn ensure_self_realm(
     state: &AppState,
     session: &SessionRecord,
 ) -> Result<String, AppError> {
-    let realm_id = self_realm_for_controller(&session.actor);
+    let realm_id = development_agent_realm_for_controller(&session.actor);
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
         let payload =
             self_realm_create_payload(&session.actor, &state.config.service_id, &realm_id);
@@ -221,8 +227,8 @@ fn self_realm_create_payload(controller_id: &str, service_id: &str, realm_id: &s
         "object": {
             "id": realm_id,
             "schema": "ak.schema.realm.v1",
-            "title": "Personal Agent Control",
-            "summary": "Controller self realm hosting personal agent identity events.",
+            "title": "Development Agent Fan-out",
+            "summary": "Non-PCR development Realm for exercising Agent fan-out.",
             "created_by": controller_id,
             "trust_domain": "ak:trust_domain:soland.local",
             "schema_refs": ["ak.schema.realm.v1"],
@@ -783,6 +789,21 @@ mod tests {
     use soland_data::Db;
 
     use super::*;
+
+    #[test]
+    fn development_fanout_realm_never_collides_with_principal_control_realms() {
+        let controller = "did:webvh:z6mkcontroller:controller.example";
+        let agent = "did:webvh:z6mkagent:agent.example";
+        let development = development_agent_realm_for_controller(controller);
+        assert_ne!(
+            development,
+            crate::routing::identity::recovery::principal_control_realm_for_did(controller)
+        );
+        assert_ne!(
+            development,
+            crate::routing::identity::recovery::principal_control_realm_for_did(agent)
+        );
+    }
     use crate::state::RealmMetaRecord;
 
     fn realm_meta(owner: &str) -> RealmMetaRecord {

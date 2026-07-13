@@ -94,12 +94,21 @@ pub(super) async fn provision_agent(
         "initial_capability_grant_ids": grant_ids,
     });
     let self_realm_id = Some(realm);
+    let controller_account = state
+        .persistence
+        .accounts()
+        .get(&session.actor)
+        .await
+        .map_err(|error| AppError::internal(format!("controller account lookup failed: {error}")))?
+        .ok_or_else(|| AppError::internal("controller account is missing"))?;
     state
         .persistence
         .agents()
         .put(json!({
             "agent_id": agent_id,
             "controller_id": controller_id,
+            "controller_account_id": controller_account.id,
+            "recipient_service_id": state.config.service_id,
             "display_name": display_name,
             "agent_slug": agent_slug.clone(),
             "avatar_blob_ref": avatar_blob_ref,
@@ -254,6 +263,7 @@ pub(super) async fn renew_agent_pairing(
         .min(24 * 60 * 60 * 1000);
     let expires_at = now_utc + chrono::Duration::milliseconds(pairing_ttl_ms as i64);
     let timestamp = now_utc.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let terminal_notification = account_notification_context(&record);
     let mut record = record;
     {
         let obj = record
@@ -278,6 +288,10 @@ pub(super) async fn renew_agent_pairing(
         obj.insert("approval_request_id".to_owned(), Value::Null);
         obj.insert("runtime_key_request".to_owned(), Value::Null);
         obj.insert("approval_requested_at".to_owned(), Value::Null);
+        obj.insert("runtime_key_binding_digest".to_owned(), Value::Null);
+        obj.insert("runtime_public_key_digest".to_owned(), Value::Null);
+        obj.insert("runtime_attestation_digest".to_owned(), Value::Null);
+        obj.insert("approval_notification_id".to_owned(), Value::Null);
         obj.insert("updated_at".to_owned(), json!(timestamp));
         if let Some(refs) = obj
             .get_mut("provision_event_refs")
@@ -292,6 +306,9 @@ pub(super) async fn renew_agent_pairing(
         .put(record)
         .await
         .map_err(|err| AppError::internal(format!("agent persist failed: {err}")))?;
+    if let Some(context) = terminal_notification {
+        persist_terminal_account_notification(state, context, "renewed").await?;
+    }
     append_audit_log(
         state,
         Some(&session.actor),
@@ -421,7 +438,7 @@ pub(super) async fn lazily_expire_pairing(
     session: &SessionRecord,
     mut record: Value,
 ) -> Value {
-    if record.get("state").and_then(Value::as_str) != Some("pending_runtime_key") {
+    if !agent_pairing_handle_is_open(&record) {
         return record;
     }
     let expired = record
@@ -440,13 +457,10 @@ pub(super) async fn lazily_expire_pairing(
     else {
         return record;
     };
-    let changed_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let _ = state
-        .persistence
-        .agents()
-        .set_state(&agent_id, "pairing_expired", &changed_at)
-        .await;
-    if state.config.development_mode
+    let bootstrap_expired =
+        record.get("state").and_then(Value::as_str) == Some("pending_runtime_key");
+    if bootstrap_expired
+        && state.config.development_mode
         && let Ok(realm) = ensure_self_realm(state, session).await
     {
         let grant_ids = {
@@ -456,11 +470,34 @@ pub(super) async fn lazily_expire_pairing(
         .unwrap_or_default();
         let _ = submit_revoke_agent_grants(state, session, &realm, &grant_ids).await;
     }
+    let terminal_notification = account_notification_context(&record);
     if let Some(obj) = record.as_object_mut() {
+        if bootstrap_expired {
+            obj.insert(
+                "state".to_owned(),
+                Value::String("pairing_expired".to_owned()),
+            );
+        }
+        obj.insert("approval_request_id".to_owned(), Value::Null);
+        obj.insert("runtime_key_request".to_owned(), Value::Null);
+        obj.insert("approval_requested_at".to_owned(), Value::Null);
+        obj.insert("runtime_key_binding_digest".to_owned(), Value::Null);
+        obj.insert("runtime_public_key_digest".to_owned(), Value::Null);
+        obj.insert("runtime_attestation_digest".to_owned(), Value::Null);
+        obj.insert("approval_notification_id".to_owned(), Value::Null);
         obj.insert(
-            "state".to_owned(),
-            Value::String("pairing_expired".to_owned()),
+            "updated_at".to_owned(),
+            json!(chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)),
         );
+    }
+    if let Err(error) = state.persistence.agents().put(record.clone()).await {
+        tracing::error!(%error, agent_id, "failed to persist expired Agent pairing");
+        return record;
+    }
+    if let Some(context) = terminal_notification
+        && let Err(error) = persist_terminal_account_notification(state, context, "expired").await
+    {
+        tracing::error!(message = %error.message, agent_id, "failed to persist expired Agent approval notification");
     }
     record
 }
@@ -477,6 +514,9 @@ pub(super) async fn lifecycle_transition(
 ) -> Result<AgentLifecycleOutcome, AppError> {
     let session = aa.authenticated_session(state, req).await?;
     let record = require_agent_controller(state, &session, &agent_id).await?;
+    let terminal_notification = (event_kind == "ak.self.agent.deactivate")
+        .then(|| account_notification_context(&record))
+        .flatten();
     let sidecar_exposure_ack =
         normalize_sidecar_exposure_ack(sidecar_exposure_ack, &session.actor)?;
     // AKP-0008 D1: the durable lifecycle event and its fan-out only exist on
@@ -576,6 +616,9 @@ pub(super) async fn lifecycle_transition(
         .agents()
         .set_state(&agent_id, new_state.as_wire_str(), &status_changed_at)
         .await;
+    if let Some(context) = terminal_notification {
+        persist_terminal_account_notification(state, context, "deactivated").await?;
+    }
     // spec `agent_lifecycle_state` = `operation_status_outcome` =
     // `{ok: true, status}` (status is the post-transition `agent_status`).
     Ok(AgentLifecycleOutcome {

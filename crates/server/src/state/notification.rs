@@ -84,6 +84,12 @@ pub enum EventNotificationKind {
     Unauthorized { reason: String },
     /// Short-TTL account sync wakeup for relayed ephemeral state.
     Ephemeral { kind: String },
+    /// Durable account-private projection changed. The IDs are server-derived
+    /// account context, never caller-supplied wire data.
+    Account {
+        account_id: String,
+        recipient_service_id: String,
+    },
 }
 
 #[derive(Clone)]
@@ -208,6 +214,16 @@ impl PgEventNotificationRelay {
 }
 
 impl EventNotification {
+    pub fn account(account_id: String, recipient_service_id: String) -> Self {
+        Self {
+            realm_id: String::new(),
+            kind: EventNotificationKind::Account {
+                account_id,
+                recipient_service_id,
+            },
+        }
+    }
+
     pub fn event(realm_id: String, cursor: String, event_payload: Value) -> Self {
         Self {
             realm_id,
