@@ -67,6 +67,9 @@ pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
             "authorization_ref",
             "seal_ref",
             "seal_basis",
+            "preconditions",
+            "effects",
+            "accepted_event_id",
         ] {
             object.remove(field);
         }
@@ -1019,7 +1022,10 @@ mod tests {
     use arkret_sdk::Operation;
     use serde_json::json;
 
-    use super::{validate_encrypted_payload_envelope, validate_message_expiry_payload};
+    use super::{
+        projection_context_stripped_payload, validate_encrypted_payload_envelope,
+        validate_invite_create_payload, validate_message_expiry_payload,
+    };
 
     fn message_operation(expiry: serde_json::Value) -> Operation {
         Operation::create(
@@ -1059,6 +1065,47 @@ mod tests {
         assert_eq!(
             validate_message_expiry_payload(&operation),
             Err("ak.message.create.payload.expiry has unknown field")
+        );
+    }
+
+    #[test]
+    fn invite_create_validation_ignores_projection_context() {
+        let operation = Operation::create(
+            arkret_sdk::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-0000000000e2".to_owned(),
+            )
+            .unwrap(),
+            arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
+            arkret_sdk::events::kinds::INVITE_CREATE,
+            json!({
+                "invite_id": "ak:invite:01904100-0000-7000-8000-0000000000e2",
+                "invitee": "did:web:bob.example",
+                "invite_delivery_target": {
+                    "recipient_service_id": "did:webvh:z6mkfixture:bob.example"
+                },
+                "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "expires_at": "2026-07-20T00:00:00Z",
+                "event_id": "ak:event:01904100-0000-7000-8000-0000000000e2",
+                "sender": "did:web:alice.example",
+                "hlc": "019041000000-0001-00000001",
+                "preconditions": {"expected_state": "pending"},
+                "effects": {"transition": "created"},
+                "accepted_event_id": "ak:event:01904100-0000-7000-8000-0000000000e2"
+            }),
+        );
+
+        assert_eq!(validate_invite_create_payload(&operation), Ok(()));
+        assert_eq!(
+            projection_context_stripped_payload(&operation.payload),
+            json!({
+                "invite_id": "ak:invite:01904100-0000-7000-8000-0000000000e2",
+                "invitee": "did:web:bob.example",
+                "invite_delivery_target": {
+                    "recipient_service_id": "did:webvh:z6mkfixture:bob.example"
+                },
+                "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "expires_at": "2026-07-20T00:00:00Z"
+            })
         );
     }
 

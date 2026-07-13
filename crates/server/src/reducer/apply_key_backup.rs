@@ -9,6 +9,7 @@ const REQUIRED_ACTIVE_SERIES_SIGNED_FIELDS: &[&str] = &[
     "actor_id",
     "backup_class",
     "active_series_id",
+    "series_pointer_version",
     "previous_series_ids",
     "frontier_ref",
     "issued_at",
@@ -53,6 +54,19 @@ impl ProjectionState {
         {
             return rejected("key_backup_active_series_active_in_previous");
         }
+        let pointer_key = (actor_id.clone(), backup_class.clone());
+        let expected_version = self
+            .key_backup_active_series
+            .get(&pointer_key)
+            .map_or(1, |current| {
+                current.series_pointer_version.saturating_add(1)
+            });
+        if record.series_pointer_version < expected_version {
+            return rejected("key_backup_active_series_pointer_version_rollback");
+        }
+        if record.series_pointer_version > expected_version {
+            return rejected("key_backup_active_series_pointer_version_gap");
+        }
         if let Err(reason) = validate_active_series_frontier_ref(
             &record.frontier_ref,
             record.auth_data.ssk_generation,
@@ -67,6 +81,7 @@ impl ProjectionState {
             actor_id: actor_id.clone(),
             backup_class: backup_class.clone(),
             active_series_id: active_series_id.clone(),
+            series_pointer_version: record.series_pointer_version,
             previous_series_ids,
             frontier_ref: record.frontier_ref.clone(),
             issued_at: record.issued_at,
@@ -81,7 +96,7 @@ impl ProjectionState {
                 .insert(cell_id, CellState::Value(operation.payload.clone()));
         }
         self.key_backup_active_series
-            .insert((actor_id.clone(), backup_class.clone()), projection);
+            .insert(pointer_key, projection);
 
         ProjectionEffect::KeyBackupActiveSeriesProjected {
             actor_id,

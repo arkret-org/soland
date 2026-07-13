@@ -13,6 +13,7 @@ fn active_series_payload() -> Value {
         "actor_id": ACTOR,
         "backup_class": "secret_storage",
         "active_series_id": ACTIVE_SERIES,
+        "series_pointer_version": 1,
         "previous_series_ids": [PREVIOUS_SERIES],
         "frontier_ref": {
             "frontier_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
@@ -29,6 +30,7 @@ fn active_series_payload() -> Value {
                 "actor_id",
                 "backup_class",
                 "active_series_id",
+                "series_pointer_version",
                 "previous_series_ids",
                 "frontier_ref",
                 "issued_at"
@@ -66,6 +68,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
         .key_backup_active_series(ACTOR, "secret_storage")
         .expect("active series projection");
     assert_eq!(projected.active_series_id, ACTIVE_SERIES);
+    assert_eq!(projected.series_pointer_version, 1);
     assert_eq!(projected.previous_series_ids, vec![PREVIOUS_SERIES]);
     assert_eq!(projected.ssk_generation, 2);
 
@@ -86,6 +89,7 @@ fn key_backup_active_series_requires_complete_signed_fields() {
         "actor_id",
         "backup_class",
         "active_series_id",
+        "series_pointer_version",
         "previous_series_ids",
         "issued_at"
     ]);
@@ -149,5 +153,54 @@ fn key_backup_active_series_rejects_frontier_ssk_mismatch() {
         effect,
         ProjectionEffect::Rejected { ref reason }
             if reason == "key_backup_active_series_ssk_generation_mismatch"
+    ));
+}
+
+#[test]
+fn key_backup_active_series_enforces_contiguous_pointer_versions() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("key-backup-active-series-version");
+    let mut gap = active_series_payload();
+    gap["series_pointer_version"] = json!(2);
+
+    let initial_gap = state.apply(
+        &make_operation(
+            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            REALM,
+            gap,
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        initial_gap,
+        ProjectionEffect::Rejected { ref reason }
+            if reason == "key_backup_active_series_pointer_version_gap"
+    ));
+
+    let accepted = state.apply(
+        &make_operation(
+            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            REALM,
+            active_series_payload(),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        accepted,
+        ProjectionEffect::KeyBackupActiveSeriesProjected { .. }
+    ));
+
+    let rollback = state.apply(
+        &make_operation(
+            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            REALM,
+            active_series_payload(),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        rollback,
+        ProjectionEffect::Rejected { ref reason }
+            if reason == "key_backup_active_series_pointer_version_rollback"
     ));
 }

@@ -605,7 +605,15 @@ async fn events_frontier(
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
         let own_pcr =
             crate::routing::identity::recovery::principal_control_realm_for_did(&session.actor);
+        let managed_agent_pcr =
+            crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
+                state,
+                &session.actor,
+                &realm_value,
+            )
+            .await?;
         let accessible = realm_value == own_pcr
+            || managed_agent_pcr
             || crate::routing::spaces::space::realm_id_accessible(
                 state,
                 &realm_value,
@@ -615,6 +623,19 @@ async fn events_frontier(
         if !accessible {
             // Same code as invisible-event reads: existence must not leak.
             return Err(AppError::not_found("realm not found"));
+        }
+        if managed_agent_pcr {
+            let frontier =
+                crate::routing::identity::managed_agent_pcr::managed_agent_event_frontier(
+                    state,
+                    &realm_value,
+                )
+                .await?
+                .ok_or_else(|| AppError::not_found("realm has no accepted Event frontier"))?;
+            return crate::result::json_ok(EventsFrontierAccountClientState {
+                frontier: EventsFrontierView::RealmSealView(frontier),
+                receipts: Vec::new(),
+            });
         }
         let head = crate::notary::ensure_realm_seal_head(state, &realm_id)
             .map_err(|e| AppError::internal(format!("seal head unavailable: {e}")))?;

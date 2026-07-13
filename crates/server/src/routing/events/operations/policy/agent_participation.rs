@@ -519,6 +519,30 @@ async fn operation_agent_write_context(
     state: &AppState,
     operation: &Operation,
 ) -> Result<Option<(String, AgentParticipationMode)>, &'static str> {
+    let actor_id = operation.actor().map(|actor| actor.to_string());
+    let executed_by = operation_executed_by(operation);
+    let authorization_ref = operation
+        .payload
+        .get("authorization_ref")
+        .and_then(Value::as_str);
+    if let (Some(actor_id), Some(executed_by), Some(authorization_ref)) =
+        (actor_id.as_deref(), executed_by, authorization_ref)
+    {
+        let managed = state
+            .persistence
+            .agents()
+            .get(actor_id)
+            .await
+            .map_err(|_| "agent_principal_lookup_unavailable")?
+            .is_some_and(|record| {
+                record.controller_id == executed_by
+                    && record.principal_control_realm_id == operation.realm_id.as_str()
+                    && record.controller_authorization_ref == authorization_ref
+            });
+        if managed {
+            return Ok(None);
+        }
+    }
     if let Some(executed_by) = operation_executed_by(operation)
         && (agent_context_agent_id(operation) == Some(executed_by)
             || operation_provenance_marks_agent(operation)

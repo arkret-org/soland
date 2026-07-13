@@ -136,6 +136,7 @@ pub struct SolandKeyBackupActiveSeries {
     pub actor_id: String,
     pub backup_class: String,
     pub active_series_id: String,
+    pub series_pointer_version: u64,
     pub previous_series_ids: Vec<String>,
     pub frontier_ref: Value,
     pub issued_at: chrono::DateTime<chrono::Utc>,

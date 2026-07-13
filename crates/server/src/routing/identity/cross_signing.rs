@@ -733,17 +733,7 @@ fn device_authorize_signature_value(
 /// object is exactly the wire `device_authorize_payload` shape the typed SDK
 /// counterpart (`deny_unknown_fields`) accepts.
 pub(crate) fn device_authorize_wire_payload(payload: &Value) -> Value {
-    let mut wire_payload = payload.clone();
-    if let Some(object) = wire_payload.as_object_mut() {
-        object.remove("event_id");
-        object.remove("sender");
-        object.remove("hlc");
-        object.remove("executed_by");
-        object.remove("authorization_ref");
-        object.remove("seal_ref");
-        object.remove("seal_basis");
-    }
-    wire_payload
+    crate::routing::events::operations::projection_context_stripped_payload(payload)
 }
 
 pub(crate) async fn verify_mls_welcome_claim_envelope_signature(

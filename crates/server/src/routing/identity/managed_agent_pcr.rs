@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{
-    AgentPcrRecoveryState, BackupClass, KeyBackup, KeyBackupRecipientMethod, ManagedFrontierRef,
-    ManagedPrincipalBinding, RealmId,
+    AgentPcrRecoveryState, BackupClass, Hash, Hlc, KeyBackup, KeyBackupRecipientMethod,
+    ManagedFrontierRef, ManagedPrincipalBinding, RealmId, RealmSealFrontierView, SealId,
 };
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -358,6 +358,105 @@ pub(crate) async fn resolve_agent_pcr_for_principal(
         .map(|record| record.principal_control_realm_id))
 }
 
+pub(crate) async fn controller_manages_agent_pcr(
+    state: &AppState,
+    controller_id: &str,
+    pcr_id: &str,
+) -> Result<bool, AppError> {
+    let agents = state
+        .persistence
+        .agents()
+        .list_for_controller(controller_id)
+        .await
+        .map_err(|error| AppError::internal(format!("managed Agent PCR lookup failed: {error}")))?;
+    Ok(agents
+        .iter()
+        .any(|record| record.principal_control_realm_id == pcr_id && record.state != "deactivated"))
+}
+
+pub(crate) async fn managed_agent_event_frontier(
+    state: &AppState,
+    pcr_id: &str,
+) -> Result<Option<RealmSealFrontierView>, AppError> {
+    let realm_id = RealmId::new(pcr_id.to_owned())
+        .map_err(|error| AppError::internal(format!("stored Agent PCR id invalid: {error}")))?;
+    let events = state
+        .persistence
+        .events()
+        .snapshot_all()
+        .await
+        .map_err(|error| AppError::internal(format!("Agent PCR event lookup failed: {error}")))?;
+    let mut entries = events
+        .into_iter()
+        .filter(|event| {
+            event
+                .envelope
+                .get("realm_id")
+                .and_then(Value::as_str)
+                .or(event.realm_id.as_deref())
+                == Some(pcr_id)
+        })
+        .filter_map(|event| {
+            let hlc = event.envelope.get("hlc")?.as_str()?.to_owned();
+            Some(json!({
+                "event_id": event.event_id,
+                "canonical_digest": event.canonical_digest,
+                "hlc": hlc,
+            }))
+        })
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    entries.sort_by(|left, right| {
+        let left_hlc = left.get("hlc").and_then(Value::as_str).unwrap_or_default();
+        let right_hlc = right.get("hlc").and_then(Value::as_str).unwrap_or_default();
+        left_hlc.cmp(right_hlc).then_with(|| {
+            left.get("event_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .cmp(
+                    right
+                        .get("event_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )
+        })
+    });
+    let latest_hlc = entries
+        .last()
+        .and_then(|entry| entry.get("hlc"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::internal("Agent PCR frontier HLC is unavailable"))?;
+    let control_event_set_root = Hash::new(
+        arkret_sdk::canonical::canonical_sha256(&entries).map_err(|error| {
+            AppError::internal(format!("Agent PCR frontier digest failed: {error}"))
+        })?,
+    )
+    .map_err(|error| AppError::internal(format!("Agent PCR frontier hash invalid: {error}")))?;
+    let state_root = control_event_set_root.clone();
+    let seal_digest = arkret_sdk::canonical::canonical_sha256(&json!({
+        "kind": "ak.managed_agent_pcr.event_frontier.v1",
+        "realm_id": realm_id.as_str(),
+        "control_event_set_root": control_event_set_root.as_str(),
+        "state_root": state_root.as_str(),
+        "hlc": latest_hlc,
+    }))
+    .map_err(|error| AppError::internal(format!("Agent PCR frontier id failed: {error}")))?;
+    let seal_id = SealId::new(format!("ak:seal:{seal_digest}"))
+        .map_err(|error| AppError::internal(format!("Agent PCR frontier id invalid: {error}")))?;
+    Ok(Some(RealmSealFrontierView {
+        realm_id,
+        seal_id,
+        control_event_set_root,
+        state_root,
+        hlc: Some(
+            Hlc::new(latest_hlc.to_owned())
+                .map_err(|error| AppError::internal(format!("Agent PCR HLC invalid: {error}")))?,
+        ),
+    }))
+}
+
 pub(crate) async fn validate_agent_controller_binding(
     state: &AppState,
     agent_record: &AgentPrincipalRecord,
@@ -406,6 +505,8 @@ pub(crate) async fn validate_delegated_agent_envelope(
     if !matches!(
         kind,
         "ak.realm.create"
+            | "ak.mls.genesis"
+            | "ak.mls.commit"
             | "ak.profile.create"
             | "ak.profile.update"
             | "ak.agent.key.authorize"
@@ -487,35 +588,9 @@ async fn current_managed_frontier(
     if !crate::routing::events::event_log::realm_is_indexed(state, realm_id) {
         return Ok(None);
     }
-    let realm_id = RealmId::new(realm_id.to_owned())
-        .map_err(|error| AppError::internal(format!("stored Agent PCR id invalid: {error}")))?;
-    let Some(seal) = crate::notary::ensure_realm_seal_head(state, &realm_id)
-        .map_err(|error| AppError::internal(format!("Agent PCR Seal lookup failed: {error}")))?
-    else {
+    let Some(frontier) = managed_agent_event_frontier(state, realm_id).await? else {
         return Ok(None);
     };
-    let seal_hlc = seal.hlc.to_string();
-    let events = state
-        .persistence
-        .events()
-        .snapshot_all()
-        .await
-        .map_err(|error| AppError::internal(format!("Agent PCR event lookup failed: {error}")))?;
-    if events.iter().any(|event| {
-        event
-            .envelope
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .or(event.realm_id.as_deref())
-            == Some(realm_id.as_str())
-            && event
-                .envelope
-                .get("hlc")
-                .and_then(Value::as_str)
-                .is_some_and(|event_hlc| event_hlc > seal_hlc.as_str())
-    }) {
-        return Ok(None);
-    }
     let commits = state
         .persistence
         .mls_commits()
@@ -528,7 +603,7 @@ async fn current_managed_frontier(
                 .effective_scope
                 .get("realm_id")
                 .and_then(Value::as_str)
-                == Some(realm_id.as_str())
+                == Some(realm_id)
             && !commit.frontier_contested
     });
     let Some(commit) = matching.next() else {
@@ -542,8 +617,8 @@ async fn current_managed_frontier(
     }
     Ok(Some(CurrentManagedFrontier {
         frontier: ManagedFrontierRef {
-            frontier_digest: seal.control_event_set_root,
-            seal_ref: seal.id.as_str().to_owned(),
+            frontier_digest: frontier.control_event_set_root,
+            seal_ref: frontier.seal_id.as_str().to_owned(),
             mls_epoch: commit.epoch,
         },
         group_id: commit.group_id,
