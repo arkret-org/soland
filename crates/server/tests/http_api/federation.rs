@@ -293,6 +293,29 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
 async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     let state = AppState::new(test_config(), Db { pool: None });
     seed_peer_delivery_binding(&state);
+    // encryption-and-audit.md §2: this fixture submits plaintext, so the
+    // Realm must explicitly authorize the receiving service to see it. This
+    // keeps the assertion focused on foreign-domain member relay acceptance.
+    let mut realm_meta = state
+        .persistence
+        .realm_meta()
+        .get(TEST_REALM_ID)
+        .await
+        .unwrap()
+        .unwrap();
+    realm_meta
+        .plaintext_visible_services
+        .insert(SERVICE_ID.to_owned());
+    realm_meta.plaintext_visible_service_classes.insert(
+        SERVICE_ID.to_owned(),
+        BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
+    );
+    state
+        .persistence
+        .realm_meta()
+        .put(TEST_REALM_ID, &realm_meta)
+        .await
+        .unwrap();
     // `did:web:alice.example` is seeded into the demo Realm's membership
     // index; the source domain is `remote.example` (mismatched home), so
     // acceptance exercises the membership-index path.

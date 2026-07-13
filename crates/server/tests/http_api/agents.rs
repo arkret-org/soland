@@ -105,6 +105,7 @@ async fn production_agent_provision_fails_closed_without_durable_fanout() {
 async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     let mut config = test_config();
     config.development_mode = true;
+    config.session_grant_introspection_bearer = Some("agent-lifecycle-s2s".to_owned());
     let state = AppState::new(config, Db { pool: None });
     let controller = "did:web:alice.example";
     let token = "agent-list-session";
@@ -166,6 +167,29 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     assert_eq!(agents[0]["display_name"], "Summary Assistant");
     assert_eq!(agents[0]["slug"], "summary");
     assert_eq!(agents[0]["status"], "pending_runtime_key");
+
+    let mut service_view = TestClient::get(format!("http://server/_arkret/self/agents/{agent_id}"))
+        .add_header("authorization", "Bearer agent-lifecycle-s2s", true)
+        .send(&app)
+        .await;
+    assert_eq!(service_view.status_code.unwrap(), StatusCode::OK);
+    let service_body: Value = service_view.take_json().await.unwrap();
+    assert_eq!(service_body["status"], "pending_runtime_key");
+    assert_eq!(
+        service_body["key_state"]["pairing_request_id"],
+        created_body["pairing_request_id"]
+    );
+    assert!(service_body["key_state"].get("pairing_code").is_none());
+
+    let denied_service_view =
+        TestClient::get(format!("http://server/_arkret/self/agents/{agent_id}"))
+            .add_header("authorization", "Bearer wrong-s2s-token", true)
+            .send(&app)
+            .await;
+    assert_eq!(
+        denied_service_view.status_code.unwrap(),
+        StatusCode::UNAUTHORIZED
+    );
 
     let mut duplicate = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)

@@ -54,6 +54,7 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use subtle::ConstantTimeEq as _;
 
 use super::{AuthArgs, append_audit_log, now, validate_did};
 use crate::error::{AppError, ErrorCode};
@@ -61,6 +62,7 @@ use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::accept_local_operations;
 use crate::routing::events::event_log::submit_event_value;
+use crate::routing::system::util::bearer_token;
 use crate::state::{AppState, SessionRecord};
 
 mod dev_fanout;
@@ -81,6 +83,16 @@ use lifecycle::*;
 use pairing::*;
 use participation::*;
 use sidecar::*;
+
+fn agent_projection_service_authorized(state: &AppState, req: &Request) -> bool {
+    let Some(expected) = state.config.session_grant_introspection_bearer.as_deref() else {
+        return false;
+    };
+    let Some(presented) = bearer_token(req) else {
+        return false;
+    };
+    expected.len() == presented.len() && bool::from(expected.as_bytes().ct_eq(presented.as_bytes()))
+}
 
 /// Mounted under `/_arkret/self`.
 pub(super) fn protocol_router() -> Router {

@@ -355,7 +355,7 @@ pub(super) async fn list_agents(
 #[endpoint(
     operation_id = "ak.self.agent.resource.get",
     tags("agents"),
-    summary = "Get a personal agent by id (controller-self only)",
+    summary = "Get a personal agent by id (controller or policy-authorized service)",
     status_codes(200, 401, 403, 404, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.resource.get"))]
@@ -366,7 +366,12 @@ pub(super) async fn get_agent(
     req: &mut Request,
 ) -> JsonResult<AgentView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let service_authorized = agent_projection_service_authorized(state, req);
+    let session = if service_authorized {
+        None
+    } else {
+        Some(aa.authenticated_session(state, req).await?)
+    };
     let agent_id = agent_id.into_inner();
     validate_agent_id(&agent_id)?;
     let record = state
@@ -377,11 +382,22 @@ pub(super) async fn get_agent(
         .map_err(|err| AppError::internal(format!("agent get failed: {err}")))?
         .ok_or_else(|| AppError::not_found("agent not found"))?;
     // Controller-self only: hide others' agents behind 404 to avoid enumeration.
-    if record.get("controller_id").and_then(Value::as_str) != Some(session.actor.as_str()) {
-        return Err(AppError::not_found("agent not found"));
+    if let Some(session) = session.as_ref() {
+        if record.get("controller_id").and_then(Value::as_str) != Some(session.actor.as_str()) {
+            return Err(AppError::not_found("agent not found"));
+        }
     }
-    let record = lazily_expire_pairing(state, &session, record).await;
+    let record = if let Some(session) = session.as_ref() {
+        lazily_expire_pairing(state, session, record).await
+    } else {
+        record
+    };
     let mut view = agent_view_from_record(&record);
+    if service_authorized {
+        if let Some(key_state) = view.key_state.as_object_mut() {
+            key_state.remove("pairing_code");
+        }
+    }
     // Surface the agent's effective capability grants from the authz
     // projection so the controller UI can list and revoke them; the
     // persisted record itself never carries grants.

@@ -185,7 +185,9 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .json(&serde_json::json!({"limit": 0}))
         .send(&app())
         .await;
-    assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
+    // error-code-registry.json: a known field that violates its schema
+    // constraint is `schema_violation` / 422 (rather than invalid_param / 400).
+    assert_eq!(invalid.status_code.unwrap().as_u16(), 422);
 }
 
 #[tokio::test]
@@ -199,10 +201,14 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
     let device = "ak:device:01904100-0000-7000-8000-00000000a11c";
     seed_did_document_also_known_as(&state, did, &["acct:alice@local.host"]).await;
 
-    let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
+    // service-http-binding.md §3.3: the protocol account-register DTO does
+    // not accept a bare handle. Seed the deployment-local account projection
+    // through the product endpoint, then verify that protocol read surfaces
+    // derive a signed canonical claim using the configured service domain.
+    let registered: Value = TestClient::post("http://server/_soland/self/account/register")
         .json(&serde_json::json!({
-            "principal_id": did,
-            "handle": "alice:local.host",
+            "did": did,
+            "handle": "@registered-handle",
             "display_name": "Alice",
             "device_id": device,
         }))
@@ -211,11 +217,8 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(
-        registered["primary_handle_claim"]["handle"],
-        "alice:local.host"
-    );
-    assert_eq!(registered["primary_handle_claim"]["subject"], did);
+    assert_eq!(registered["handle"], "@registered-handle");
+    assert_eq!(registered["did"], did);
 
     let token = dev_token_for_device(state.clone(), did, device, "Alice").await;
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
@@ -225,7 +228,10 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(viewer["primary_handle_claim"]["handle"], "alice:local.host");
+    assert_eq!(
+        viewer["primary_handle_claim"]["handle"],
+        "registered-handle:local.host"
+    );
     assert_eq!(viewer["primary_handle_claim"]["subject"], did);
 
     let subject_handles: Value =
@@ -241,11 +247,14 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
             .await
             .unwrap();
     assert_eq!(subject_handles["subject"], did);
-    assert_eq!(subject_handles["primary_handle"], "alice:local.host");
+    assert_eq!(
+        subject_handles["primary_handle"],
+        "registered-handle:local.host"
+    );
     let claims = subject_handles["claims"].as_array().unwrap();
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0]["subject"], did);
-    assert_eq!(claims[0]["handle"], "alice:local.host");
+    assert_eq!(claims[0]["handle"], "registered-handle:local.host");
 }
 
 #[tokio::test]
@@ -667,13 +676,18 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     // profiles-presence.md §4.1 references it and does not define `limited`).
     assert_eq!(backfill["has_more"], false);
 
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    // service-http-binding.md account_auth: `self` authorization queries are
+    // user-session operations, so the contract check must be authenticated.
     let authz: Value = TestClient::post("http://server/_arkret/self/authz/check")
+        .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "actor_id": "did:web:alice.example",
             "action": "ak.strand.read",
             "resource": {"kind": "realm", "realm_id": DEMO_REALM_ID}
         }))
-        .send(&app())
+        .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
@@ -688,15 +702,15 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert_eq!(authz["policy_results"][0]["realm_id"], DEMO_REALM_ID);
     assert_eq!(authz["policy_results"][0]["cache"]["mode"], "in_memory");
 
-    let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
     let ice: Value = TestClient::post("http://server/_arkret/self/rtc/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": "ak:call:01964137-0000-7000-8000-000000000001",
             "actor_id": "did:web:alice.example",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            // media-operations.schema.json: mode is required.
+            "mode": "turn"
         }))
         .send(&app_from_state(state))
         .await
@@ -777,13 +791,16 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert!(
-        actors["actors"]
+    assert!(actors["actors"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|actor| { actor["did"] == "did:web:alice.example" && actor["kind"] == "actor" })
-    );
+            // AdminActor's typed DTO identifies the row with `id` + `did`;
+            // it does not invent a collection-only `kind` discriminator.
+            .any(|actor| {
+                actor["id"] == "did:web:alice.example"
+                    && actor["did"] == "did:web:alice.example"
+            }));
 
     let devices: Value = TestClient::get("http://server/_soland/admin/devices")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -793,8 +810,9 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         .await
         .unwrap();
     assert!(devices["devices"].as_array().unwrap().iter().any(|device| {
-        device["actor"] == "did:web:alice.example"
-            && device["device_id"] == "ak:device:01904100-0000-7000-8000-a11ce0000001"
+        // AdminDevice uses canonical `id` and optional `actor_id`.
+        device["actor_id"] == "did:web:alice.example"
+            && device["id"] == "ak:device:01904100-0000-7000-8000-a11ce0000001"
     }));
 
     let unknown = TestClient::get("http://server/_soland/admin/not-real")

@@ -81,7 +81,12 @@ clippy:
 
 # Run the Rust test suite.
 test:
-    cargo test --locked
+    CARGO_TARGET_DIR=target/test cargo test --locked
+
+# Run the HTTP API integration suite in an isolated target directory so a
+# long-running `just dev` process cannot lock its test binary on Windows.
+test-http-api:
+    CARGO_TARGET_DIR=target/http-api cargo test --locked -p soland --test http_api --no-fail-fast
 
 # Query the default health endpoint.
 health:

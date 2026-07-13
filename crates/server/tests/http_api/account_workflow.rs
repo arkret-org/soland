@@ -526,14 +526,13 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         listed_search["realms"][0]["realm_id"],
         listed_realm_id.as_str()
     );
-    let anonymous_sync_after_listed =
-        account_subscribe_frame(state.clone(), None, "catchup=true").await;
-    assert!(
-        !anonymous_sync_after_listed["realms"]
-            .as_object()
-            .unwrap()
-            .contains_key(&listed_realm_id)
-    );
+    // client-sync.md §2 / service-http-binding.md §3.4: account subscribe is
+    // an authenticated principal/device stream, never a directory projection.
+    let anonymous_sync =
+        TestClient::get("http://server/_arkret/self/account/subscribe?catchup=true")
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(anonymous_sync.status_code, Some(StatusCode::UNAUTHORIZED));
 
     let unlisted_realm = seed_test_realm(
         &state,
@@ -753,50 +752,10 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         "block message response: {block_message}"
     );
 
-    let workflow_thread_id = expected_strand_id_for_scope(&realm_id);
-    let thread: Value = TestClient::get(format!(
-        "http://server/_soland/self/index/thread?thread_id={workflow_thread_id}"
-    ))
-    .add_header("authorization", format!("Bearer {alice}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(thread["events"][0]["content"]["body"], "hello workflow");
-
-    let message_search: Value = TestClient::post("http://server/_soland/self/index/search")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "query": "workflow",
-            "realm_ids": [realm_id],
-            "object_kinds": ["message"]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(
-        message_search["results"][0]["event_id"],
-        sent_message["event_id"]
-    );
-
-    let notifications: Value =
-        TestClient::get("http://server/_soland/self/index/notifications?actor=did:web:bob.example")
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(notifications["unread_count"], 2);
-    assert!(
-        notifications["notifications"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|notification| notification["event_ref"] == sent_message["event_id"])
-    );
+    // The deployment-local `/_soland/self/index/*` scaffold was retired.
+    // service-http-binding.md §3.3/§3.4 assigns message reads to events query
+    // and account subscribe; the assertions below exercise that canonical
+    // projection directly.
 
     let sync_with_message =
         account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
@@ -961,85 +920,24 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .await;
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
 
-    // Protocol snapshot head fails closed: soland cannot produce a signed
-    // ak.schema.snapshot.v1 manifest, so `ak.self.snapshot.query.manifest_head` answers
-    // `not_implemented` (spec service-surface.md §5.2).
+    // snapshot.md / service-http-binding.md: the protocol surface now returns
+    // the signed ak.schema.snapshot.v1 manifest directly.
     let mut protocol_head = TestClient::get(format!(
         "http://server/_arkret/self/snapshot/head?realm_id={realm_id}"
     ))
+    .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
     .await;
-    assert_eq!(protocol_head.status_code.unwrap().as_u16(), 501);
+    assert_eq!(protocol_head.status_code.unwrap().as_u16(), 200);
     let protocol_head_body: Value = protocol_head.take_json().await.unwrap();
-    assert_eq!(protocol_head_body["error"]["code"], "not_implemented");
-
-    // The deployment-local dev snapshot head lives on the product face.
-    let snapshot: Value = TestClient::get(format!(
-        "http://server/_soland/self/sync/snapshot-head?realm_id={realm_id}"
-    ))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(snapshot["frontier"]["message_count"], 3);
-    assert!(snapshot["id"].as_str().unwrap().starts_with("ak:snapshot:"));
+    assert_eq!(protocol_head_body["realm_id"], realm_id);
     assert!(
-        !snapshot["dev_digest"]["digest"]
+        protocol_head_body["id"]
             .as_str()
-            .unwrap()
-            .is_empty()
+            .is_some_and(|id| id.starts_with("ak:snapshot:"))
     );
-    // Snapshot v1 (round 9): chunk_id is now a typed integer in the SDK
-    // shape; small test states fit in a single 256 KiB chunk so chunk[0]
-    // .digest is the state_digest and chunk_count == 1.
-    assert_eq!(snapshot["chunks"][0]["chunk_id"], 0);
-    assert_eq!(snapshot["chunks"][0]["digest"], snapshot["state_digest"]);
-    assert_eq!(snapshot["chunk_count"], 1);
-    assert_eq!(
-        snapshot["merkle_root"].as_str().unwrap(),
-        snapshot["state_digest"].as_str().unwrap(),
-        "single-chunk Merkle root collapses to the leaf digest"
-    );
-    // GeneratorProof envelope is present + carries a non-empty signature.
-    let proof = &snapshot["generator_proof"];
-    assert!(proof.is_object(), "generator_proof must be present");
-    assert!(
-        !proof["signature"]["jws"].as_str().unwrap().is_empty(),
-        "generator_proof.signature.jws must be non-empty"
-    );
-    assert_eq!(proof["chunk_count"], 1);
-    assert_eq!(
-        proof["realm_id"].as_str().unwrap(),
-        realm_id,
-        "generator_proof.realm_id matches the snapshot Realm"
-    );
-
-    let snapshot_chunk: Value = TestClient::get(format!(
-        "http://server/_soland/self/sync/snapshot-chunk?snapshot_ref={}&chunk_id=0",
-        snapshot["id"].as_str().unwrap()
-    ))
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(snapshot_chunk["digest"], snapshot["state_digest"]);
-    assert_eq!(snapshot_chunk["verified"], true);
-    assert!(!snapshot_chunk["bytes_base64"].as_str().unwrap().is_empty());
-    // Snapshot v1: chunk responses surface the audit-path so receivers
-    // can verify the chunk against the head's merkle_root without
-    // trusting the chunk source.
-    assert!(snapshot_chunk["audit_path"].is_array());
-    assert_eq!(
-        snapshot_chunk["tree_size"], 1,
-        "single-chunk tree has tree_size == 1"
-    );
-    assert_eq!(
-        snapshot_chunk["merkle_root"].as_str().unwrap(),
-        snapshot["merkle_root"].as_str().unwrap(),
-        "chunk merkle_root matches head merkle_root"
-    );
+    assert!(protocol_head_body["chunks"].is_array());
+    assert!(protocol_head_body["signature"].is_object());
 
     let kicked = remove_test_realm_member(&state, &realm_id, "did:web:bob.example");
     assert!(
@@ -1062,16 +960,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .unwrap();
     assert!(directory["realms"].as_array().unwrap().is_empty());
 
-    let index: Value = TestClient::post("http://server/_soland/self/index/query")
-        .json(&serde_json::json!({"realm_ids": [realm_id]}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(index["results"].as_array().unwrap().is_empty());
-
-    let sync = account_subscribe_frame(state.clone(), None, "catchup=true").await;
+    let sync = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
     assert!(!sync["realms"].as_object().unwrap().contains_key(&realm_id));
 
     let audit_events: Value = TestClient::get("http://server/_soland/admin/audit/events?limit=20")
