@@ -986,7 +986,7 @@ fn encrypted_projection_field_matches_operation(value: &Value, operation: &Opera
     else {
         return false;
     };
-    envelope.aad.realm_id == operation.realm_id.as_str() && envelope.aad.event_kind == kind
+    envelope.aad.realm_id == operation.realm_id && envelope.aad.event_kind == kind
 }
 
 fn rsvp_lww_hlc(operation: &Operation) -> String {

@@ -1,3 +1,7 @@
+pub use arkret_sdk::models::product::{
+    AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
+    DeviceSigningKeyDirectoryQueryRequestBody,
+};
 pub use arkret_sdk::ops_api::HardeningStatus;
 use arkret_sdk::{
     AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
@@ -6,10 +10,9 @@ use arkret_sdk::{
     ServerDescription, SessionGrantProofKind,
 };
 pub use arkret_sdk::{
-    AuthorizedDeviceSigningKey, ContactListRow, ContactState, DeviceMessageEnvelope,
-    DeviceMessageTarget, DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody,
-    DeviceMessagesGetOutcome, DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody,
-    DeviceSigningKeyDirectoryOutcome, DeviceSigningKeyDirectoryQueryRequestBody, DeviceStatus,
+    ContactListRow, ContactState, DeviceMessageEnvelope, DeviceMessageTarget,
+    DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome,
+    DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody, DeviceStatus,
     DirectConversationBindingState, DirectConversationSummary, EventsQueryPostRequestBody,
     IdentityResolveRequestBody, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome,
     KeysQueryRequestBody, KeysUploadOutcome, KeysUploadRequestBody, OkOutcome, PushNotifyOutcome,
@@ -552,15 +555,29 @@ pub use arkret_sdk::{
 
 const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
     "service_discovery",
+    "identity_registry",
     "events_sync",
+    "peer_federation",
+    "directory_discovery",
+    "contact_lifecycle",
+    "consent_management",
+    "account_data",
+    "read_cursor",
+    "blob_storage",
     "device_and_keys",
     "realtime_media",
     "authz_policy",
     "moderation_reports",
-    "projection_lifecycle",
+    "realm_object_read",
+    "realm_read",
+    "realm_governance_links",
     "circle_management",
     "push",
+    "applet",
+    "applet_install",
+    "applet_ghost",
     "mimi_interop",
+    "agent_pairing_handoff",
     "invite_locator_handoff",
     "agent_runtime",
 ];
@@ -588,6 +605,12 @@ const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
 const UNDECLARED_OPERATION_IDS: &[&str] = &[];
 
 fn canonical_supported_operations() -> Vec<String> {
+    let missing_surfaces =
+        artifacts::missing_operation_surface_groups(SUPPORTED_OPERATION_SURFACES);
+    debug_assert!(
+        missing_surfaces.is_empty(),
+        "supported operation surface groups missing from artifact registry: {missing_surfaces:?}"
+    );
     let missing = artifacts::missing_operation_ids(SUPPORTED_STANDALONE_OPERATION_IDS);
     debug_assert!(
         missing.is_empty(),

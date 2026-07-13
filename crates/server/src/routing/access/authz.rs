@@ -51,12 +51,13 @@ async fn authz_check(
     req: &mut Request,
 ) -> JsonResult<AuthzCheckOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    // TODO(authz-scoping): service-http-binding.md §account_auth / §self authorization
-    // requires caller-shape scoping (principal session vs service signature).
-    // Until that is fully wired, anonymous access remains closed.
     let session = aa.authenticated_session(state, req).await?;
-    let _ = &session;
     let body = body.into_inner();
+    if body.actor_id.as_str() != session.actor {
+        return Err(AppError::capability_denied(
+            "authorization checks may only target the authenticated actor",
+        ));
+    }
     let resource = body.resource.clone().unwrap_or(Value::Null);
     let ParsedAuthzResource {
         resource: resource_str,

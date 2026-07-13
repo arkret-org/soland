@@ -27,6 +27,7 @@ pub trait KeyBackupStore: Send + Sync {
     async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>>;
     async fn delete(&self, backup_id: &str) -> PersistenceResult<bool>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
+    async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<Value>>;
 }
 
 #[derive(Default)]
@@ -57,6 +58,16 @@ impl KeyBackupStore for MemoryKeyBackupStore {
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self.backups.lock().values().cloned().collect())
+    }
+
+    async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<Value>> {
+        Ok(self
+            .backups
+            .lock()
+            .values()
+            .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(actor_id))
+            .cloned()
+            .collect())
     }
 }
 
@@ -153,5 +164,17 @@ impl KeyBackupStore for PgKeyBackupStore {
             .await
             .map(|rows| rows.into_iter().map(|r| r.payload).collect())
             .map_err(PersistenceError::from)
+    }
+
+    async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT payload FROM key_backups WHERE account_id = $1 ORDER BY created_at ASC, id ASC",
+        )
+        .bind::<Text, _>(actor_id)
+        .load::<JsonPayloadRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(|r| r.payload).collect())
+        .map_err(PersistenceError::from)
     }
 }

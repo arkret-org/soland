@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_sdk::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
 use arkret_sdk::{
-    Did, EventId, EventsFrontierFederationPeerState, EventsQueryPostRequestBody, RealmId, canonical,
+    Did, EventId, EventsFrontierFederationPeerState, EventsQueryPostRequestBody,
+    EventsSubmitFederationRequestBody, RealmId, canonical,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
 use salvo::http::StatusCode;
@@ -103,7 +104,7 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.command.submit"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let body_value = match req.parse_json::<Value>().await {
+    let body = match req.parse_json::<EventsSubmitFederationRequestBody>().await {
         Ok(body) => body,
         Err(_) => {
             render_error(
@@ -111,6 +112,16 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
                 StatusCode::BAD_REQUEST,
                 "bad_json",
                 "invalid ak.peer.events.command.submit request body",
+            );
+            return;
+        }
+    };
+    let body_value = match serde_json::to_value(body) {
+        Ok(body) => body,
+        Err(error) => {
+            render_app_error(
+                res,
+                AppError::internal(format!("peer events submit request serialize: {error}")),
             );
             return;
         }

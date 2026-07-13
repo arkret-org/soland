@@ -928,6 +928,26 @@ mod tests {
         response
     }
 
+    async fn spawn_mock_http_once(body: String) -> (std::net::SocketAddr, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hit_count = Arc::new(AtomicUsize::new(0));
+        let server_hit_count = hit_count.clone();
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                server_hit_count.fetch_add(1, Ordering::SeqCst);
+                let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut [0u8; 4096]).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response.as_bytes()).await;
+            }
+        });
+        (addr, hit_count)
+    }
+
     #[tokio::test]
     async fn check_cache_hit_returns_cached() {
         let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
@@ -953,27 +973,12 @@ mod tests {
 
     #[tokio::test]
     async fn check_cache_hit_requires_current_frontiers() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let hit_count = Arc::new(AtomicUsize::new(0));
-        let hit_count_clone = hit_count.clone();
         let signing = signing_key();
         let mut input = sample_input(false);
         input.expected_frontiers = frontiers('1', '2', '3');
         let stale_key = input.canonical_request_hash();
         let resp_body = serde_json::to_string(&signed_sample_response(&input, &signing)).unwrap();
-        tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                hit_count_clone.fetch_add(1, Ordering::SeqCst);
-                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    resp_body.len(),
-                    resp_body
-                );
-                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
-            }
-        });
+        let (addr, hit_count) = spawn_mock_http_once(resp_body).await;
 
         let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
@@ -1000,25 +1005,10 @@ mod tests {
         // Spin up a one-shot mock server. We use tokio + a hand-rolled
         // TCP listener instead of pulling in wiremock; this keeps the
         // test deps in sync with what's already in soland/Cargo.toml.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let hit_count = Arc::new(AtomicUsize::new(0));
-        let hit_count_clone = hit_count.clone();
         let signing = signing_key();
         let input = sample_input(false);
         let resp_body = serde_json::to_string(&signed_sample_response(&input, &signing)).unwrap();
-        tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                hit_count_clone.fetch_add(1, Ordering::SeqCst);
-                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    resp_body.len(),
-                    resp_body
-                );
-                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
-            }
-        });
+        let (addr, hit_count) = spawn_mock_http_once(resp_body).await;
 
         let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
@@ -1032,25 +1022,13 @@ mod tests {
 
     #[tokio::test]
     async fn check_rejects_expired_signed_decision() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
         let signing = signing_key();
         let input = sample_input(true);
         let mut expired = signed_sample_response(&input, &signing);
         expired.expires_at = Utc::now() - chrono::Duration::seconds(1);
         let expired = sign_policy_response(&input, &signing, expired);
         let resp_body = serde_json::to_string(&expired).unwrap();
-        tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    resp_body.len(),
-                    resp_body
-                );
-                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
-            }
-        });
+        let (addr, _) = spawn_mock_http_once(resp_body).await;
 
         let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
@@ -1065,25 +1043,13 @@ mod tests {
 
     #[tokio::test]
     async fn check_rejects_signed_frontier_mismatch() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
         let signing = signing_key();
         let input = sample_input(true);
         let mut mismatched = signed_sample_response(&input, &signing);
         mismatched.policy_frontier_digest = hash_with('a');
         let mismatched = sign_policy_response(&input, &signing, mismatched);
         let resp_body = serde_json::to_string(&mismatched).unwrap();
-        tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    resp_body.len(),
-                    resp_body
-                );
-                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
-            }
-        });
+        let (addr, _) = spawn_mock_http_once(resp_body).await;
 
         let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
@@ -1145,24 +1111,12 @@ mod tests {
     async fn check_signature_invalid_rejected() {
         // Spin up a mock that returns a response whose kid does NOT
         // match the declared policy_server_did.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
         let signing = signing_key();
         let input = sample_input(true);
         let mut bad_response = signed_sample_response(&input, &signing);
         bad_response.signature.kid = "did:web:imposter.example#key-1".to_owned();
         let resp_body = serde_json::to_string(&bad_response).unwrap();
-        tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    resp_body.len(),
-                    resp_body
-                );
-                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
-            }
-        });
+        let (addr, _) = spawn_mock_http_once(resp_body).await;
 
         let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);
@@ -1180,23 +1134,11 @@ mod tests {
 
     #[tokio::test]
     async fn check_forged_signature_rejected() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
         let signing = signing_key();
         let input = sample_input(true);
         let bad_response = signed_sample_response(&input, &wrong_signing_key());
         let resp_body = serde_json::to_string(&bad_response).unwrap();
-        tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 4096]).await;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    resp_body.len(),
-                    resp_body
-                );
-                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
-            }
-        });
+        let (addr, _) = spawn_mock_http_once(resp_body).await;
 
         let url = format!("http://{addr}/_arkret/self/policy/check");
         let cfg = realm_config(&url);

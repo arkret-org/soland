@@ -284,6 +284,19 @@ pub fn operation_ids_for_surface_groups(surfaces: &[&str]) -> Vec<String> {
         .collect()
 }
 
+pub fn missing_operation_surface_groups(surfaces: &[&str]) -> Vec<String> {
+    let catalog = operation_surface_groups()
+        .iter()
+        .map(|group| group.surface.as_str())
+        .collect::<BTreeSet<_>>();
+    surfaces
+        .iter()
+        .copied()
+        .filter(|surface| !catalog.contains(surface))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 pub fn registered_operation_ids(candidate_operation_ids: &[&str]) -> Vec<String> {
     let catalog = operation_ids();
     let mut seen = BTreeSet::new();

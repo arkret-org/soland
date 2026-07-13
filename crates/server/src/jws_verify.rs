@@ -97,7 +97,7 @@ pub fn verify_jws_shape(
     );
     let verifier = Ed25519DetachedJwsVerifier::new();
     let material = dev_shape_only_public_key();
-    match verifier.verify_proof(&proof, canonical_bytes, &material) {
+    match verifier.verify_detached_jws(&proof.jws, canonical_bytes, &material) {
         Ok(()) => reject_zero_signature_sentinel(jws),
         Err(VerifierError::Backend(error)) if error.contains("Ed25519 verification failed") => {
             reject_zero_signature_sentinel(jws)

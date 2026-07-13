@@ -776,16 +776,19 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
             handles: vec![AppletNamespaceEntry::exclusive(namespace.to_owned())],
             ..Default::default()
         },
-        registration_epoch,
     );
+    package.registration_epoch = registration_epoch;
     package.webhook_auth = WebhookAuth::http_message_signature(
         format!("{}#applet-service-key", package.service_id),
         vec![WebhookSignatureAlg::EdDsa],
     );
     let service_document = applet_service_id_document(&package);
     package.registration_epoch_evidence = Some(
-        arkret_sdk::AppletRegistrationEpochEvidence::from_did_document(&service_document, None)
-            .unwrap(),
+        arkret_sdk::AppletRegistrationEpochEvidence::from_did_document(
+            &service_document,
+            arkret_sdk::AppletDidMethodVersionEvidence::unversioned("did:web").unwrap(),
+        )
+        .unwrap(),
     );
     package.requested_scopes = vec![
         "ak.message.create".to_owned(),

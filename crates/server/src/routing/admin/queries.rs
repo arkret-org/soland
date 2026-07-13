@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::models::{
+use arkret_sdk::models::product::{
     AdminActor, AdminActorList, AdminAuditEntry, AdminAuditList, AdminCapabilityList, AdminDevice,
     AdminDeviceList, CapabilityGrantState, CapabilitySummary,
 };

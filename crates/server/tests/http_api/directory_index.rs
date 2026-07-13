@@ -558,19 +558,13 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
     // discovery-directory.md §9 resolve_target reuses resolve_realm's flat
     // realm_preview; fields are top-level with no `preview` nesting.
     assert_eq!(resolved["realm_preview"]["title"], "Preview realm");
-    assert_eq!(
-        resolved["realm_preview"]["history_visibility"],
-        "joined"
-    );
+    assert_eq!(resolved["realm_preview"]["history_visibility"], "joined");
     assert_eq!(resolved["object_preview"]["strand_id"], strand_id);
     // discovery-directory.md §9: join_candidates[] is produced only for
     // realm-target resolution; a strand preview target has no join route, and
     // the SDK field is #[serde(skip_serializing_if = "Vec::is_empty")], so an
     // empty list omits the key entirely — the field is absent (None), not [].
-    assert_eq!(
-        resolved["join_candidates"].as_array().map(Vec::len),
-        None
-    );
+    assert_eq!(resolved["join_candidates"].as_array().map(Vec::len), None);
 }
 
 #[tokio::test]

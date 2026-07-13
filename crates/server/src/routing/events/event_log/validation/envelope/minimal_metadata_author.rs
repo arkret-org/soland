@@ -311,7 +311,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
         bytes: proof_public_key.to_vec(),
     };
     Ed25519DetachedJwsVerifier::new()
-        .verify_proof(&proof, proof_binding_bytes, &material)
+        .verify_detached_jws(&proof.jws, proof_binding_bytes, &material)
         .map_err(|error| author_credential_invalid(format!("proof JWS: {error}")))
 }
 

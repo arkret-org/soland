@@ -203,20 +203,29 @@ pub(super) fn decode_mimi_opaque_bytes(
     Ok(Some(bytes))
 }
 
-pub(super) fn mimi_provider_directory_value(state: &AppState) -> Value {
-    json!({
-        "schema": "ak.schema.mimi_interop.v1",
-        "service_id": state.config.service_id.clone(),
-        "service_type": "mimi_provider_facade",
-        "supported_profiles": ["ak.profile.mimi_interop.v1"],
-        "mimi": {
-            "protocol_draft": "draft-ietf-mimi-protocol-06",
-            "content_draft": "draft-ietf-mimi-content-08",
-            "room_policy_draft": "draft-ietf-mimi-room-policy-03",
-            "identifier_draft": "draft-kohbrok-mimi-identifiers-01",
-            "base_url": mimi_base_url(state),
-            "provider_id": mimi_provider_id(state),
-            "features": [
+pub(super) fn mimi_provider_directory_value(
+    state: &AppState,
+) -> arkret_sdk::models::ProviderDirectory {
+    use arkret_sdk::models::{ProviderDirectory, ProviderDirectoryMimi, ProviderDirectoryProof};
+
+    let signature =
+        sha256_hex(format!("{}:ak.profile.mimi_interop.v1", state.config.service_id).as_bytes());
+    ProviderDirectory {
+        schema: Some("ak.schema.mimi_interop.v1".to_owned()),
+        service_id: Some(
+            arkret_sdk::Did::new(state.config.service_id.clone())
+                .expect("validated service_id must be a DID"),
+        ),
+        service_type: "mimi_provider_facade".to_owned(),
+        supported_profiles: vec!["ak.profile.mimi_interop.v1".to_owned()],
+        mimi: ProviderDirectoryMimi {
+            protocol_draft: "draft-ietf-mimi-protocol-06".to_owned(),
+            content_draft: "draft-ietf-mimi-content-08".to_owned(),
+            room_policy_draft: Some("draft-ietf-mimi-room-policy-03".to_owned()),
+            identifier_draft: Some("draft-kohbrok-mimi-identifiers-01".to_owned()),
+            base_url: mimi_base_url(state),
+            provider_id: mimi_provider_id(state),
+            features: [
                 "key_material",
                 "room_update",
                 "notify",
@@ -225,31 +234,52 @@ pub(super) fn mimi_provider_directory_value(state: &AppState) -> Value {
                 "consent",
                 "identifier_query",
                 "report_abuse",
-                "proxy_download"
-            ],
-            "mls_cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
-            "content_profiles": [
-                "application/mimi-content",
-                "text/plain;charset=utf-8",
-                "text/markdown;variant=GFM-MIMI",
-                "application/vnd.arkret.content+json"
-            ],
-            "room_policy_components": [
-                "roles",
-                "membership",
-                "history_visibility",
-                "join_rule",
-                "message_expiration",
-                "asset_privacy"
+                "proxy_download",
             ]
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect(),
+            mls_cipher_suites: Some(vec![
+                "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),
+            ]),
+            content_profiles: Some(
+                [
+                    "application/mimi-content",
+                    "text/plain;charset=utf-8",
+                    "text/markdown;variant=GFM-MIMI",
+                    "application/vnd.arkret.content+json",
+                ]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
+            ),
+            room_policy_components: Some(
+                [
+                    "roles",
+                    "membership",
+                    "history_visibility",
+                    "join_rule",
+                    "message_expiration",
+                    "asset_privacy",
+                ]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
+            ),
+            extra: Default::default(),
         },
-        "proof": {
-            "type": "dev_service_digest",
-            "kid": format!("{}#mimi-provider", state.config.service_id),
-            "alg": "sha256-dev",
-            "sig": sha256_hex(format!("{}:ak.profile.mimi_interop.v1", state.config.service_id).as_bytes())
-        }
-    })
+        proof: Some(ProviderDirectoryProof {
+            verification_method: format!("{}#mimi-provider", state.config.service_id),
+            signature,
+            extra: [
+                ("type".to_owned(), json!("dev_service_digest")),
+                ("alg".to_owned(), json!("sha256-dev")),
+            ]
+            .into_iter()
+            .collect(),
+        }),
+        extra: Default::default(),
+    }
 }
 
 pub(super) fn mimi_base_url(state: &AppState) -> String {

@@ -65,11 +65,11 @@ db-url:
 
 # Format Rust sources.
 fmt:
-    cargo fmt --all
+    cargo +nightly fmt --all
 
 # Check Rust formatting.
 fmt-check:
-    cargo fmt --all -- --check
+    cargo +nightly fmt --all -- --check
 
 # Check the default Cargo targets.
 check:

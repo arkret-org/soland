@@ -49,7 +49,7 @@ jobs:
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
 
@@ -65,7 +65,7 @@ jobs:
         shell: bash
 
       - name: Rustfmt
-        run: cargo fmt --all -- --check
+        run: cargo +nightly fmt --all -- --check
         working-directory: soland
 
       - name: Clippy

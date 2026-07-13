@@ -409,7 +409,10 @@ async fn service_id_is_config_driven_across_public_metadata() {
     // bare base64url (no `eddsa-ed25519:` prefix); the signing input is
     // label || 0x00 || canonical_json(response without `signature`).
     assert_eq!(ice["signature"]["kid"], format!("{service_id}#notary-key"));
-    assert_eq!(ice["signature"]["signature_input"], "ak.media.ice_config.v1");
+    assert_eq!(
+        ice["signature"]["signature_input"],
+        "ak.media.ice_config.v1"
+    );
     assert_ne!(ice["signature"]["sig"], "placeholder");
     assert!(
         ice["signature"]["payload_digest"]

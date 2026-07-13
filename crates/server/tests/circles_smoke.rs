@@ -105,6 +105,7 @@ fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &st
             invited_at: None,
             joined_at: now,
             updated_at: now,
+            reason: None,
         },
     );
 }

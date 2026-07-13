@@ -75,6 +75,7 @@ and rollout-only switches that should be managed deliberately.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `SOLAND_ADMIN_PRINCIPAL_DIDS` | empty | Comma-separated principal DID allowlist for production admin APIs. An empty value closes the admin API outside development mode; browser sessions additionally require `SOLAND_SESSION_GRANT_INTROSPECTION_URL`. |
 | `SOLAND_ADMIN_PAGE_LIMIT` | `100` | Default admin API page size. |
 | `SOLAND_ADMIN_MAX_PAGE_LIMIT` | `1000` | Maximum admin API page size; clamped above the default. |
 | `SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED` | ephemeral seed | Optional base64 ed25519 seed for agent audit-binding signatures; store and rotate like other signing keys. |

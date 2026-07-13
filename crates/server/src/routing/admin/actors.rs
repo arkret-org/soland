@@ -4,7 +4,7 @@
 //! [`super::queries`]); `GET /_soland/admin/actors/{actor_id}` — one
 //! [`AdminActor`] row with the account lifecycle linkage sodmin needs.
 
-use arkret_sdk::models::AdminActor;
+use arkret_sdk::models::product::AdminActor;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde_json::json;

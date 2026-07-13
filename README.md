@@ -7,8 +7,7 @@ PostgreSQL. The HTTP surface mirrors `arkret-spec/spec/v1/artifacts/openapi/arkr
 in-memory mode keeps the same API for fast local iteration.
 
 > See [DEPLOYMENT.md](DEPLOYMENT.md) for production guidance, [SECURITY.md](SECURITY.md)
-> for vulnerability disclosure, and [../_todos.md](../_todos.md) for the open
-> task list. Operator-facing internals:
+> for vulnerability disclosure. Operator-facing internals:
 >
 > - [`docs/architecture.md`](docs/architecture.md) — reducer / projection
 >   pipeline, federation outbox, MLS lifecycle, multi-replica notes.
@@ -36,8 +35,8 @@ security-boundary lifecycle and policy events use `ak.realm.*`.
 ## Round R4 (protocol review closures)
 
 Spec round 4 (`arkret-spec` range `2a4d39b..a77b995`, 8 commits) lands
-on top of R2/R3. See [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and
-[`../_todos.md`](../_todos.md) for the canonical wire-breaking list.
+on top of R2/R3. See [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` for
+the canonical wire-breaking list.
 Operator-visible highlights:
 
 - **`trust_domain` is now immutable on a Realm** — captured by
@@ -399,20 +398,17 @@ just check
 just test
 ```
 
-The OpenAPI snapshot test (`arkret_openapi_spec_contains_facet_projection_contracts`
-in `tests/http_api.rs`) locks the operation-id surface at the framework level;
-`tests/http_api.rs` covers protocol behaviors. See the root `../_todos.md` `F5/F6`
-entries for the known pre-existing test failures.
+The OpenAPI namespace test (`soland_admin_openapi_uses_product_namespace` in
+`crates/server/tests/http_api/openapi.rs`) locks the product operation-id surface at the
+framework level; `crates/server/tests/http_api/` covers protocol behaviors.
 
 ## Status & roadmap
 
 The current implementation has product-shaped auth/session, identity, events
 log, device key, to-device, blob, directory, sync, and index surfaces.
 PostgreSQL migrations and the persistence adapters are wired; in-memory mode is
-the development fallback. Remaining production work is tracked in
-[`../_todos.md`](../_todos.md) — reducer-backed projections, full policy ordering,
-durable projection/device sub-stores, full E2EE client workflow, anti-enumeration, and
-the complete federation/media/recovery/key-backup surfaces.
+the development fallback. Current changes and remaining production work are recorded
+in [`CHANGELOG.md`](CHANGELOG.md) and repository issues.
 
 ## Production Deployment Checklist
 
@@ -436,10 +432,3 @@ The same list is computed at runtime and surfaced on
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
-
----
-
-<!-- circle-rollout milestone pointer -->
-> **Active milestone tracking** (local-only, gitignored): see
-> `_soland_todos.md` in the parent `arkret/` directory for the
-> circle-rollout (AKP-0007) work item list and per-stage checkpoints.

@@ -83,13 +83,10 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
         .supersedes
         .as_ref()
         .map(|backup_id| backup_id.as_str().to_owned());
-    let snapshot = store.snapshot_all().await.map_err(|error| {
+    let snapshot = store.list_for_actor(actor_id).await.map_err(|error| {
         AppError::internal(format!("key backup series chain lookup failed: {error}"))
     })?;
     for existing in snapshot {
-        if existing.get("actor_id").and_then(Value::as_str) != Some(actor_id) {
-            continue;
-        }
         if existing.get("series_id").and_then(Value::as_str) != Some(series_id) {
             continue;
         }
@@ -225,15 +222,12 @@ pub(super) async fn owned_key_backup_snapshot(
     let snapshot = state
         .persistence
         .key_backups()
-        .snapshot_all()
+        .list_for_actor(actor_id)
         .await
         .map_err(|error| {
             AppError::internal(format!("key backup snapshot lookup failed: {error}"))
         })?;
-    Ok(snapshot
-        .into_iter()
-        .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(actor_id))
-        .collect())
+    Ok(snapshot)
 }
 
 #[endpoint(
@@ -367,11 +361,10 @@ pub(super) async fn list_key_backups(
     let mut backups: Vec<Value> = state
         .persistence
         .key_backups()
-        .snapshot_all()
+        .list_for_actor(&session.actor)
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor))
         .filter(|backup| match series_filter.as_deref() {
             Some(series) => backup.get("series_id").and_then(Value::as_str) == Some(series),
             None => true,

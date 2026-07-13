@@ -249,6 +249,8 @@ pub struct RateLimiter {
     state: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
 }
 
+const RATE_LIMIT_MAX_ENTRIES: usize = 100_000;
+
 impl RateLimiter {
     pub fn new(config: RateLimiterConfig) -> Self {
         Self {
@@ -267,7 +269,7 @@ impl RateLimiter {
         self.check_with_ceiling_window(key, ceiling, self.config.window)
     }
 
-    /// Sliding-window check against an explicit ceiling **and** window. The
+    /// Fixed-window check against an explicit ceiling **and** window. The
     /// rate-limiter middleware passes the live (hot-swappable) window/ceiling
     /// from `RuntimeSettings` here so quota changes take effect immediately;
     /// the shared counter map is unaffected by the source of the window.
@@ -285,7 +287,22 @@ impl RateLimiter {
             return true;
         }
 
-        // New window or expired
+        // Bound attacker-controlled peer/class cardinality. Expired entries
+        // are discarded first; if every entry is live, evict the oldest
+        // window before admitting a new key.
+        if !state.contains_key(key) && state.len() >= RATE_LIMIT_MAX_ENTRIES {
+            state.retain(|_, (_, window_start)| now.duration_since(*window_start) < window);
+            if state.len() >= RATE_LIMIT_MAX_ENTRIES
+                && let Some(oldest_key) = state
+                    .iter()
+                    .min_by_key(|(_, (_, window_start))| *window_start)
+                    .map(|(key, _)| key.clone())
+            {
+                state.remove(&oldest_key);
+            }
+        }
+
+        // New window or expired.
         state.insert(key.to_owned(), (1, now));
         true
     }
@@ -346,11 +363,15 @@ fn trusted_forwarded_client(req: &Request) -> Option<String> {
         .headers()
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())?;
+    rightmost_forwarded_ip(header).map(|address| address.to_string())
+}
+
+fn rightmost_forwarded_ip(header: &str) -> Option<std::net::IpAddr> {
     header
         .split(',')
         .map(str::trim)
-        .find(|part| !part.is_empty())
-        .map(ToOwned::to_owned)
+        .rev()
+        .find_map(|part| part.parse::<std::net::IpAddr>().ok())
 }
 
 fn rate_limit_peer_key(req: &Request) -> String {
@@ -488,5 +509,14 @@ mod tests {
         assert!(dev.api_max_requests > prod.api_max_requests);
         assert!(dev.auth_max_requests > prod.auth_max_requests);
         assert!(dev.max_requests >= prod.max_requests);
+    }
+
+    #[test]
+    fn forwarded_chain_uses_rightmost_valid_ip() {
+        assert_eq!(
+            rightmost_forwarded_ip("198.51.100.1, invalid, 203.0.113.7"),
+            Some("203.0.113.7".parse().unwrap())
+        );
+        assert_eq!(rightmost_forwarded_ip("invalid, also-invalid"), None);
     }
 }

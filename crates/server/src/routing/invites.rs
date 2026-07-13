@@ -408,9 +408,8 @@ async fn persist_invite_quarantine_entry(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned);
-    let invite_event_digest =
-        canonical_digest_or_fallback(body.get("invite_event").unwrap_or(&Value::Null));
-    let request_digest = canonical_digest_or_fallback(body);
+    let invite_event_digest = canonical_digest(body.get("invite_event").unwrap_or(&Value::Null))?;
+    let request_digest = canonical_digest(body)?;
     let idempotency_key_digest =
         format!("sha256:{}", sha256_hex(delivery.idempotency_key.as_bytes()));
     let quarantine_id = format!(
@@ -514,11 +513,9 @@ async fn persist_invite_quarantine_entry(
     Ok(true)
 }
 
-fn canonical_digest_or_fallback(value: &Value) -> String {
-    canonical::canonical_sha256(value).unwrap_or_else(|_| {
-        let bytes = serde_json::to_vec(value).unwrap_or_default();
-        canonical::sha256_digest(&bytes)
-    })
+fn canonical_digest(value: &Value) -> Result<String, AppError> {
+    canonical::canonical_sha256(value)
+        .map_err(|error| AppError::internal(format!("canonical invite digest failed: {error}")))
 }
 
 fn invite_quarantine_entry_active(entry: &Value, at: chrono::DateTime<chrono::Utc>) -> bool {
