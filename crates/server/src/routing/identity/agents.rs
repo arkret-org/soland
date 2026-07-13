@@ -59,8 +59,8 @@ use subtle::ConstantTimeEq as _;
 
 use super::{AuthArgs, append_audit_log, now, validate_did};
 use crate::error::{AppError, ErrorCode};
-use crate::persistence::AgentPrincipalRecord;
 use crate::ids;
+use crate::persistence::AgentPrincipalRecord;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::accept_local_operations;
 use crate::routing::events::event_log::submit_event_value;
@@ -159,13 +159,20 @@ mod tests {
         }
     }
 
-    fn agent_record(agent_id: &str, controller_id: &str) -> Value {
-        json!({
-            "agent_id": agent_id,
-            "controller_id": controller_id,
-            "display_name": "Test Agent",
-            "state": "active",
-        })
+    fn agent_record(agent_id: &str, controller_id: &str) -> AgentPrincipalRecord {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-11T00:00:00Z")
+            .expect("fixture timestamp")
+            .with_timezone(&chrono::Utc);
+        let mut record = AgentPrincipalRecord::new(
+            agent_id.to_owned(),
+            controller_id.to_owned(),
+            "ak:realm:01999999-0000-7000-8000-00000000feed".to_owned(),
+            format!("{agent_id}#managed-controller"),
+            "active".to_owned(),
+            created_at,
+        );
+        record.display_name = Some("Test Agent".to_owned());
+        record
     }
 
     fn pending_pairing_record(
@@ -174,19 +181,19 @@ mod tests {
         requested_scope: Value,
         pairing_code: &str,
         pairing_expires_at: &str,
-    ) -> Value {
-        json!({
-            "agent_id": agent_id,
-            "controller_id": controller_id,
-            "principal_control_realm_id": "ak:realm:01999999-0000-7000-8000-00000000feed",
-            "controller_authorization_ref": format!("{agent_id}#managed-controller"),
-            "display_name": "Test Agent",
-            "state": "pending_runtime_key",
-            "requested_scope": requested_scope,
-            "pairing_request_id": "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
-            "pairing_code": pairing_code,
-            "pairing_expires_at": pairing_expires_at,
-        })
+    ) -> AgentPrincipalRecord {
+        let mut record = agent_record(agent_id, controller_id);
+        record.state = "pending_runtime_key".to_owned();
+        record.requested_scope = Some(requested_scope);
+        record.pairing_request_id =
+            Some("agent_pairing_request:01999999-0000-7000-8000-00000000feed".to_owned());
+        record.pairing_code = Some(pairing_code.to_owned());
+        record.pairing_expires_at = Some(
+            chrono::DateTime::parse_from_rfc3339(pairing_expires_at)
+                .expect("fixture pairing expiry")
+                .with_timezone(&chrono::Utc),
+        );
+        record
     }
 
     fn requested_agent_scope() -> Value {
@@ -209,7 +216,7 @@ mod tests {
     }
 
     fn key_authorize_envelope(
-        record: &Value,
+        record: &AgentPrincipalRecord,
         controller: &str,
         agent_id: &str,
         verification_method: &str,
@@ -231,8 +238,8 @@ mod tests {
             "kind": "ak.agent.key.authorize",
             "actor_id": agent_id,
             "executed_by": controller,
-            "authorization_ref": record["controller_authorization_ref"],
-            "realm_id": record["principal_control_realm_id"],
+            "authorization_ref": record.controller_authorization_ref.as_str(),
+            "realm_id": record.principal_control_realm_id.as_str(),
             "payload": {
                 "agent_id": agent_id,
                 "key_id": "ak:agent_key:01999999000070008000000000000001",
@@ -246,7 +253,7 @@ mod tests {
                 "approval_evidence": {
                     "kind": "pairing_request",
                     "request_canonical_digest": request_canonical_digest,
-                    "pairing_request_id": record["pairing_request_id"],
+                    "pairing_request_id": record.pairing_request_id.as_deref(),
                     "approved_by": controller,
                 },
             },
@@ -338,15 +345,12 @@ mod tests {
 
     #[test]
     fn agent_view_projects_spec_shape_dropping_internal_columns() {
-        let record = json!({
-            "agent_id": "did:webvh:z6mkfixture:agent.example",
-            "controller_id": "did:webvh:example.com:users:alice",
-            "display_name": "Summary Assistant",
-            "agent_slug": "summary",
-            "state": "active",
-            "created_at": "2026-06-11T00:00:00.000Z",
-            "updated_at": "2026-06-11T00:00:00.000Z"
-        });
+        let mut record = agent_record(
+            "did:webvh:z6mkfixture:agent.example",
+            "did:webvh:example.com:users:alice",
+        );
+        record.display_name = Some("Summary Assistant".to_owned());
+        record.agent_slug = Some("summary".to_owned());
         let view = AgentView {
             agent: agent_projection_from_record(&record),
             status: AgentStatus::Active,
@@ -372,11 +376,11 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         let mut active = agent_record("did:web:agent.example", "did:web:controller.example");
-        active["state"] = json!("active");
+        active.state = "active".to_owned();
         assert!(agent_record_reserves_selector_slug(&active, &now));
 
         let mut paused = active.clone();
-        paused["state"] = json!("paused");
+        paused.state = "paused".to_owned();
         assert!(agent_record_reserves_selector_slug(&paused, &now));
 
         let pending_future = pending_pairing_record(
@@ -398,11 +402,11 @@ mod tests {
         assert!(!agent_record_reserves_selector_slug(&pending_expired, &now));
 
         let mut pairing_expired = active.clone();
-        pairing_expired["state"] = json!("pairing_expired");
+        pairing_expired.state = "pairing_expired".to_owned();
         assert!(!agent_record_reserves_selector_slug(&pairing_expired, &now));
 
         let mut deactivated = active;
-        deactivated["state"] = json!("deactivated");
+        deactivated.state = "deactivated".to_owned();
         assert!(!agent_record_reserves_selector_slug(&deactivated, &now));
     }
 
@@ -560,9 +564,13 @@ mod tests {
             "12345678",
             "2999-01-01T00:00:00Z",
         );
-        record["approval_request_id"] = json!("agent_runtime_approval:01999999");
-        record["approval_requested_at"] = json!("2026-07-08T00:00:00.000Z");
-        record["runtime_key_request"] = json!({
+        record.approval_request_id = Some("agent_runtime_approval:01999999".to_owned());
+        record.approval_requested_at = Some(
+            chrono::DateTime::parse_from_rfc3339("2026-07-08T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        record.runtime_key_request = Some(json!({
             "pairing_request_id": "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
             "agent_id": "did:web:agent.example",
             "verification_method": "did:web:agent.example#runtime-key-1",
@@ -573,21 +581,30 @@ mod tests {
                 "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             },
             "proof_of_possession": { "challenge": "agent_pairing_request:01999999-0000-7000-8000-00000000feed" }
-        });
+        }));
 
-        let key_state = agent_key_state_from_record(&record, Vec::new());
+        let key_state = agent_key_state_from_record(
+            &record,
+            arkret_sdk::AgentPcrRecoveryState::Pending,
+            Vec::new(),
+        )
+        .expect("key state projection");
 
         assert_eq!(
-            key_state["approval_request_id"],
-            "agent_runtime_approval:01999999"
+            key_state.approval_request_id.as_deref(),
+            Some("agent_runtime_approval:01999999")
         );
         assert_eq!(
-            key_state["pending_runtime_key_request"]["verification_method"],
-            "did:web:agent.example#runtime-key-1"
+            key_state
+                .pending_runtime_key_request
+                .as_ref()
+                .and_then(|request| request.get("verification_method"))
+                .and_then(Value::as_str),
+            Some("did:web:agent.example#runtime-key-1")
         );
         assert_eq!(
-            key_state["approval_requested_at"],
-            "2026-07-08T00:00:00.000Z"
+            key_state.approval_requested_at,
+            record.approval_requested_at
         );
     }
 
@@ -618,7 +635,7 @@ mod tests {
             "12345678",
             "2999-01-01T00:00:00Z",
         );
-        record["approval_request_id"] = json!("agent_runtime_approval:01999999");
+        record.approval_request_id = Some("agent_runtime_approval:01999999".to_owned());
 
         let outcome = agent_runtime_key_request_status_outcome(
             &record,
@@ -645,11 +662,13 @@ mod tests {
             "12345678",
             "2999-01-01T00:00:00Z",
         );
-        record["state"] = json!("active");
-        record["authorized_event_ref"] = json!("ak:event:01999999-0000-7000-8000-000000000001");
-        record["authorized_verification_method"] = json!("did:web:agent.example#runtime-1");
-        record["authorized_public_key_digest"] =
-            json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        record.state = "active".to_owned();
+        record.authorized_event_ref =
+            Some("ak:event:01999999-0000-7000-8000-000000000001".to_owned());
+        record.authorized_verification_method = Some("did:web:agent.example#runtime-1".to_owned());
+        record.authorized_public_key_digest = Some(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        );
 
         let outcome = agent_runtime_key_request_status_outcome(
             &record,
@@ -683,7 +702,7 @@ mod tests {
             "12345678",
             "2026-07-09T00:00:00Z",
         );
-        record["approval_request_id"] = json!("agent_runtime_approval:01999999");
+        record.approval_request_id = Some("agent_runtime_approval:01999999".to_owned());
 
         let outcome = agent_runtime_key_request_status_outcome(
             &record,
@@ -763,7 +782,7 @@ mod tests {
             "2999-01-01T00:00:00Z",
         );
         let mut mismatched_record = record.clone();
-        mismatched_record["pairing_code"] = json!("87654321");
+        mismatched_record.pairing_code = Some("87654321".to_owned());
         let envelope = key_authorize_envelope(
             &record,
             controller,

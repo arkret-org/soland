@@ -1,8 +1,10 @@
-use super::*;
 use diesel::dsl::case_when;
-use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper};
-use diesel::PgExpressionMethods;
+use diesel::{
+    BoolExpressionMethods, ExpressionMethods, PgExpressionMethods, QueryDsl, SelectableHelper,
+};
 use soland_data::schema::agent_principals;
+
+use super::*;
 
 /// AKP-0010 — agent participation policy persistence. Controller
 /// selections (`ak.agent.participation.v1`) and the governance ceiling
@@ -293,11 +295,10 @@ impl AgentParticipationStore for PgAgentParticipationStore {
 }
 
 /// AKP-0008 — native personal agent principal persistence (provision /
-/// list / get / lifecycle). JSON Value records carry the soland-internal
-/// agent principal columns: id, controller_id,
-/// display_name, agent_slug, avatar_blob_ref, state, created_at, updated_at. The wire boundary
-/// projects these into the spec `agent_projection` (dropping the internal
-/// columns) — see `routing::identity::agents::agent_projection_from_record`.
+/// list / get / lifecycle). The typed persistence model keeps database column
+/// names, nullability, UUIDs, and timestamps checked at compile time. The wire
+/// boundary projects it into `agent_projection`, dropping internal columns —
+/// see `routing::identity::agents::agent_projection_from_record`.
 #[derive(Clone, Debug)]
 pub struct AgentRuntimeActivation {
     pub agent_id: String,
@@ -446,7 +447,10 @@ impl AgentStore for MemoryAgentStore {
             return Ok(false);
         };
         if record.approval_request_id.as_deref() != Some(&activation.approval_request_id)
-            || !matches!(record.state.as_str(), "pending_runtime_key" | "active" | "paused")
+            || !matches!(
+                record.state.as_str(),
+                "pending_runtime_key" | "active" | "paused"
+            )
             || record.runtime_key_binding_digest.as_deref()
                 != Some(&activation.runtime_key_binding_digest)
             || record.pairing_request_id.as_deref() != Some(&activation.pairing_request_id)
@@ -460,8 +464,7 @@ impl AgentStore for MemoryAgentStore {
         record.authorized_event_ref = Some(activation.authorized_event_ref.clone());
         record.authorized_verification_method =
             Some(activation.authorized_verification_method.clone());
-        record.authorized_public_key_digest =
-            Some(activation.authorized_public_key_digest.clone());
+        record.authorized_public_key_digest = Some(activation.authorized_public_key_digest.clone());
         record.paired_pairing_request_id = Some(activation.pairing_request_id.clone());
         record.paired_request_digest = Some(activation.paired_request_digest.clone());
         // Keep the approval and notification ids until the terminal account
@@ -508,8 +511,13 @@ impl AgentStore for MemoryAgentStore {
             record.paired_pairing_request_id.as_deref() == Some(&write.pairing_request_id);
         if record.pairing_request_id.as_deref() != Some(&write.pairing_request_id)
             || pairing_handle_was_consumed
-            || !matches!(record.state.as_str(), "pending_runtime_key" | "active" | "paused")
-            || record.runtime_key_binding_digest.as_deref()
+            || !matches!(
+                record.state.as_str(),
+                "pending_runtime_key" | "active" | "paused"
+            )
+            || record
+                .runtime_key_binding_digest
+                .as_deref()
                 .is_some_and(|digest| digest != write.runtime_key_binding_digest)
         {
             return Ok(None);
@@ -542,10 +550,9 @@ pub(crate) struct PgAgentStore {
 
 #[async_trait]
 impl AgentStore for PgAgentStore {
-    async fn put(&self, mut principal: AgentPrincipalRecord) -> PersistenceResult<()> {
+    async fn put(&self, principal: AgentPrincipalRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         let agent_id = principal.id.clone();
-        principal.updated_at = Utc::now();
         let upsert = diesel::insert_into(agent_principals::table)
             .values(&principal)
             .on_conflict(agent_principals::id)
@@ -553,20 +560,20 @@ impl AgentStore for PgAgentStore {
             .set(&principal);
         let affected = diesel::query_dsl::methods::FilterDsl::filter(
             upsert,
-                agent_principals::controller_id
-                    .eq(&principal.controller_id)
-                    .and(
-                        agent_principals::principal_control_realm_id
-                            .eq(&principal.principal_control_realm_id),
-                    )
-                    .and(
-                        agent_principals::controller_authorization_ref
-                            .eq(&principal.controller_authorization_ref),
-                    ),
-            )
-            .execute(&mut *conn)
-            .await
-            .map_err(PersistenceError::from)?;
+            agent_principals::controller_id
+                .eq(&principal.controller_id)
+                .and(
+                    agent_principals::principal_control_realm_id
+                        .eq(&principal.principal_control_realm_id),
+                )
+                .and(
+                    agent_principals::controller_authorization_ref
+                        .eq(&principal.controller_authorization_ref),
+                ),
+        )
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
         if affected == 1 {
             Ok(())
         } else {
@@ -642,14 +649,8 @@ impl AgentStore for PgAgentStore {
         diesel::update(
             agent_principals::table
                 .filter(agent_principals::id.eq(&activation.agent_id))
-                .filter(agent_principals::state.eq_any([
-                    "pending_runtime_key",
-                    "active",
-                    "paused",
-                ]))
-                .filter(
-                    agent_principals::approval_request_id.eq(&activation.approval_request_id),
-                )
+                .filter(agent_principals::state.eq_any(["pending_runtime_key", "active", "paused"]))
+                .filter(agent_principals::approval_request_id.eq(&activation.approval_request_id))
                 .filter(
                     agent_principals::runtime_key_binding_digest
                         .eq(&activation.runtime_key_binding_digest),
@@ -671,8 +672,7 @@ impl AgentStore for PgAgentStore {
             agent_principals::paired_pairing_request_id.eq(&activation.pairing_request_id),
             agent_principals::paired_request_digest.eq(&activation.paired_request_digest),
             agent_principals::runtime_key_request.eq(None::<Value>),
-            agent_principals::approval_requested_at
-                .eq(None::<chrono::DateTime<chrono::Utc>>),
+            agent_principals::approval_requested_at.eq(None::<chrono::DateTime<chrono::Utc>>),
             agent_principals::runtime_key_binding_digest.eq(None::<String>),
             agent_principals::runtime_public_key_digest.eq(None::<String>),
             agent_principals::runtime_attestation_digest.eq(None::<String>),
@@ -713,15 +713,12 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool).await?;
         let approval_notification_id =
             ids::typed_uuid_part_expect_internal(&write.approval_notification_id);
-        let controller_account_id = ids::typed_uuid_part_expect_internal(&write.controller_account_id);
+        let controller_account_id =
+            ids::typed_uuid_part_expect_internal(&write.controller_account_id);
         diesel::update(
             agent_principals::table
                 .filter(agent_principals::id.eq(&write.agent_id))
-                .filter(agent_principals::state.eq_any([
-                    "pending_runtime_key",
-                    "active",
-                    "paused",
-                ]))
+                .filter(agent_principals::state.eq_any(["pending_runtime_key", "active", "paused"]))
                 .filter(agent_principals::pairing_request_id.eq(&write.pairing_request_id))
                 .filter(
                     agent_principals::paired_pairing_request_id

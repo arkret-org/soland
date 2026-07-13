@@ -47,7 +47,6 @@ pub struct AgentPrincipalRecord {
     pub authorized_event_ref: Option<String>,
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
-    #[diesel(skip_update)]
     pub state_changed_at: Option<DateTime<Utc>>,
     #[diesel(skip_update)]
     pub created_at: DateTime<Utc>,

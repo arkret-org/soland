@@ -135,7 +135,8 @@ pub(super) async fn provision_agent(
         "pending_runtime_key".to_owned(),
         now_utc,
     );
-    principal.controller_account_id = Some(ids::typed_uuid_part_expect_internal(&controller_account.id));
+    principal.controller_account_id =
+        Some(ids::typed_uuid_part_expect_internal(&controller_account.id));
     principal.recipient_service_id = Some(state.config.service_id.clone());
     principal.display_name = display_name.clone();
     principal.agent_slug = Some(agent_slug.clone());
@@ -310,7 +311,11 @@ pub(super) async fn renew_agent_pairing(
     record.runtime_attestation_digest = None;
     record.approval_notification_id = None;
     record.updated_at = now_utc;
-    if let Some(refs) = record.provision_event_refs.as_mut().and_then(Value::as_object_mut) {
+    if let Some(refs) = record
+        .provision_event_refs
+        .as_mut()
+        .and_then(Value::as_object_mut)
+    {
         refs.insert("initial_capability_grant_ids".to_owned(), json!(grant_ids));
     }
     state
@@ -339,7 +344,7 @@ pub(super) async fn renew_agent_pairing(
     let agent_principal_did = arkret_sdk::Did::new(agent_id)
         .map_err(|err| AppError::internal(format!("persisted agent DID invalid: {err}")))?;
     let principal_control_realm_id = RealmId::new(record.principal_control_realm_id.clone())
-    .map_err(|error| AppError::internal(format!("persisted Agent PCR invalid: {error}")))?;
+        .map_err(|error| AppError::internal(format!("persisted Agent PCR invalid: {error}")))?;
     let controller_authorization_ref = record.controller_authorization_ref.clone();
     let pcr_recovery =
         crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, &record)

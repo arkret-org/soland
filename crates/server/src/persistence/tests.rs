@@ -16,18 +16,24 @@ fn runtime_approval_write(binding: &str) -> AgentRuntimeApprovalWrite {
     }
 }
 
+fn agent_principal(state: &str) -> AgentPrincipalRecord {
+    let mut record = AgentPrincipalRecord::new(
+        "did:web:agent.example".to_owned(),
+        "did:web:controller.example".to_owned(),
+        "ak:realm:01964137-0000-7000-8000-000000000010".to_owned(),
+        "did:web:agent.example#managed-controller".to_owned(),
+        state.to_owned(),
+        Utc::now(),
+    );
+    record.pairing_request_id = Some("agent_pairing_request:test".to_owned());
+    record
+}
+
 #[tokio::test]
 async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
     let store = MemoryAgentStore::new();
     store
-        .put(serde_json::json!({
-            "agent_id": "did:web:agent.example",
-            "controller_id": "did:web:controller.example",
-            "principal_control_realm_id": "ak:realm:01964137-0000-7000-8000-000000000010",
-            "controller_authorization_ref": "did:web:agent.example#managed-controller",
-            "state": "pending_runtime_key",
-            "pairing_request_id": "agent_pairing_request:test",
-        }))
+        .put(agent_principal("pending_runtime_key"))
         .await
         .unwrap();
 
@@ -37,7 +43,10 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(stored["approval_request_id"], "agent_runtime_approval:test");
+    assert_eq!(
+        stored.approval_request_id.as_deref(),
+        Some("agent_runtime_approval:test")
+    );
     let retry = AgentRuntimeApprovalWrite {
         approval_request_id: "agent_runtime_approval:retry".to_owned(),
         approval_notification_id: "ak:notification:01964137-0000-7000-8000-000000000099".to_owned(),
@@ -48,13 +57,10 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(retried.approval_request_id, stored.approval_request_id);
     assert_eq!(
-        retried["approval_request_id"],
-        stored["approval_request_id"]
-    );
-    assert_eq!(
-        retried["approval_notification_id"],
-        stored["approval_notification_id"]
+        retried.approval_notification_id,
+        stored.approval_notification_id
     );
     assert!(
         store
@@ -89,12 +95,13 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
     );
     let activated = store.get(&activation.agent_id).await.unwrap().unwrap();
     assert_eq!(
-        activated["approval_request_id"], "agent_runtime_approval:test",
+        activated.approval_request_id.as_deref(),
+        Some("agent_runtime_approval:test"),
         "terminal notification correlation must survive activation"
     );
     assert_eq!(
-        activated["approval_notification_id"],
-        "ak:notification:01964137-0000-7000-8000-000000000001"
+        activated.approval_notification_id.map(|id| id.to_string()),
+        Some("01964137-0000-7000-8000-000000000001".to_owned())
     );
     assert!(
         store
@@ -106,8 +113,8 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
             .unwrap()
     );
     let cleaned = store.get(&activation.agent_id).await.unwrap().unwrap();
-    assert!(cleaned["approval_request_id"].is_null());
-    assert!(cleaned["approval_notification_id"].is_null());
+    assert!(cleaned.approval_request_id.is_none());
+    assert!(cleaned.approval_notification_id.is_none());
     assert!(
         store
             .put_runtime_approval_if_compatible(&runtime_approval_write("sha256:binding-a"))
@@ -118,8 +125,7 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
     );
 
     let mut replacement_record = store.get(&activation.agent_id).await.unwrap().unwrap();
-    replacement_record["pairing_request_id"] =
-        serde_json::json!("agent_pairing_request:replacement");
+    replacement_record.pairing_request_id = Some("agent_pairing_request:replacement".to_owned());
     store.put(replacement_record).await.unwrap();
     let replacement = AgentRuntimeApprovalWrite {
         pairing_request_id: "agent_pairing_request:replacement".to_owned(),
@@ -141,18 +147,11 @@ async fn memory_agent_runtime_request_and_activation_are_compare_and_set() {
 #[tokio::test]
 async fn memory_agent_controller_pcr_binding_is_immutable() {
     let store = MemoryAgentStore::new();
-    let record = serde_json::json!({
-        "agent_id": "did:web:agent.example",
-        "controller_id": "did:web:controller.example",
-        "principal_control_realm_id": "ak:realm:01964137-0000-7000-8000-000000000010",
-        "controller_authorization_ref": "did:web:agent.example#managed-controller",
-        "state": "pending_runtime_key",
-    });
+    let record = agent_principal("pending_runtime_key");
     store.put(record.clone()).await.unwrap();
 
     let mut changed = record;
-    changed["principal_control_realm_id"] =
-        serde_json::json!("ak:realm:01964137-0000-7000-8000-000000000011");
+    changed.principal_control_realm_id = "ak:realm:01964137-0000-7000-8000-000000000011".to_owned();
     assert!(matches!(
         store.put(changed).await,
         Err(PersistenceError::Conflict(message)) if message.contains("immutable")
@@ -1585,6 +1584,70 @@ async fn optional_pg_persistence_store() -> Option<PgPersistenceStore> {
     Some(PgPersistenceStore::new(
         db.pool.expect("DATABASE_URL yields a postgres pool"),
     ))
+}
+
+#[tokio::test]
+async fn pg_agent_principal_typed_upsert_preserves_identity_binding() {
+    let Some(store) = optional_pg_persistence_store().await else {
+        return;
+    };
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let agent_id = format!("did:web:pg-agent-{suffix}.example");
+    let controller_id = format!("did:web:pg-controller-{suffix}.example");
+    let pcr_id = "ak:realm:01964137-0000-7000-8000-000000000010";
+    let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-13T00:00:00.000Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut principal = AgentPrincipalRecord::new(
+        agent_id.clone(),
+        controller_id,
+        pcr_id.to_owned(),
+        format!("{agent_id}#managed-controller"),
+        "pending_runtime_key".to_owned(),
+        created_at,
+    );
+    principal.display_name = Some("Typed Agent".to_owned());
+    principal.requested_scope = Some(serde_json::json!({
+        "actions": ["ak.event.read"],
+        "resources": [{"kind": "service", "service_id": "did:web:soland.example"}],
+    }));
+    store.agents().put(principal).await.unwrap();
+
+    let mut changed = store
+        .agents()
+        .get(&agent_id)
+        .await
+        .unwrap()
+        .expect("typed Agent record round-trips");
+    let changed_at = created_at + chrono::Duration::seconds(1);
+    changed.state = "paused".to_owned();
+    changed.state_changed_at = Some(changed_at);
+    changed.updated_at = changed_at;
+    changed.created_at = created_at + chrono::Duration::days(1);
+    store.agents().put(changed).await.unwrap();
+
+    let persisted = store.agents().get(&agent_id).await.unwrap().unwrap();
+    assert_eq!(persisted.state, "paused");
+    assert_eq!(persisted.state_changed_at, Some(changed_at));
+    assert_eq!(persisted.created_at, created_at);
+    assert_eq!(persisted.principal_control_realm_id, pcr_id);
+
+    let mut rebound = persisted;
+    rebound.principal_control_realm_id = "ak:realm:01964137-0000-7000-8000-000000000011".to_owned();
+    assert!(matches!(
+        store.agents().put(rebound).await,
+        Err(PersistenceError::Conflict(message)) if message.contains("immutable")
+    ));
+    assert_eq!(
+        store
+            .agents()
+            .get(&agent_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .principal_control_realm_id,
+        pcr_id
+    );
 }
 
 #[tokio::test]

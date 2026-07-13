@@ -514,19 +514,20 @@ async fn register_agent_selection(
     reply: bool,
     act_on_behalf: bool,
 ) {
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let mut record = crate::persistence::AgentPrincipalRecord::new(
+        agent_id.to_owned(),
+        "did:web:alice.example".to_owned(),
+        "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+        format!("{agent_id}#managed-controller"),
+        "active".to_owned(),
+        chrono::Utc::now(),
+    );
+    record.display_name = Some("Summary".to_owned());
+    record.agent_slug = Some("summary".to_owned());
     state
         .persistence
         .agents()
-        .put(json!({
-            "agent_id": agent_id,
-            "controller_id": "did:web:alice.example",
-            "display_name": "Summary",
-            "agent_slug": "summary",
-            "state": "active",
-            "created_at": now,
-            "updated_at": now,
-        }))
+        .put(record)
         .await
         .expect("agent record");
     let realm_uuid = realm_id
@@ -1073,7 +1074,7 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
         .await
         .expect("agent lookup")
         .expect("agent record");
-    record["state"] = json!("paused");
+    record.state = "paused".to_owned();
     state
         .persistence
         .agents()
