@@ -38,7 +38,12 @@ pub(crate) async fn validate_trusted_sidecar_member_operation(
 }
 
 pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, &'static str) {
-    if message == arkret_sdk::REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL {
+    if message == "agent_pcr_recovery_not_ready" {
+        (
+            salvo::http::StatusCode::PRECONDITION_FAILED,
+            "agent_pcr_recovery_not_ready",
+        )
+    } else if message == arkret_sdk::REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL {
         (salvo::http::StatusCode::CONFLICT, "failed_precondition")
     } else if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
@@ -166,6 +171,7 @@ pub async fn validate_operation_policy(
             validate_morph_schema_migrate_authz(state, operation).await?;
         }
         validate_principal_control_realm_binding(operation)?;
+        message_rules::validate_managed_agent_control_realm_binding(state, operation).await?;
         validate_accountability_profile_policy(state, operations, operation).await?;
         if kinds::canonical_kind_string(operation) == "ak.cross_signing.publish" {
             crate::routing::identity::cross_signing::validate_cross_signing_publish(

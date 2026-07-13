@@ -268,6 +268,97 @@ pub(in crate::routing::events::operations) fn validate_principal_control_realm_b
     }
 }
 
+pub(in crate::routing::events::operations) async fn validate_managed_agent_control_realm_binding(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let kind = kinds::canonical_kind_string(operation);
+    let explicit_agent_control = matches!(
+        kind.as_str(),
+        "ak.agent.key.authorize"
+            | "ak.agent.key.revoke"
+            | "ak.self.agent.pause"
+            | "ak.self.agent.resume"
+            | "ak.self.agent.deactivate"
+    );
+    let possible_agent_profile_or_genesis = matches!(
+        kind.as_str(),
+        "ak.realm.create" | "ak.profile.create" | "ak.profile.update"
+    );
+    if !explicit_agent_control && !possible_agent_profile_or_genesis {
+        return Ok(());
+    }
+    let agent_id = if explicit_agent_control {
+        operation
+            .payload
+            .get("agent_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    } else if kind == "ak.realm.create" {
+        operation
+            .payload
+            .get("object")
+            .and_then(|object| object.get("created_by"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    } else {
+        operation
+            .payload
+            .get("object")
+            .and_then(|object| object.get("actor_id"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| operation.actor().map(|actor| actor.as_str().to_owned()))
+    };
+    let Some(agent_id) = agent_id else {
+        return if explicit_agent_control {
+            Err("managed_agent_control_event_missing_agent_id")
+        } else {
+            Ok(())
+        };
+    };
+    let expected = crate::routing::identity::managed_agent_pcr::resolve_agent_pcr_for_principal(
+        state, &agent_id,
+    )
+    .await
+    .map_err(|_| "managed_agent_principal_binding_unavailable")?;
+    let expected = match expected {
+        Some(expected) => expected,
+        None if possible_agent_profile_or_genesis => return Ok(()),
+        None => return Err("managed_agent_principal_binding_unavailable"),
+    };
+    if !realm_ids_match(operation.realm_id.as_str(), &expected) {
+        return Err("principal_control_realm_mismatch");
+    }
+    if kind == "ak.realm.create" {
+        let object = operation
+            .payload
+            .get("object")
+            .ok_or("managed_agent_pcr_genesis_object_missing")?;
+        crate::routing::identity::managed_agent_pcr::validate_agent_pcr_genesis_object(
+            object, &agent_id, &expected,
+        )
+        .map_err(|_| "principal_control_realm_profile_mismatch")?;
+    }
+    if kind == "ak.agent.key.authorize" {
+        let record = state
+            .persistence
+            .agents()
+            .get(&agent_id)
+            .await
+            .map_err(|_| "managed_agent_principal_binding_unavailable")?
+            .ok_or("managed_agent_principal_binding_unavailable")?;
+        let recovery =
+            crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, &record)
+                .await
+                .map_err(|_| "agent_pcr_recovery_not_ready")?;
+        if !recovery.is_ready() {
+            return Err("agent_pcr_recovery_not_ready");
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn realm_ids_match(a: &str, b: &str) -> bool {
     a == b
 }

@@ -16,6 +16,7 @@ pub(super) mod device_messages;
 pub(super) mod did;
 pub(in crate::routing) mod key_backup;
 mod keys;
+pub(crate) mod managed_agent_pcr;
 // R3 spec-sync (arkret-spec b47ff6ec) — recovery policy / receipt
 // endpoints (HTTP-4 / REC-1). pub(crate) so the control-realm derivation
 // (`principal_control_realm_for_did`) is reachable from the events policy gate.

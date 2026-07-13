@@ -82,13 +82,14 @@ CREATE TABLE public.agent_participation_ceiling (
 CREATE TABLE public.agent_principals (
     id text NOT NULL,
     controller_id text NOT NULL,
+    principal_control_realm_id text NOT NULL,
+    controller_authorization_ref text NOT NULL,
     display_name text,
     agent_slug text,
     avatar_blob_ref text,
     state text DEFAULT 'active'::text NOT NULL,
     requested_scope jsonb,
     accountability jsonb,
-    self_realm_id text,
     provision_event_refs jsonb,
     pairing_request_id text,
     paired_pairing_request_id text,
@@ -111,6 +112,8 @@ CREATE TABLE public.agent_principals (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT agent_principals_id_check CHECK (((id ~~ 'did:%'::text) AND (id !~ '[[:space:]#?]'::text))),
+    CONSTRAINT agent_principals_pcr_id_check CHECK ((principal_control_realm_id ~ '^ak:realm:[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
+    CONSTRAINT agent_principals_controller_authorization_ref_check CHECK ((controller_authorization_ref ~~ (id || '#%'::text))),
     CONSTRAINT agent_principals_agent_slug_check CHECK ((agent_slug IS NULL) OR (agent_slug ~ '^[a-z0-9]([a-z0-9_-]{0,62}[a-z0-9])?$'::text)),
     CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['pending_runtime_key'::text, 'active'::text, 'paused'::text, 'deactivated'::text, 'pairing_expired'::text])))
 );
@@ -1565,6 +1568,7 @@ CREATE INDEX agent_participation_ceiling_realm_idx ON public.agent_participation
 CREATE INDEX agent_participation_realm_idx ON public.agent_participation USING btree (realm_id);
 
 CREATE INDEX agent_principals_controller_idx ON public.agent_principals USING btree (controller_id);
+CREATE UNIQUE INDEX agent_principals_pcr_idx ON public.agent_principals USING btree (principal_control_realm_id);
 CREATE INDEX agent_principals_controller_agent_slug_idx ON public.agent_principals USING btree (controller_id, agent_slug) WHERE (agent_slug IS NOT NULL);
 
 CREATE UNIQUE INDEX agent_principals_pairing_request_idx ON public.agent_principals USING btree (pairing_request_id) WHERE (pairing_request_id IS NOT NULL);

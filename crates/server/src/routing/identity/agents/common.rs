@@ -178,24 +178,38 @@ pub(super) fn agent_projection_from_record(record: &Value) -> AgentProjection {
 /// The `agent`/`status` pair is required. `grants` defaults empty here — the
 /// `get_agent` read path overlays it from the authz projection
 /// (`grants_for_subject_all_realms`) so the controller UI sees live grants.
-pub(super) fn agent_view_from_record(state: &AppState, record: &Value) -> AgentView {
-    let status = record
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or("active")
-        .to_owned();
+pub(super) async fn agent_view_from_record(
+    state: &AppState,
+    record: &Value,
+) -> Result<AgentView, AppError> {
+    let agent = agent_projection_from_record(record);
     let agent_id = record
         .get("agent_id")
         .and_then(Value::as_str)
         .unwrap_or_default();
     let active_authorizations = active_agent_key_authorizations(state, agent_id);
-    let key_state = agent_key_state_from_record(record, active_authorizations);
-    AgentView {
-        agent: serde_json::to_value(agent_projection_from_record(record)).unwrap_or(Value::Null),
-        status,
+    let mut key_state = agent_key_state_from_record(record, active_authorizations);
+    key_state.as_object_mut().expect("key state object").insert(
+        "pcr_recovery".to_owned(),
+        serde_json::to_value(
+            crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, record)
+                .await?,
+        )
+        .map_err(|error| {
+            AppError::internal(format!(
+                "Agent PCR recovery projection encode failed: {error}"
+            ))
+        })?,
+    );
+    let key_state: KeyState = serde_json::from_value(key_state).map_err(|error| {
+        AppError::internal(format!("persisted Agent key_state is invalid: {error}"))
+    })?;
+    Ok(AgentView {
+        status: agent.status,
+        agent,
         grants: Vec::new(),
-        key_state,
-    }
+        key_state: Some(key_state),
+    })
 }
 
 pub(super) fn agent_key_state_from_record(
@@ -218,13 +232,21 @@ pub(super) fn agent_key_state_from_record(
         .unwrap_or_default();
     key_state.insert("agent_id".to_owned(), json!(agent_id));
     key_state.insert("controller_id".to_owned(), json!(controller_id));
-    if let Some(realm_id) = record.get("self_realm_id").and_then(Value::as_str) {
+    if let Some(realm_id) = record
+        .get("principal_control_realm_id")
+        .and_then(Value::as_str)
+    {
         key_state.insert("principal_control_realm_id".to_owned(), json!(realm_id));
     }
-    key_state.insert(
-        "controller_authorization_ref".to_owned(),
-        json!(format!("{agent_id}#managed-controller")),
-    );
+    if let Some(authorization_ref) = record
+        .get("controller_authorization_ref")
+        .and_then(Value::as_str)
+    {
+        key_state.insert(
+            "controller_authorization_ref".to_owned(),
+            json!(authorization_ref),
+        );
+    }
     if let Some(value) = record
         .get("requested_scope")
         .filter(|value| !value.is_null())

@@ -634,6 +634,10 @@ struct AgentPrincipalRow {
     agent_id: String,
     #[diesel(sql_type = Text)]
     controller_id: String,
+    #[diesel(sql_type = Text)]
+    principal_control_realm_id: String,
+    #[diesel(sql_type = Text)]
+    controller_authorization_ref: String,
     #[diesel(sql_type = Nullable<Text>)]
     display_name: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -646,8 +650,6 @@ struct AgentPrincipalRow {
     requested_scope: Option<Value>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     accountability: Option<Value>,
-    #[diesel(sql_type = Nullable<Text>)]
-    self_realm_id: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     provision_event_refs: Option<Value>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -690,8 +692,8 @@ struct AgentPrincipalRow {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-const AGENT_COLUMNS: &str = "id AS agent_id, controller_id, display_name, \
-     agent_slug, avatar_blob_ref, state, requested_scope, accountability, self_realm_id, provision_event_refs, \
+const AGENT_COLUMNS: &str = "id AS agent_id, controller_id, principal_control_realm_id, controller_authorization_ref, display_name, \
+     agent_slug, avatar_blob_ref, state, requested_scope, accountability, provision_event_refs, \
      pairing_request_id, paired_pairing_request_id, paired_request_digest, pairing_code, pairing_expires_at, approval_request_id, \
      controller_account_id, recipient_service_id, runtime_key_binding_digest, \
      runtime_public_key_digest, runtime_attestation_digest, approval_notification_id, \
@@ -703,13 +705,14 @@ impl From<AgentPrincipalRow> for Value {
         serde_json::json!({
             "agent_id": row.agent_id,
             "controller_id": row.controller_id,
+            "principal_control_realm_id": row.principal_control_realm_id,
+            "controller_authorization_ref": row.controller_authorization_ref,
             "display_name": row.display_name,
             "agent_slug": row.agent_slug,
             "avatar_blob_ref": row.avatar_blob_ref,
             "state": row.state,
             "requested_scope": row.requested_scope,
             "accountability": row.accountability,
-            "self_realm_id": row.self_realm_id,
             "provision_event_refs": row.provision_event_refs,
             "pairing_request_id": row.pairing_request_id,
             "paired_pairing_request_id": row.paired_pairing_request_id,
@@ -753,6 +756,8 @@ impl AgentStore for PgAgentStore {
         };
         let agent_id = get_str("agent_id")?;
         let controller_id = get_str("controller_id")?;
+        let principal_control_realm_id = get_str("principal_control_realm_id")?;
+        let controller_authorization_ref = get_str("controller_authorization_ref")?;
         let display_name = record
             .get("display_name")
             .and_then(Value::as_str)
@@ -778,10 +783,6 @@ impl AgentStore for PgAgentStore {
             .get("accountability")
             .cloned()
             .filter(|value| !value.is_null());
-        let self_realm_id = record
-            .get("self_realm_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
         let provision_event_refs = record
             .get("provision_event_refs")
             .cloned()
@@ -874,20 +875,22 @@ impl AgentStore for PgAgentStore {
             .map(ToOwned::to_owned);
         sql_query(
             "INSERT INTO agent_principals \
-             (id, controller_id, display_name, agent_slug, avatar_blob_ref, state, requested_scope, \
-              accountability, self_realm_id, provision_event_refs, pairing_request_id, \
+             (id, controller_id, principal_control_realm_id, controller_authorization_ref, display_name, agent_slug, avatar_blob_ref, state, requested_scope, \
+              accountability, provision_event_refs, pairing_request_id, \
               paired_pairing_request_id, paired_request_digest, pairing_code, pairing_expires_at, approval_request_id, controller_account_id, \
               recipient_service_id, runtime_key_binding_digest, runtime_public_key_digest, \
               runtime_attestation_digest, approval_notification_id, runtime_key_request, \
               approval_requested_at, authorized_event_ref, authorized_verification_method, \
               authorized_public_key_digest, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW(), NOW()) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, NOW(), NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
              controller_id = EXCLUDED.controller_id, \
+             principal_control_realm_id = EXCLUDED.principal_control_realm_id, \
+             controller_authorization_ref = EXCLUDED.controller_authorization_ref, \
              display_name = EXCLUDED.display_name, agent_slug = EXCLUDED.agent_slug, \
              avatar_blob_ref = EXCLUDED.avatar_blob_ref, \
              state = EXCLUDED.state, requested_scope = EXCLUDED.requested_scope, \
-             accountability = EXCLUDED.accountability, self_realm_id = EXCLUDED.self_realm_id, \
+             accountability = EXCLUDED.accountability, \
              provision_event_refs = EXCLUDED.provision_event_refs, \
              pairing_request_id = EXCLUDED.pairing_request_id, pairing_code = EXCLUDED.pairing_code, \
              paired_pairing_request_id = EXCLUDED.paired_pairing_request_id, \
@@ -908,13 +911,14 @@ impl AgentStore for PgAgentStore {
         )
         .bind::<Text, _>(&agent_id)
         .bind::<Text, _>(&controller_id)
+        .bind::<Text, _>(&principal_control_realm_id)
+        .bind::<Text, _>(&controller_authorization_ref)
         .bind::<Nullable<Text>, _>(&display_name)
         .bind::<Nullable<Text>, _>(&agent_slug)
         .bind::<Nullable<Text>, _>(&avatar_blob_ref)
         .bind::<Text, _>(&state)
         .bind::<Nullable<Jsonb>, _>(&requested_scope)
         .bind::<Nullable<Jsonb>, _>(&accountability)
-        .bind::<Nullable<Text>, _>(&self_realm_id)
         .bind::<Nullable<Jsonb>, _>(&provision_event_refs)
         .bind::<Nullable<Text>, _>(&pairing_request_id)
         .bind::<Nullable<Text>, _>(&paired_pairing_request_id)

@@ -357,13 +357,19 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         return Ok(agent_record);
     };
     let Some(expected_realm_id) = agent_record
-        .get("self_realm_id")
+        .get("principal_control_realm_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
     else {
         return Ok(agent_record);
     };
-    let expected_authorization_ref = format!("{agent_id}#managed-controller");
+    let Some(expected_authorization_ref) = agent_record
+        .get("controller_authorization_ref")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(agent_record);
+    };
     let expected_request_digest = pairing_request_binding_digest(
         &agent_record,
         &controller_id,
@@ -632,6 +638,25 @@ pub(super) async fn agent_key_pair(
         }
     }
     ensure_current_runtime_key_request_matches(&agent_record, &body)?;
+    let pcr_recovery = crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(
+        state,
+        &agent_record,
+    )
+    .await?;
+    if !pcr_recovery.is_ready() {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "managed Agent PCR recovery backup is not ready for the current pre-commit frontier",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code("agent_pcr_recovery_not_ready"));
+    }
+    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        state,
+        &agent_record,
+        body.authorize_event.created_at,
+    )
+    .await?;
     let authorize_event_value = serde_json::to_value(&body.authorize_event)
         .map_err(|error| AppError::invalid_param(format!("authorize_event invalid: {error}")))?;
     let authorized_at = chrono::Utc::now();
@@ -883,16 +908,20 @@ pub(super) fn ensure_key_authorize_event_matches_request(
             "authorize_event.executed_by must match the authenticated controller",
         ));
     }
-    let expected_authorization_ref = format!("{agent_id}#managed-controller");
+    let expected_authorization_ref = agent_record
+        .get("controller_authorization_ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::capability_denied("Agent has no controller delegation binding"))?;
     if envelope.get("authorization_ref").and_then(Value::as_str)
-        != Some(expected_authorization_ref.as_str())
+        != Some(expected_authorization_ref)
     {
         return Err(AppError::capability_denied(
             "authorize_event.authorization_ref must match the Agent DID controller delegation",
         ));
     }
     let expected_realm_id = agent_record
-        .get("self_realm_id")
+        .get("principal_control_realm_id")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {

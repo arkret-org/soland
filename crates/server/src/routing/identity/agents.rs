@@ -31,15 +31,16 @@ use std::collections::BTreeSet;
 use arkret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
-    AgentLifecycleState, AgentList, AgentPairingBootstrap, AgentPairingResolveRequestBody,
-    AgentParticipation, AgentParticipationEntry,
+    AgentLifecycleState, AgentList, AgentPairingBootstrap, AgentPairingMode,
+    AgentPairingResolveRequestBody, AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
-    AgentProjection, AgentProvisionOutcome, AgentProvisionRequestBody,
-    AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRuntimeApprovalOutcome,
-    AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
-    AgentRuntimeApprovalStatusRequestBody, AgentSidecarContextRef, AgentSidecarExposureAck,
-    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView,
+    AgentProjection, AgentProvisionOutcome, AgentProvisionPcrRecovery,
+    AgentProvisionRequestBody, AgentRenewPairingOutcome, AgentRenewPairingRequestBody,
+    AgentResumeRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
+    AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody,
+    AgentSidecarContextRef, AgentSidecarExposureAck, AgentSidecarThreadEnsureOutcome,
+    AgentSidecarThreadEnsureRequestBody, AgentStatus, AgentView, GrantSnapshot, KeyState,
     PublicKey, effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
 use arkret_sdk::{
@@ -67,9 +68,10 @@ use crate::state::{AppState, SessionRecord};
 
 mod dev_fanout;
 use dev_fanout::{
-    attach_agent_grant_event, ensure_self_realm, fanout_provision_subevents, fanout_renewal_grants,
-    materialize_capability_grant, revoke_capability_grant, submit_durable_agent_lifecycle,
-    submit_revoke_agent_grants, submit_revoke_agent_keys,
+    attach_agent_grant_event, fanout_provision_subevents, fanout_renewal_grants,
+    materialize_capability_grant, require_controller_principal_control_realm,
+    revoke_capability_grant, submit_durable_agent_lifecycle, submit_revoke_agent_grants,
+    submit_revoke_agent_keys, validate_initial_content_grant_scope,
 };
 
 mod common;
@@ -343,15 +345,14 @@ mod tests {
             "created_at": "2026-06-11T00:00:00.000Z",
             "updated_at": "2026-06-11T00:00:00.000Z"
         });
-        let key_state = agent_key_state_from_record(&record, Vec::new());
         let view = AgentView {
-            agent: serde_json::to_value(agent_projection_from_record(&record)).unwrap(),
-            status: "active".to_owned(),
+            agent: agent_projection_from_record(&record),
+            status: AgentStatus::Active,
             grants: Vec::new(),
-            key_state,
+            key_state: None,
         };
         // spec `agent_view` = `{agent: <agent_projection>, status, ...}`.
-        assert_eq!(view.status, "active");
+        assert_eq!(view.status, AgentStatus::Active);
         let agent = serde_json::to_value(&view).expect("view serializes");
         assert_eq!(agent["agent"]["slug"], "summary");
         assert_eq!(agent["agent"]["status"], "active");

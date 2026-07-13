@@ -14,7 +14,6 @@
 use arkret_sdk::canonical;
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::SessionRecord;
 use crate::error::{AppError, ErrorCode};
@@ -31,20 +30,6 @@ const SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ak.self.events.command.submit";
 const ACTION_EVENT_READ: &str = "ak.event.read";
 const ACTION_MESSAGE_CREATE: &str = "ak.message.create";
 const ACTION_REACTION_ADD: &str = "ak.reaction.add";
-
-/// Development-only fan-out Realm. Its domain-separated identifier is never
-/// a controller or Agent Principal Control Realm identifier.
-pub(super) fn development_agent_realm_for_controller(controller_id: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"ak.development.agent_fanout_realm.v1\0");
-    hasher.update(controller_id.as_bytes());
-    let digest = hasher.finalize();
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x70;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    format!("ak:realm:{}", uuid::Uuid::from_bytes(bytes))
-}
 
 /// Build a server-authored envelope for `session.actor` and submit it via the
 /// shared internal event API. `actor_seq` is taken as
@@ -99,6 +84,57 @@ pub(super) async fn submit_agent_fanout_event(
     Ok(outcome.event_id)
 }
 
+/// Development-only delegated authoring for control facts that belong to the
+/// Agent principal. The controller is the proof signer/executor; the Agent is
+/// the principal of record and therefore owns actor_seq and the PCR stream.
+async fn submit_managed_agent_control_event(
+    state: &AppState,
+    session: &SessionRecord,
+    realm_id: &str,
+    agent_id: &str,
+    kind: &str,
+    payload: Value,
+) -> Result<String, AppError> {
+    let next_seq = state
+        .persistence
+        .events()
+        .max_actor_seq(agent_id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+        + 1;
+    let event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
+    let payload_bytes = canonical::canonical_json_bytes(&payload).unwrap_or_default();
+    let payload_digest = canonical::sha256_digest(&payload_bytes);
+    let authorization_ref =
+        crate::routing::identity::managed_agent_pcr::controller_authorization_ref(agent_id);
+    let envelope = json!({
+        "event_id": event_id,
+        "kind": kind,
+        "realm_id": realm_id,
+        "actor_id": agent_id,
+        "actor_seq": next_seq,
+        "created_at": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "hlc": state.hlc.now(),
+        "prev_refs": [],
+        "refs": [],
+        "executed_by": session.actor,
+        "authorization_ref": authorization_ref,
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": session.actor,
+            "payload_digest": payload_digest,
+        }],
+    });
+    let delegated_session = super::delegated_agent_session(session, agent_id);
+    let outcome = submit_event_value(state, &delegated_session, envelope)
+        .await
+        .map_err(|err| agent_fanout_submit_error(kind, err.status, err.code, err.message))?;
+    Ok(outcome.event_id)
+}
+
 fn agent_fanout_submit_error(
     kind: &str,
     status: salvo::http::StatusCode,
@@ -128,19 +164,22 @@ fn agent_fanout_submit_error(
         .with_reason_code(wire_code)
 }
 
-/// Idempotently ensure the controller's self realm exists in the realm
-/// index. When absent, submit the controller-authored `ak.realm.create`
-/// genesis event (the `realm_create` bootstrap path admits the creator as
-/// the first member). Returns the self realm id.
-pub(super) async fn ensure_self_realm(
+/// Resolve the authenticated controller's own Principal Control Realm. Agent
+/// provisioning may write controller-owned facts there, but it must never
+/// create an ordinary Realm and reuse it as an Agent PCR.
+pub(super) async fn require_controller_principal_control_realm(
     state: &AppState,
     session: &SessionRecord,
 ) -> Result<String, AppError> {
-    let realm_id = development_agent_realm_for_controller(&session.actor);
+    let realm_id =
+        crate::routing::identity::recovery::principal_control_realm_for_did(&session.actor);
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
-        let payload =
-            self_realm_create_payload(&session.actor, &state.config.service_id, &realm_id);
-        submit_agent_fanout_event(state, session, &realm_id, "ak.realm.create", payload).await?;
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "controller Principal Control Realm must be initialized before provisioning an Agent",
+        )
+        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("principal_control_realm_missing"));
     }
 
     // The Realm directory index and reducer projection are separate caches.
@@ -221,46 +260,10 @@ fn reconcile_self_realm_owner_projection(
     Ok(())
 }
 
-/// Minimal `realm_create_payload` for a controller self realm. Mirrors the
-/// `ak.schema.realm.v1` object the conformance harness submits; the realm
-/// is private (invite join) since it only ever hosts the controller and
-/// the agent identity sub-events.
-fn self_realm_create_payload(controller_id: &str, service_id: &str, realm_id: &str) -> Value {
-    json!({
-        "object": {
-            "id": realm_id,
-            "schema": "ak.schema.realm.v1",
-            "title": "Development Agent Fan-out",
-            "summary": "Non-PCR development Realm for exercising Agent fan-out.",
-            "created_by": controller_id,
-            "trust_domain": "ak:trust_domain:soland.local",
-            "schema_refs": ["ak.schema.realm.v1"],
-            "default_discoverability": "listed",
-            "default_join_rule": "invite",
-            "history_visibility": "shared",
-            "encryption_profile": "none",
-            "plaintext_visible_services": [service_id],
-            "security_class": "standard",
-            "federation_policy": "restricted",
-            "notary_profile": "single_did",
-            "digest_algorithm": "sha256",
-            "notary": {
-                "type": "single_did",
-                "did": controller_id,
-                "recovery_members": ["did:web:recovery.soland.local"],
-                "controller_organization": "did:web:organization.primary.soland.local",
-                "recovery_controller_organizations": [
-                    "did:web:organization.recovery.soland.local"
-                ],
-            },
-            "created_at": "2026-05-02T00:00:00Z",
-        },
-    })
-}
-
-/// AKP-0008 §4.3 — fan-out the three durable provisioning sub-events for a
-/// freshly provisioned agent (option B). Returns the submitted event ids
-/// `(profile_event, accountability_event, capability_grant_id)`. The
+/// Fan out the controller-owned provisioning facts. Agent Profile and Agent
+/// PCR genesis are intentionally absent: the controller E2EE client authors
+/// them after it has locally created the Agent PCR MLS state. Returns
+/// `(accountability_event, selector_event, capability_grant_ids)`. The
 /// initial capability grant carries `effective_after_first_authorized_key`
 /// so the evaluator fails closed until pairing completes (§4.3.2).
 pub(super) async fn fanout_provision_subevents(
@@ -268,62 +271,22 @@ pub(super) async fn fanout_provision_subevents(
     session: &SessionRecord,
     realm_id: &str,
     agent_id: &str,
-    display_name: Option<&str>,
     agent_slug: &str,
-    avatar_blob_ref: Option<&str>,
     requested_scope: &Value,
 ) -> Result<(String, String, Vec<String>), AppError> {
     let controller = session.actor.clone();
-    // 1. Agent actor profile (`ak.profile.create`), authored by the controller with the agent
-    //    principal as the profile subject. The `profile_create_payload` def resolves to
-    //    `state_payload`, so the profile object rides in `value` (the soland actor-profile reducer
-    //    is not wired; list/get read the agent_principals table).
-    let mut profile = json!({
-        "id": format!("ak:actor_profile:{agent_id}"),
-        "schema": "ak.schema.actor_profile.v1",
-        "actor_id": agent_id,
-        "actor_kind": "agent",
-        "display_name": display_name.unwrap_or("Agent"),
-        "agent_slug": agent_slug,
-    });
-    if let Some(avatar_blob_ref) = avatar_blob_ref {
-        profile
-            .as_object_mut()
-            .expect("agent profile is an object")
-            .insert(
-                "avatar_blob_ref".to_owned(),
-                Value::String(avatar_blob_ref.to_owned()),
-            );
-    }
-    profile
-        .as_object_mut()
-        .expect("agent profile is an object")
-        .insert("status".to_owned(), Value::String("active".to_owned()));
-    let profile_payload = json!({ "value": profile });
-    let profile_event = submit_agent_fanout_event(
-        state,
-        session,
-        realm_id,
-        "ak.profile.create",
-        profile_payload,
-    )
-    .await?;
-
-    // 2. Accountability grant (`ak.identity.accountability_grant`), issuer = controller, subject =
-    //    agent. Resolves to `state_payload`.
+    // 1. Accountability grant, issuer = controller and subject = Agent.
     let now_utc = Utc::now();
-    // Longevity-safe: no expires_at — the controller self-endorsement is
-    // governed by grant_status revocation and controller lifecycle cascade
-    // (actor.md §3.3.1), never by a silent timer.
-    let accountability_payload = json!({
-        "value": {
-            "issuer": controller,
-            "subject": agent_id,
-            "accountability_scope": controller,
-            "not_before": now_utc.to_rfc3339_opts(SecondsFormat::Secs, true),
-            "grant_status": "active",
-        },
+    let created_at = now_utc.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let mut accountability_payload = json!({
+        "schema": "ak.schema.accountability_grant.v1",
+        "issuer": controller,
+        "subject": agent_id,
+        "accountability_scope": "agent_operator",
+        "not_before": created_at,
+        "grant_status": "active",
     });
+    insert_nested_dev_proof(&mut accountability_payload, "proof", &controller)?;
     let accountability_event = submit_agent_fanout_event(
         state,
         session,
@@ -333,26 +296,84 @@ pub(super) async fn fanout_provision_subevents(
     )
     .await?;
 
+    // 2. Controller-scoped selector claim. It remains pending until the
+    // controller client has bootstrapped the Agent PCR/Profile and recovery.
+    let mut selector_payload = json!({
+        "schema": "ak.schema.agent_selector_claim.v1",
+        "controller_subject": controller,
+        "agent_slug": agent_slug,
+        "subject": agent_id,
+        "issuer": controller,
+        "binding_state": "pending",
+        "visibility": "private",
+        "created_at": created_at,
+        "source_refs": [accountability_event],
+    });
+    insert_nested_dev_proofs(&mut selector_payload, &controller)?;
+    let selector_event = submit_agent_fanout_event(
+        state,
+        session,
+        realm_id,
+        "ak.agent.selector_claim",
+        selector_payload,
+    )
+    .await?;
+
     // 3. Initial capability grant (`ak.capability.grant`), issuer = controller, subject = agent,
     //    flagged inactive until pairing.
     let actions = initial_grant_actions(requested_scope);
     let constraints = initial_grant_constraints(requested_scope, &actions);
     let mut grant_ids = Vec::new();
-    if !actions.is_empty() {
+    for (grant_realm_id, resources) in
+        initial_content_grant_resources_by_realm(requested_scope, &actions)?
+    {
         let grant_id = ids::generate_grant_id();
         let grant_payload = capability_grant_payload(
             &grant_id,
-            realm_id,
+            &grant_realm_id,
             &controller,
             agent_id,
             &actions,
+            &resources,
             &constraints,
             true,
         );
-        materialize_grant(state, session, realm_id, grant_payload).await?;
+        materialize_grant(state, session, &grant_realm_id, grant_payload).await?;
         grant_ids.push(grant_id);
     }
-    Ok((profile_event, accountability_event, grant_ids))
+    Ok((accountability_event, selector_event, grant_ids))
+}
+
+fn insert_nested_dev_proof(
+    payload: &mut Value,
+    field: &str,
+    controller: &str,
+) -> Result<(), AppError> {
+    let digest = canonical::canonical_sha256(payload)
+        .map_err(|error| AppError::internal(format!("nested proof digest failed: {error}")))?;
+    payload.as_object_mut().expect("payload object").insert(
+        field.to_owned(),
+        json!({
+            "type": "dev-proof",
+            "verification_method": controller,
+            "payload_digest": digest,
+        }),
+    );
+    Ok(())
+}
+
+fn insert_nested_dev_proofs(payload: &mut Value, controller: &str) -> Result<(), AppError> {
+    let digest = canonical::canonical_sha256(payload)
+        .map_err(|error| AppError::internal(format!("nested proofs digest failed: {error}")))?;
+    payload.as_object_mut().expect("payload object").insert(
+        "proofs".to_owned(),
+        json!([{
+            "type": "dev-proof",
+            "verification_method": controller,
+            "payload_digest": digest,
+        }]),
+    );
+    Ok(())
 }
 
 /// Re-issue the initial pending capability grant for a pairing renewal
@@ -363,7 +384,6 @@ pub(super) async fn fanout_provision_subevents(
 pub(super) async fn fanout_renewal_grants(
     state: &AppState,
     session: &SessionRecord,
-    realm_id: &str,
     agent_id: &str,
     requested_scope: &Value,
 ) -> Result<Vec<String>, AppError> {
@@ -371,18 +391,21 @@ pub(super) async fn fanout_renewal_grants(
     let actions = initial_grant_actions(requested_scope);
     let constraints = initial_grant_constraints(requested_scope, &actions);
     let mut grant_ids = Vec::new();
-    if !actions.is_empty() {
+    for (grant_realm_id, resources) in
+        initial_content_grant_resources_by_realm(requested_scope, &actions)?
+    {
         let grant_id = ids::generate_grant_id();
         let grant_payload = capability_grant_payload(
             &grant_id,
-            realm_id,
+            &grant_realm_id,
             &controller,
             agent_id,
             &actions,
+            &resources,
             &constraints,
             true,
         );
-        materialize_grant(state, session, realm_id, grant_payload).await?;
+        materialize_grant(state, session, &grant_realm_id, grant_payload).await?;
         grant_ids.push(grant_id);
     }
     Ok(grant_ids)
@@ -391,8 +414,8 @@ pub(super) async fn fanout_renewal_grants(
 /// Expand `requested_scope` (the provision request DSL) into a minimal
 /// content capability action set. Service-surface actions may be present in
 /// `agent_key_scope.actions`, but they are never materialized as
-/// `ak.capability.grant.actions`. With no explicit actions we grant the
-/// least-privilege read baseline (AKP-0008 §4.7 `read`).
+/// `ak.capability.grant.actions`. An omitted/empty scope grants no implicit
+/// content access.
 fn initial_grant_actions(requested_scope: &Value) -> Vec<String> {
     let explicit_actions: Vec<String> = requested_scope
         .get("actions")
@@ -403,13 +426,104 @@ fn initial_grant_actions(requested_scope: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default();
-    if explicit_actions.is_empty() {
-        return vec![ACTION_EVENT_READ.to_owned()];
-    }
     explicit_actions
         .into_iter()
         .filter(|action| initial_capability_grant_action(action))
         .collect()
+}
+
+pub(super) fn validate_initial_content_grant_scope(
+    requested_scope: &Value,
+) -> Result<(), AppError> {
+    let actions = initial_grant_actions(requested_scope);
+    initial_content_grant_resources_by_realm(requested_scope, &actions).map(|_| ())
+}
+
+fn initial_content_grant_resources_by_realm(
+    requested_scope: &Value,
+    content_actions: &[String],
+) -> Result<Vec<(String, Vec<Value>)>, AppError> {
+    if content_actions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut grouped = std::collections::BTreeMap::<String, Vec<Value>>::new();
+    for resource in requested_scope
+        .get("resources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let kind = resource
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::invalid_param("requested_scope resource kind is missing"))?;
+        if matches!(kind, "operation" | "service") {
+            continue;
+        }
+        let realm_id = resource
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AppError::invalid_param(format!(
+                    "requested_scope {kind} resource requires realm_id for a content grant"
+                ))
+            })?;
+        let selector = match kind {
+            "realm" => json!({
+                "kind": "realm",
+                "realm_id": realm_id,
+                "match_scope": "realm_wide",
+            }),
+            "strand" | "space" | "object" => {
+                let resource_ref = resource
+                    .get("resource_ref")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AppError::invalid_param(format!(
+                            "requested_scope {kind} resource requires resource_ref"
+                        ))
+                    })?;
+                let expected_prefix = match kind {
+                    "strand" => "ak:strand:",
+                    "space" => "ak:space:",
+                    "object" => "ak:",
+                    _ => unreachable!(),
+                };
+                if !resource_ref.starts_with(expected_prefix) {
+                    return Err(AppError::invalid_param(format!(
+                        "requested_scope {kind} resource_ref has the wrong typed-id kind"
+                    )));
+                }
+                let id_field = match kind {
+                    "strand" => "strand_id",
+                    "space" => "space_id",
+                    "object" => "object_ref",
+                    _ => unreachable!(),
+                };
+                let mut selector = serde_json::Map::new();
+                selector.insert("kind".to_owned(), Value::String(kind.to_owned()));
+                selector.insert("realm_id".to_owned(), Value::String(realm_id.to_owned()));
+                selector.insert(id_field.to_owned(), Value::String(resource_ref.to_owned()));
+                Value::Object(selector)
+            }
+            _ => {
+                return Err(AppError::invalid_param(format!(
+                    "requested_scope resource kind `{kind}` cannot back a content grant"
+                )));
+            }
+        };
+        grouped
+            .entry(realm_id.to_owned())
+            .or_default()
+            .push(selector);
+    }
+    if grouped.is_empty() {
+        return Err(AppError::invalid_param(
+            "requested_scope content actions require at least one Realm-scoped content resource",
+        ));
+    }
+    Ok(grouped.into_iter().collect())
 }
 
 fn initial_grant_constraints(requested_scope: &Value, content_actions: &[String]) -> Vec<Value> {
@@ -460,6 +574,7 @@ fn capability_grant_payload(
     issuer: &str,
     subject: &str,
     actions: &[String],
+    resources: &[Value],
     constraints: &[Value],
     effective_after_first_authorized_key: bool,
 ) -> Value {
@@ -471,7 +586,7 @@ fn capability_grant_payload(
         "issuer": issuer,
         "subject": subject,
         "actions": actions,
-        "resources": [{ "kind": "realm", "realm_id": realm_id }],
+        "resources": resources,
         "issued_at": issued_at,
         "proofs": [{
             "kind": "detached_jws",
@@ -655,7 +770,8 @@ pub(super) async fn submit_durable_agent_lifecycle(
             .expect("payload object")
             .insert("sidecar_exposure_ack".to_owned(), ack.clone());
     }
-    submit_agent_fanout_event(state, session, realm_id, event_kind, payload).await
+    submit_managed_agent_control_event(state, session, realm_id, agent_id, event_kind, payload)
+        .await
 }
 
 /// AKP-0008 §4.11 — fan-out `ak.agent.key.revoke` for the agent's authorized
@@ -690,7 +806,15 @@ pub(super) async fn submit_revoke_agent_keys(
                 .expect("payload object")
                 .insert("reason".to_owned(), json!(reason));
         }
-        submit_agent_fanout_event(state, session, realm_id, "ak.agent.key.revoke", payload).await?;
+        submit_managed_agent_control_event(
+            state,
+            session,
+            realm_id,
+            agent_id,
+            "ak.agent.key.revoke",
+            payload,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -728,21 +852,6 @@ mod tests {
     use soland_data::Db;
 
     use super::*;
-
-    #[test]
-    fn development_fanout_realm_never_collides_with_principal_control_realms() {
-        let controller = "did:webvh:z6mkcontroller:controller.example";
-        let agent = "did:webvh:z6mkagent:agent.example";
-        let development = development_agent_realm_for_controller(controller);
-        assert_ne!(
-            development,
-            crate::routing::identity::recovery::principal_control_realm_for_did(controller)
-        );
-        assert_ne!(
-            development,
-            crate::routing::identity::recovery::principal_control_realm_for_did(agent)
-        );
-    }
     use crate::state::RealmMetaRecord;
 
     fn realm_meta(owner: &str) -> RealmMetaRecord {
@@ -829,10 +938,10 @@ mod tests {
     }
 
     #[test]
-    fn initial_grant_default_uses_content_read_only() {
+    fn initial_grant_default_adds_no_content_access() {
         let actions = initial_grant_actions(&Value::Null);
 
-        assert_eq!(actions, vec![ACTION_EVENT_READ.to_owned()]);
+        assert!(actions.is_empty());
     }
 
     #[test]
@@ -893,7 +1002,10 @@ mod tests {
     fn requested_scope_preserves_content_grant_constraints() {
         let requested = json!({
             "actions": [ACTION_MESSAGE_CREATE],
-            "resources": [{ "kind": "operation", "operation": ACTION_MESSAGE_CREATE }],
+            "resources": [{
+                "kind": "realm",
+                "realm_id": "ak:realm:01964137-0000-7000-8000-000000000002"
+            }],
             "constraints": [{
                 "constraint_type": "claim_based",
                 "effect": "require_review",
@@ -905,12 +1017,17 @@ mod tests {
 
         let actions = initial_grant_actions(&requested);
         let constraints = initial_grant_constraints(&requested, &actions);
+        let resources = initial_content_grant_resources_by_realm(&requested, &actions)
+            .expect("content resources")
+            .remove(0)
+            .1;
         let payload = capability_grant_payload(
             "ak:grant:01964137-0000-7000-8000-000000000001",
             "ak:realm:01964137-0000-7000-8000-000000000002",
             "did:web:controller.example",
             "did:web:agent.example",
             &actions,
+            &resources,
             &constraints,
             true,
         );
@@ -932,5 +1049,36 @@ mod tests {
         let actions = initial_grant_actions(&requested);
 
         assert!(initial_grant_constraints(&requested, &actions).is_empty());
+    }
+
+    #[test]
+    fn requested_scope_content_grants_preserve_governed_realm() {
+        let realm_id = "ak:realm:01964137-0000-7000-8000-000000000002";
+        let requested = json!({
+            "actions": [ACTION_EVENT_READ],
+            "resources": [{ "kind": "realm", "realm_id": realm_id }]
+        });
+        let actions = initial_grant_actions(&requested);
+        let grants = initial_content_grant_resources_by_realm(&requested, &actions)
+            .expect("content scope must map to one grant");
+
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].0, realm_id);
+        assert_eq!(grants[0].1[0]["realm_id"], realm_id);
+        assert_eq!(grants[0].1[0]["match_scope"], "realm_wide");
+    }
+
+    #[test]
+    fn requested_scope_rejects_content_actions_without_content_resources() {
+        let requested = json!({
+            "actions": [ACTION_EVENT_READ],
+            "resources": [{
+                "kind": "service",
+                "service_id": "did:web:soland.example"
+            }]
+        });
+        let actions = initial_grant_actions(&requested);
+
+        assert!(initial_content_grant_resources_by_realm(&requested, &actions).is_err());
     }
 }

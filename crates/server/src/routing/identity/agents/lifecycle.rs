@@ -31,6 +31,28 @@ pub(super) async fn provision_agent(
     let now_utc = chrono::Utc::now();
     validate_agent_slug(&agent_slug)
         .map_err(|err| AppError::invalid_param(format!("slug is invalid: {err}")))?;
+    let requested_scope = body
+        .requested_scope
+        .as_ref()
+        .map(|scope| serde_json::to_value(scope).unwrap_or(Value::Null))
+        .unwrap_or(Value::Null);
+    validate_initial_content_grant_scope(&requested_scope)?;
+    let active_recovery_policy = state
+        .persistence
+        .recovery_policies()
+        .get_active_for_principal(&controller_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("controller recovery policy lookup failed: {error}"))
+        })?;
+    if active_recovery_policy.is_none() {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "controller must accept a recovery policy before provisioning a managed Agent",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("recovery_policy_required"));
+    }
     let existing = state
         .persistence
         .agents()
@@ -49,7 +71,12 @@ pub(super) async fn provision_agent(
             "slug is already bound to an active or open agent for this controller",
         ));
     }
+    let controller_realm = require_controller_principal_control_realm(state, &session).await?;
     let agent_id = generate_agent_principal_did(&state.config.service_id);
+    let principal_control_realm_id =
+        crate::routing::identity::managed_agent_pcr::allocate_principal_control_realm_id()?;
+    let controller_authorization_ref =
+        crate::routing::identity::managed_agent_pcr::controller_authorization_ref(&agent_id);
     let timestamp = now_utc.to_rfc3339_opts(SecondsFormat::Millis, true);
     let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
     let pairing_code = generate_pairing_code();
@@ -58,10 +85,6 @@ pub(super) async fn provision_agent(
         .unwrap_or(15 * 60 * 1000)
         .min(24 * 60 * 60 * 1000);
     let expires_at = now_utc + chrono::Duration::milliseconds(pairing_ttl_ms as i64);
-    let requested_scope = body
-        .requested_scope
-        .map(|scope| serde_json::to_value(scope).unwrap_or(Value::Null))
-        .unwrap_or(Value::Null);
     if !state.config.development_mode {
         return Err(AppError::unsupported_feature(
             "production agent provisioning requires protocol-valid delegated fan-out",
@@ -76,24 +99,28 @@ pub(super) async fn provision_agent(
     // AKP-0008 D1: development can materialize the agent's identity sub-events
     // with dev proofs. Production fails closed above until the delegated
     // fan-out has a protocol-valid authorization_ref + detached-JWS path.
-    let realm = ensure_self_realm(state, &session).await?;
-    let (profile_event, accountability_event, grant_ids) = fanout_provision_subevents(
+    let (accountability_event, selector_event, grant_ids) = fanout_provision_subevents(
         state,
         &session,
-        &realm,
+        &controller_realm,
         &agent_id,
-        display_name.as_deref(),
         &agent_slug,
-        avatar_blob_ref.as_deref(),
         &requested_scope,
     )
     .await?;
     let provision_event_refs = json!({
-        "agent_profile_event_id": profile_event,
         "accountability_grant_event_id": accountability_event,
+        "selector_claim_event_id": selector_event,
         "initial_capability_grant_ids": grant_ids,
     });
-    let self_realm_id = Some(realm);
+    crate::routing::identity::managed_agent_pcr::persist_managed_agent_did_binding(
+        state,
+        &agent_id,
+        &controller_id,
+        &principal_control_realm_id,
+        &controller_authorization_ref,
+    )
+    .await?;
     let controller_account = state
         .persistence
         .accounts()
@@ -107,6 +134,8 @@ pub(super) async fn provision_agent(
         .put(json!({
             "agent_id": agent_id,
             "controller_id": controller_id,
+            "principal_control_realm_id": principal_control_realm_id,
+            "controller_authorization_ref": controller_authorization_ref,
             "controller_account_id": controller_account.id,
             "recipient_service_id": state.config.service_id,
             "display_name": display_name,
@@ -115,7 +144,6 @@ pub(super) async fn provision_agent(
             "requested_scope": requested_scope,
             "accountability": body.accountability,
             "state": "pending_runtime_key",
-            "self_realm_id": self_realm_id,
             "provision_event_refs": provision_event_refs,
             "pairing_request_id": pairing_request_id,
             "pairing_code": pairing_code,
@@ -136,6 +164,8 @@ pub(super) async fn provision_agent(
             "slug": agent_slug,
             "avatar_blob_ref": avatar_blob_ref,
             "pairing_request_id": pairing_request_id,
+            "principal_control_realm_id": principal_control_realm_id,
+            "controller_authorization_ref": controller_authorization_ref,
         }),
         "accepted",
     )
@@ -146,6 +176,9 @@ pub(super) async fn provision_agent(
     })?;
     json_ok(AgentProvisionOutcome {
         agent_id: agent_principal_did,
+        principal_control_realm_id,
+        controller_authorization_ref,
+        pcr_recovery: AgentProvisionPcrRecovery::default(),
         pairing_request_id,
         pairing_code: Some(pairing_code),
         expires_at,
@@ -179,7 +212,7 @@ pub(super) async fn renew_agent_pairing(
     body: JsonBody<AgentRenewPairingRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentProvisionOutcome> {
+) -> JsonResult<AgentRenewPairingOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
@@ -246,12 +279,11 @@ pub(super) async fn renew_agent_pairing(
         proj.grant_ids_for_subject(&agent_id)
     };
     let grant_ids = if bootstrap_reopen && live_grant_ids.is_empty() {
-        let realm = ensure_self_realm(state, &session).await?;
         let requested_scope = record
             .get("requested_scope")
             .cloned()
             .unwrap_or(Value::Null);
-        fanout_renewal_grants(state, &session, &realm, &agent_id, &requested_scope).await?
+        fanout_renewal_grants(state, &session, &agent_id, &requested_scope).await?
     } else {
         live_grant_ids
     };
@@ -303,7 +335,7 @@ pub(super) async fn renew_agent_pairing(
     state
         .persistence
         .agents()
-        .put(record)
+        .put(record.clone())
         .await
         .map_err(|err| AppError::internal(format!("agent persist failed: {err}")))?;
     if let Some(context) = terminal_notification {
@@ -325,8 +357,32 @@ pub(super) async fn renew_agent_pairing(
     .await;
     let agent_principal_did = arkret_sdk::Did::new(agent_id)
         .map_err(|err| AppError::internal(format!("persisted agent DID invalid: {err}")))?;
-    json_ok(AgentProvisionOutcome {
+    let principal_control_realm_id = RealmId::new(
+        record
+            .get("principal_control_realm_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::internal("Agent record missing principal_control_realm_id"))?
+            .to_owned(),
+    )
+    .map_err(|error| AppError::internal(format!("persisted Agent PCR invalid: {error}")))?;
+    let controller_authorization_ref = record
+        .get("controller_authorization_ref")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::internal("Agent record missing controller_authorization_ref"))?
+        .to_owned();
+    let pcr_recovery =
+        crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, &record)
+            .await?;
+    json_ok(AgentRenewPairingOutcome {
         agent_id: agent_principal_did,
+        principal_control_realm_id,
+        controller_authorization_ref,
+        pcr_recovery,
+        pairing_mode: if bootstrap_reopen {
+            AgentPairingMode::Bootstrap
+        } else {
+            AgentPairingMode::Replacement
+        },
         pairing_request_id,
         pairing_code: Some(pairing_code),
         expires_at,
@@ -411,10 +467,10 @@ pub(super) async fn get_agent(
     } else {
         record
     };
-    let mut view = agent_view_from_record(state, &record);
+    let mut view = agent_view_from_record(state, &record).await?;
     if service_authorized {
-        if let Some(key_state) = view.key_state.as_object_mut() {
-            key_state.remove("pairing_code");
+        if let Some(key_state) = view.key_state.as_mut() {
+            key_state.pairing_code = None;
         }
     }
     // Surface the agent's effective capability grants from the authz
@@ -424,7 +480,14 @@ pub(super) async fn get_agent(
         .authz
         .grants_for_subject_all_realms(&agent_id)
         .into_iter()
-        .filter_map(|grant| serde_json::to_value(grant).ok())
+        .filter_map(|grant| {
+            Some(GrantSnapshot {
+                grant_id: GrantId::new(grant.grant_id).ok()?,
+                status: Some("active".to_owned()),
+                grant_digest: None,
+                expires_at: grant.expires_at,
+            })
+        })
         .collect();
     json_ok(view)
 }
@@ -463,7 +526,7 @@ pub(super) async fn lazily_expire_pairing(
         record.get("state").and_then(Value::as_str) == Some("pending_runtime_key");
     if bootstrap_expired
         && state.config.development_mode
-        && let Ok(realm) = ensure_self_realm(state, session).await
+        && let Ok(realm) = require_controller_principal_control_realm(state, session).await
     {
         let grant_ids = {
             let proj = state.projection.lock();
@@ -587,7 +650,12 @@ pub(super) async fn lifecycle_transition(
     // controller, and on deactivate fan-out the revocation chain
     // (`ak.agent.key.revoke` + `ak.capability.revoke` for every grant the
     // agent holds). Production fails closed above.
-    let realm = ensure_self_realm(state, &session).await?;
+    let realm = record
+        .get("principal_control_realm_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::internal("Agent record missing principal_control_realm_id"))?
+        .to_owned();
     submit_durable_agent_lifecycle(
         state,
         &session,
@@ -608,7 +676,8 @@ pub(super) async fn lifecycle_transition(
             )
         };
         submit_revoke_agent_keys(state, &session, &realm, &agent_id, &key_ids, None).await?;
-        submit_revoke_agent_grants(state, &session, &realm, &grant_ids).await?;
+        let controller_realm = require_controller_principal_control_realm(state, &session).await?;
+        submit_revoke_agent_grants(state, &session, &controller_realm, &grant_ids).await?;
     }
     // Persist the lifecycle state transition on the agent_principal row so
     // list/get reflect the new status (the durable event drives the reducer
@@ -794,7 +863,7 @@ pub(super) async fn attach_agent_grant(
     // AKP-0008 §4.11 (dev option B): write the real `ak.capability.grant`
     // authored by the controller. Production submits this from inkson.
     if state.config.development_mode {
-        let realm = ensure_self_realm(state, &session).await?;
+        let realm = require_controller_principal_control_realm(state, &session).await?;
         attach_agent_grant_event(
             state,
             &session,
@@ -864,7 +933,7 @@ pub(super) async fn detach_agent_grant(
     // accountability-grant detach is a separate governance object, so it stays
     // audit-only here until that cell family is introduced.
     if state.config.development_mode && is_capability_grant_id(&grant_id) {
-        let realm = ensure_self_realm(state, &session).await?;
+        let realm = require_controller_principal_control_realm(state, &session).await?;
         revoke_capability_grant(state, &session, &realm, &grant_id).await?;
     }
     // spec `agent_grant_detach_outcome` = `{ok, revoked_at}`.

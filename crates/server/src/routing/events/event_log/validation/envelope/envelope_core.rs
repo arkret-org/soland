@@ -79,7 +79,18 @@ pub(crate) async fn validate_event_envelope_with_context(
             "actor_id must be a DID",
         ));
     }
-    if actor_id != session.actor {
+    let managed_agent_delegation = if actor_id != session.actor {
+        crate::routing::identity::managed_agent_pcr::validate_delegated_agent_envelope(
+            state,
+            object,
+            &session.actor,
+        )
+        .await
+        .is_ok()
+    } else {
+        false
+    };
+    if actor_id != session.actor && !managed_agent_delegation {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",
@@ -212,7 +223,8 @@ pub(crate) async fn validate_event_envelope_with_context(
         ));
     }
     let is_realm_create_bootstrap = kind == "ak.realm.create"
-        && realm_create_actor_is_creator(object, &session.actor)
+        && realm_create_actor_is_creator(object, &actor_id)
+        && (actor_id == session.actor || managed_agent_delegation)
         && !realm_exists;
     let is_invite_acceptance_join =
         member_join_accepts_pending_invite(state, object, &session.actor, &realm_id).await;
@@ -249,6 +261,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         && !is_third_party_invite_claim
         && !is_foreign_invite_delivery
         && !is_applet_delegated
+        && !managed_agent_delegation
         && !is_member_self_knock
         && !realm_has_member(state, &realm_id, &session.actor).await
     {
