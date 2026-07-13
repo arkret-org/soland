@@ -42,7 +42,7 @@ pub(super) async fn resolve_agent_pairing(
     let record = lookup_pairing_record(state, pairing_request_id, pairing_code, None).await?;
     ensure_pairing_request_open(&record).map_err(|_| agent_pairing_not_found())?;
     let agent_id = record.id.as_str();
-    let pairing_expires_at = pairing_record_timestamp(&record, "pairing_expires_at")?;
+    let pairing_expires_at = required_pairing_expires_at(&record)?;
     let bootstrap = AgentPairingBootstrap {
         arkret_base_url: state
             .config
@@ -151,8 +151,8 @@ pub(super) async fn submit_agent_runtime_key_request(
     let proposed_requested_at = agent_record
         .approval_requested_at
         .unwrap_or_else(chrono::Utc::now);
-    let expires_at = pairing_record_timestamp(&agent_record, "pairing_expires_at")?
-        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    let expires_at =
+        required_pairing_expires_at(&agent_record)?.to_rfc3339_opts(SecondsFormat::Millis, true);
     let write = crate::persistence::AgentRuntimeApprovalWrite {
         agent_id: agent_id.to_owned(),
         pairing_request_id: body.pairing_request_id.clone(),
@@ -956,7 +956,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
             "authorize_event.payload.approval_evidence.approved_by must match the authenticated controller",
         ));
     }
-    let pairing_request_id = pairing_record_string(agent_record, "pairing_request_id")?;
+    let pairing_request_id = required_pairing_request_id(agent_record)?;
     if approval_evidence
         .get("pairing_request_id")
         .and_then(Value::as_str)
@@ -1043,7 +1043,7 @@ pub(super) fn ensure_pairing_request_open(
             ));
         }
     }
-    let expires_at = pairing_record_timestamp(agent_record, "pairing_expires_at")?;
+    let expires_at = required_pairing_expires_at(agent_record)?;
     if expires_at <= chrono::Utc::now() {
         return Err(pairing_failed_precondition("pairing request has expired"));
     }
@@ -1080,7 +1080,7 @@ pub(super) fn ensure_pairing_request_id_matches(
     agent_record: &AgentPrincipalRecord,
     supplied_pairing_request_id: &str,
 ) -> Result<(), AppError> {
-    let expected = pairing_record_string(agent_record, "pairing_request_id")?;
+    let expected = required_pairing_request_id(agent_record)?;
     if expected != supplied_pairing_request_id {
         return Err(pairing_failed_precondition(
             "pairing_request_id does not match the open pairing request",
@@ -1238,44 +1238,33 @@ pub(super) fn pairing_failed_precondition(reason: &'static str) -> AppError {
         .with_reason_detail(reason)
 }
 
-pub(super) fn pairing_record_string<'a>(
-    record: &'a AgentPrincipalRecord,
-    key: &str,
-) -> Result<&'a str, AppError> {
-    let value = match key {
-        "agent_id" => Some(record.id.as_str()),
-        "controller_id" => Some(record.controller_id.as_str()),
-        "principal_control_realm_id" => Some(record.principal_control_realm_id.as_str()),
-        "controller_authorization_ref" => Some(record.controller_authorization_ref.as_str()),
-        "pairing_request_id" => record.pairing_request_id.as_deref(),
-        "paired_pairing_request_id" => record.paired_pairing_request_id.as_deref(),
-        "pairing_code" => record.pairing_code.as_deref(),
-        "approval_request_id" => record.approval_request_id.as_deref(),
-        "runtime_key_binding_digest" => record.runtime_key_binding_digest.as_deref(),
-        "authorized_event_ref" => record.authorized_event_ref.as_deref(),
-        _ => None,
-    };
-    value
+fn required_pairing_request_id(record: &AgentPrincipalRecord) -> Result<&str, AppError> {
+    record
+        .pairing_request_id
+        .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            pairing_failed_precondition("agent pairing metadata is incomplete")
-                .with_reason_detail(format!("missing {key}"))
-        })
+        .ok_or_else(|| incomplete_pairing_metadata("pairing_request_id"))
 }
 
-pub(super) fn pairing_record_timestamp(
+fn required_pairing_code(record: &AgentPrincipalRecord) -> Result<&str, AppError> {
+    record
+        .pairing_code
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| incomplete_pairing_metadata("pairing_code"))
+}
+
+fn required_pairing_expires_at(
     record: &AgentPrincipalRecord,
-    key: &str,
 ) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
-    match key {
-        "pairing_expires_at" => record.pairing_expires_at,
-        "approval_requested_at" => record.approval_requested_at,
-        _ => None,
-    }
-    .ok_or_else(|| {
-        pairing_failed_precondition("agent pairing metadata is incomplete")
-            .with_reason_detail(format!("missing {key}"))
-    })
+    record
+        .pairing_expires_at
+        .ok_or_else(|| incomplete_pairing_metadata("pairing_expires_at"))
+}
+
+fn incomplete_pairing_metadata(field: &str) -> AppError {
+    pairing_failed_precondition("agent pairing metadata is incomplete")
+        .with_reason_detail(format!("missing {field}"))
 }
 
 pub(super) fn runtime_public_key_digest(
@@ -1328,9 +1317,9 @@ pub(super) fn pairing_request_binding_digest(
     runtime_public_key_digest: &str,
     service_id: &str,
 ) -> Result<String, AppError> {
-    let pairing_request_id = pairing_record_string(agent_record, "pairing_request_id")?;
-    let pairing_code = pairing_record_string(agent_record, "pairing_code")?;
-    let expires_at = pairing_record_timestamp(agent_record, "pairing_expires_at")?
+    let pairing_request_id = required_pairing_request_id(agent_record)?;
+    let pairing_code = required_pairing_code(agent_record)?;
+    let expires_at = required_pairing_expires_at(agent_record)?
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let controller = Did::new(controller.to_owned())
         .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;

@@ -295,11 +295,10 @@ impl AgentParticipationStore for PgAgentParticipationStore {
 }
 
 /// AKP-0008 — native personal agent principal persistence (provision /
-/// list / get / lifecycle). JSON Value records carry the soland-internal
-/// agent principal columns: id, controller_id,
-/// display_name, agent_slug, avatar_blob_ref, state, created_at, updated_at. The wire boundary
-/// projects these into the spec `agent_projection` (dropping the internal
-/// columns) — see `routing::identity::agents::agent_projection_from_record`.
+/// list / get / lifecycle). The typed persistence model keeps database column
+/// names, nullability, UUIDs, and timestamps checked at compile time. The wire
+/// boundary projects it into `agent_projection`, dropping internal columns —
+/// see `routing::identity::agents::agent_projection_from_record`.
 #[derive(Clone, Debug)]
 pub struct AgentRuntimeActivation {
     pub agent_id: String,
@@ -551,10 +550,9 @@ pub(crate) struct PgAgentStore {
 
 #[async_trait]
 impl AgentStore for PgAgentStore {
-    async fn put(&self, mut principal: AgentPrincipalRecord) -> PersistenceResult<()> {
+    async fn put(&self, principal: AgentPrincipalRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         let agent_id = principal.id.clone();
-        principal.updated_at = Utc::now();
         let upsert = diesel::insert_into(agent_principals::table)
             .values(&principal)
             .on_conflict(agent_principals::id)

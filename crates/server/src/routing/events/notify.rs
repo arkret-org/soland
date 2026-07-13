@@ -580,16 +580,20 @@ mod tests {
     }
 
     async fn put_agent(state: &AppState, agent: &str, controller: &str) {
+        let mut record = crate::persistence::AgentPrincipalRecord::new(
+            agent.to_owned(),
+            controller.to_owned(),
+            "ak:realm:01964137-0000-7000-8000-000000000010".to_owned(),
+            format!("{agent}#managed-controller"),
+            "active".to_owned(),
+            chrono::Utc::now(),
+        );
+        record.agent_slug = Some("summary".to_owned());
+        record.display_name = Some("Summary".to_owned());
         state
             .persistence
             .agents()
-            .put(json!({
-                "agent_id": agent,
-                "controller_id": controller,
-                "agent_slug": "summary",
-                "display_name": "Summary",
-                "state": "active",
-            }))
+            .put(record)
             .await
             .expect("agent record");
     }

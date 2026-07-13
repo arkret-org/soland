@@ -523,16 +523,16 @@ mod tests {
                 .unwrap()
         );
 
-        store
-            .agents()
-            .put(json!({
-                "agent_id": agent_id,
-                "controller_id": "did:web:alice.example",
-                "display_name": "Alice Assistant",
-                "state": "active"
-            }))
-            .await
-            .unwrap();
+        let mut record = crate::persistence::AgentPrincipalRecord::new(
+            agent_id.to_owned(),
+            "did:web:alice.example".to_owned(),
+            "ak:realm:01964137-0000-7000-8000-000000000010".to_owned(),
+            format!("{agent_id}#managed-controller"),
+            "active".to_owned(),
+            chrono::Utc::now(),
+        );
+        record.display_name = Some("Alice Assistant".to_owned());
+        store.agents().put(record).await.unwrap();
 
         assert!(
             session_actor_is_agent_runtime(store.agents(), agent_id)
