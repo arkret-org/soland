@@ -38,7 +38,9 @@ pub(crate) async fn validate_trusted_sidecar_member_operation(
 }
 
 pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, &'static str) {
-    if message.starts_with("message_edit_window")
+    if message == arkret_sdk::REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL {
+        (salvo::http::StatusCode::CONFLICT, "failed_precondition")
+    } else if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
         || message.starts_with("disappearing_")
         || message.starts_with("direct_conversation_")
