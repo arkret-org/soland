@@ -146,7 +146,10 @@ pub(super) fn agent_projection_from_record(record: &AgentPrincipalRecord) -> Age
     AgentProjection {
         agent_id: Did::new(record.id.clone())
             .unwrap_or_else(|_| Did::new("did:webvh:invalid:invalid").expect("static did")),
-        display_name: record.display_name.clone().filter(|value| !value.is_empty()),
+        display_name: record
+            .display_name
+            .clone()
+            .filter(|value| !value.is_empty()),
         slug: record.agent_slug.clone().unwrap_or_default(),
         avatar_blob_ref: record
             .avatar_blob_ref
@@ -192,23 +195,32 @@ pub(super) fn agent_key_state_from_record(
         .clone()
         .map(serde_json::from_value)
         .transpose()
-        .map_err(|error| AppError::internal(format!("persisted Agent scope is invalid: {error}")))?;
+        .map_err(|error| {
+            AppError::internal(format!("persisted Agent scope is invalid: {error}"))
+        })?;
     let authorized_event_ref = record
         .authorized_event_ref
         .as_ref()
         .map(|value| EventId::new(value.clone()))
         .transpose()
         .map_err(|error| {
-            AppError::internal(format!("persisted Agent authorization Event is invalid: {error}"))
+            AppError::internal(format!(
+                "persisted Agent authorization Event is invalid: {error}"
+            ))
         })?;
     Ok(KeyState {
-        agent_id: Did::new(record.id.clone())
-            .map_err(|error| AppError::internal(format!("persisted Agent DID is invalid: {error}")))?,
+        agent_id: Did::new(record.id.clone()).map_err(|error| {
+            AppError::internal(format!("persisted Agent DID is invalid: {error}"))
+        })?,
         controller_id: Did::new(record.controller_id.clone()).map_err(|error| {
-            AppError::internal(format!("persisted Agent controller DID is invalid: {error}"))
+            AppError::internal(format!(
+                "persisted Agent controller DID is invalid: {error}"
+            ))
         })?,
         principal_control_realm_id: RealmId::new(record.principal_control_realm_id.clone())
-            .map_err(|error| AppError::internal(format!("persisted Agent PCR is invalid: {error}")))?,
+            .map_err(|error| {
+                AppError::internal(format!("persisted Agent PCR is invalid: {error}"))
+            })?,
         controller_authorization_ref: record.controller_authorization_ref.clone(),
         status: agent_projection_from_record(record).status,
         pcr_recovery,
@@ -249,7 +261,9 @@ fn active_agent_key_authorizations(
                 verification_method: key_id.clone(),
                 key_id,
                 authorized_event_ref: EventId::new(authorized_event_ref).map_err(|error| {
-                    AppError::internal(format!("projected Agent authorization Event is invalid: {error}"))
+                    AppError::internal(format!(
+                        "projected Agent authorization Event is invalid: {error}"
+                    ))
                 })?,
                 expires_at: None,
             })

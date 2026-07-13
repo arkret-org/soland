@@ -94,29 +94,29 @@ pub(super) struct SolandRecoveryReceiptsOutcome {
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SolandRecoveryReceiptItem {
-    receipt_id: ReceiptId,
-    principal_id: Did,
-    recovery_session_id: RecoverySessionId,
-    policy_id: PolicyId,
-    policy_version: u64,
-    trust_domain: TypedTrustDomainId,
-    new_device_id: DeviceId,
-    outcome: RecoveryReceiptOutcome,
-    completed_at: chrono::DateTime<chrono::Utc>,
-    accepted_at: chrono::DateTime<chrono::Utc>,
+    pub(super) receipt_id: ReceiptId,
+    pub(super) principal_id: Did,
+    pub(super) recovery_session_id: RecoverySessionId,
+    pub(super) policy_id: PolicyId,
+    pub(super) policy_version: u64,
+    pub(super) trust_domain: TypedTrustDomainId,
+    pub(super) new_device_id: DeviceId,
+    pub(super) outcome: RecoveryReceiptOutcome,
+    pub(super) completed_at: chrono::DateTime<chrono::Utc>,
+    pub(super) accepted_at: chrono::DateTime<chrono::Utc>,
     #[salvo(schema(value_type = serde_json::Value))]
-    receipt: Value,
+    pub(super) receipt: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SolandRecoveryReceiptPutOutcome {
-    ok: bool,
-    receipt_id: ReceiptId,
-    principal_id: Did,
-    recovery_session_id: RecoverySessionId,
-    outcome: RecoveryReceiptOutcome,
-    accepted_at: chrono::DateTime<chrono::Utc>,
+    pub(super) ok: bool,
+    pub(super) receipt_id: ReceiptId,
+    pub(super) principal_id: Did,
+    pub(super) recovery_session_id: RecoverySessionId,
+    pub(super) outcome: RecoveryReceiptOutcome,
+    pub(super) accepted_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug, Deserialize, ToSchema)]

@@ -224,13 +224,14 @@ pub(super) async fn recovery_policy_put(
     .await;
 
     res.status_code(StatusCode::CREATED);
-    let outcome = serde_json::from_value(json!({
-        "ok": true,
-        "policy_id": record.policy_id,
-        "principal_id": record.principal_id,
-        "version": record.version,
-        "accepted_at": accepted_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-    }))
-    .map_err(|error| stored_recovery_type_error("policy publish outcome", error))?;
+    let outcome = RecoveryPolicyPublishOutcome {
+        ok: true,
+        policy_id: PolicyId::new(record.policy_id)
+            .map_err(|error| stored_recovery_type_error("policy id", error))?,
+        principal_id: Did::new(record.principal_id)
+            .map_err(|error| stored_recovery_type_error("policy principal id", error))?,
+        version: u64::from(record.version),
+        accepted_at,
+    };
     json_ok(outcome)
 }

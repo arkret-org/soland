@@ -59,8 +59,8 @@ use subtle::ConstantTimeEq as _;
 
 use super::{AuthArgs, append_audit_log, now, validate_did};
 use crate::error::{AppError, ErrorCode};
-use crate::persistence::AgentPrincipalRecord;
 use crate::ids;
+use crate::persistence::AgentPrincipalRecord;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::accept_local_operations;
 use crate::routing::events::event_log::submit_event_value;

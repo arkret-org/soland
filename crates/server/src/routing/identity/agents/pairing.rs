@@ -309,7 +309,11 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let Some(approval_request_id) = agent_record.approval_request_id.clone() else {
         return Ok(agent_record);
     };
-    let Some(runtime_request) = agent_record.runtime_key_request.as_ref().filter(|value| value.is_object()) else {
+    let Some(runtime_request) = agent_record
+        .runtime_key_request
+        .as_ref()
+        .filter(|value| value.is_object())
+    else {
         return Ok(agent_record);
     };
     let agent_id = agent_record.id.clone();
@@ -396,7 +400,10 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let activation = crate::persistence::AgentRuntimeActivation {
         agent_id: agent_id.clone(),
         approval_request_id: approval_request_id.clone(),
-        runtime_key_binding_digest: agent_record.runtime_key_binding_digest.clone().unwrap_or_default(),
+        runtime_key_binding_digest: agent_record
+            .runtime_key_binding_digest
+            .clone()
+            .unwrap_or_default(),
         pairing_request_id,
         paired_request_digest,
         authorized_event_ref: accepted.event_id,
@@ -564,7 +571,8 @@ pub(super) async fn agent_key_pair(
     if agent_record.authorized_event_ref.as_deref() == Some(event_id) {
         let same_request = agent_record.paired_pairing_request_id.as_deref()
             == Some(body.pairing_request_id.as_str())
-            && agent_record.paired_request_digest.as_deref() == Some(paired_request_digest.as_str());
+            && agent_record.paired_request_digest.as_deref()
+                == Some(paired_request_digest.as_str());
         if !same_request {
             return Err(AppError::conflict(
                 "authorize_event.event_id was already accepted for a different pairing request",
@@ -701,8 +709,7 @@ fn ensure_current_runtime_key_request_matches(
         runtime_attestation.as_ref(),
     )
     .map_err(|error| AppError::invalid_param(format!("runtime key binding invalid: {error}")))?;
-    if agent_record.runtime_key_binding_digest.as_deref() != Some(current_binding.as_str())
-    {
+    if agent_record.runtime_key_binding_digest.as_deref() != Some(current_binding.as_str()) {
         return Err(pairing_failed_precondition(
             "runtime key binding changed after controller discovery",
         ));

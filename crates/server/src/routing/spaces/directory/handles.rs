@@ -706,6 +706,7 @@ pub(super) async fn signed_handle_claim(
         created_at: signature.created_at,
         domain: None,
         audience: Some(Audience::Single(audience.to_owned())),
+        proof_purpose: None,
         jws: signature.jws,
     });
     claim

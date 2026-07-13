@@ -35,20 +35,40 @@ pub(super) async fn recovery_receipts_get(
 pub(super) fn recovery_receipt_item(
     record: &RecoveryReceiptRecord,
 ) -> Result<SolandRecoveryReceiptItem, AppError> {
-    serde_json::from_value(json!({
-        "receipt_id": record.receipt_id,
-        "principal_id": record.principal_id,
-        "recovery_session_id": record.recovery_session_id,
-        "policy_id": record.policy_id,
-        "policy_version": record.policy_version,
-        "trust_domain": record.trust_domain,
-        "new_device_id": record.new_device_id,
-        "outcome": record.outcome,
-        "completed_at": record.completed_at,
-        "accepted_at": record.accepted_at,
-        "receipt": record.raw_payload,
-    }))
-    .map_err(|error| stored_recovery_type_error("receipt item", error))
+    Ok(SolandRecoveryReceiptItem {
+        receipt_id: ReceiptId::new(record.receipt_id.clone())
+            .map_err(|error| stored_recovery_type_error("receipt id", error))?,
+        principal_id: Did::new(record.principal_id.clone())
+            .map_err(|error| stored_recovery_type_error("receipt principal id", error))?,
+        recovery_session_id: RecoverySessionId::new(record.recovery_session_id.clone())
+            .map_err(|error| stored_recovery_type_error("receipt recovery session id", error))?,
+        policy_id: PolicyId::new(record.policy_id.clone())
+            .map_err(|error| stored_recovery_type_error("receipt policy id", error))?,
+        policy_version: u64::from(record.policy_version),
+        trust_domain: TypedTrustDomainId::new(record.trust_domain.clone())
+            .map_err(|error| stored_recovery_type_error("receipt trust domain", error))?,
+        new_device_id: DeviceId::new(record.new_device_id.clone())
+            .map_err(|error| stored_recovery_type_error("receipt new device id", error))?,
+        outcome: recovery_receipt_outcome(&record.outcome)?,
+        completed_at: record.completed_at,
+        accepted_at: record.accepted_at,
+        receipt: record.raw_payload.clone(),
+    })
+}
+
+fn recovery_receipt_outcome(value: &str) -> Result<RecoveryReceiptOutcome, AppError> {
+    match value {
+        "completed" => Ok(RecoveryReceiptOutcome::Completed),
+        "partial" => Ok(RecoveryReceiptOutcome::Partial),
+        "aborted_by_user" => Ok(RecoveryReceiptOutcome::AbortedByUser),
+        "policy_denied" => Ok(RecoveryReceiptOutcome::PolicyDenied),
+        "evidence_insufficient" => Ok(RecoveryReceiptOutcome::EvidenceInsufficient),
+        "service_defined" => Ok(RecoveryReceiptOutcome::ServiceDefined),
+        other => Err(stored_recovery_type_error(
+            "receipt outcome",
+            format_args!("unknown value `{other}`"),
+        )),
+    }
 }
 
 #[endpoint(
@@ -169,14 +189,16 @@ pub(super) async fn recovery_receipt_put(
     .await;
 
     res.status_code(StatusCode::CREATED);
-    let outcome = serde_json::from_value(json!({
-        "ok": true,
-        "receipt_id": record.receipt_id,
-        "principal_id": record.principal_id,
-        "recovery_session_id": record.recovery_session_id,
-        "outcome": record.outcome,
-        "accepted_at": accepted_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-    }))
-    .map_err(|error| stored_recovery_type_error("receipt put outcome", error))?;
+    let outcome = SolandRecoveryReceiptPutOutcome {
+        ok: true,
+        receipt_id: ReceiptId::new(record.receipt_id)
+            .map_err(|error| stored_recovery_type_error("receipt id", error))?,
+        principal_id: Did::new(record.principal_id)
+            .map_err(|error| stored_recovery_type_error("receipt principal id", error))?,
+        recovery_session_id: RecoverySessionId::new(record.recovery_session_id)
+            .map_err(|error| stored_recovery_type_error("receipt recovery session id", error))?,
+        outcome: recovery_receipt_outcome(&record.outcome)?,
+        accepted_at,
+    };
     json_ok(outcome)
 }
