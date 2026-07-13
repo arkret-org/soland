@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_sdk::lattice::{CellState, SealedOp};
 use arkret_sdk::models::EffectiveScope as GovernanceScope;
+use arkret_sdk::move_event::{LatticeOp, LatticeOpType};
 use arkret_sdk::state_res::compute_state_root;
 use arkret_sdk::{
     CellId, CellRef, Event, Hash, MlsGovernanceBindingPayload, MlsGovernanceControlStateLeaf,
@@ -138,13 +139,12 @@ async fn materialize_governance_proof(
                 "duplicate canonical Event digest in Realm control history",
             ));
         }
-        for effect in &event.effects {
-            let op = SealedOp::new(move_id.clone(), effect.op.clone());
+        for (cell, op) in canonical_event_ops(&event, &move_id)? {
             ops_by_cell
-                .entry(effect.cell.clone())
+                .entry(cell.clone())
                 .or_default()
                 .push(op.clone());
-            event_ops.push((effect.cell.clone(), op));
+            event_ops.push((cell, op));
         }
         events.push(event);
     }
@@ -290,6 +290,172 @@ async fn materialize_governance_proof(
         control_state,
         frontier_events,
     })
+}
+
+/// Expand the reducer-defined Realm genesis writes into the control-state
+/// operations covered by the create Event digest.
+///
+/// `ak.realm.create` atomically seeds the ordered create log, the creator's
+/// membership FSM cell, and the Realm notary cell. Those latter two writes are
+/// reducer semantics derived from the signed `payload.object`; clients are not
+/// required to duplicate them in `effects[]`. The proof materializer must
+/// therefore reconstruct the same three cells instead of treating the literal
+/// producer effect list as the complete reducer output.
+fn canonical_event_ops(
+    event: &Event,
+    move_id: &MoveId,
+) -> Result<Vec<(CellRef, SealedOp)>, AppError> {
+    if event.kind.as_str() != arkret_sdk::events::kinds::REALM_CREATE {
+        return Ok(event
+            .effects
+            .iter()
+            .map(|effect| {
+                (
+                    effect.cell.clone(),
+                    SealedOp::new(move_id.clone(), effect.op.clone()),
+                )
+            })
+            .collect());
+    }
+
+    let object = event
+        .payload
+        .get("object")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                "Realm create proof material is missing payload.object",
+            )
+        })?;
+    let created_by = object
+        .get("created_by")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                "Realm create proof material is missing created_by",
+            )
+        })?;
+    if created_by != event.actor_id.as_str() {
+        return Err(AppError::new(
+            ErrorCode::StateMismatch,
+            "Realm create proof material has created_by/actor_id drift",
+        ));
+    }
+    let notary = object.get("notary").cloned().ok_or_else(|| {
+        AppError::new(
+            ErrorCode::StateMismatch,
+            "Realm create proof material is missing the genesis notary value",
+        )
+    })?;
+    let notary_value =
+        serde_json::from_value::<arkret_sdk::NotaryValue>(notary.clone()).map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!("Realm create proof notary value is invalid: {error}"),
+            )
+        })?;
+    notary_value.validate().map_err(|error| {
+        AppError::new(
+            ErrorCode::StateMismatch,
+            format!("Realm create proof notary value is invalid: {error}"),
+        )
+    })?;
+
+    let create_cell = CellRef::new(format!(
+        "ak:cell:ak.component.realm.create.v1:{}",
+        event.realm_id.as_str()
+    ))
+    .map_err(proof_state_error)?;
+    if !event
+        .effects
+        .iter()
+        .any(|effect| effect.cell == create_cell)
+    {
+        return Err(AppError::new(
+            ErrorCode::StateMismatch,
+            "Realm create proof material omits the create-log effect",
+        ));
+    }
+
+    let notary_cell = CellRef::new(format!(
+        "ak:cell:ak.component.notary.v1:{}",
+        event.realm_id.as_str()
+    ))
+    .map_err(proof_state_error)?;
+    let member_cell = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{created_by}"))
+        .map_err(proof_state_error)?;
+    let mut entry = serde_json::Value::Object(object.clone());
+    if let Some(entry) = entry.as_object_mut() {
+        entry.insert(
+            "entry_id".to_owned(),
+            serde_json::Value::String(event.event_id.as_str().to_owned()),
+        );
+    }
+
+    let mut result = event
+        .effects
+        .iter()
+        .filter(|effect| {
+            effect.cell != create_cell && effect.cell != notary_cell && effect.cell != member_cell
+        })
+        .map(|effect| {
+            (
+                effect.cell.clone(),
+                SealedOp::new(move_id.clone(), effect.op.clone()),
+            )
+        })
+        .collect::<Vec<_>>();
+    result.extend([
+        (
+            create_cell,
+            SealedOp::new(
+                move_id.clone(),
+                LatticeOp {
+                    op_type: LatticeOpType::Append,
+                    tag: None,
+                    value: Some(entry),
+                    from: None,
+                    to: None,
+                    reason: None,
+                    issuer_seq: Some(event.actor_seq),
+                },
+            ),
+        ),
+        (
+            member_cell,
+            SealedOp::new(
+                move_id.clone(),
+                LatticeOp {
+                    op_type: LatticeOpType::Transition,
+                    tag: None,
+                    value: None,
+                    from: Some(serde_json::json!("invite")),
+                    to: Some(serde_json::json!("join")),
+                    reason: Some("realm_genesis".to_owned()),
+                    issuer_seq: None,
+                },
+            ),
+        ),
+        (
+            notary_cell,
+            SealedOp::new(
+                move_id.clone(),
+                LatticeOp {
+                    op_type: LatticeOpType::Set,
+                    tag: None,
+                    value: Some(notary),
+                    from: None,
+                    to: None,
+                    reason: None,
+                    issuer_seq: None,
+                },
+            ),
+        ),
+    ]);
+    Ok(result)
 }
 
 fn proof_state_error(error: impl std::fmt::Display) -> AppError {

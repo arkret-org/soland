@@ -1128,6 +1128,13 @@ impl ProjectionState {
                     self.cells
                         .insert(cell_id, CellState::Value(Value::Array(vec![entry])));
                 }
+                if let Some(notary) = payload_object.and_then(|object| object.get("notary"))
+                    && let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
+                        "ak:cell:ak.component.notary.v1:{realm_id}"
+                    ))
+                {
+                    self.cells.insert(cell_id, CellState::Value(notary.clone()));
+                }
                 if let Some(creator) = creator.as_deref() {
                     self.bootstrap_realm_creator_member(&realm_id, creator, operation, now);
                 }

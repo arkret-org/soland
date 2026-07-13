@@ -540,6 +540,15 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
         state.member_fsm_state("did:web:alice").as_deref(),
         Some("join")
     );
+    let notary_cell =
+        arkret_sdk::CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}")).unwrap();
+    assert_eq!(
+        state.cell_value(&notary_cell),
+        Some(&serde_json::json!({
+            "type": "single_did",
+            "did": "did:web:notary.example"
+        }))
+    );
 
     let duplicate = state.apply(
         &make_operation(
