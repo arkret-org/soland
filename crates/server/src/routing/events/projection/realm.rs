@@ -335,12 +335,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
             .await
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|record| {
-                record
-                    .get("agent_id")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
+            .map(|record| record.id)
             .collect::<Vec<_>>();
         let membership_frontier = operation
             .payload
