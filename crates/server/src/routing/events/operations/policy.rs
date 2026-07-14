@@ -312,6 +312,13 @@ async fn validate_managed_agent_grant_ceiling(
     let Some(record) = record else {
         return Ok(());
     };
+    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        chrono::Utc::now(),
+    )
+    .await
+    .map_err(|_| "agent_requested_scope_commitment_invalid")?;
     let Some(actions) = grant.get("actions").and_then(Value::as_array) else {
         return Err("agent_grant_exceeds_requested_scope");
     };

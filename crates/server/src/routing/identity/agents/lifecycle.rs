@@ -69,6 +69,17 @@ pub(super) async fn provision_agent(
         ));
     }
     let agent_id = generate_agent_principal_did(&state.config.service_id);
+    let agent_principal_did = Did::new(agent_id.clone()).map_err(|err| {
+        AppError::internal(format!("generated agent principal DID invalid: {err}"))
+    })?;
+    let controller_did = Did::new(controller_id.clone())
+        .map_err(|err| AppError::internal(format!("controller DID invalid: {err}")))?;
+    let requested_scope_digest = arkret_sdk::agent_requested_scope_digest(
+        &agent_principal_did,
+        &controller_did,
+        &body.requested_scope,
+    )
+    .map_err(|err| AppError::internal(format!("requested_scope digest failed: {err}")))?;
     let principal_control_realm_id =
         crate::routing::identity::managed_agent_pcr::allocate_principal_control_realm_id()?;
     let controller_authorization_ref =
@@ -107,6 +118,8 @@ pub(super) async fn provision_agent(
         &controller_id,
         &principal_control_realm_id,
         &controller_authorization_ref,
+        &requested_scope,
+        &requested_scope_digest,
     )
     .await?;
     let controller_account = state
@@ -155,18 +168,17 @@ pub(super) async fn provision_agent(
             "pairing_request_id": pairing_request_id,
             "principal_control_realm_id": principal_control_realm_id,
             "controller_authorization_ref": controller_authorization_ref,
+            "requested_scope_digest": requested_scope_digest,
         }),
         "accepted",
     )
     .await;
     res.status_code(StatusCode::CREATED);
-    let agent_principal_did = arkret_sdk::Did::new(agent_id).map_err(|err| {
-        AppError::internal(format!("generated agent principal DID invalid: {err}"))
-    })?;
     json_ok(AgentProvisionOutcome {
         agent_id: agent_principal_did,
         principal_control_realm_id,
         controller_authorization_ref,
+        requested_scope_digest,
         pcr_recovery: AgentProvisionPcrRecovery::default(),
         pairing_request_id,
         pairing_code: Some(pairing_code),
@@ -209,6 +221,14 @@ pub(super) async fn renew_agent_pairing(
     // Lazy-expire first so a stale pending record renews through the same
     // state path as an observed-expired one.
     let record = lazily_expire_pairing(state, record).await?;
+    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        chrono::Utc::now(),
+    )
+    .await?;
+    let requested_scope_digest =
+        crate::routing::identity::managed_agent_pcr::requested_scope_digest_for_record(&record)?;
     let bootstrap_reopen = match record.state.as_str() {
         "pending_runtime_key" | "pairing_expired" => true,
         "active" | "paused" => false,
@@ -317,6 +337,7 @@ pub(super) async fn renew_agent_pairing(
         agent_id: agent_principal_did,
         principal_control_realm_id,
         controller_authorization_ref,
+        requested_scope_digest,
         pcr_recovery,
         pairing_mode: if bootstrap_reopen {
             AgentPairingMode::Bootstrap
@@ -402,6 +423,12 @@ pub(super) async fn get_agent(
     }
     let record = reconcile_accepted_agent_authorization(state, record).await?;
     let record = lazily_expire_pairing(state, record).await?;
+    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        chrono::Utc::now(),
+    )
+    .await?;
     let mut view = agent_view_from_record(state, &record).await?;
     if service_authorized {
         if let Some(key_state) = view.key_state.as_mut() {
@@ -753,6 +780,12 @@ pub(super) async fn attach_agent_grant(
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     let record = require_agent_controller(state, &session, &agent_id).await?;
+    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        chrono::Utc::now(),
+    )
+    .await?;
     let body = body.into_inner();
     let grant_constraints = body
         .grant

@@ -98,15 +98,46 @@ fn requested_scope_actions(record: &AgentPrincipalRecord) -> BTreeSet<&str> {
 }
 
 fn is_content_scope_kind(kind: Option<&str>) -> bool {
-    matches!(kind, Some("realm" | "strand" | "space" | "object"))
+    matches!(
+        kind,
+        Some(
+            "realm"
+                | "space"
+                | "circle"
+                | "strand"
+                | "message"
+                | "morph"
+                | "object"
+                | "relation"
+                | "view"
+                | "event"
+                | "actor"
+                | "schema"
+                | "policy"
+                | "invite"
+                | "notification"
+                | "read_cursor"
+                | "blob"
+        )
+    )
 }
 
 fn scope_resource_ref(resource: &Value) -> Option<&Value> {
     resource
         .get("resource_ref")
-        .or_else(|| resource.get("strand_id"))
         .or_else(|| resource.get("space_id"))
+        .or_else(|| resource.get("circle_id"))
+        .or_else(|| resource.get("strand_id"))
+        .or_else(|| resource.get("message_id"))
+        .or_else(|| resource.get("morph_id"))
         .or_else(|| resource.get("object_ref"))
+        .or_else(|| resource.get("relation_id"))
+        .or_else(|| resource.get("view_id"))
+        .or_else(|| resource.get("event_id"))
+        .or_else(|| resource.get("actor_id"))
+        .or_else(|| resource.get("policy_id"))
+        .or_else(|| resource.get("invite_id"))
+        .or_else(|| resource.get("blob_ref"))
 }
 
 fn scope_resource_selector_covers(ceiling: &Value, resource: &Value) -> bool {
@@ -130,6 +161,9 @@ fn scope_resource_selector_covers(ceiling: &Value, resource: &Value) -> bool {
         Some("service") => ceiling
             .get("service_id")
             .is_none_or(|value| resource.get("service_id") == Some(value)),
+        Some("schema") => ceiling
+            .get("schema_ref")
+            .is_none_or(|value| resource.get("schema_ref") == Some(value)),
         _ => scope_resource_ref(ceiling)
             .is_none_or(|value| scope_resource_ref(resource) == Some(value)),
     }
@@ -240,14 +274,32 @@ pub(super) fn agent_requested_participation_ceiling(
         .into_iter()
         .flatten()
         .any(|constraint| {
-            let approval = constraint
-                .get("controller_approval_required")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-                || constraint
-                    .get("approval_required")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
+            if constraint.get("constraint_type").and_then(Value::as_str) != Some("claim_based") {
+                return false;
+            }
+            let controller_requirement = match constraint.get("subtype").and_then(Value::as_str) {
+                Some("approval") => {
+                    constraint
+                        .get("approval_required")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        && (constraint.get("approval_relation").and_then(Value::as_str)
+                            == Some("controller")
+                            || constraint
+                                .get("controller_approval_required")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false))
+                }
+                Some("accountability") => {
+                    constraint
+                        .get("accountability_required")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        && constraint.get("approval_relation").and_then(Value::as_str)
+                            == Some("controller")
+                }
+                _ => false,
+            };
             let applies_to_message_create = constraint
                 .get("applies_to_actions")
                 .and_then(Value::as_array)
@@ -256,7 +308,7 @@ pub(super) fn agent_requested_participation_ceiling(
                         .iter()
                         .any(|value| value.as_str() == Some(ACTION_MESSAGE_CREATE))
                 });
-            approval && applies_to_message_create
+            controller_requirement && applies_to_message_create
         });
     AgentParticipation {
         reply: message_create && actions.contains(ACTION_REACTION_ADD),
@@ -407,6 +459,35 @@ mod requested_scope_tests {
             })],
             &[]
         ));
+
+        let circle_ceiling = record_with_scope(json!({
+            "actions": [ACTION_EVENT_READ],
+            "resources": [{
+                "kind": "circle",
+                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+                "resource_ref": "ak:circle:019f6000-0000-7000-8000-000000000003"
+            }]
+        }));
+        assert!(agent_grant_within_requested_scope(
+            &circle_ceiling,
+            &[ACTION_EVENT_READ.to_owned()],
+            &[json!({
+                "kind": "circle",
+                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+                "circle_id": "ak:circle:019f6000-0000-7000-8000-000000000003"
+            })],
+            &[]
+        ));
+        assert!(!agent_grant_within_requested_scope(
+            &circle_ceiling,
+            &[ACTION_EVENT_READ.to_owned()],
+            &[json!({
+                "kind": "circle",
+                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+                "circle_id": "ak:circle:019f6000-0000-7000-8000-000000000004"
+            })],
+            &[]
+        ));
     }
 
     #[test]
@@ -445,8 +526,12 @@ mod requested_scope_tests {
         let record = record_with_scope(json!({
             "actions": [ACTION_EVENT_READ, ACTION_MESSAGE_CREATE, ACTION_REACTION_ADD],
             "constraints": [{
+                "constraint_type": "claim_based",
+                "subtype": "accountability",
+                "effect": "allow",
                 "applies_to_actions": [ACTION_MESSAGE_CREATE],
-                "controller_approval_required": true
+                "accountability_required": true,
+                "approval_relation": "controller"
             }]
         }));
 
@@ -470,6 +555,19 @@ mod requested_scope_tests {
                 act_on_behalf: false,
             }
         );
+
+        let wrong_action = record_with_scope(json!({
+            "actions": [ACTION_MESSAGE_CREATE, ACTION_REACTION_ADD],
+            "constraints": [{
+                "constraint_type": "claim_based",
+                "subtype": "approval",
+                "effect": "require_review",
+                "approval_required": true,
+                "approval_relation": "controller",
+                "applies_to_actions": [ACTION_REACTION_ADD]
+            }]
+        }));
+        assert!(!agent_requested_participation_ceiling(&wrong_action).act_on_behalf);
     }
 }
 
@@ -551,15 +649,21 @@ pub(super) fn agent_key_state_from_record(
                 "persisted Agent authorization Event is invalid: {error}"
             ))
         })?;
+    let agent_id = Did::new(record.id.clone())
+        .map_err(|error| AppError::internal(format!("persisted Agent DID is invalid: {error}")))?;
+    let controller_id = Did::new(record.controller_id.clone()).map_err(|error| {
+        AppError::internal(format!(
+            "persisted Agent controller DID is invalid: {error}"
+        ))
+    })?;
+    let requested_scope_digest =
+        arkret_sdk::agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
+            .map_err(|error| {
+                AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
+            })?;
     Ok(KeyState {
-        agent_id: Did::new(record.id.clone()).map_err(|error| {
-            AppError::internal(format!("persisted Agent DID is invalid: {error}"))
-        })?,
-        controller_id: Did::new(record.controller_id.clone()).map_err(|error| {
-            AppError::internal(format!(
-                "persisted Agent controller DID is invalid: {error}"
-            ))
-        })?,
+        agent_id,
+        controller_id,
         principal_control_realm_id: RealmId::new(record.principal_control_realm_id.clone())
             .map_err(|error| {
                 AppError::internal(format!("persisted Agent PCR is invalid: {error}"))
@@ -568,6 +672,7 @@ pub(super) fn agent_key_state_from_record(
         status: agent_projection_from_record(record).status,
         pcr_recovery,
         requested_scope,
+        requested_scope_digest,
         pairing_request_id: record.pairing_request_id.clone(),
         pairing_code: record.pairing_code.clone(),
         pairing_expires_at: record.pairing_expires_at,

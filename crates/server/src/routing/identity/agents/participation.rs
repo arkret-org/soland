@@ -58,6 +58,12 @@ pub(super) async fn set_agent_participation(
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     let record = require_agent_controller(state, &session, &agent_id).await?;
+    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        chrono::Utc::now(),
+    )
+    .await?;
     let body = body.into_inner();
     let governance_ceiling = resolve_effective_ceiling(state, &body.scope).await;
     let ceiling = effective_participation(
@@ -254,6 +260,12 @@ pub(super) async fn get_agent_participation(
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     let record = require_agent_controller(state, &session, &agent_id).await?;
+    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        chrono::Utc::now(),
+    )
+    .await?;
     let selections = state
         .persistence
         .agent_participation()

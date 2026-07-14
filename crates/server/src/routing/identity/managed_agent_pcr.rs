@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{
-    AgentPcrRecoveryState, BackupClass, Hash, Hlc, KeyBackup, KeyBackupRecipientMethod,
-    ManagedFrontierRef, ManagedPrincipalBinding, RealmId, RealmSealFrontierView, SealId,
+    AgentKeyScope, AgentPcrRecoveryState, BackupClass, Did, Hash, Hlc, KeyBackup,
+    KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding, RealmId,
+    RealmSealFrontierView, SealId, agent_requested_scope_digest,
 };
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -35,6 +36,8 @@ pub(crate) async fn persist_managed_agent_did_binding(
     controller_id: &str,
     principal_control_realm_id: &RealmId,
     authorization_ref: &str,
+    requested_scope: &Value,
+    requested_scope_digest: &Hash,
 ) -> Result<(), AppError> {
     let now = Utc::now();
     let document = json!({
@@ -53,6 +56,8 @@ pub(crate) async fn persist_managed_agent_did_binding(
                 "realm_id": principal_control_realm_id,
                 "controller_did": controller_id,
                 "authorization_ref": authorization_ref,
+                "requested_scope": requested_scope,
+                "requested_scope_digest": requested_scope_digest,
             },
         }],
     });
@@ -62,6 +67,7 @@ pub(crate) async fn persist_managed_agent_did_binding(
         controller_id,
         principal_control_realm_id.as_str(),
         authorization_ref,
+        requested_scope,
     )?;
     let operation = json!({
         "versionId": "1",
@@ -86,6 +92,7 @@ pub(crate) async fn persist_managed_agent_did_binding(
                 "controller_id": controller_id,
                 "principal_control_realm_id": principal_control_realm_id,
                 "authorization_ref": authorization_ref,
+                "requested_scope_digest": requested_scope_digest,
             }),
             fetched_at: now,
             expires_at: now,
@@ -466,6 +473,10 @@ pub(crate) async fn validate_agent_controller_binding(
     let controller_id = agent_record.controller_id.as_str();
     let pcr_id = agent_record.principal_control_realm_id.as_str();
     let authorization_ref = agent_record.controller_authorization_ref.as_str();
+    let requested_scope = agent_record
+        .requested_scope
+        .as_ref()
+        .ok_or_else(|| schema_error("managed Agent requested_scope is missing"))?;
     let document = agent_did_document_at(state, agent_id, accepted_at).await?;
     validate_agent_did_document_binding(
         &document,
@@ -473,6 +484,7 @@ pub(crate) async fn validate_agent_controller_binding(
         controller_id,
         pcr_id,
         authorization_ref,
+        requested_scope,
     )
 }
 
@@ -648,6 +660,10 @@ async fn validate_binding_against_record(
     let controller_id = record.controller_id.as_str();
     let pcr_id = record.principal_control_realm_id.as_str();
     let authorization_ref = record.controller_authorization_ref.as_str();
+    let requested_scope = record
+        .requested_scope
+        .as_ref()
+        .ok_or_else(|| schema_error("managed Agent requested_scope is missing"))?;
     if binding.managed_principal_id.as_str() != agent_id
         || binding.controller_id.as_str() != controller_id
         || binding.principal_control_realm_id.as_str() != pcr_id
@@ -665,6 +681,7 @@ async fn validate_binding_against_record(
         controller_id,
         pcr_id,
         authorization_ref,
+        requested_scope,
     )
 }
 
@@ -698,6 +715,7 @@ fn validate_agent_did_document_binding(
     controller_id: &str,
     pcr_id: &str,
     authorization_ref: &str,
+    expected_requested_scope: &Value,
 ) -> Result<(), AppError> {
     if document.get("id").and_then(Value::as_str) != Some(agent_id) {
         return Err(schema_error("managed Agent DID document id mismatch"));
@@ -724,13 +742,43 @@ fn validate_agent_did_document_binding(
     let exact_keys = endpoint.keys().map(String::as_str).collect::<BTreeSet<_>>();
     if service.get("id").and_then(Value::as_str)
         != Some(format!("{agent_id}#{PCR_SERVICE_FRAGMENT}").as_str())
-        || exact_keys != BTreeSet::from(["authorization_ref", "controller_did", "realm_id"])
+        || exact_keys
+            != BTreeSet::from([
+                "authorization_ref",
+                "controller_did",
+                "realm_id",
+                "requested_scope",
+                "requested_scope_digest",
+            ])
         || endpoint.get("realm_id").and_then(Value::as_str) != Some(pcr_id)
         || endpoint.get("controller_did").and_then(Value::as_str) != Some(controller_id)
         || endpoint.get("authorization_ref").and_then(Value::as_str) != Some(authorization_ref)
+        || endpoint.get("requested_scope") != Some(expected_requested_scope)
     {
         return Err(schema_error(
             "ArkretPrincipalControlRealm service does not match the managed Agent binding",
+        ));
+    }
+    let requested_scope: AgentKeyScope = serde_json::from_value(expected_requested_scope.clone())
+        .map_err(|error| {
+        schema_error(format!("managed Agent requested_scope is invalid: {error}"))
+    })?;
+    let agent_did = Did::new(agent_id.to_owned())
+        .map_err(|error| schema_error(format!("managed Agent DID is invalid: {error}")))?;
+    let controller_did = Did::new(controller_id.to_owned()).map_err(|error| {
+        schema_error(format!("managed Agent controller DID is invalid: {error}"))
+    })?;
+    let expected_digest =
+        agent_requested_scope_digest(&agent_did, &controller_did, &requested_scope).map_err(
+            |error| schema_error(format!("managed Agent ceiling digest failed: {error}")),
+        )?;
+    if endpoint
+        .get("requested_scope_digest")
+        .and_then(Value::as_str)
+        != Some(expected_digest.as_str())
+    {
+        return Err(schema_error(
+            "ArkretPrincipalControlRealm requested_scope commitment digest mismatch",
         ));
     }
     let delegation = document
@@ -763,6 +811,25 @@ fn validate_agent_did_document_binding(
         ));
     }
     Ok(())
+}
+
+pub(crate) fn requested_scope_digest_for_record(
+    record: &AgentPrincipalRecord,
+) -> Result<Hash, AppError> {
+    let requested_scope: AgentKeyScope = serde_json::from_value(
+        record
+            .requested_scope
+            .clone()
+            .ok_or_else(|| schema_error("managed Agent requested_scope is missing"))?,
+    )
+    .map_err(|error| schema_error(format!("managed Agent requested_scope is invalid: {error}")))?;
+    let agent_id = Did::new(record.id.clone())
+        .map_err(|error| schema_error(format!("managed Agent DID is invalid: {error}")))?;
+    let controller_id = Did::new(record.controller_id.clone()).map_err(|error| {
+        schema_error(format!("managed Agent controller DID is invalid: {error}"))
+    })?;
+    agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
+        .map_err(|error| schema_error(format!("managed Agent ceiling digest failed: {error}")))
 }
 
 async fn validate_current_recovery_recipient(
@@ -842,7 +909,25 @@ mod tests {
     const PCR: &str = "ak:realm:01999999-0000-7000-8000-00000000feed";
     const AUTHORIZATION: &str = "did:web:agent.example#managed-controller";
 
+    fn requested_scope() -> Value {
+        json!({
+            "actions": ["ak.event.read"],
+            "resources": [{
+                "kind": "operation",
+                "operation": "ak.self.events.query.scan"
+            }]
+        })
+    }
+
     fn did_document() -> Value {
+        let requested_scope = requested_scope();
+        let typed_scope: AgentKeyScope = serde_json::from_value(requested_scope.clone()).unwrap();
+        let digest = agent_requested_scope_digest(
+            &Did::new(AGENT).unwrap(),
+            &Did::new(CONTROLLER).unwrap(),
+            &typed_scope,
+        )
+        .unwrap();
         json!({
             "id": AGENT,
             "capabilityDelegation": [{
@@ -859,6 +944,8 @@ mod tests {
                     "realm_id": PCR,
                     "controller_did": CONTROLLER,
                     "authorization_ref": AUTHORIZATION,
+                    "requested_scope": requested_scope,
+                    "requested_scope_digest": digest,
                 },
             }],
         })
@@ -882,23 +969,44 @@ mod tests {
 
     #[test]
     fn did_binding_requires_one_exact_agent_pcr_service() {
-        validate_agent_did_document_binding(&did_document(), AGENT, CONTROLLER, PCR, AUTHORIZATION)
-            .expect("exact managed Agent DID binding must pass");
+        validate_agent_did_document_binding(
+            &did_document(),
+            AGENT,
+            CONTROLLER,
+            PCR,
+            AUTHORIZATION,
+            &requested_scope(),
+        )
+        .expect("exact managed Agent DID binding must pass");
 
         let mut wrong_pcr = did_document();
         wrong_pcr["service"][0]["serviceEndpoint"]["realm_id"] =
             json!("ak:realm:01999999-0000-7000-8000-00000000bad0");
         assert!(
-            validate_agent_did_document_binding(&wrong_pcr, AGENT, CONTROLLER, PCR, AUTHORIZATION,)
-                .is_err()
+            validate_agent_did_document_binding(
+                &wrong_pcr,
+                AGENT,
+                CONTROLLER,
+                PCR,
+                AUTHORIZATION,
+                &requested_scope(),
+            )
+            .is_err()
         );
 
         let mut duplicate = did_document();
         let service = duplicate["service"][0].clone();
         duplicate["service"].as_array_mut().unwrap().push(service);
         assert!(
-            validate_agent_did_document_binding(&duplicate, AGENT, CONTROLLER, PCR, AUTHORIZATION,)
-                .is_err()
+            validate_agent_did_document_binding(
+                &duplicate,
+                AGENT,
+                CONTROLLER,
+                PCR,
+                AUTHORIZATION,
+                &requested_scope(),
+            )
+            .is_err()
         );
 
         let mut wrong_delegation_controller = did_document();
@@ -910,6 +1018,22 @@ mod tests {
                 CONTROLLER,
                 PCR,
                 AUTHORIZATION,
+                &requested_scope(),
+            )
+            .is_err()
+        );
+
+        let mut changed_scope = did_document();
+        changed_scope["service"][0]["serviceEndpoint"]["requested_scope"]["actions"] =
+            json!(["ak.event.read", "ak.message.create"]);
+        assert!(
+            validate_agent_did_document_binding(
+                &changed_scope,
+                AGENT,
+                CONTROLLER,
+                PCR,
+                AUTHORIZATION,
+                &requested_scope(),
             )
             .is_err()
         );

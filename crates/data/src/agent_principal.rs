@@ -27,6 +27,7 @@ pub struct AgentPrincipalRecord {
     pub agent_slug: Option<String>,
     pub avatar_blob_ref: Option<String>,
     pub state: String,
+    #[diesel(skip_update)]
     pub requested_scope: Option<Value>,
     pub accountability: Option<Value>,
     pub provision_event_refs: Option<Value>,
