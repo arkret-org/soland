@@ -48,7 +48,8 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<arkret_sdk::ServerDesc
             .to_limiter_config()
             .advertised_policy(),
     );
-    if let Some(limits) = description.limits.as_object_mut() {
+    {
+        let limits = &mut description.limits.extensions;
         limits.insert(
             "max_event_bytes".to_owned(),
             json!(MAX_EVENT_ENVELOPE_BYTES),
@@ -554,7 +555,7 @@ pub(in crate::routing::events) async fn events_query_durable_scope_impl(
         next_cursor,
         prev_cursor: None,
         has_more,
-        range_completeness: Value::Null,
+        range_completeness: None,
     })
 }
 

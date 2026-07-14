@@ -488,9 +488,6 @@ pub(super) fn validate_ghost_actor_provision_request(
             "display_name must be omitted or non-empty",
         ));
     }
-    if provision.external_ref.is_null() {
-        return Err(AppError::missing_param("external_ref is required"));
-    }
     Ok(())
 }
 

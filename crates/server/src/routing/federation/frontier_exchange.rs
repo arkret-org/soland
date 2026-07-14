@@ -327,7 +327,7 @@ fn validate_frontier_response(
     if state.issuer.as_str() != peer_did {
         return Err("issuer_mismatch".to_owned());
     }
-    if !state.signature.is_object() {
+    if state.signature.is_empty() {
         return Err("signature_missing".to_owned());
     }
     Ok(state.frontier_root.to_string())

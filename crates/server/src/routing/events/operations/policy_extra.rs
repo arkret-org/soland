@@ -426,7 +426,8 @@ pub(crate) async fn validate_realm_key_share_policy(
     // share_class=member_device from here: recipient_device_id is required.
     let recipient_device_id = share
         .recipient_device_id
-        .as_deref()
+        .as_ref()
+        .map(arkret_sdk::DeviceId::as_str)
         .ok_or("policy_denied")?;
     let Some(meta) = state
         .persistence
@@ -598,12 +599,7 @@ fn validate_rrk_targeted_realm_key_share(
     if !has_material {
         return Some(Err("realm_key_share_material_missing"));
     }
-    if let Some(scope_realm_id) = share
-        .key_scope
-        .effective_scope
-        .get("realm_id")
-        .and_then(Value::as_str)
-        && scope_realm_id != realm_id
+    if share.key_scope.effective_scope.realm_id().as_str() != realm_id
     {
         return Some(Err("realm_key_share_scope_mismatch"));
     }
@@ -654,7 +650,8 @@ fn realm_key_share_receiver_event_state(
 fn realm_key_share_source(
     share: &arkret_sdk::RealmKeySharePayload,
 ) -> arkret_sdk::HistoryKeySource {
-    if share.recipient_device_id.as_deref() == Some(share.sender_device_id.as_str()) {
+    if share.recipient_device_id.as_ref().map(arkret_sdk::DeviceId::as_str)
+        == Some(share.sender_device_id.as_str())
         arkret_sdk::HistoryKeySource::OwnDevice
     } else if share.encrypted_key_ref.is_some() {
         arkret_sdk::HistoryKeySource::KeyBackup

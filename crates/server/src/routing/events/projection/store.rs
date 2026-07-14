@@ -186,7 +186,19 @@ pub async fn load_projected_events_from_pg(
 
 pub struct FederationIngestResult {
     pub accepted: Vec<OperationId>,
-    pub rejected: Vec<Value>,
+    pub rejected: Vec<arkret_sdk::EventsSubmitRejectedItem>,
+}
+
+fn federation_rejection(
+    operation_id: &OperationId,
+    reason_code: impl Into<String>,
+    detail: Option<String>,
+) -> arkret_sdk::EventsSubmitRejectedItem {
+    arkret_sdk::EventsSubmitRejectedItem {
+        id: operation_id.to_string(),
+        reason_code: reason_code.into(),
+        detail,
+    }
 }
 
 pub async fn ingest_federation_operations(
@@ -205,11 +217,11 @@ pub async fn ingest_federation_operations(
             Ok(gate) => gate,
             Err(rejection) => {
                 rejected.extend(operations.iter().map(|operation| {
-                    json!({
-                        "operation_id": operation.operation_id.clone(),
-                        "reason": rejection.code,
-                        "message": rejection.message.clone(),
-                    })
+                    federation_rejection(
+                        &operation.operation_id,
+                        rejection.code,
+                        Some(rejection.message.clone()),
+                    )
                 }));
                 return FederationIngestResult { accepted, rejected };
             }
@@ -227,37 +239,34 @@ pub async fn ingest_federation_operations(
             continue;
         }
         if operation.validate_payload_object().is_err() {
-            rejected.push(json!({
-                "operation_id": operation_id,
-                "reason": "invalid_payload",
-            }));
+            rejected.push(federation_rejection(&operation_id, "invalid_payload", None));
             continue;
         }
         if let Err(rejection) = profile_gate.enforce_operation(&operation) {
-            rejected.push(json!({
-                "operation_id": operation_id,
-                "reason": rejection.code,
-                "message": rejection.message,
-            }));
+            rejected.push(federation_rejection(
+                &operation_id,
+                rejection.code,
+                Some(rejection.message),
+            ));
             continue;
         }
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(&operation))
         {
-            rejected.push(json!({
-                "operation_id": operation_id,
-                "reason": "invalid_semantics",
-                "message": message,
-            }));
+            rejected.push(federation_rejection(
+                &operation_id,
+                "invalid_semantics",
+                Some(message.to_owned()),
+            ));
             continue;
         }
         if let Err(message) =
             validate_content_encryption_floor(state, std::slice::from_ref(&operation)).await
         {
-            rejected.push(json!({
-                "operation_id": operation_id,
-                "reason": message,
-                "message": message,
-            }));
+            rejected.push(federation_rejection(
+                &operation_id,
+                message,
+                Some(message.to_owned()),
+            ));
             continue;
         }
         if let Err(message) =
@@ -265,11 +274,11 @@ pub async fn ingest_federation_operations(
         {
             let (_, code) =
                 crate::routing::events::operations::operation_policy_reason_code(message);
-            rejected.push(json!({
-                "operation_id": operation_id,
-                "reason": code,
-                "message": message,
-            }));
+            rejected.push(federation_rejection(
+                &operation_id,
+                code,
+                Some(message.to_owned()),
+            ));
             continue;
         }
         if let Err(error) = state
@@ -279,11 +288,11 @@ pub async fn ingest_federation_operations(
             .await
         {
             tracing::error!(%error, "failed to persist federation operation");
-            rejected.push(json!({
-                "operation_id": operation_id,
-                "reason": "persistence_error",
-                "message": error.to_string(),
-            }));
+            rejected.push(federation_rejection(
+                &operation_id,
+                "persistence_error",
+                Some(error.to_string()),
+            ));
             continue;
         }
         project_federation_operation(state, origin, &operation).await;

@@ -941,7 +941,7 @@ async fn project_realm_key_share_to_device(
         return;
     };
     let sender_device_id = if source_device_id.trim().is_empty() {
-        share.sender_device_id.trim()
+        share.sender_device_id.as_str()
     } else {
         source_device_id.trim()
     };
@@ -962,7 +962,7 @@ async fn project_realm_key_share_to_device(
         idempotency_key: format!("realm_key_share:{}", operation.operation_id),
         sender: origin.to_owned(),
         recipient: share.recipient_principal_id.to_string(),
-        device_id: recipient_device_id,
+        device_id: recipient_device_id.to_string(),
         position: state.next_to_device_position(),
         content,
         created_at: operation.created_at,

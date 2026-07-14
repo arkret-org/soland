@@ -171,27 +171,22 @@ pub(crate) fn delivery_binding_stale_response(
     handover_frontier: &[arkret_sdk::EventId],
     witness: Value,
 ) -> Value {
-    let handover_frontier = Value::Array(
-        handover_frontier
-            .iter()
-            .map(|event_id| Value::String(event_id.as_str().to_owned()))
-            .collect(),
-    );
     let witness = match witness {
         Value::Object(object) => object.into_iter().collect::<BTreeMap<_, _>>(),
         other => BTreeMap::from([("value".to_owned(), other)]),
     };
     let details = arkret_sdk::DeliveryBindingStale {
-        new_recipient_service_id: Value::String(new_recipient_service_id.as_str().to_owned()),
-        handover_frontier: handover_frontier.clone(),
+        new_recipient_service_id: new_recipient_service_id.clone(),
+        handover_frontier: handover_frontier.to_vec(),
         handover_proof: arkret_sdk::DeliveryBindingStaleHandoverProof {
-            frontier: handover_frontier,
-            recipient_service_id: Value::String(new_recipient_service_id.as_str().to_owned()),
-            actor_id: Value::String(actor_id.as_str().to_owned()),
-            witness,
-            extra: BTreeMap::new(),
+            frontier: handover_frontier.to_vec(),
+            recipient_service_id: new_recipient_service_id.clone(),
+            actor_id: actor_id.clone(),
+            witness: arkret_sdk::NonEmptyJsonObject::new(witness)
+                .expect("delivery binding witness must be non-empty"),
+            extra: Default::default(),
         },
-        extra: BTreeMap::new(),
+        extra: Default::default(),
     };
     error_envelope_with_details(
         arkret_sdk::ERROR_CODE_DELIVERY_BINDING_STALE,

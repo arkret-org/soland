@@ -930,7 +930,7 @@ async fn events_query_impl(
                     prev_cursor: cursor_token.clone(),
                     next_cursor,
                     has_more: page.has_more,
-                    range_completeness: Value::Null,
+                    range_completeness: None,
                 });
             }
             Ok(None) => {}
@@ -948,7 +948,7 @@ async fn events_query_impl(
             prev_cursor: cursor_token.clone(),
             next_cursor: None,
             has_more: false,
-            range_completeness: Value::Null,
+            range_completeness: None,
         });
     }
 
@@ -1013,7 +1013,7 @@ async fn events_query_impl(
         prev_cursor: cursor_token.clone(),
         next_cursor,
         has_more: limited,
-        range_completeness: Value::Null,
+        range_completeness: None,
     })
 }
 
@@ -1421,7 +1421,7 @@ async fn durable_events_query_from_parts(
         next_cursor,
         prev_cursor: cursor_token,
         has_more,
-        range_completeness: Value::Null,
+        range_completeness: None,
     }
 }
 

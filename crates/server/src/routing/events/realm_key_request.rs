@@ -68,10 +68,18 @@ pub(crate) async fn relay_ephemeral_realm_key_request(
     // target_source_ref)` instead of scanning Realm membership — we only verify
     // that `target_source_ref` is a syntactically valid `ak:device:<id>` and
     // resolves to an active (non-revoked) device of that principal.
+    let target_device_ref = match &request.target_source_ref {
+        arkret_sdk::RealmKeySourceRef::Device(device_id) => device_id.as_str(),
+        arkret_sdk::RealmKeySourceRef::Service(_) => {
+            return Err(AppError::invalid_param(
+                "ak.realm_key.request target_source_ref must identify a device",
+            ));
+        }
+    };
     let target = resolve_target_provider_device(
         state,
         request.target_principal_id.as_str(),
-        &request.target_source_ref,
+        target_device_ref,
     )
     .await
     .ok_or_else(|| {
@@ -121,10 +129,14 @@ fn realm_key_request_id(
     {
         return id.to_owned();
     }
+    let target_source_ref = match &request.target_source_ref {
+        arkret_sdk::RealmKeySourceRef::Device(device_id) => device_id.as_str(),
+        arkret_sdk::RealmKeySourceRef::Service(service_id) => service_id.as_str(),
+    };
     let basis = format!(
         "{}|{}|{}|{}",
         envelope.actor_id.as_str(),
-        request.target_source_ref,
+        target_source_ref,
         request.recipient_device_id,
         request.created_at.to_rfc3339()
     );

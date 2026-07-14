@@ -371,7 +371,10 @@ fn strand_assigned_to_relations(
 
 // ── Handlers ───────────────────────────────────────────────────────────
 
-fn document_projection_document(morph: &MorphProjection, body: Value) -> Result<Value, AppError> {
+fn document_projection_document(
+    morph: &MorphProjection,
+    body: Value,
+) -> Result<arkret_sdk::DocumentMorphProjection, AppError> {
     parse_projection_id::<MorphId>(&morph.morph_id, "document.morph_id")?;
     parse_projection_id::<RealmId>(&morph.realm_id, "document.realm_id")?;
     parse_projection_id::<Did>(&morph.created_by, "document.created_by")?;
@@ -411,10 +414,11 @@ fn document_projection_document(morph: &MorphProjection, body: Value) -> Result<
     if let Some(updated_at) = morph.updated_at {
         document.insert("updated_at".to_owned(), json!(updated_at));
     }
-    Ok(Value::Object(document))
+    serde_json::from_value(Value::Object(document))
+        .map_err(|error| AppError::internal(format!("invalid document projection: {error}")))
 }
 
-fn document_projection_versions(morph: &MorphProjection) -> Vec<Value> {
+fn document_projection_versions(morph: &MorphProjection) -> Vec<BTreeMap<String, Value>> {
     morph
         .versions
         .iter()
@@ -424,14 +428,14 @@ fn document_projection_versions(morph: &MorphProjection) -> Vec<Value> {
             } else {
                 version.author.as_str()
             };
-            json!({
+            json_object(json!({
                 "version_id": version.version_id,
                 "event_id": version.event_id,
                 "author": author,
                 "created_at": version.created_at,
                 "body_digest": version.body_digest,
                 "body": version.body,
-            })
+            }))
         })
         .collect()
 }
@@ -773,7 +777,7 @@ async fn document_projection_relations(
     morph_id: &str,
     realm_id: &str,
     session: &SessionRecord,
-) -> Result<Vec<Value>, AppError> {
+) -> Result<Vec<BTreeMap<String, Value>>, AppError> {
     let snapshots = {
         let projection = state.projection.lock();
         projection
@@ -809,8 +813,17 @@ async fn document_projection_relations(
     relations.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
     Ok(relations
         .into_iter()
-        .map(|(_, _, relation)| relation)
+        .map(|(_, _, relation)| json_object(relation))
         .collect())
+}
+
+fn json_object(value: Value) -> BTreeMap<String, Value> {
+    value
+        .as_object()
+        .expect("projection row must be an object")
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 fn document_comment_anchor(content: &Value, morph_id: &str) -> Option<Value> {
@@ -884,7 +897,7 @@ fn document_projection_comments(
     session: &SessionRecord,
     history_visibility: &str,
     history_policy: Option<&HistorySharingPolicyPayloadValue>,
-) -> Vec<Value> {
+) -> Vec<BTreeMap<String, Value>> {
     let mut comments = projection
         .messages
         .values()
@@ -933,7 +946,7 @@ fn document_projection_comments(
     comments.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
     comments
         .into_iter()
-        .map(|(_, _, comment)| comment)
+        .map(|(_, _, comment)| json_object(comment))
         .collect()
 }
 

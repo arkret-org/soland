@@ -66,8 +66,9 @@ async fn authorize_account_device_pair(
         .as_deref()
         .or_else(|| {
             body.device_metadata
-                .get("display_name")
-                .and_then(Value::as_str)
+                .as_ref()
+                .and_then(|metadata| metadata.display_name.as_ref())
+                .map(arkret_sdk::NonEmptyString::as_str)
         })
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -124,13 +125,8 @@ async fn authorize_account_device_pair(
     Ok(AccountDevicePairOutcome {
         device_id,
         authorized_event_ref,
-        device_grant: json!({
-            "status": "active",
-            "authorized_by_device_id": session.device_id.clone(),
-            "authorized_at": authorized_at,
-            "display_name": display_name,
-        }),
-        key_backup_hint: json!({}),
+        device_grant: None,
+        key_backup_hint: None,
     })
 }
 
@@ -177,34 +173,12 @@ struct PairPubkeyMaterial {
     device_public_key: String,
 }
 
-fn pair_pubkey_material(new_device_pubkey: &Value) -> Result<PairPubkeyMaterial, AppError> {
-    let object = new_device_pubkey
-        .as_object()
-        .ok_or_else(|| AppError::invalid_param("new_device_pubkey must be an object"))?;
-    for required in ["kid", "alg"] {
-        let value = object
-            .get(required)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                AppError::missing_param(format!("new_device_pubkey.{required} is required"))
-            })?;
-        let _ = value;
-    }
-    let public_key = object
-        .get("public_key")
-        .or_else(|| object.get("key"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::missing_param("new_device_pubkey.public_key is required"))?;
+fn pair_pubkey_material(
+    new_device_pubkey: &arkret_sdk::PublicKey,
+) -> Result<PairPubkeyMaterial, AppError> {
+    let public_key = new_device_pubkey.key.as_str();
     let device_public_key = normalize_pair_device_public_key(public_key)?;
-    let kid = object
-        .get("kid")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
+    let kid = new_device_pubkey.kid.as_str();
     DeviceId::new(kid.to_owned())
         .map(|device_id| PairPubkeyMaterial {
             device_id: device_id.to_string(),

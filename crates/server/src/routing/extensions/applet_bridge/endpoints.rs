@@ -1,11 +1,12 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
 use arkret_sdk::{
-    AppletActorView, AppletPingOutcome, AppletProtocolMetadata, AppletRealmView, AppletRevokeMode,
-    AppletRevokeOutcome, AppletTransactionOutcome, AppletTransactionRequestBody, Did,
-    GhostActorProvisionOutcome, GhostActorProvisionRequestBody, InstallCommitOutcome,
-    InstallCommitRequestBody, InstallPlan, InstallPreviewRequestBody, InstallRevokeRequestBody,
-    RealmId, SessionRevokeOutcome, SessionRevokeRequestBody,
+    AppletActorView, AppletId, AppletPingOutcome, AppletProtocolMetadata, AppletRealmView,
+    AppletRevokeMode, AppletRevokeOutcome, AppletTransactionOutcome,
+    AppletTransactionRequestBody, Did, ExternalRef, FieldType, GhostActorProvisionOutcome,
+    GhostActorProvisionRequestBody, InstallCommitOutcome, InstallCommitRequestBody, InstallPlan,
+    InstallPreviewRequestBody, InstallRevokeRequestBody, ProtocolInstance, RealmId,
+    SessionRevokeOutcome, SessionRevokeRequestBody,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -454,15 +455,14 @@ fn session_revoke_body_for_applet(
             "applet delegated session revoke requires a fresh session revoke lifecycle proof",
         )
     })?;
-    let effective_scope = serde_json::to_value(&revoke.effective_scope).map_err(|error| {
-        AppError::internal(format!("serialize applet effective_scope: {error}"))
-    })?;
     Ok(SessionRevokeRequestBody {
         target_grant_id: None,
         target_device_id: None,
         all_sessions: None,
-        applet_id: Some(record.applet_id.clone()),
-        effective_scope: Some(effective_scope),
+        applet_id: Some(AppletId::new(record.applet_id.clone()).map_err(|error| {
+            AppError::internal(format!("stored applet_id is invalid: {error}"))
+        })?),
+        effective_scope: Some(revoke.effective_scope.clone()),
         registration_epoch: Some(package.registration_epoch.clone()),
         service_id: Some(package.service_id.clone()),
         capability_grant_refs: grant_refs.to_vec(),
@@ -658,17 +658,14 @@ async fn resolve_actor_endpoint(
                 .get("display_name")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            external_ref: json!({
-                "applet_id": doc.get("applet_id").cloned().unwrap_or(Value::Null),
-                "accountability": doc.get("accountability").cloned().unwrap_or(Value::Null),
-            }),
+            external_ref: None,
         });
     }
     json_ok(AppletActorView {
         exists: false,
         actor_id: None,
         display_name: None,
-        external_ref: Value::Null,
+        external_ref: None,
     })
 }
 
@@ -699,14 +696,24 @@ async fn resolve_realm_endpoint(
             exists: true,
             realm_id: Some(realm_id),
             title: Some(applet_display_name(&record.manifest).unwrap_or(record.namespace)),
-            external_ref: json!({"applet_id": record.applet_id}),
+            external_ref: Some(ExternalRef {
+                protocol: record
+                    .package
+                    .as_ref()
+                    .and_then(|package| package.protocols.first().cloned())
+                    .unwrap_or_else(|| "applet".to_owned()),
+                external_id: record.applet_id,
+                instance_id: Some(record.install_id),
+                display_name: None,
+                url: None,
+            }),
         });
     }
     json_ok(AppletRealmView {
         exists: false,
         realm_id: None,
         title: None,
-        external_ref: Value::Null,
+        external_ref: None,
     })
 }
 
@@ -734,33 +741,41 @@ async fn protocol_metadata_endpoint(
                 .map(|package| package.protocols.iter().any(|item| item == &protocol))
                 .unwrap_or(false)
         })
-        .map(|record| {
-            json!({
-                "instance_id": record.applet_id.clone(),
-                "display_name": applet_display_name(&record.manifest)
-                    .unwrap_or_else(|| record.namespace.clone()),
-                "external_ref": {
-                    "protocol": protocol.clone(),
-                    "external_id": record.applet_id.clone(),
-                    "instance_id": record.install_id.clone(),
-                },
-                "service_id": record
-                    .package
-                    .as_ref()
-                    .map(|package| package.service_id.to_string()),
-                "status": record.status.clone(),
-            })
+        .map(|record| ProtocolInstance {
+            instance_id: record.applet_id.clone(),
+            display_name: applet_display_name(&record.manifest)
+                .unwrap_or_else(|| record.namespace.clone()),
+            external_ref: Some(ExternalRef {
+                protocol: protocol.clone(),
+                external_id: record.applet_id,
+                instance_id: Some(record.install_id),
+                display_name: None,
+                url: None,
+            }),
         })
         .collect::<Vec<_>>();
     json_ok(AppletProtocolMetadata {
         protocol: protocol.clone(),
         display_name: format!("{protocol} applet protocol"),
         icon_blob_ref: None,
-        field_types: json!({
-            "applet_id": {"type": "string", "required": true},
-            "service_id": {"type": "string"},
-            "status": {"type": "string"},
-        }),
+        field_types: [
+            ("applet_id", true),
+            ("service_id", false),
+            ("status", false),
+        ]
+        .into_iter()
+        .map(|(name, required)| {
+            (
+                name.to_owned(),
+                FieldType {
+                    r#type: "string".to_owned(),
+                    required: required.then_some(true),
+                    enum_values: None,
+                    description: None,
+                },
+            )
+        })
+        .collect(),
         instances,
     })
 }
@@ -793,9 +808,16 @@ async fn third_party_users_endpoint(
                     exists: true,
                     actor_id: Some(actor_id),
                     display_name: ghost.display_name.clone(),
-                    external_ref: json!({
-                        "external_id": ghost.external_id.clone(),
-                        "applet_id": record.applet_id.clone(),
+                    external_ref: Some(ExternalRef {
+                        protocol: record
+                            .package
+                            .as_ref()
+                            .and_then(|package| package.protocols.first().cloned())
+                            .unwrap_or_else(|| "applet".to_owned()),
+                        external_id: ghost.external_id.clone(),
+                        instance_id: Some(record.install_id.clone()),
+                        display_name: ghost.display_name.clone(),
+                        url: None,
                     }),
                 });
             }
@@ -805,7 +827,7 @@ async fn third_party_users_endpoint(
         exists: false,
         actor_id: None,
         display_name: None,
-        external_ref: Value::Null,
+        external_ref: None,
     })
 }
 
@@ -839,14 +861,24 @@ async fn third_party_locations_endpoint(
             exists: true,
             realm_id: Some(realm_id),
             title: Some(applet_display_name(&record.manifest).unwrap_or(record.namespace.clone())),
-            external_ref: json!({"location": location, "applet_id": record.applet_id}),
+            external_ref: Some(ExternalRef {
+                protocol: record
+                    .package
+                    .as_ref()
+                    .and_then(|package| package.protocols.first().cloned())
+                    .unwrap_or_else(|| "applet".to_owned()),
+                external_id: location,
+                instance_id: Some(record.install_id),
+                display_name: None,
+                url: None,
+            }),
         });
     }
     json_ok(AppletRealmView {
         exists: false,
         realm_id: None,
         title: None,
-        external_ref: Value::Null,
+        external_ref: None,
     })
 }
 

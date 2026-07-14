@@ -369,7 +369,12 @@ async fn peer_events_frontier(
         witness_receipts: Vec::new(),
         observed_at: observed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         issuer: service_id,
-        signature,
+        signature: signature
+            .as_object()
+            .expect("frontier signature must be an object")
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
         max_hlc,
     })
 }
@@ -1182,7 +1187,7 @@ async fn peer_events_query_response(
             next_cursor: None,
             prev_cursor: None,
             has_more: false,
-            range_completeness: Value::Null,
+            range_completeness: None,
         });
     }
     let candidate_limit = peer_events_candidate_limit(parts.limit);
@@ -1254,7 +1259,7 @@ async fn peer_events_query_response(
         next_cursor,
         prev_cursor,
         has_more,
-        range_completeness: Value::Null,
+        range_completeness: None,
     })
 }
 

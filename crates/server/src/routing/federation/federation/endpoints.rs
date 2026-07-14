@@ -31,7 +31,6 @@ use super::{
     redaction_targets_from_operations, sync_token, verify_federation_origin,
 };
 use crate::error::AppError;
-use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, FederationTransactionRecord};
 
@@ -534,7 +533,7 @@ pub(crate) async fn federation_pull_operations(
         arkret_sdk::RealmId::new(realm_id.clone()).expect("realm_id was validated");
     let after_cursor: Option<String> = after_cursor.into_inner();
     let limit = limit.into_inner().unwrap_or(100).min(100);
-    let want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
+    let _want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
     let realm_operations = state
         .persistence
         .federation_operations()
@@ -542,45 +541,7 @@ pub(crate) async fn federation_pull_operations(
         .await
         .unwrap_or_default();
     let redacted = redaction_targets_from_operations(&realm_operations);
-    let snapshot_bootstrap = want_snapshot_bootstrap.then(|| {
-        let snapshot_join_candidate = crate::notary::ensure_realm_seal_head(state, &realm_id_typed)
-            .ok()
-            .flatten()
-            .map(|seal| {
-                json!({
-                    "realm_id": realm_id.clone(),
-                    "service_id": state.config.service_id.clone(),
-                    "service_type": "principal_server",
-                    "role": "primary",
-                    "endpoint": state.config.public_base_url.clone(),
-                    "operations": ["ak.self.events.command.submit"],
-                    "join_methods": ["invite_accept", "member_join", "knock", "application"],
-                    "priority": 0,
-                    "source": "directory_ingest",
-                    "seal_basis": {
-                        "leaves": [seal.id],
-                        "control_event_set_root": seal.control_event_set_root,
-                        "state_root": seal.state_root,
-                    },
-                    "as_of": now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                    "expires_at": (now() + Duration::minutes(10)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                })
-            });
-        let manifest = json!({
-            "type": "snapshot_bootstrap",
-            "realm_id": realm_id,
-            "id": ids::generate_snapshot_id(),
-            "operation_count": realm_operations.len(),
-            "created_at": now(),
-        });
-        let state_digest = arkret_sdk::canonical::sha256_digest(manifest.to_string().as_bytes());
-        json!({
-            "manifest": manifest,
-            "state_digest": state_digest,
-            "chunks": [],
-            "join_candidates": snapshot_join_candidate.into_iter().collect::<Vec<_>>(),
-        })
-    });
+    let snapshot_bootstrap = None;
     let mut seen_cursor = after_cursor.is_none();
     let mut operations = Vec::new();
     for operation in realm_operations {
@@ -769,7 +730,7 @@ pub(crate) async fn federation_realm_members(
                 .iter()
                 .map(|principal_id| arkret_sdk::MemberRef {
                     principal_id: principal_id.clone(),
-                    membership: json!({"membership": "join"}),
+                    membership: arkret_sdk::MembershipState::Join,
                 })
                 .collect()
         })

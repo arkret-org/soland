@@ -1,6 +1,6 @@
 use arkret_sdk::{
-    AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionRequestBody, Event,
-    namespace_pattern_matches,
+    AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionRequestBody, Event, EventId,
+    RejectedItem, namespace_pattern_matches,
 };
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
@@ -202,21 +202,19 @@ fn namespace_pattern_is_wildcard(pattern: &str) -> bool {
     pattern.contains('*') || pattern.ends_with(':') || pattern.ends_with('/')
 }
 
-fn rejected_event(event_id: &str, reason_code: impl Into<String>) -> Value {
-    json!({
-        "event_id": event_id,
-        "reason_code": reason_code.into(),
-    })
+fn rejected_event(event_id: &str, reason_code: impl Into<String>) -> RejectedItem {
+    RejectedItem {
+        event_id: EventId::new(event_id.to_owned()).ok(),
+        reason_code: reason_code.into(),
+        retry_after_ms: None,
+    }
 }
 
 fn rejected_event_with_detail(
     event_id: &str,
     reason_code: impl Into<String>,
     detail: impl Into<String>,
-) -> Value {
-    json!({
-        "event_id": event_id,
-        "reason_code": reason_code.into(),
-        "detail": detail.into(),
-    })
+) -> RejectedItem {
+    let _detail = detail.into();
+    rejected_event(event_id, reason_code)
 }

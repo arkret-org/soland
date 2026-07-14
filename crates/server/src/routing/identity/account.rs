@@ -28,7 +28,8 @@ use arkret_sdk::{
     AccountRegistrationPolicy, AccountRegistrationPolicyEvidence,
     AccountRegistrationRateLimitPolicy, AccountStatus, AccountUpdateProfileOutcome,
     AccountUpdateProfileRequestBody, AccountView, ActorKind, ActorProfile, ActorProfileId, BlobRef,
-    ContactIntroductionEvidence, DeviceId, Did, ErrorCode, EventId, Hash, RealmId, StrandId,
+    ContactIntroductionEvidence, DeviceId, Did, ErrorCode, EventId, Hash, Patch, PatchOpKind,
+    RealmId, StrandId,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -1282,16 +1283,16 @@ async fn update_profile(
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("account not found"))?;
     let patch = body.patch;
-    if !patch.is_object() {
-        return Err(AppError::invalid_param("profile patch must be an object"));
-    }
     if let Some(value) = patch_string(&patch, "display_name")? {
         current.display_name = value.and_then(empty_to_none);
     }
     if let Some(value) = patch_string(&patch, "profile_fields.bio")? {
         current.bio = value.and_then(empty_to_none);
     }
-    if patch.get("profile_fields.avatar_url").is_some() {
+    if patch
+        .iter()
+        .any(|(path, _)| path == "profile_fields.avatar_url")
+    {
         return Err(AppError::invalid_param(
             "avatar_url is not accepted on the profile update protocol",
         )
@@ -1330,33 +1331,22 @@ fn empty_to_none(value: String) -> Option<String> {
     }
 }
 
-fn patch_value<'a>(patch: &'a Value, field: &str) -> Result<Option<Option<&'a Value>>, AppError> {
-    let Some(value) = patch.get(field) else {
+fn patch_value<'a>(patch: &'a Patch, field: &str) -> Result<Option<Option<&'a Value>>, AppError> {
+    let Some((_, operation)) = patch.iter().find(|(path, _)| path.as_str() == field) else {
         return Ok(None);
     };
-    let Some(object) = value.as_object() else {
-        return Ok(Some(Some(value)));
-    };
-    let Some(op) = object.get("$op").and_then(Value::as_str) else {
-        return Ok(Some(Some(value)));
-    };
-    match op {
-        "set" => Ok(Some(Some(object.get("value").ok_or_else(|| {
-            AppError::invalid_param(format!(
-                "profile patch {field} set operation requires value"
-            ))
+    match operation.op() {
+        PatchOpKind::Set => Ok(Some(Some(operation.value().ok_or_else(|| {
+            AppError::invalid_param(format!("profile patch {field} set operation requires value"))
         })?))),
-        "unset" => Ok(Some(None)),
-        "add" | "remove" => Err(AppError::invalid_param(format!(
-            "profile patch {field} does not support {op}"
-        ))),
-        _ => Err(AppError::invalid_param(format!(
-            "profile patch {field} has unsupported operation"
+        PatchOpKind::Unset => Ok(Some(None)),
+        PatchOpKind::Add | PatchOpKind::Remove => Err(AppError::invalid_param(format!(
+            "profile patch {field} does not support collection operations"
         ))),
     }
 }
 
-fn patch_string(patch: &Value, field: &str) -> Result<Option<Option<String>>, AppError> {
+fn patch_string(patch: &Patch, field: &str) -> Result<Option<Option<String>>, AppError> {
     patch_value(patch, field)?
         .map(|value| match value {
             None | Some(Value::Null) => Ok(None),
@@ -1368,7 +1358,7 @@ fn patch_string(patch: &Value, field: &str) -> Result<Option<Option<String>>, Ap
         .transpose()
 }
 
-fn patch_blob_ref(patch: &Value, field: &str) -> Result<Option<Option<BlobRef>>, AppError> {
+fn patch_blob_ref(patch: &Patch, field: &str) -> Result<Option<Option<BlobRef>>, AppError> {
     patch_value(patch, field)?
         .map(|value| match value {
             None | Some(Value::Null) => Ok(None),

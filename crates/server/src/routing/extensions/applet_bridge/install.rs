@@ -1071,8 +1071,7 @@ pub(super) fn e2ee_effect_for_package(package: &AppletPackage) -> InstallE2eeEff
     InstallE2eeEffect {
         requires_mls_join: package
             .e2ee_policy
-            .get("allow_mls_join")
-            .and_then(Value::as_bool)
+            .mls_join_requested
             .unwrap_or(false),
         plaintext_access: "policy_declared".to_owned(),
         authorization_refs: Vec::new(),
@@ -1082,8 +1081,7 @@ pub(super) fn e2ee_effect_for_package(package: &AppletPackage) -> InstallE2eeEff
 fn package_requests_mls_join(package: &AppletPackage) -> bool {
     package
         .e2ee_policy
-        .get("allow_mls_join")
-        .and_then(Value::as_bool)
+        .mls_join_requested
         .unwrap_or(false)
 }
 

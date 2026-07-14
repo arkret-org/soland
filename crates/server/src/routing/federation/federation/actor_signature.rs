@@ -69,7 +69,11 @@ pub(super) async fn verify_federation_actor_signature(
     body: &arkret_sdk::FederationVerifyActorRequestBody,
     unsigned_request_digest: &str,
 ) -> Result<VerifiedFederationActor, AppError> {
-    let actor_signature = parse_federation_actor_signature(&body.signature)?;
+    let actor_signature = FederationActorSignature {
+        verification_method: body.signature.key_id.clone(),
+        sig_b64: Some(body.signature.signature.clone()),
+        jws: None,
+    };
     // High-risk path: enforce DID document freshness before federation receive
     // signature verification (fail-closed-on-stale).
     let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
@@ -122,54 +126,6 @@ pub(super) async fn verify_federation_actor_signature(
         verified_key_id: resolved_key.verification_method,
         did_document_ref: resolved_key.did_document_ref,
         key_log_head: resolved_key.key_log_head,
-    })
-}
-
-fn parse_federation_actor_signature(value: &Value) -> Result<FederationActorSignature, AppError> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| actor_signature_error("actor signature must be an object"))?;
-    let verification_method = object
-        .get("kid")
-        .or_else(|| object.get("key_id"))
-        .or_else(|| object.get("verification_method"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| actor_signature_error("actor signature missing kid"))?
-        .to_owned();
-    let alg = object
-        .get("alg")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| actor_signature_error("actor signature missing alg"))?
-        .to_owned();
-    if !matches!(alg.as_str(), "Ed25519" | "EdDSA") {
-        return Err(actor_signature_error(
-            "actor signature alg must be Ed25519 or EdDSA",
-        ));
-    }
-    let sig_b64 = object
-        .get("sig")
-        .or_else(|| object.get("signature"))
-        .or_else(|| object.get("signature_b64"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let jws = object
-        .get("jws")
-        .or_else(|| object.get("detached_jws"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    if sig_b64.is_none() && jws.is_none() {
-        return Err(actor_signature_error(
-            "actor signature missing sig or detached jws",
-        ));
-    }
-    Ok(FederationActorSignature {
-        verification_method,
-        sig_b64,
-        jws,
     })
 }
 

@@ -155,7 +155,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         required_pairing_expires_at(&agent_record)?.to_rfc3339_opts(SecondsFormat::Millis, true);
     let write = crate::persistence::AgentRuntimeApprovalWrite {
         agent_id: agent_id.to_owned(),
-        pairing_request_id: body.pairing_request_id.clone(),
+        pairing_request_id: body.pairing_request_id.to_string(),
         approval_request_id: proposed_approval_request_id.clone(),
         approval_notification_id: proposed_notification_id.clone(),
         approval_requested_at: proposed_requested_at,
@@ -642,10 +642,10 @@ pub(super) async fn agent_key_pair(
         runtime_key_binding_digest: agent_record.runtime_key_binding_digest.clone().ok_or_else(
             || pairing_failed_precondition("agent runtime key binding metadata is incomplete"),
         )?,
-        pairing_request_id: body.pairing_request_id.clone(),
+        pairing_request_id: body.pairing_request_id.to_string(),
         paired_request_digest,
         authorized_event_ref: authorized_event_ref.as_str().to_owned(),
-        authorized_verification_method: body.verification_method.clone(),
+        authorized_verification_method: body.verification_method.to_string(),
         authorized_public_key_digest: runtime_public_key_digest.clone(),
         authorized_at,
     };
@@ -682,13 +682,18 @@ fn ensure_current_runtime_key_request_matches(
         .filter(|value| value.is_object())
         .ok_or_else(|| pairing_failed_precondition("runtime key request is no longer pending"))?;
     let runtime_attestation = runtime_attestation_value(body.runtime_attestation.as_ref())?;
+    let public_key_value = serde_json::to_value(&body.public_key)
+        .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?;
+    let proof_value = serde_json::to_value(&body.proof_of_possession).map_err(|error| {
+        AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
+    })?;
     let fields_match = current.get("pairing_request_id").and_then(Value::as_str)
         == Some(body.pairing_request_id.as_str())
         && current.get("agent_id").and_then(Value::as_str) == Some(body.agent_id.as_str())
         && current.get("verification_method").and_then(Value::as_str)
             == Some(body.verification_method.as_str())
-        && current.get("public_key") == Some(&body.public_key)
-        && current.get("proof_of_possession") == Some(&body.proof_of_possession)
+        && current.get("public_key") == Some(&public_key_value)
+        && current.get("proof_of_possession") == Some(&proof_value)
         && current
             .get("runtime_attestation")
             .filter(|value| !value.is_null())
@@ -1140,26 +1145,24 @@ struct AgentKeyPairProofOfPossession {
 }
 
 pub(super) fn runtime_ed25519_public_key(
-    public_key: &Value,
+    public_key: &PublicKey,
     verification_method: &str,
 ) -> Result<[u8; 32], AppError> {
-    let key: PublicKey = serde_json::from_value(public_key.clone())
-        .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?;
-    if key.kty != "OKP" {
+    if public_key.kty.as_str() != "OKP" {
         return Err(AppError::invalid_param("public_key.kty must be OKP"));
     }
-    if key.alg != "Ed25519" && key.alg != "EdDSA" {
+    if public_key.alg.as_str() != "Ed25519" && public_key.alg.as_str() != "EdDSA" {
         return Err(AppError::invalid_param(
             "public_key.alg must be Ed25519 or EdDSA",
         ));
     }
-    if key.kid != verification_method {
+    if public_key.kid.as_str() != verification_method {
         return Err(AppError::invalid_param(
             "public_key.kid must match verification_method",
         ));
     }
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(key.key.as_bytes())
+        .decode(public_key.key.as_bytes())
         .map_err(|_| AppError::invalid_param("public_key.key is not base64url"))?;
     bytes
         .try_into()
@@ -1174,8 +1177,12 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
     let agent_id = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
     let public_key_bytes = runtime_ed25519_public_key(&body.public_key, &body.verification_method)?;
-    let proof: AgentKeyPairProofOfPossession =
-        serde_json::from_value(body.proof_of_possession.clone()).map_err(|error| {
+    let proof: AgentKeyPairProofOfPossession = serde_json::from_value(
+        serde_json::to_value(&body.proof_of_possession).map_err(|error| {
+            AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
+        })?,
+    )
+    .map_err(|error| {
             AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
         })?;
     if proof.audience != service_id {
@@ -1192,7 +1199,8 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
         &body.pairing_request_id,
         &agent_id,
         &body.verification_method,
-        &body.public_key,
+        &serde_json::to_value(&body.public_key)
+            .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?,
         runtime_attestation_value(body.runtime_attestation.as_ref())?.as_ref(),
     )
     .map_err(|error| {
@@ -1208,7 +1216,7 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
     let request_digest = Hash::new(proof.request_canonical_digest.clone())
         .map_err(|_| AppError::invalid_param("proof_of_possession digest is invalid"))?;
     let signing_input = arkret_sdk::agent::agent_key_pair_proof_signing_input(
-        body.verification_method.clone(),
+        body.verification_method.to_string(),
         proof.challenge,
         proof.audience,
         proof.expires_at,
@@ -1267,7 +1275,7 @@ fn incomplete_pairing_metadata(field: &str) -> AppError {
 }
 
 pub(super) fn runtime_public_key_digest(
-    public_key: &Value,
+    public_key: &PublicKey,
     verification_method: &str,
 ) -> Result<String, AppError> {
     runtime_ed25519_public_key(public_key, verification_method)?;

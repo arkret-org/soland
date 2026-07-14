@@ -178,7 +178,6 @@ pub(super) async fn provision_agent(
         agent_id: agent_principal_did,
         principal_control_realm_id,
         controller_authorization_ref,
-        requested_scope_digest,
         pcr_recovery: AgentProvisionPcrRecovery::default(),
         pairing_request_id,
         pairing_code: Some(pairing_code),
@@ -227,8 +226,6 @@ pub(super) async fn renew_agent_pairing(
         chrono::Utc::now(),
     )
     .await?;
-    let requested_scope_digest =
-        crate::routing::identity::managed_agent_pcr::requested_scope_digest_for_record(&record)?;
     let bootstrap_reopen = match record.state.as_str() {
         "pending_runtime_key" | "pairing_expired" => true,
         "active" | "paused" => false,
@@ -337,7 +334,6 @@ pub(super) async fn renew_agent_pairing(
         agent_id: agent_principal_did,
         principal_control_realm_id,
         controller_authorization_ref,
-        requested_scope_digest,
         pcr_recovery,
         pairing_mode: if bootstrap_reopen {
             AgentPairingMode::Bootstrap
@@ -724,7 +720,12 @@ pub(super) async fn resume_agent(
             AgentLifecycleState::Active,
             "ak.self.agent.resume",
             None,
-            body.sidecar_exposure_ack,
+            body.sidecar_exposure_ack
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| {
+                    AppError::invalid_param(format!("sidecar_exposure_ack invalid: {error}"))
+                })?,
         )
         .await?,
     )
