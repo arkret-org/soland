@@ -2,8 +2,8 @@
 
 use arkret_sdk::{
     BackupClass, BackupId, DeviceId, Did, EventId, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND,
-    KeyBackup, KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupRecipientMethod,
-    KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
+    KeyBackup, KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupKdfName,
+    KeyBackupRecipientMethod, KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};

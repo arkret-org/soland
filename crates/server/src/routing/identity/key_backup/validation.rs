@@ -4,13 +4,6 @@ pub(super) fn schema_error(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::SchemaViolation, message)
 }
 
-pub(super) fn required_u64(parent: &Value, field: &str) -> Result<u64, AppError> {
-    parent
-        .get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| schema_error(format!("key backup kdf.params `{field}` is required")))
-}
-
 pub(super) fn is_base64url_token(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -41,79 +34,6 @@ pub(super) fn backup_class_wire(backup_class: BackupClass) -> &'static str {
     }
 }
 
-pub(super) fn key_backup_extra_str<'a>(backup: &'a KeyBackup, field: &str) -> Option<&'a str> {
-    backup.extra.get(field).and_then(Value::as_str)
-}
-
-pub(super) fn is_x_extension_key(key: &str) -> bool {
-    let Some(rest) = key.strip_prefix("x_") else {
-        return false;
-    };
-    let mut chars = rest.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    first.is_ascii_lowercase()
-        && rest.len() <= 64
-        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
-}
-
-pub(super) fn validate_extra_keys(
-    path: &str,
-    extra: &std::collections::BTreeMap<String, Value>,
-) -> Result<(), AppError> {
-    for key in extra.keys() {
-        if !is_x_extension_key(key) {
-            return Err(schema_error(format!(
-                "{path}.{key} is not defined by ak.schema.key_backup.v1"
-            )));
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn validate_key_backup_extension_extras_typed(
-    backup: &KeyBackup,
-) -> Result<(), AppError> {
-    validate_extra_keys("key backup", &backup.extra)?;
-    validate_extra_keys("key backup encryption", &backup.encryption.extra)?;
-    validate_extra_keys(
-        "key backup domain_separation",
-        &backup.domain_separation.extra,
-    )?;
-    validate_extra_keys(
-        "key backup domain_separation.aead_aad",
-        &backup.domain_separation.aead_aad.extra,
-    )?;
-    if let Some(kdf) = &backup.encryption.kdf {
-        validate_extra_keys("key backup encryption.kdf", &kdf.extra)?;
-        if let Some(params) = kdf.params.as_object() {
-            for key in params.keys() {
-                if !matches!(
-                    key.as_str(),
-                    "memory_kib" | "iterations" | "parallelism" | "digest_algorithm"
-                ) && !is_x_extension_key(key)
-                {
-                    return Err(schema_error(format!(
-                        "key backup encryption.kdf.params.{key} is not defined by ak.schema.key_backup.v1"
-                    )));
-                }
-            }
-        }
-    }
-    validate_extra_keys("key backup encryption.aead", &backup.encryption.aead.extra)?;
-    for (idx, item) in backup.contents.iter().enumerate() {
-        validate_extra_keys(&format!("key backup contents[{idx}]"), &item.extra)?;
-    }
-    if let Some(auth_data) = &backup.auth_data {
-        validate_extra_keys("key backup auth_data", &auth_data.extra)?;
-    }
-    if let Some(retention) = &backup.retention {
-        validate_extra_keys("key backup retention", &retention.extra)?;
-    }
-    Ok(())
-}
-
 pub(super) fn key_backup_to_value(backup: &KeyBackup) -> Result<Value, AppError> {
     serde_json::to_value(backup)
         .map_err(|error| AppError::internal(format!("key backup body re-encode failed: {error}")))
@@ -124,26 +44,6 @@ pub(super) fn validate_key_backup_body_typed(
     actor_id: &str,
     backup: &KeyBackup,
 ) -> Result<(), AppError> {
-    if key_backup_extra_str(backup, "schema") == Some("ak.secret_storage.v1") {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
-            "ak.secret_storage.v1 wire form is not accepted; senders MUST use ak.schema.key_backup.v1",
-        )
-        .with_wire_code("key_backup_wire_schema_required"));
-    }
-    if let Some(payload_schema) = key_backup_extra_str(backup, "payload_schema")
-        && !matches!(
-            payload_schema,
-            "ak.schema.recovery_policy.v1"
-                | "ak.schema.recovery_receipt.v1"
-                | "ak.schema.key_backup.v1"
-        )
-    {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
-            format!("unsupported key backup payload_schema `{payload_schema}`"),
-        ));
-    }
     if backup.backup_id.as_str() != backup_id.as_str() {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
@@ -155,7 +55,6 @@ pub(super) fn validate_key_backup_body_typed(
             "backup actor_id must match authenticated actor",
         ));
     }
-    validate_key_backup_extension_extras_typed(backup)?;
     validate_key_backup_encryption_typed(backup)?;
     validate_key_backup_domain_separation_typed(backup)?;
     if backup.backup_class == BackupClass::MlsHistory {
@@ -356,47 +255,41 @@ pub(super) fn validate_key_backup_kdf_typed(backup: &KeyBackup) -> Result<(), Ap
         .kdf
         .as_ref()
         .ok_or_else(|| schema_error("passphrase_kdf key backup requires encryption.kdf"))?;
-    let params = kdf
-        .params
-        .as_object()
-        .ok_or_else(|| schema_error("key backup `params` must be an object"))?;
-    let params = Value::Object(params.clone());
-    match kdf.name.as_str() {
-        "argon2id" => {
+    match kdf.name {
+        KeyBackupKdfName::Argon2id => {
             let memory_floor = if backup.mixed_secret_storage {
                 262_144
             } else {
                 65_536
             };
             let iteration_floor = if memory_floor == 262_144 { 4 } else { 3 };
-            if required_u64(&params, "memory_kib")? < memory_floor {
+            if kdf
+                .params
+                .memory_kib
+                .is_none_or(|value| value < memory_floor)
+            {
                 return Err(schema_error(format!(
                     "argon2id params.memory_kib must be >= {memory_floor}"
                 )));
             }
-            if required_u64(&params, "iterations")? < iteration_floor {
+            if kdf
+                .params
+                .iterations
+                .is_none_or(|value| value < iteration_floor)
+            {
                 return Err(schema_error(format!(
                     "argon2id params.iterations must be >= {iteration_floor}"
                 )));
             }
-            if required_u64(&params, "parallelism")? < 1 {
+            if kdf.params.parallelism.is_none_or(|value| value < 1) {
                 return Err(schema_error("argon2id params.parallelism must be >= 1"));
             }
         }
-        "pbkdf2" => {
-            if params.get("hash").is_some() {
-                return Err(schema_error(
-                    "pbkdf2 params.hash is forbidden; use digest_algorithm",
-                ));
-            }
-            if required_u64(&params, "iterations")? < 600_000 {
+        KeyBackupKdfName::Pbkdf2 => {
+            if kdf.params.iterations.is_none_or(|value| value < 600_000) {
                 return Err(schema_error("pbkdf2 params.iterations must be >= 600000"));
             }
-            let digest_algorithm = params
-                .get("digest_algorithm")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !matches!(digest_algorithm, "sha256" | "sha384" | "sha512") {
+            if kdf.params.digest_algorithm.is_none() {
                 return Err(schema_error(
                     "pbkdf2 params.digest_algorithm must be sha256, sha384, or sha512",
                 ));
@@ -410,11 +303,6 @@ pub(super) fn validate_key_backup_kdf_typed(backup: &KeyBackup) -> Result<(), Ap
                     "pbkdf2 key backup requires degraded_profile_reason",
                 ));
             }
-        }
-        other => {
-            return Err(schema_error(format!(
-                "unsupported key backup kdf name `{other}`"
-            )));
         }
     }
     Ok(())
@@ -468,28 +356,30 @@ pub(super) fn scan_mls_history_opaque_field(
 }
 
 pub(super) fn validate_mls_history_opaque_only_typed(backup: &KeyBackup) -> Result<(), AppError> {
-    for (key, value) in &backup.extra {
+    for (key, value) in backup.extra.iter() {
         scan_mls_history_opaque_field(key, value, "")?;
     }
-    for (key, value) in &backup.encryption.extra {
+    for (key, value) in backup.encryption.extra.iter() {
         scan_mls_history_opaque_field(key, value, "/encryption")?;
     }
     if let Some(kdf) = &backup.encryption.kdf {
-        scan_mls_history_opaque_value(&kdf.params, "/encryption/kdf/params")?;
-        for (key, value) in &kdf.extra {
+        for (key, value) in kdf.params.extra.iter() {
+            scan_mls_history_opaque_field(key, value, "/encryption/kdf/params")?;
+        }
+        for (key, value) in kdf.extra.iter() {
             scan_mls_history_opaque_field(key, value, "/encryption/kdf")?;
         }
     }
-    for (key, value) in &backup.encryption.aead.extra {
+    for (key, value) in backup.encryption.aead.extra.iter() {
         scan_mls_history_opaque_field(key, value, "/encryption/aead")?;
     }
     for (idx, item) in backup.contents.iter().enumerate() {
-        for (key, value) in &item.extra {
+        for (key, value) in item.extra.iter() {
             scan_mls_history_opaque_field(key, value, &format!("/contents/{idx}"))?;
         }
     }
     if let Some(auth_data) = &backup.auth_data {
-        for (key, value) in &auth_data.extra {
+        for (key, value) in auth_data.extra.iter() {
             scan_mls_history_opaque_field(key, value, "/auth_data")?;
         }
     }
@@ -550,29 +440,8 @@ pub(super) fn validate_key_backup_auth_data_typed(backup: &KeyBackup) -> Result<
         .auth_data
         .as_ref()
         .ok_or_else(|| schema_error("key backup auth_data is required"))?;
-    if auth.verification_method.trim().is_empty() {
-        return Err(schema_error("auth_data.verification_method is required"));
-    }
-    if !matches!(
-        auth.signature_algorithm.as_str(),
-        "Ed25519" | "ES256" | "ML-DSA-65"
-    ) {
-        return Err(schema_error(
-            "auth_data.signature_algorithm must be Ed25519, ES256, or ML-DSA-65",
-        ));
-    }
-    if !is_base64url_token(&auth.signature) {
-        return Err(schema_error(
-            "auth_data.signature must be a non-empty base64url token",
-        ));
-    }
-    let has_ssk_generation = auth
-        .ssk_generation
-        .is_some_and(|generation| generation >= 1);
+    let has_ssk_generation = auth.ssk_generation.is_some();
     let has_device_authorize_event_id = auth.device_authorize_event_id.is_some();
-    if auth.ssk_generation.is_some_and(|generation| generation < 1) {
-        return Err(schema_error("auth_data.ssk_generation must be >= 1"));
-    }
     match (has_ssk_generation, has_device_authorize_event_id) {
         (true, false) | (false, true) => {}
         (false, false) => {
