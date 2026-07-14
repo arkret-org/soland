@@ -30,8 +30,17 @@ const CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS: i64 = 90_000;
 /// Parse the `ak.cross_signing.publish` operation payload into the SDK content
 /// type. Returns a wire reason code on malformed input.
 fn parse_publish(payload: &Value) -> Result<CrossSigningPublish, &'static str> {
-    serde_json::from_value::<CrossSigningPublish>(payload.clone())
-        .map_err(|_| "cross_signing_publish_malformed")
+    serde_json::from_value::<CrossSigningPublish>(
+        crate::routing::events::projection_context_stripped_payload(payload),
+    )
+    .map_err(|_| "cross_signing_publish_malformed")
+}
+
+fn parse_reset(payload: &Value) -> Result<CrossSigningResetPayload, &'static str> {
+    serde_json::from_value::<CrossSigningResetPayload>(
+        crate::routing::events::projection_context_stripped_payload(payload),
+    )
+    .map_err(|_| "cross_signing_reset_malformed")
 }
 
 /// Validate a `ak.cross_signing.publish` BEFORE acceptance (read-only). Runs:
@@ -121,8 +130,7 @@ pub async fn validate_cross_signing_reset(
     state: &AppState,
     payload: &Value,
 ) -> Result<(), &'static str> {
-    let content: CrossSigningResetPayload =
-        serde_json::from_value(payload.clone()).map_err(|_| "cross_signing_reset_malformed")?;
+    let content = parse_reset(payload)?;
     content
         .validate_structure()
         .map_err(|_| "cross_signing_reset_invalid_structure")?;
@@ -298,7 +306,7 @@ async fn require_verified_reset_recovery_session(
 /// the current publish + bumps the generation high-water; marks devices
 /// `needs_reverification`). Validation already ran pre-acceptance.
 pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
-    let content: CrossSigningResetPayload = match serde_json::from_value(payload.clone()) {
+    let content = match parse_reset(payload) {
         Ok(content) => content,
         Err(error) => {
             tracing::warn!(%error, "cross_signing.reset projector: malformed payload");

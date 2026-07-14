@@ -964,7 +964,7 @@ pub(crate) fn validate_cross_signing_reset_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let reset: arkret_sdk::CrossSigningResetPayload =
-        serde_json::from_value(operation.payload.clone())
+        serde_json::from_value(projection_context_stripped_payload(&operation.payload))
             .map_err(|_| "cross_signing reset payload violates reset profile")?;
     reset
         .validate_structure()
