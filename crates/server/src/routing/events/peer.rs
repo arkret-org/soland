@@ -104,7 +104,7 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.command.submit"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = match req.parse_json::<EventsSubmitFederationRequestBody>().await {
+    let body_value = match req.parse_json::<Value>().await {
         Ok(body) => body,
         Err(_) => {
             render_error(
@@ -116,16 +116,17 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
             return;
         }
     };
-    let body_value = match serde_json::to_value(body) {
-        Ok(body) => body,
-        Err(error) => {
-            render_app_error(
-                res,
-                AppError::internal(format!("peer events submit request serialize: {error}")),
-            );
-            return;
-        }
-    };
+    if let Err(error) =
+        serde_json::from_value::<EventsSubmitFederationRequestBody>(body_value.clone())
+    {
+        render_app_error(
+            res,
+            schema_violation(format!(
+                "invalid ak.peer.events.command.submit request body: {error}"
+            )),
+        );
+        return;
+    }
     if let Err(error) = validate_peer_request(state, req, Some(&body_value)).await {
         render_app_error(res, error);
         return;
