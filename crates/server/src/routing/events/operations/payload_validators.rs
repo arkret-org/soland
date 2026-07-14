@@ -963,14 +963,14 @@ fn collect_nonempty_unique_string_array(
 pub(crate) fn validate_cross_signing_reset_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let reset: arkret_sdk::crypto_protocol::CrossSigningResetContent =
+    let reset: arkret_sdk::CrossSigningResetPayload =
         serde_json::from_value(operation.payload.clone())
             .map_err(|_| "cross_signing reset payload violates reset profile")?;
     reset
         .validate_structure()
         .map_err(|_| "cross_signing reset payload violates reset profile")?;
     let now = chrono::Utc::now();
-    let skew = (now - reset.issued_at).num_seconds().abs();
+    let skew = (now - *reset.issued_at()).num_seconds().abs();
     if skew > CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS {
         return Err("cross_signing_reset_clock_skew_exceeded");
     }

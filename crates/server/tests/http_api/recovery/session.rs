@@ -61,7 +61,7 @@ fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value
 }
 
 fn sign_reset_payload(payload: &mut Value, signing: &SigningKey) {
-    let content: arkret_sdk::CrossSigningResetContent =
+    let content: arkret_sdk::CrossSigningResetPayload =
         serde_json::from_value(payload.clone()).expect("reset content");
     let input = content.reset_signing_input().expect("reset signing input");
     let signature = URL_SAFE_NO_PAD.encode(signing.sign(&input).to_bytes());
@@ -69,7 +69,7 @@ fn sign_reset_payload(payload: &mut Value, signing: &SigningKey) {
 }
 
 fn sign_device_quorum_reset_payload(payload: &mut Value, signings: &[SigningKey]) {
-    let content: arkret_sdk::CrossSigningResetContent =
+    let content: arkret_sdk::CrossSigningResetPayload =
         serde_json::from_value(payload.clone()).expect("reset content");
     let input = content.reset_signing_input().expect("reset signing input");
     for (idx, signing) in signings.iter().enumerate() {
@@ -79,7 +79,7 @@ fn sign_device_quorum_reset_payload(payload: &mut Value, signings: &[SigningKey]
 }
 
 fn bind_recovery_unlock_commitment(payload: &mut Value) {
-    let content: arkret_sdk::CrossSigningResetContent =
+    let content: arkret_sdk::CrossSigningResetPayload =
         serde_json::from_value(payload.clone()).expect("reset content");
     let commitment = content
         .recovery_unlock_commitment()
@@ -912,9 +912,9 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
             "kind": "recovery_unlock",
             "recovery_session_id": recovery_session_id,
             "recovery_secret_ref": recovery_ref,
-            "unlock_commitment": "sha256:placeholder",
+            "unlock_commitment": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "alg": "EdDSA",
-            "signature": ""
+            "signature": "AA"
         }),
     );
     bind_recovery_unlock_commitment(&mut payload);
@@ -965,7 +965,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
             "service_id": service_id,
             "verification_method": service_vm,
             "alg": "EdDSA",
-            "signature": ""
+            "signature": "AA"
         }),
     );
     sign_reset_payload(&mut payload, &service_key);
@@ -1035,13 +1035,13 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
                     "device_id": device_a,
                     "verification_method": format!("{principal_id}#{device_a}"),
                     "alg": "EdDSA",
-                    "signature": ""
+                    "signature": "AA"
                 },
                 {
                     "device_id": device_b,
                     "verification_method": format!("{principal_id}#{device_b}"),
                     "alg": "EdDSA",
-                    "signature": ""
+                    "signature": "AA"
                 }
             ]
         }),
@@ -1121,7 +1121,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
             "kind": "principal_signing",
             "verification_method": vm,
             "alg": "EdDSA",
-            "signature": ""
+            "signature": "AA"
         }),
     );
     sign_reset_payload(&mut payload, &signing);
@@ -1173,7 +1173,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
             "kind": "principal_signing",
             "verification_method": vm,
             "alg": "EdDSA",
-            "signature": ""
+            "signature": "AA"
         }),
     );
     sign_reset_payload(&mut replay_payload, &signing);
@@ -1226,7 +1226,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
         "proof": { "kind": "principal_signing", "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXI" },
         "issued_at": "2026-05-30T00:00:00Z",
     });
-    let content: arkret_sdk::CrossSigningResetContent =
+    let content: arkret_sdk::CrossSigningResetPayload =
         serde_json::from_value(reset).expect("reset content");
     state
         .cross_signing

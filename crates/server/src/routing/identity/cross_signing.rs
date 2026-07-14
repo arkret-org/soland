@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{
-    CrossSigningPublish, CrossSigningResetContent, CrossSigningResetProof,
+    CrossSigningPublish, CrossSigningResetPayload, CrossSigningResetProof,
     DeviceEnrollmentAuthorityBinding, DeviceId, DeviceQuorumSignature, DeviceStatus,
     DeviceTrustBinding, Did, EventId, MlsRequesterTrustBinding, MlsWelcomeClaimEnvelope,
     SignatureMaterial,
@@ -121,14 +121,14 @@ pub async fn validate_cross_signing_reset(
     state: &AppState,
     payload: &Value,
 ) -> Result<(), &'static str> {
-    let content: CrossSigningResetContent =
+    let content: CrossSigningResetPayload =
         serde_json::from_value(payload.clone()).map_err(|_| "cross_signing_reset_malformed")?;
     content
         .validate_structure()
         .map_err(|_| "cross_signing_reset_invalid_structure")?;
 
-    let principal =
-        Did::new(content.principal_id.as_str().to_owned()).map_err(|_| "cross_signing_bad_did")?;
+    let principal = Did::new(content.principal_id().as_str().to_owned())
+        .map_err(|_| "cross_signing_bad_did")?;
     if cross_signing_reset_replay_seen(state, &content) {
         return Err("cross_signing_reset_replayed");
     }
@@ -140,14 +140,14 @@ pub async fn validate_cross_signing_reset(
             .map(|p| p.generation.get())
             .unwrap_or(0)
     };
-    if content.previous_generation != current {
+    if content.previous_generation() != current {
         return Err("cross_signing_reset_generation_mismatch");
     }
 
     let input = content
         .reset_signing_input()
         .map_err(|_| "cross_signing_reset_input_failed")?;
-    match &content.proof {
+    match content.proof() {
         CrossSigningResetProof::PrincipalSigning {
             verification_method,
             alg,
@@ -155,7 +155,7 @@ pub async fn validate_cross_signing_reset(
         } => {
             ensure_reset_alg(alg)?;
             crate::jws_verify::validate_verification_method_controller(
-                content.principal_id.as_str(),
+                content.principal_id().as_str(),
                 verification_method,
             )
             .map_err(|_| "cross_signing_reset_proof_authority_invalid")?;
@@ -175,7 +175,8 @@ pub async fn validate_cross_signing_reset(
             signature,
         } => {
             ensure_reset_alg(alg)?;
-            require_verified_reset_recovery_session(state, &content, recovery_session_id).await?;
+            require_verified_reset_recovery_session(state, &content, recovery_session_id.as_str())
+                .await?;
             let policy = active_reset_recovery_policy(state, &content, "recovery_unlock").await?;
             if !policy_mentions_identifier(
                 &policy,
@@ -211,14 +212,14 @@ pub async fn validate_cross_signing_reset(
         } => {
             let policy = active_reset_recovery_policy(state, &content, "device_quorum").await?;
             if let Some(required) = policy_device_quorum_threshold(&policy)
-                && *threshold < required
+                && threshold.get() < u64::from(required)
             {
                 return Err("cross_signing_reset_quorum_below_policy");
             }
             verify_device_quorum_reset(
                 state,
-                content.principal_id.as_str(),
-                *threshold,
+                content.principal_id().as_str(),
+                threshold.get(),
                 signatures,
                 &input,
             )
@@ -233,7 +234,8 @@ pub async fn validate_cross_signing_reset(
             attestation_ref,
         } => {
             ensure_reset_alg(alg)?;
-            require_verified_reset_recovery_session(state, &content, recovery_session_id).await?;
+            require_verified_reset_recovery_session(state, &content, recovery_session_id.as_str())
+                .await?;
             let policy =
                 active_reset_recovery_policy(state, &content, "trusted_recovery_service").await?;
             if !policy_mentions_identifier(
@@ -270,7 +272,7 @@ pub async fn validate_cross_signing_reset(
 
 async fn require_verified_reset_recovery_session(
     state: &AppState,
-    content: &CrossSigningResetContent,
+    content: &CrossSigningResetPayload,
     recovery_session_id: &str,
 ) -> Result<(), &'static str> {
     let record = state
@@ -280,13 +282,13 @@ async fn require_verified_reset_recovery_session(
         .await
         .map_err(|_| "cross_signing_reset_recovery_session_unavailable")?
         .ok_or("cross_signing_reset_recovery_session_missing")?;
-    if record.principal_id != content.principal_id.as_str() {
+    if record.principal_id != content.principal_id().as_str() {
         return Err("cross_signing_reset_recovery_session_principal_mismatch");
     }
     if record.state != "verified" {
         return Err("cross_signing_reset_recovery_session_not_verified");
     }
-    if content.issued_at < record.created_at || content.issued_at > record.expires_at {
+    if *content.issued_at() < record.created_at || *content.issued_at() > record.expires_at {
         return Err("cross_signing_reset_recovery_session_expired");
     }
     Ok(())
@@ -296,7 +298,7 @@ async fn require_verified_reset_recovery_session(
 /// the current publish + bumps the generation high-water; marks devices
 /// `needs_reverification`). Validation already ran pre-acceptance.
 pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
-    let content: CrossSigningResetContent = match serde_json::from_value(payload.clone()) {
+    let content: CrossSigningResetPayload = match serde_json::from_value(payload.clone()) {
         Ok(content) => content,
         Err(error) => {
             tracing::warn!(%error, "cross_signing.reset projector: malformed payload");
@@ -316,8 +318,8 @@ pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
         .persistence
         .device_messages()
         .purge_cross_signing_reset_stale_messages(
-            content.principal_id.as_str(),
-            content.new_generation,
+            content.principal_id().as_str(),
+            content.new_generation(),
         )
         .await
     {
@@ -334,21 +336,21 @@ fn ensure_reset_alg(alg: &str) -> Result<(), &'static str> {
 
 async fn active_reset_recovery_policy(
     state: &AppState,
-    content: &CrossSigningResetContent,
+    content: &CrossSigningResetPayload,
     proof_kind: &str,
 ) -> Result<RecoveryPolicyRecord, &'static str> {
     let policy = state
         .persistence
         .recovery_policies()
-        .get_active_for_principal(content.principal_id.as_str())
+        .get_active_for_principal(content.principal_id().as_str())
         .await
         .map_err(|_| "cross_signing_reset_proof_authority_invalid")?
         .ok_or("cross_signing_reset_recovery_ref_unknown")?;
-    if policy.trust_domain != content.trust_domain.as_str() {
+    if policy.trust_domain != content.trust_domain().as_str() {
         return Err("cross_signing_reset_proof_authority_invalid");
     }
     if let Some(expires_at) = policy.expires_at
-        && expires_at <= content.issued_at
+        && expires_at <= *content.issued_at()
     {
         return Err("cross_signing_reset_proof_authority_invalid");
     }
@@ -362,26 +364,26 @@ async fn active_reset_recovery_policy(
     Ok(policy)
 }
 
-fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningResetContent) -> bool {
+fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningResetPayload) -> bool {
     let now = chrono::Utc::now();
     let cutoff = now - chrono::Duration::seconds(CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS);
     let mut replays = state.cross_signing_reset_replays.lock();
     replays.retain(|_, seen_at| *seen_at >= cutoff);
     replays.contains_key(&(
-        content.principal_id.as_str().to_owned(),
-        content.previous_generation,
+        content.principal_id().as_str().to_owned(),
+        content.previous_generation(),
     ))
 }
 
-fn remember_cross_signing_reset_replay(state: &AppState, content: &CrossSigningResetContent) {
+fn remember_cross_signing_reset_replay(state: &AppState, content: &CrossSigningResetPayload) {
     let now = chrono::Utc::now();
     let cutoff = now - chrono::Duration::seconds(CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS);
     let mut replays = state.cross_signing_reset_replays.lock();
     replays.retain(|_, seen_at| *seen_at >= cutoff);
     replays.insert(
         (
-            content.principal_id.as_str().to_owned(),
-            content.previous_generation,
+            content.principal_id().as_str().to_owned(),
+            content.previous_generation(),
         ),
         now,
     );
@@ -390,7 +392,7 @@ fn remember_cross_signing_reset_replay(state: &AppState, content: &CrossSigningR
 async fn verify_device_quorum_reset(
     state: &AppState,
     principal_id: &str,
-    threshold: u32,
+    threshold: u64,
     signatures: &[DeviceQuorumSignature],
     input: &[u8],
 ) -> Result<(), &'static str> {
@@ -401,7 +403,7 @@ async fn verify_device_quorum_reset(
         .await
         .map_err(|_| "cross_signing_reset_quorum_insufficient")?;
     let mut seen_devices = BTreeSet::new();
-    let mut valid = 0u32;
+    let mut valid = 0u64;
     for contribution in signatures {
         ensure_reset_alg(&contribution.alg)?;
         if !seen_devices.insert(contribution.device_id.as_str().to_owned()) {
