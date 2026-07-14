@@ -31,12 +31,8 @@ pub(super) async fn provision_agent(
     let now_utc = chrono::Utc::now();
     validate_agent_slug(&agent_slug)
         .map_err(|err| AppError::invalid_param(format!("slug is invalid: {err}")))?;
-    let requested_scope = body
-        .requested_scope
-        .as_ref()
-        .map(|scope| serde_json::to_value(scope).unwrap_or(Value::Null))
-        .unwrap_or(Value::Null);
-    validate_initial_content_grant_scope(&requested_scope)?;
+    let requested_scope = serde_json::to_value(&body.requested_scope)
+        .map_err(|error| AppError::invalid_param(format!("requested_scope is invalid: {error}")))?;
     let active_recovery_policy = state
         .persistence
         .recovery_policies()
@@ -62,7 +58,7 @@ pub(super) async fn provision_agent(
         .map_err(|err| AppError::internal(format!("agent slug conflict check failed: {err}")))?;
     let mut existing = existing;
     for record in existing.iter_mut() {
-        *record = lazily_expire_pairing(state, &session, record.clone()).await?;
+        *record = lazily_expire_pairing(state, record.clone()).await?;
     }
     if existing.iter().any(|record| {
         record.agent_slug.as_deref() == Some(agent_slug.as_str())
@@ -98,19 +94,12 @@ pub(super) async fn provision_agent(
     // AKP-0008 D1: development can materialize the agent's identity sub-events
     // with dev proofs. Production fails closed above until the delegated
     // fan-out has a protocol-valid authorization_ref + detached-JWS path.
-    let (accountability_event, selector_event, grant_ids) = fanout_provision_subevents(
-        state,
-        &session,
-        &controller_realm,
-        &agent_id,
-        &agent_slug,
-        &requested_scope,
-    )
-    .await?;
+    let (accountability_event, selector_event) =
+        fanout_provision_subevents(state, &session, &controller_realm, &agent_id, &agent_slug)
+            .await?;
     let provision_event_refs = json!({
         "accountability_grant_event_id": accountability_event,
         "selector_claim_event_id": selector_event,
-        "initial_capability_grant_ids": grant_ids,
     });
     crate::routing::identity::managed_agent_pcr::persist_managed_agent_did_binding(
         state,
@@ -141,7 +130,7 @@ pub(super) async fn provision_agent(
     principal.display_name = display_name.clone();
     principal.agent_slug = Some(agent_slug.clone());
     principal.avatar_blob_ref = avatar_blob_ref.clone();
-    principal.requested_scope = (!requested_scope.is_null()).then_some(requested_scope);
+    principal.requested_scope = Some(requested_scope);
     principal.accountability = (!body.accountability.is_null()).then_some(body.accountability);
     principal.provision_event_refs = Some(provision_event_refs);
     principal.pairing_request_id = Some(pairing_request_id.clone());
@@ -192,8 +181,7 @@ pub(super) async fn provision_agent(
 /// same anti-enumeration lookup; the PRINCIPAL is not one-time):
 ///
 /// - Bootstrap re-open (`pending_runtime_key` / `pairing_expired`): status returns to
-///   `pending_runtime_key` and, when the expiry cleanup already revoked the pending provision
-///   grants, they are re-issued at provision parity.
+///   `pending_runtime_key` without changing Realm grants.
 /// - Runtime replacement (`active` / `paused`): zero-downtime key replacement. Agent status,
 ///   existing keys, sessions, and grants all stay untouched; completing the new pairing supersedes
 ///   every old active key (reason=`superseded_by_repairing`) in the pair transaction.
@@ -219,8 +207,8 @@ pub(super) async fn renew_agent_pairing(
     let body = body.into_inner();
     let record = require_agent_controller(state, &session, &agent_id).await?;
     // Lazy-expire first so a stale pending record renews through the same
-    // path (grants already revoked) as an observed-expired one.
-    let record = lazily_expire_pairing(state, &session, record).await?;
+    // state path as an observed-expired one.
+    let record = lazily_expire_pairing(state, record).await?;
     let bootstrap_reopen = match record.state.as_str() {
         "pending_runtime_key" | "pairing_expired" => true,
         "active" | "paused" => false,
@@ -266,23 +254,6 @@ pub(super) async fn renew_agent_pairing(
             ));
         }
     }
-    // Bootstrap re-open only: re-issue the pending grants the expiry cleanup
-    // revoked. A still-open pairing keeps its live grants; only re-fan-out
-    // when none remain. Runtime replacement never touches grants — they bind
-    // the agent principal, not the key.
-    let live_grant_ids = {
-        let proj = state.projection.lock();
-        proj.unrevoked_grant_locations_for_subject(&agent_id)
-            .into_iter()
-            .map(|(grant_id, _)| grant_id)
-            .collect::<Vec<_>>()
-    };
-    let grant_ids = if bootstrap_reopen && live_grant_ids.is_empty() {
-        let requested_scope = record.requested_scope.clone().unwrap_or(Value::Null);
-        fanout_renewal_grants(state, &session, &agent_id, &requested_scope).await?
-    } else {
-        live_grant_ids
-    };
     let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
     let pairing_code = generate_pairing_code();
     let pairing_ttl_ms = body
@@ -311,13 +282,6 @@ pub(super) async fn renew_agent_pairing(
     record.runtime_attestation_digest = None;
     record.approval_notification_id = None;
     record.updated_at = now_utc;
-    if let Some(refs) = record
-        .provision_event_refs
-        .as_mut()
-        .and_then(Value::as_object_mut)
-    {
-        refs.insert("initial_capability_grant_ids".to_owned(), json!(grant_ids));
-    }
     state
         .persistence
         .agents()
@@ -385,13 +349,12 @@ pub(super) async fn list_agents(
         .list_for_controller(&session.actor)
         .await
         .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
-    // AKP-0008 §4.3.2 — lazily expire any agent past its pairing window
-    // before projecting, so list reflects `pairing_expired` and the pending
-    // grants are revoked on first observation.
+    // Lazily expire any agent past its pairing window before projecting, so
+    // list reflects `pairing_expired` without changing Realm grants.
     let mut agents = Vec::with_capacity(records.len());
     for record in records {
         let record = reconcile_accepted_agent_authorization(state, record).await?;
-        let record = lazily_expire_pairing(state, &session, record).await?;
+        let record = lazily_expire_pairing(state, record).await?;
         agents.push(agent_projection_from_record(&record));
     }
     // spec `agent_list` = `{agents: [agent_projection], next_cursor?, has_more}`.
@@ -438,11 +401,7 @@ pub(super) async fn get_agent(
         }
     }
     let record = reconcile_accepted_agent_authorization(state, record).await?;
-    let record = if let Some(session) = session.as_ref() {
-        lazily_expire_pairing(state, session, record).await?
-    } else {
-        record
-    };
+    let record = lazily_expire_pairing(state, record).await?;
     let mut view = agent_view_from_record(state, &record).await?;
     if service_authorized {
         if let Some(key_state) = view.key_state.as_mut() {
@@ -468,15 +427,11 @@ pub(super) async fn get_agent(
     json_ok(view)
 }
 
-/// AKP-0008 §4.3.2 — lazily expire a `pending_runtime_key` agent whose
-/// pairing window has elapsed. On first observation past `pairing_expires_at`
-/// the agent flips to `pairing_expired` and (dev option B) the pending
-/// `effective_after_first_authorized_key` grants are auto-revoked. Returns
-/// the record with the (possibly) updated `state`. No-op for any other
-/// state. The controller `session` authors the revoke fan-out.
+/// Lazily expire a `pending_runtime_key` agent whose pairing window has
+/// elapsed. Pairing state is independent from Realm grants, so expiry never
+/// creates, revokes, or rewrites a grant.
 pub(super) async fn lazily_expire_pairing(
     state: &AppState,
-    session: &SessionRecord,
     mut record: AgentPrincipalRecord,
 ) -> Result<AgentPrincipalRecord, AppError> {
     if !agent_pairing_handle_is_open(&record) {
@@ -491,13 +446,6 @@ pub(super) async fn lazily_expire_pairing(
     }
     let agent_id = record.id.clone();
     let bootstrap_expired = record.state == "pending_runtime_key";
-    if bootstrap_expired && state.config.development_mode {
-        let grant_locations = {
-            let proj = state.projection.lock();
-            proj.unrevoked_grant_locations_for_subject(&agent_id)
-        };
-        submit_revoke_agent_grants(state, session, &grant_locations).await?;
-    }
     let terminal_notification = account_notification_context(&record);
     let now = chrono::Utc::now();
     if bootstrap_expired {
@@ -804,8 +752,30 @@ pub(super) async fn attach_agent_grant(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
-    require_agent_controller(state, &session, &agent_id).await?;
+    let record = require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
+    let grant_constraints = body
+        .grant
+        .constraints
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            AppError::internal(format!("grant constraint encoding failed: {error}"))
+        })?;
+    if !agent_grant_within_requested_scope(
+        &record,
+        &body.grant.actions,
+        &body.grant.resources,
+        &grant_constraints,
+    ) {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "grant exceeds the immutable Agent requested_scope ceiling",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code("agent_grant_exceeds_requested_scope"));
+    }
     if !state.config.development_mode {
         return Err(AppError::unsupported_feature(
             "production Agent grant attachment requires protocol-valid Event authoring",

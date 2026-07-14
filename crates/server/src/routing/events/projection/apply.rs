@@ -1206,17 +1206,10 @@ fn refresh_authz_index_from_capability_effect(
     effect: &crate::reducer::ProjectionEffect,
 ) {
     use crate::reducer::ProjectionEffect;
-    // AKP-0008 §4.5 / D3 — pairing completion clears
-    // `effective_after_first_authorized_key` on the agent's pending grants;
-    // re-fold each cleared grant so it enters the engine read index now that
-    // it is active.
     let grant_ids: Vec<String> = match effect {
         ProjectionEffect::CapabilityGrantProjected { grant_id, .. }
         | ProjectionEffect::CapabilityRevokeProjected { grant_id, .. }
         | ProjectionEffect::CapabilityDelegateProjected { grant_id, .. } => vec![grant_id.clone()],
-        ProjectionEffect::AgentKeyAuthorizeProjected {
-            cleared_grant_ids, ..
-        } => cleared_grant_ids.clone(),
         _ => return,
     };
     for grant_id in grant_ids {

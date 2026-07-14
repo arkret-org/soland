@@ -1,5 +1,9 @@
 use super::*;
 
+const ACTION_EVENT_READ: &str = "ak.event.read";
+const ACTION_MESSAGE_CREATE: &str = "ak.message.create";
+const ACTION_REACTION_ADD: &str = "ak.reaction.add";
+
 /// Narrow internal execution context used only after the caller has authenticated
 /// the deployment S2S credential and the handler has re-validated the claimed
 /// controller against the authoritative Agent record.
@@ -81,6 +85,186 @@ pub(super) async fn require_agent_controller(
     Ok(record)
 }
 
+fn requested_scope_actions(record: &AgentPrincipalRecord) -> BTreeSet<&str> {
+    record
+        .requested_scope
+        .as_ref()
+        .and_then(|scope| scope.get("actions"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
+fn is_content_scope_kind(kind: Option<&str>) -> bool {
+    matches!(kind, Some("realm" | "strand" | "space" | "object"))
+}
+
+fn scope_resource_ref(resource: &Value) -> Option<&Value> {
+    resource
+        .get("resource_ref")
+        .or_else(|| resource.get("strand_id"))
+        .or_else(|| resource.get("space_id"))
+        .or_else(|| resource.get("object_ref"))
+}
+
+fn scope_resource_selector_covers(ceiling: &Value, resource: &Value) -> bool {
+    let ceiling_kind = ceiling.get("kind").and_then(Value::as_str);
+    let resource_kind = resource.get("kind").and_then(Value::as_str);
+    let kind_covers = ceiling_kind == resource_kind
+        || (ceiling_kind == Some("realm") && is_content_scope_kind(resource_kind));
+    if !kind_covers {
+        return false;
+    }
+    if ceiling
+        .get("realm_id")
+        .is_some_and(|value| resource.get("realm_id") != Some(value))
+    {
+        return false;
+    }
+    match ceiling_kind {
+        Some("operation") => ceiling
+            .get("operation")
+            .is_none_or(|value| resource.get("operation") == Some(value)),
+        Some("service") => ceiling
+            .get("service_id")
+            .is_none_or(|value| resource.get("service_id") == Some(value)),
+        _ => scope_resource_ref(ceiling)
+            .is_none_or(|value| scope_resource_ref(resource) == Some(value)),
+    }
+}
+
+fn scope_resources_within_requested_scope(requested_scope: &Value, resources: &[Value]) -> bool {
+    let ceilings = requested_scope
+        .get("resources")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let has_content_ceiling = ceilings
+        .iter()
+        .any(|ceiling| is_content_scope_kind(ceiling.get("kind").and_then(Value::as_str)));
+    resources.iter().all(|resource| {
+        let resource_kind = resource.get("kind").and_then(Value::as_str);
+        (is_content_scope_kind(resource_kind) && !has_content_ceiling)
+            || ceilings
+                .iter()
+                .any(|ceiling| scope_resource_selector_covers(ceiling, resource))
+    })
+}
+
+fn constraints_preserve_requested_scope(requested_scope: &Value, constraints: &[Value]) -> bool {
+    let mandatory = requested_scope
+        .get("constraints")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    mandatory
+        .iter()
+        .all(|constraint| constraints.contains(constraint))
+}
+
+/// A per-key scope may narrow, but never widen, the immutable provision scope.
+pub(crate) fn agent_key_scope_within_requested_scope(
+    record: &AgentPrincipalRecord,
+    scope: &Value,
+) -> bool {
+    let Some(requested_scope) = record.requested_scope.as_ref() else {
+        return false;
+    };
+    let Some(actions) = scope.get("actions").and_then(Value::as_array) else {
+        return false;
+    };
+    let Some(resources) = scope.get("resources").and_then(Value::as_array) else {
+        return false;
+    };
+    let constraints = scope
+        .get("constraints")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let requested_actions = requested_scope_actions(record);
+    actions.iter().all(|action| {
+        action
+            .as_str()
+            .is_some_and(|action| requested_actions.contains(action))
+    }) && scope_resources_within_requested_scope(requested_scope, resources)
+        && constraints_preserve_requested_scope(requested_scope, constraints)
+}
+
+/// Managed Agent grants are always bounded by the immutable scope selected
+/// at provisioning. Realm membership and policy can only narrow this set.
+pub(crate) fn agent_actions_within_requested_scope(
+    record: &AgentPrincipalRecord,
+    actions: &[String],
+) -> bool {
+    let ceiling = requested_scope_actions(record);
+    actions
+        .iter()
+        .all(|action| ceiling.contains(action.as_str()))
+}
+
+/// Enforce the action ceiling and, when provisioning declared explicit
+/// content selectors, the optional resource ceiling. With no content
+/// selectors, Realm grants remain responsible for choosing concrete scope.
+pub(crate) fn agent_grant_within_requested_scope(
+    record: &AgentPrincipalRecord,
+    actions: &[String],
+    resources: &[Value],
+    constraints: &[Value],
+) -> bool {
+    if !agent_actions_within_requested_scope(record, actions) {
+        return false;
+    }
+    record.requested_scope.as_ref().is_some_and(|scope| {
+        scope_resources_within_requested_scope(scope, resources)
+            && constraints_preserve_requested_scope(scope, constraints)
+    })
+}
+
+/// Project the provision-time action ceiling onto the participation bits.
+/// Third-party mention delivery requires read authority; replying requires
+/// both actions in the materialized reply grant. Acting on behalf additionally
+/// requires the explicit controller-approval constraint that distinguishes it
+/// from ordinary `ak.message.create` authority.
+pub(super) fn agent_requested_participation_ceiling(
+    record: &AgentPrincipalRecord,
+) -> AgentParticipation {
+    let actions = requested_scope_actions(record);
+    let message_create = actions.contains(ACTION_MESSAGE_CREATE);
+    let approval_required = record
+        .requested_scope
+        .as_ref()
+        .and_then(|scope| scope.get("constraints"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|constraint| {
+            let approval = constraint
+                .get("controller_approval_required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || constraint
+                    .get("approval_required")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+            let applies_to_message_create = constraint
+                .get("applies_to_actions")
+                .and_then(Value::as_array)
+                .is_none_or(|values| {
+                    values
+                        .iter()
+                        .any(|value| value.as_str() == Some(ACTION_MESSAGE_CREATE))
+                });
+            approval && applies_to_message_create
+        });
+    AgentParticipation {
+        reply: message_create && actions.contains(ACTION_REACTION_ADD),
+        accept_third_party_mention: actions.contains(ACTION_EVENT_READ),
+        act_on_behalf: message_create && approval_required,
+    }
+}
+
 pub(super) fn ensure_sidecar_controller_request(
     body: &AgentSidecarThreadEnsureRequestBody,
     session: &SessionRecord,
@@ -127,6 +311,166 @@ pub(super) fn generate_agent_principal_did(service_id: &str) -> String {
         crate::routing::identity::webvh_validation::derive_webvh_scid_from_skeleton(&skeleton)
             .unwrap_or_else(|_| agent_uuid.simple().to_string());
     format!("did:webvh:{scid}:{host}:webvh:agent:{agent_uuid}")
+}
+
+#[cfg(test)]
+mod requested_scope_tests {
+    use super::*;
+
+    fn record_with_scope(scope: Value) -> AgentPrincipalRecord {
+        let mut record = AgentPrincipalRecord::new(
+            "did:webvh:agent.example:agents:test".to_owned(),
+            "did:webvh:controller.example:users:test".to_owned(),
+            "ak:realm:019f6000-0000-7000-8000-000000000001".to_owned(),
+            "did:webvh:agent.example:agents:test#controller".to_owned(),
+            "active".to_owned(),
+            chrono::Utc::now(),
+        );
+        record.requested_scope = Some(scope);
+        record
+    }
+
+    #[test]
+    fn realm_grant_actions_cannot_exceed_provision_ceiling() {
+        let record = record_with_scope(json!({
+            "actions": [ACTION_MESSAGE_CREATE, ACTION_REACTION_ADD]
+        }));
+
+        assert!(agent_actions_within_requested_scope(
+            &record,
+            &[ACTION_MESSAGE_CREATE.to_owned()]
+        ));
+        assert!(!agent_actions_within_requested_scope(
+            &record,
+            &[ACTION_EVENT_READ.to_owned()]
+        ));
+    }
+
+    #[test]
+    fn explicit_content_resources_narrow_later_realm_grants() {
+        let record = record_with_scope(json!({
+            "actions": [ACTION_EVENT_READ],
+            "resources": [{
+                "kind": "realm",
+                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001"
+            }]
+        }));
+        assert!(agent_grant_within_requested_scope(
+            &record,
+            &[ACTION_EVENT_READ.to_owned()],
+            &[json!({
+                "kind": "strand",
+                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+                "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
+            })],
+            &[]
+        ));
+        assert!(!agent_grant_within_requested_scope(
+            &record,
+            &[ACTION_EVENT_READ.to_owned()],
+            &[json!({
+                "kind": "realm",
+                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000099"
+            })],
+            &[]
+        ));
+
+        let realm_wide_strand_ceiling = record_with_scope(json!({
+            "actions": [ACTION_EVENT_READ],
+            "resources": [{
+                "kind": "strand",
+                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001"
+            }]
+        }));
+        assert!(agent_grant_within_requested_scope(
+            &realm_wide_strand_ceiling,
+            &[ACTION_EVENT_READ.to_owned()],
+            &[json!({
+                "kind": "strand",
+                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+                "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
+            })],
+            &[]
+        ));
+
+        let global_strand_ceiling = record_with_scope(json!({
+            "actions": [ACTION_EVENT_READ],
+            "resources": [{ "kind": "strand" }]
+        }));
+        assert!(agent_grant_within_requested_scope(
+            &global_strand_ceiling,
+            &[ACTION_EVENT_READ.to_owned()],
+            &[json!({
+                "kind": "strand",
+                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000099",
+                "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
+            })],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn realm_grant_must_preserve_provision_constraints() {
+        let mandatory = json!({"controller_approval_required": true});
+        let record = record_with_scope(json!({
+            "actions": [ACTION_EVENT_READ],
+            "resources": [{
+                "kind": "operation",
+                "operation": "ak.self.events.stream.subscribe"
+            }],
+            "constraints": [mandatory.clone()]
+        }));
+        let resources = [json!({
+            "kind": "strand",
+            "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+            "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
+        })];
+
+        assert!(agent_grant_within_requested_scope(
+            &record,
+            &[ACTION_EVENT_READ.to_owned()],
+            &resources,
+            &[mandatory]
+        ));
+        assert!(!agent_grant_within_requested_scope(
+            &record,
+            &[ACTION_EVENT_READ.to_owned()],
+            &resources,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn participation_is_intersected_with_provision_ceiling() {
+        let record = record_with_scope(json!({
+            "actions": [ACTION_EVENT_READ, ACTION_MESSAGE_CREATE, ACTION_REACTION_ADD],
+            "constraints": [{
+                "applies_to_actions": [ACTION_MESSAGE_CREATE],
+                "controller_approval_required": true
+            }]
+        }));
+
+        assert_eq!(
+            agent_requested_participation_ceiling(&record),
+            AgentParticipation {
+                reply: true,
+                accept_third_party_mention: true,
+                act_on_behalf: true,
+            }
+        );
+
+        let record = record_with_scope(json!({
+            "actions": [ACTION_MESSAGE_CREATE]
+        }));
+        assert_eq!(
+            agent_requested_participation_ceiling(&record),
+            AgentParticipation {
+                reply: false,
+                accept_third_party_mention: false,
+                act_on_behalf: false,
+            }
+        );
+    }
 }
 
 /// Project a persisted agent_principal JSON record into the spec
@@ -193,11 +537,10 @@ pub(super) fn agent_key_state_from_record(
     let requested_scope = record
         .requested_scope
         .clone()
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| {
-            AppError::internal(format!("persisted Agent scope is invalid: {error}"))
-        })?;
+        .ok_or_else(|| AppError::internal("persisted Agent requested_scope is missing"))?;
+    let requested_scope = serde_json::from_value(requested_scope).map_err(|error| {
+        AppError::internal(format!("persisted Agent scope is invalid: {error}"))
+    })?;
     let authorized_event_ref = record
         .authorized_event_ref
         .as_ref()

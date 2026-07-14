@@ -156,6 +156,7 @@ pub async fn validate_operation_policy(
 ) -> Result<(), &'static str> {
     for operation in operations {
         validate_realm_lifecycle_write_gate(state, operation)?;
+        validate_managed_agent_grant_ceiling(state, operation).await?;
         if kinds::operation_is_message_create(operation)
             && !message_operation_is_encrypted(operation)
             && known_realm_denies_plaintext_service(state, operation.realm_id.as_str()).await
@@ -286,5 +287,55 @@ mod tests {
             &invalid_op,
             actor
         ));
+    }
+}
+
+async fn validate_managed_agent_grant_ceiling(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(arkret_sdk::events::kinds::CAPABILITY_GRANT)
+    {
+        return Ok(());
+    }
+    let grant = operation.payload.get("grant").unwrap_or(&operation.payload);
+    let Some(subject) = grant.get("subject").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let record = state
+        .persistence
+        .agents()
+        .get(subject)
+        .await
+        .map_err(|_| "agent_grant_ceiling_lookup_failed")?;
+    let Some(record) = record else {
+        return Ok(());
+    };
+    let Some(actions) = grant.get("actions").and_then(Value::as_array) else {
+        return Err("agent_grant_exceeds_requested_scope");
+    };
+    let actions = actions
+        .iter()
+        .map(|action| action.as_str().map(ToOwned::to_owned))
+        .collect::<Option<Vec<_>>>()
+        .ok_or("agent_grant_exceeds_requested_scope")?;
+    let Some(resources) = grant.get("resources").and_then(Value::as_array) else {
+        return Err("agent_grant_exceeds_requested_scope");
+    };
+    let constraints = grant
+        .get("constraints")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if crate::routing::identity::agents::agent_grant_within_requested_scope(
+        &record,
+        &actions,
+        resources,
+        constraints,
+    ) {
+        Ok(())
+    } else {
+        Err("agent_grant_exceeds_requested_scope")
     }
 }

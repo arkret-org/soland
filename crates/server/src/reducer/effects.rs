@@ -224,15 +224,11 @@ pub enum ProjectionEffect {
         agent_id: String,
         new_state: AgentLifecycleState,
     },
-    /// AKP-0008 §4.5 / D3 — `ak.agent.key.authorize` projected: the key is
-    /// recorded in `agent_authorized_keys` and every
-    /// `effective_after_first_authorized_key` grant for this agent has had
-    /// the flag cleared (the grants are now in their normal effective
-    /// window). `cleared_grant_ids` enumerates the grants that flipped.
+    /// `ak.agent.key.authorize` projected: the key is recorded in
+    /// `agent_authorized_keys`. Realm grants are independent from pairing.
     AgentKeyAuthorizeProjected {
         agent_id: String,
         key_id: String,
-        cleared_grant_ids: Vec<String>,
     },
     /// AKP-0008 §4.11 — `ak.agent.key.revoke` projected: the key was removed
     /// from `agent_authorized_keys`.

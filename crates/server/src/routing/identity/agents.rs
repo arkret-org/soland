@@ -69,13 +69,13 @@ use crate::state::{AppState, SessionRecord};
 
 mod dev_fanout;
 use dev_fanout::{
-    attach_agent_grant_event, fanout_provision_subevents, fanout_renewal_grants,
-    materialize_capability_grant, require_controller_principal_control_realm,
-    revoke_capability_grant, submit_durable_agent_lifecycle, submit_revoke_agent_grants,
-    submit_revoke_agent_keys, validate_initial_content_grant_scope,
+    attach_agent_grant_event, fanout_provision_subevents, materialize_capability_grant,
+    require_controller_principal_control_realm, revoke_capability_grant,
+    submit_durable_agent_lifecycle, submit_revoke_agent_grants, submit_revoke_agent_keys,
 };
 
 mod common;
+pub(crate) use common::agent_grant_within_requested_scope;
 mod lifecycle;
 mod pairing;
 mod participation;
@@ -912,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn key_authorize_event_rejects_scope_mismatch() {
+    fn key_authorize_event_accepts_narrower_scope_and_rejects_widening() {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
@@ -941,7 +941,7 @@ mod tests {
             weaker_scope,
         );
 
-        let err = ensure_key_authorize_event_matches_request(
+        ensure_key_authorize_event_matches_request(
             &envelope,
             controller,
             &record,
@@ -950,8 +950,31 @@ mod tests {
             public_key_digest,
             service_id,
         )
-        .expect_err("agent_key_scope must match provisioned requested_scope");
+        .expect("a narrower agent_key_scope must be accepted");
 
+        let widened_scope = json!({
+            "actions": ["ak.reaction.add"],
+            "resources": [{ "kind": "service", "service_id": service_id }]
+        });
+        let widened_envelope = key_authorize_envelope(
+            &record,
+            controller,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_id,
+            widened_scope,
+        );
+        let err = ensure_key_authorize_event_matches_request(
+            &widened_envelope,
+            controller,
+            &record,
+            agent,
+            verification_method,
+            public_key_digest,
+            service_id,
+        )
+        .expect_err("agent_key_scope must not exceed provisioned requested_scope");
         assert_eq!(err.wire_code(), "invalid_param");
         assert!(err.message.contains("agent_key_scope"));
     }

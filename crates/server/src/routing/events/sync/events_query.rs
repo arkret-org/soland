@@ -1371,9 +1371,9 @@ async fn durable_events_query_from_parts(
         if !super::super::event_log::event_visible_to_session(state, &record, session).await {
             continue;
         }
-        if !canonical_event_visible_to_personal_blocklist(state, &record, session).await {
-            continue;
-        }
+        // Personal blocklists are encrypted actor-private presentation state.
+        // They must not remove accepted Operations from the canonical query;
+        // clients apply the holder's filter after sync.
         records.push(record);
     }
     records.sort_by(|left, right| {

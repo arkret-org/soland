@@ -492,9 +492,8 @@ fn apply_agent_deactivate_dispatch(
     s.apply_agent_lifecycle(op, AgentLifecycleState::Deactivated)
 }
 
-/// AKP-0008 §4.5 / D3 — dispatch for `ak.agent.key.authorize`. Records the
-/// authorized key and clears `effective_after_first_authorized_key` on the
-/// agent's pending capability grants.
+/// Dispatch for `ak.agent.key.authorize`. Pairing records the authorized key
+/// without changing independent Realm grants.
 fn apply_agent_key_authorize_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1224,9 +1223,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         arkret_sdk::events::kinds::CAPABILITY_DELEGATE,
         apply_capability_delegate_dispatch,
     );
-    // AKP-0008 §4.5 / §4.11 / D3 — agent runtime key authorization +
-    // revocation. authorize records the key and clears the agent's pending
-    // `effective_after_first_authorized_key` grants; revoke removes the key.
+    // Agent runtime key authorization + revocation. Authorize records the
+    // key; revoke removes it. Neither operation changes Realm grants.
     m.insert(
         arkret_sdk::events::kinds::AGENT_KEY_AUTHORIZE,
         apply_agent_key_authorize_dispatch,
