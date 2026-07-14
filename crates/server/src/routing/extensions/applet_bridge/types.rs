@@ -1,6 +1,8 @@
 //! Wire and storage types for the applet bridge surface.
 
-use arkret_sdk::{AppletPackage, AppletWireNamespaces, InstallCommitOutcome};
+use arkret_sdk::{
+    AppletPackage, AppletRegistrationEpochEvidence, AppletWireNamespaces, InstallCommitOutcome,
+};
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,6 +25,11 @@ pub struct AppletRecord {
     pub manifest: AppletManifest,
     #[serde(default)]
     pub package: Option<AppletPackage>,
+    /// Durable copy of the evidence intentionally excluded from the signed
+    /// AppletPackage serialization transcript. Runtime authorization must be
+    /// able to revalidate the installed registration epoch after reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration_epoch_evidence: Option<AppletRegistrationEpochEvidence>,
     #[serde(default)]
     pub namespaces: Option<AppletWireNamespaces>,
     #[serde(default)]
