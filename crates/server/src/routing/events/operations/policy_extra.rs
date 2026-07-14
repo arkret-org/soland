@@ -599,8 +599,7 @@ fn validate_rrk_targeted_realm_key_share(
     if !has_material {
         return Some(Err("realm_key_share_material_missing"));
     }
-    if share.key_scope.effective_scope.realm_id().as_str() != realm_id
-    {
+    if share.key_scope.effective_scope.realm_id().as_str() != realm_id {
         return Some(Err("realm_key_share_scope_mismatch"));
     }
     if share
@@ -650,7 +649,10 @@ fn realm_key_share_receiver_event_state(
 fn realm_key_share_source(
     share: &arkret_sdk::RealmKeySharePayload,
 ) -> arkret_sdk::HistoryKeySource {
-    if share.recipient_device_id.as_ref().map(arkret_sdk::DeviceId::as_str)
+    if share
+        .recipient_device_id
+        .as_ref()
+        .map(arkret_sdk::DeviceId::as_str)
         == Some(share.sender_device_id.as_str())
     {
         arkret_sdk::HistoryKeySource::OwnDevice

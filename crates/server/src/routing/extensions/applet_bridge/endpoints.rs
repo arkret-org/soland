@@ -2,11 +2,11 @@
 
 use arkret_sdk::{
     AppletActorView, AppletId, AppletPingOutcome, AppletProtocolMetadata, AppletRealmView,
-    AppletRevokeMode, AppletRevokeOutcome, AppletTransactionOutcome,
-    AppletTransactionRequestBody, Did, ExternalRef, FieldType, GhostActorProvisionOutcome,
-    GhostActorProvisionRequestBody, InstallCommitOutcome, InstallCommitRequestBody, InstallPlan,
-    InstallPreviewRequestBody, InstallRevokeRequestBody, ProtocolInstance, RealmId,
-    SessionRevokeOutcome, SessionRevokeRequestBody,
+    AppletRevokeMode, AppletRevokeOutcome, AppletTransactionOutcome, AppletTransactionRequestBody,
+    Did, ExternalRef, FieldType, GhostActorProvisionOutcome, GhostActorProvisionRequestBody,
+    InstallCommitOutcome, InstallCommitRequestBody, InstallPlan, InstallPreviewRequestBody,
+    InstallRevokeRequestBody, ProtocolInstance, RealmId, SessionRevokeOutcome,
+    SessionRevokeRequestBody,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;

@@ -1069,20 +1069,14 @@ pub(super) fn capability_constraints_for_scope(
 
 pub(super) fn e2ee_effect_for_package(package: &AppletPackage) -> InstallE2eeEffect {
     InstallE2eeEffect {
-        requires_mls_join: package
-            .e2ee_policy
-            .mls_join_requested
-            .unwrap_or(false),
+        requires_mls_join: package.e2ee_policy.mls_join_requested.unwrap_or(false),
         plaintext_access: "policy_declared".to_owned(),
         authorization_refs: Vec::new(),
     }
 }
 
 fn package_requests_mls_join(package: &AppletPackage) -> bool {
-    package
-        .e2ee_policy
-        .mls_join_requested
-        .unwrap_or(false)
+    package.e2ee_policy.mls_join_requested.unwrap_or(false)
 }
 
 fn e2ee_authorization_refs_for_install(

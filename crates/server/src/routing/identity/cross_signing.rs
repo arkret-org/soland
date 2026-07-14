@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{
-    CrossSigningPublishContent, CrossSigningResetContent, CrossSigningResetProof,
+    CrossSigningPublish, CrossSigningResetContent, CrossSigningResetProof,
     DeviceEnrollmentAuthorityBinding, DeviceId, DeviceQuorumSignature, DeviceStatus,
     DeviceTrustBinding, Did, EventId, MlsRequesterTrustBinding, MlsWelcomeClaimEnvelope,
     SignatureMaterial,
@@ -29,8 +29,8 @@ const CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS: i64 = 90_000;
 
 /// Parse the `ak.cross_signing.publish` operation payload into the SDK content
 /// type. Returns a wire reason code on malformed input.
-fn parse_publish(payload: &Value) -> Result<CrossSigningPublishContent, &'static str> {
-    serde_json::from_value::<CrossSigningPublishContent>(payload.clone())
+fn parse_publish(payload: &Value) -> Result<CrossSigningPublish, &'static str> {
+    serde_json::from_value::<CrossSigningPublish>(payload.clone())
         .map_err(|_| "cross_signing_publish_malformed")
 }
 
@@ -84,13 +84,13 @@ pub async fn validate_cross_signing_publish(
     let current = {
         let mgr = state.cross_signing.lock();
         mgr.current_cross_signing(&principal)
-            .map(|p| p.generation)
+            .map(|p| p.generation.get())
             .unwrap_or(0)
     };
     if content.expected_previous_generation != current {
         return Err("cross_signing_cas_conflict");
     }
-    if content.generation != current + 1 {
+    if content.generation.get() != current + 1 {
         return Err("cross_signing_generation_not_monotonic");
     }
     Ok(())
@@ -137,7 +137,7 @@ pub async fn validate_cross_signing_reset(
     let current = {
         let mgr = state.cross_signing.lock();
         mgr.current_cross_signing(&principal)
-            .map(|p| p.generation)
+            .map(|p| p.generation.get())
             .unwrap_or(0)
     };
     if content.previous_generation != current {
@@ -619,12 +619,12 @@ pub(crate) fn check_device_cross_signing_binding(
         .current_cross_signing(&principal)
         .ok_or("cross_signing_state_missing")?;
     // Live generation gate (device-lifecycle.md §15 step 3 / §5.2.1).
-    if binding_generation != publish.generation {
+    if binding_generation != publish.generation.get() {
         return Err("device_recovery_ssk_generation_mismatch");
     }
     let ssk = decode_ed25519_key(
-        &publish.self_signing_key.key.public_key,
-        &publish.self_signing_key.key.key_format,
+        publish.self_signing_key.public_key.as_str(),
+        publish.self_signing_key.key_format.as_str(),
     )
     .map_err(|_| "cross_signing_ssk_undecodable")?;
     let device_input = DeviceTrustBinding::canonical_input(
@@ -678,13 +678,18 @@ pub fn validate_device_authorize_binding(
         .get("device_public_key")
         .and_then(Value::as_str)
         .ok_or("device_authorize_missing_device_public_key")?;
+    let algorithms = payload_shape
+        .algorithms
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
     check_device_cross_signing_binding(
         state,
         principal_id,
         device_id,
         device_public_key,
-        &payload_shape.hpke_key,
-        &payload_shape.algorithms,
+        payload_shape.hpke_key.as_str(),
+        &algorithms,
         binding,
     )
 }
@@ -699,7 +704,7 @@ fn verify_device_authorize_device_signature(
         return Ok(());
     };
     let signature_b64 = device_authorize_signature_value(signature_material)?;
-    let device_key = decode_ed25519_key(&payload.device_public_key, "multibase")
+    let device_key = decode_ed25519_key(payload.device_public_key.as_str(), "multibase")
         .map_err(|_| "device_authorize_device_public_key_invalid")?;
     let input = payload
         .device_possession_signature_input()
@@ -775,16 +780,18 @@ fn verify_mls_welcome_claim_envelope_ssk_signature(
             .current_cross_signing(&envelope.requester_did)
             .ok_or(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
         (
-            publish.generation,
-            publish.self_signing_key.key.kid.clone(),
-            publish.self_signing_key.key.public_key.clone(),
-            publish.self_signing_key.key.key_format.clone(),
+            publish.generation.get(),
+            publish.self_signing_key.kid.clone(),
+            publish.self_signing_key.public_key.clone(),
+            publish.self_signing_key.key_format,
         )
     };
-    if envelope_generation != accepted_generation || envelope.signature.kid.as_str() != ssk_kid {
+    if envelope_generation != accepted_generation
+        || envelope.signature.kid.as_str() != ssk_kid.as_str()
+    {
         return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
-    let ssk = decode_ed25519_key(&ssk_public_key, &ssk_key_format)
+    let ssk = decode_ed25519_key(ssk_public_key.as_str(), ssk_key_format.as_str())
         .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let signing_bytes = envelope
         .canonical_signing_bytes()
@@ -869,7 +876,7 @@ fn device_signature_kid_points_to_device_key(
 /// membership) and confirm the published bytes match.
 async fn resolve_psk_in_control_set(
     state: &AppState,
-    content: &CrossSigningPublishContent,
+    content: &CrossSigningPublish,
 ) -> Result<VerifyingKey, &'static str> {
     let kid = content.principal_signing_key.kid.as_str();
     // resolve_ed25519_pubkey enforces that the verification method is present in
@@ -878,8 +885,8 @@ async fn resolve_psk_in_control_set(
         .await
         .map_err(|_| "cross_signing_psk_not_in_control_set")?;
     let published = decode_ed25519_key(
-        &content.principal_signing_key.public_key,
-        &content.principal_signing_key.key_format,
+        content.principal_signing_key.public_key.as_str(),
+        content.principal_signing_key.key_format.as_str(),
     )
     .map_err(|_| "cross_signing_psk_undecodable")?;
     if resolved.to_bytes() != published.to_bytes() {

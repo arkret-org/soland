@@ -810,8 +810,8 @@ fn tier2_publish_and_authorize(
     device_signing: &SigningKey,
 ) -> (Value, Value, String, String) {
     use arkret_sdk::{
-        CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, DeviceId,
-        DeviceTrustBinding, SignedCrossSigningKey,
+        CrossSigningPublish, DeviceId, DeviceTrustBinding, KeyFormat, NonEmptyString, PublishedKey,
+        SubordinateSignedKey, SubordinateSignedKeyBinding,
     };
 
     let principal_did = Did::new(principal.to_owned()).unwrap();
@@ -820,49 +820,53 @@ fn tier2_publish_and_authorize(
     let ssk_multibase = test_ed25519_multibase_public(ssk);
     let device_public_key = test_ed25519_multibase_public(device_signing);
 
-    let mut publish = CrossSigningPublishContent {
+    let mut publish = CrossSigningPublish {
         principal_id: principal_did.clone(),
         trust_domain: arkret_sdk::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
-        principal_signing_key: CrossSigningKeyRecord {
-            kid: format!("{principal}#ak_principal_signing_v1"),
-            alg: "EdDSA".to_owned(),
-            public_key: psk_multibase.clone(),
-            key_format: "multibase".to_owned(),
+        principal_signing_key: PublishedKey {
+            kid: NonEmptyString::new(format!("{principal}#ak_principal_signing_v1")).unwrap(),
+            alg: NonEmptyString::new("EdDSA").unwrap(),
+            public_key: NonEmptyString::new(psk_multibase.clone()).unwrap(),
+            key_format: KeyFormat::Multibase,
         },
-        self_signing_key: SignedCrossSigningKey {
-            key: CrossSigningKeyRecord {
-                kid: format!("{principal}#ak_self_signing_v1"),
-                alg: "EdDSA".to_owned(),
-                public_key: ssk_multibase.clone(),
-                key_format: "multibase".to_owned(),
-            },
-            binding: CrossSigningBinding {
-                verification_method: format!("{principal}#ak_principal_signing_v1"),
-                alg: "EdDSA".to_owned(),
-                signature: String::new(),
+        self_signing_key: SubordinateSignedKey {
+            kid: NonEmptyString::new(format!("{principal}#ak_self_signing_v1")).unwrap(),
+            alg: NonEmptyString::new("EdDSA").unwrap(),
+            public_key: NonEmptyString::new(ssk_multibase.clone()).unwrap(),
+            key_format: KeyFormat::Multibase,
+            binding: SubordinateSignedKeyBinding {
+                verification_method: NonEmptyString::new(format!(
+                    "{principal}#ak_principal_signing_v1"
+                ))
+                .unwrap(),
+                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature: NonEmptyString::new("pending").unwrap(),
             },
         },
-        user_signing_key: SignedCrossSigningKey {
-            key: CrossSigningKeyRecord {
-                kid: format!("{principal}#ak_user_signing_v1"),
-                alg: "EdDSA".to_owned(),
-                public_key: "z6MkUserDistinctKey".to_owned(),
-                key_format: "multibase".to_owned(),
-            },
-            binding: CrossSigningBinding {
-                verification_method: format!("{principal}#ak_principal_signing_v1"),
-                alg: "EdDSA".to_owned(),
-                signature: "dW51c2Vk".to_owned(),
+        user_signing_key: SubordinateSignedKey {
+            kid: NonEmptyString::new(format!("{principal}#ak_user_signing_v1")).unwrap(),
+            alg: NonEmptyString::new("EdDSA").unwrap(),
+            public_key: NonEmptyString::new("z6MkUserDistinctKey").unwrap(),
+            key_format: KeyFormat::Multibase,
+            binding: SubordinateSignedKeyBinding {
+                verification_method: NonEmptyString::new(format!(
+                    "{principal}#ak_principal_signing_v1"
+                ))
+                .unwrap(),
+                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature: NonEmptyString::new("dW51c2Vk").unwrap(),
             },
         },
         expected_previous_generation: 0,
-        generation: 1,
+        generation: std::num::NonZeroU64::new(1).unwrap(),
         issued_at: chrono::Utc::now(),
     };
     // PSK signs the SSK record over the §5.1 canonical input.
     let ssk_input = publish.self_signing_binding_input().unwrap();
-    publish.self_signing_key.binding.signature =
-        arkret_sdk::base64url_encode(psk.sign(&ssk_input).to_bytes());
+    publish.self_signing_key.binding.signature = NonEmptyString::new(arkret_sdk::base64url_encode(
+        psk.sign(&ssk_input).to_bytes(),
+    ))
+    .unwrap();
 
     // SSK signs the device binding over the §5.2 canonical input.
     let device_input = DeviceTrustBinding::canonical_input(
@@ -915,9 +919,8 @@ fn tier2_publish_and_authorize(
 async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     use arkret_sdk::signatures::PublicKeyMaterial;
     use arkret_sdk::{
-        CrossSigningPublishContent, DeviceCrossSigningChainVerification, DeviceId,
-        DeviceTrustBinding, DeviceTrustState, QueryDeviceCrossSigningBinding,
-        verify_device_cross_signing_chain,
+        CrossSigningPublish, DeviceCrossSigningChainVerification, DeviceId, DeviceTrustBinding,
+        DeviceTrustState, QueryDeviceCrossSigningBinding, verify_device_cross_signing_chain,
     };
 
     let state = AppState::new(test_config(), Db { pool: None });
@@ -987,7 +990,7 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     // Reconstruct the SDK inputs from the response and run the chain verifier,
     // anchoring the PSK to the published key (a inkson client would instead
     // resolve A's DID and confirm this PSK is in A's control set).
-    let publish: CrossSigningPublishContent =
+    let publish: CrossSigningPublish =
         serde_json::from_value(query["cross_signing"][alice].clone()).unwrap();
     let binding: QueryDeviceCrossSigningBinding =
         serde_json::from_value(entry["cross_signing_binding"].clone()).unwrap();

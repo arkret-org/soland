@@ -66,7 +66,6 @@ fn realm_key_share_wire_payload(payload: &Value) -> Value {
     wire_payload
 }
 
-
 fn rejected(reason: &str) -> ProjectionEffect {
     ProjectionEffect::Rejected {
         reason: reason.to_owned(),

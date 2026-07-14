@@ -19,8 +19,8 @@
 use std::collections::BTreeMap;
 
 use arkret_sdk::{
-    CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, Did,
-    MlsWelcomeClaimEnvelope, SignedCrossSigningKey, TypedTrustDomainId,
+    CrossSigningPublish, Did, KeyFormat, MlsWelcomeClaimEnvelope, NonEmptyString, PublishedKey,
+    SubordinateSignedKey, SubordinateSignedKeyBinding, TypedTrustDomainId,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -138,46 +138,44 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
     login["session_credential"].as_str().unwrap().to_owned()
 }
 
-fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublishContent {
+fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublish {
     let principal_id = Did::new(principal.to_owned()).unwrap();
     let self_signing_public_key = ed25519_public_multibase(&test_ssk_signing_key());
-    CrossSigningPublishContent {
+    CrossSigningPublish {
         principal_id: principal_id.clone(),
         trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland-mls-test.local").unwrap(),
-        principal_signing_key: CrossSigningKeyRecord {
-            kid: format!("{principal}#principal-signing"),
-            alg: "EdDSA".to_owned(),
-            public_key: "z6MkPrincipalAlice".to_owned(),
-            key_format: "multibase".to_owned(),
+        principal_signing_key: PublishedKey {
+            kid: NonEmptyString::new(format!("{principal}#principal-signing")).unwrap(),
+            alg: NonEmptyString::new("EdDSA").unwrap(),
+            public_key: NonEmptyString::new("z6MkPrincipalAlice").unwrap(),
+            key_format: KeyFormat::Multibase,
         },
-        self_signing_key: SignedCrossSigningKey {
-            key: CrossSigningKeyRecord {
-                kid: format!("{principal}#self-signing"),
-                alg: "EdDSA".to_owned(),
-                public_key: self_signing_public_key,
-                key_format: "multibase".to_owned(),
-            },
-            binding: CrossSigningBinding {
-                verification_method: format!("{principal}#principal-signing"),
-                alg: "EdDSA".to_owned(),
-                signature: format!("psk-sig-ssk-gen-{generation}"),
+        self_signing_key: SubordinateSignedKey {
+            kid: NonEmptyString::new(format!("{principal}#self-signing")).unwrap(),
+            alg: NonEmptyString::new("EdDSA").unwrap(),
+            public_key: NonEmptyString::new(self_signing_public_key).unwrap(),
+            key_format: KeyFormat::Multibase,
+            binding: SubordinateSignedKeyBinding {
+                verification_method: NonEmptyString::new(format!("{principal}#principal-signing"))
+                    .unwrap(),
+                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature: NonEmptyString::new(format!("psk-sig-ssk-gen-{generation}")).unwrap(),
             },
         },
-        user_signing_key: SignedCrossSigningKey {
-            key: CrossSigningKeyRecord {
-                kid: format!("{principal}#user-signing"),
-                alg: "EdDSA".to_owned(),
-                public_key: "z6MkUserAlice".to_owned(),
-                key_format: "multibase".to_owned(),
-            },
-            binding: CrossSigningBinding {
-                verification_method: format!("{principal}#principal-signing"),
-                alg: "EdDSA".to_owned(),
-                signature: format!("psk-sig-usk-gen-{generation}"),
+        user_signing_key: SubordinateSignedKey {
+            kid: NonEmptyString::new(format!("{principal}#user-signing")).unwrap(),
+            alg: NonEmptyString::new("EdDSA").unwrap(),
+            public_key: NonEmptyString::new("z6MkUserAlice").unwrap(),
+            key_format: KeyFormat::Multibase,
+            binding: SubordinateSignedKeyBinding {
+                verification_method: NonEmptyString::new(format!("{principal}#principal-signing"))
+                    .unwrap(),
+                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature: NonEmptyString::new(format!("psk-sig-usk-gen-{generation}")).unwrap(),
             },
         },
         expected_previous_generation: generation.saturating_sub(1),
-        generation,
+        generation: std::num::NonZeroU64::new(generation).unwrap(),
         issued_at: Utc::now(),
     }
 }

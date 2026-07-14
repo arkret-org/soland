@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_sdk::{
-    CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, SignedCrossSigningKey,
-    TypedTrustDomainId,
+    CrossSigningPublish, KeyFormat, NonEmptyString, PublishedKey, SubordinateSignedKey,
+    SubordinateSignedKeyBinding, TypedTrustDomainId,
 };
 use chrono::Utc;
 
@@ -14,45 +14,45 @@ const BOB_DID: &str = "did:web:bob.example";
 const BOB_PAIRWISE_DID: &str = "did:peer:2.ezbobpairwise";
 const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
 
-fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublishContent {
+fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublish {
     let principal_id = Did::new(principal.to_owned()).unwrap();
-    CrossSigningPublishContent {
+    CrossSigningPublish {
         principal_id: principal_id.clone(),
         trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland.local".to_owned()).unwrap(),
-        principal_signing_key: CrossSigningKeyRecord {
-            kid: format!("{principal}#principal-signing"),
-            alg: "EdDSA".to_owned(),
-            public_key: "z6MkPrincipalDirect".to_owned(),
-            key_format: "multibase".to_owned(),
+        principal_signing_key: PublishedKey {
+            kid: NonEmptyString::new(format!("{principal}#principal-signing")).unwrap(),
+            alg: NonEmptyString::new("EdDSA").unwrap(),
+            public_key: NonEmptyString::new("z6MkPrincipalDirect").unwrap(),
+            key_format: KeyFormat::Multibase,
         },
-        self_signing_key: SignedCrossSigningKey {
-            key: CrossSigningKeyRecord {
-                kid: format!("{principal}#self-signing"),
-                alg: "EdDSA".to_owned(),
-                public_key: "z6MkSelfDirect".to_owned(),
-                key_format: "multibase".to_owned(),
-            },
-            binding: CrossSigningBinding {
-                verification_method: format!("{principal}#principal-signing"),
-                alg: "EdDSA".to_owned(),
-                signature: format!("direct-psk-sig-ssk-gen-{generation}"),
+        self_signing_key: SubordinateSignedKey {
+            kid: NonEmptyString::new(format!("{principal}#self-signing")).unwrap(),
+            alg: NonEmptyString::new("EdDSA").unwrap(),
+            public_key: NonEmptyString::new("z6MkSelfDirect").unwrap(),
+            key_format: KeyFormat::Multibase,
+            binding: SubordinateSignedKeyBinding {
+                verification_method: NonEmptyString::new(format!("{principal}#principal-signing"))
+                    .unwrap(),
+                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature: NonEmptyString::new(format!("direct-psk-sig-ssk-gen-{generation}"))
+                    .unwrap(),
             },
         },
-        user_signing_key: SignedCrossSigningKey {
-            key: CrossSigningKeyRecord {
-                kid: format!("{principal}#user-signing"),
-                alg: "EdDSA".to_owned(),
-                public_key: "z6MkUserDirect".to_owned(),
-                key_format: "multibase".to_owned(),
-            },
-            binding: CrossSigningBinding {
-                verification_method: format!("{principal}#principal-signing"),
-                alg: "EdDSA".to_owned(),
-                signature: format!("direct-psk-sig-usk-gen-{generation}"),
+        user_signing_key: SubordinateSignedKey {
+            kid: NonEmptyString::new(format!("{principal}#user-signing")).unwrap(),
+            alg: NonEmptyString::new("EdDSA").unwrap(),
+            public_key: NonEmptyString::new("z6MkUserDirect").unwrap(),
+            key_format: KeyFormat::Multibase,
+            binding: SubordinateSignedKeyBinding {
+                verification_method: NonEmptyString::new(format!("{principal}#principal-signing"))
+                    .unwrap(),
+                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature: NonEmptyString::new(format!("direct-psk-sig-usk-gen-{generation}"))
+                    .unwrap(),
             },
         },
         expected_previous_generation: generation.saturating_sub(1),
-        generation,
+        generation: std::num::NonZeroU64::new(generation).unwrap(),
         issued_at: Utc::now(),
     }
 }

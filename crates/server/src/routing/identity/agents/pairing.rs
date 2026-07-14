@@ -1182,9 +1182,7 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
             AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
         })?,
     )
-    .map_err(|error| {
-            AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
-        })?;
+    .map_err(|error| AppError::invalid_param(format!("proof_of_possession invalid: {error}")))?;
     if proof.audience != service_id {
         return Err(AppError::invalid_param(
             "proof_of_possession.audience must match this principal server",

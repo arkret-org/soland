@@ -28,8 +28,8 @@ use arkret_sdk::{
     MimiNotifyOutcome, MimiNotifyRequestBody, MimiProxyDownloadOutcome,
     MimiProxyDownloadRequestBody, MimiReportAbuseOutcome, MimiReportAbuseRequestBody,
     MimiRequestConsentOutcome, MimiRequestConsentRequestBody, MimiRoomUpdateOutcome,
-    MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody, MlsGroupId,
-    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, Proof, ReportId, canonical,
+    MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody,
+    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, MlsGroupId, Proof, ReportId, canonical,
 };
 use chrono::Duration;
 use salvo::http::StatusCode;

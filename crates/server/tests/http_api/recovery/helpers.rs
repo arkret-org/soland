@@ -306,7 +306,7 @@ pub(crate) fn seed_cross_signing(
         "generation": 1,
         "issued_at": "2026-05-30T00:00:00Z",
     });
-    let content: arkret_sdk::CrossSigningPublishContent =
+    let content: arkret_sdk::CrossSigningPublish =
         serde_json::from_value(publish).expect("cross-signing publish content");
     state
         .cross_signing

@@ -98,7 +98,7 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
         let published = mgr
             .current_cross_signing(&principal)
             .ok_or_else(key_backup_untrusted_signature)?;
-        let published_generation = published.generation;
+        let published_generation = published.generation.get();
         let record = mgr
             .device(&principal, &device)
             .ok_or_else(key_backup_untrusted_signature)?;

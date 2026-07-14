@@ -26,7 +26,7 @@ pub(crate) async fn ensure_direct_peer_resolvable(
         .cross_signing
         .lock()
         .current_cross_signing(&peer_did)
-        .is_some_and(|publish| publish.generation >= 1);
+        .is_some();
     if !has_cross_signing_control {
         return Err(direct_resolve_precondition(
             crate::error::reasons::PEER_UNRESOLVABLE,
@@ -620,17 +620,14 @@ pub(super) async fn submit_direct_mls_welcome(
             "sig": URL_SAFE_NO_PAD.encode(signature_seed.as_bytes()),
         }
     });
-    let requester_ssk_generation = arkret_sdk::Did::new(actor.to_owned())
-        .ok()
-        .and_then(|did| {
-            let manager = state.cross_signing.lock();
-            {
-                manager
-                    .current_cross_signing(&did)
-                    .map(|publish| publish.generation)
-            }
-        })
-        .filter(|generation| *generation >= 1);
+    let requester_ssk_generation = arkret_sdk::Did::new(actor.to_owned()).ok().and_then(|did| {
+        let manager = state.cross_signing.lock();
+        {
+            manager
+                .current_cross_signing(&did)
+                .map(|publish| publish.generation.get())
+        }
+    });
     if let Some(generation) = requester_ssk_generation {
         claim_envelope["ssk_generation"] = json!(generation);
     } else {

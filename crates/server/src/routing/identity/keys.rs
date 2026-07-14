@@ -89,15 +89,13 @@ async fn keys_upload(
     let one_time_key_count = body.one_time_keys.len() as u64;
     let mut one_time_key_alg_counts = BTreeMap::new();
     for key_id in body.one_time_keys.keys() {
-        let algorithm = key_id
-            .as_str()
-            .split(':')
-            .next()
-            .unwrap_or(key_id.as_str());
+        let algorithm = key_id.as_str().split(':').next().unwrap_or(key_id.as_str());
         *one_time_key_alg_counts
-            .entry(arkret_sdk::NonEmptyString::new(algorithm.to_owned()).map_err(|error| {
-                AppError::invalid_param(format!("one-time key algorithm is invalid: {error}"))
-            })?)
+            .entry(
+                arkret_sdk::NonEmptyString::new(algorithm.to_owned()).map_err(|error| {
+                    AppError::invalid_param(format!("one-time key algorithm is invalid: {error}"))
+                })?,
+            )
             .or_insert(0) += 1;
     }
     let one_time_keys = body.one_time_keys;
@@ -307,7 +305,9 @@ async fn keys_query(
                         })
                         .transpose()
                         .map_err(|error| {
-                            AppError::internal(format!("stored trust algorithm is invalid: {error}"))
+                            AppError::internal(format!(
+                                "stored trust algorithm is invalid: {error}"
+                            ))
                         })?,
                     device_status: Some(facet.status),
                     cross_signing_binding: facet.cross_signing_binding,
@@ -429,11 +429,11 @@ fn verify_keys_upload_device_signature(
         .map_err(|_| AppError::invalid_param("keys/upload signature is not base64url"))?;
     let signature = Signature::from_slice(&signature_bytes)
         .map_err(|_| AppError::invalid_param("keys/upload signature must be 64 bytes"))?;
-    let verifying_key = crate::routing::identity::cross_signing::decode_ed25519_key(
-        device_public_key,
-        "multibase",
-    )
-    .map_err(|error| AppError::invalid_param(format!("device signing key is invalid: {error}")))?;
+    let verifying_key =
+        crate::routing::identity::cross_signing::decode_ed25519_key(device_public_key, "multibase")
+            .map_err(|error| {
+                AppError::invalid_param(format!("device signing key is invalid: {error}"))
+            })?;
     use ed25519_dalek::Verifier as _;
     verifying_key
         .verify(&signing_input, &signature)

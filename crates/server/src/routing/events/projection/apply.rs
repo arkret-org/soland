@@ -1138,7 +1138,10 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         // device record; project them verbatim (services MUST NOT substitute
         // these values in projection).
         if !typed.hpke_key.trim().is_empty() {
-            map.insert("hpke_key".to_owned(), Value::String(typed.hpke_key.clone()));
+            map.insert(
+                "hpke_key".to_owned(),
+                Value::String(typed.hpke_key.to_string()),
+            );
         }
         map.insert(
             "algorithms".to_owned(),
@@ -1146,7 +1149,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
                 typed
                     .algorithms
                     .iter()
-                    .map(|algorithm| Value::String(algorithm.clone()))
+                    .map(|algorithm| Value::String(algorithm.to_string()))
                     .collect(),
             ),
         );

@@ -1114,8 +1114,7 @@ fn current_accepted_ssk_generation(state: &AppState, principal: &arkret_sdk::Did
         .cross_signing
         .lock()
         .current_cross_signing(principal)
-        .map(|publish| publish.generation)
-        .filter(|generation| *generation >= 1)
+        .map(|publish| publish.generation.get())
 }
 
 async fn current_keypackage_trust_binding(

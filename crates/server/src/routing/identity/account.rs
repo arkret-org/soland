@@ -1337,7 +1337,9 @@ fn patch_value<'a>(patch: &'a Patch, field: &str) -> Result<Option<Option<&'a Va
     };
     match operation.op() {
         PatchOpKind::Set => Ok(Some(Some(operation.value().ok_or_else(|| {
-            AppError::invalid_param(format!("profile patch {field} set operation requires value"))
+            AppError::invalid_param(format!(
+                "profile patch {field} set operation requires value"
+            ))
         })?))),
         PatchOpKind::Unset => Ok(Some(None)),
         PatchOpKind::Add | PatchOpKind::Remove => Err(AppError::invalid_param(format!(

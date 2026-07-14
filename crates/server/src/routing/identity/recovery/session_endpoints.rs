@@ -1063,13 +1063,18 @@ pub(super) async fn recovery_session_complete(
         .ok_or_else(|| AppError::invalid_param("authorize event missing cross_signing_binding"))?;
     // Defense-in-depth: re-verify the binding against the accepted SSK (ingest
     // already verified it via §3a, but completion is the irreversible step).
+    let algorithms = typed_authorize
+        .algorithms
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
     crate::routing::identity::cross_signing::verify_device_cross_signing_binding(
         state,
         &record.principal_id,
         &record.requesting_device_id,
         &typed_authorize.device_public_key,
         &typed_authorize.hpke_key,
-        &typed_authorize.algorithms,
+        &algorithms,
         binding,
     )?;
 
