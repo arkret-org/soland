@@ -2,8 +2,8 @@
 
 Thanks for considering a contribution! soland is a reference Arkret v1
 principal server; the protocol contract lives in
-[`arkret-spec`](https://github.com/arkret/arkret-spec) and the Rust SDK
-in [`arkret-rust-sdk`](https://github.com/arkret/arkret-rust-sdk).
+[`arkret-spec`](https://github.com/arkret-org/arkret-spec) and the Rust SDK
+in [`arkret-rust-sdk`](https://github.com/arkret-org/arkret-rust-sdk).
 
 ## Pre-commit hook setup
 
@@ -16,7 +16,7 @@ git config core.hooksPath .githooks
 The hook runs `cargo fmt --all -- --check` plus `cargo clippy --no-deps -- -D
 warnings` on staged Rust changes. If `.githooks/` is missing or you want a
 richer hook, copy `.githooks/pre-commit` from
-[`arkret-rust-sdk`](https://github.com/arkret/arkret-rust-sdk) and
+[`arkret-rust-sdk`](https://github.com/arkret-org/arkret-rust-sdk) and
 adapt to your local toolchain.
 
 ## Repository layout

@@ -94,8 +94,8 @@ soland depends on the `arkret` crate at `../arkret-rust-sdk/crates/sdk`.
 Clone both repos side by side:
 
 ```bash
-git clone https://github.com/arkret/arkret-rust-sdk.git
-git clone https://github.com/arkret/soland.git
+git clone https://github.com/arkret-org/arkret-rust-sdk.git
+git clone https://github.com/arkret-org/soland.git
 cd soland
 ```
 
@@ -384,7 +384,7 @@ Workspace layout (the CI checkout assumes the same):
 
 ```
 arkret/
-├── arkret-rust-sdk/       # https://github.com/arkret/arkret-rust-sdk
+├── arkret-rust-sdk/       # https://github.com/arkret-org/arkret-rust-sdk
 │   └── crates/sdk
 └── soland/                 # this repo
     ├── src/

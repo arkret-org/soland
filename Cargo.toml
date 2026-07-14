@@ -12,8 +12,8 @@ version = "0.3.0"
 edition = "2024"
 rust-version = "1.96"
 license = "Apache-2.0"
-repository = "https://github.com/arkret/soland"
-homepage = "https://github.com/arkret/soland"
+repository = "https://github.com/arkret-org/soland"
+homepage = "https://github.com/arkret-org/soland"
 authors = ["Arkret contributors"]
 
 [workspace.dependencies]
