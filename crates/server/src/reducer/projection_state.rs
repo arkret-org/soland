@@ -165,12 +165,9 @@ pub struct ProjectionState {
     /// resolves them, and pause/deactivate cancels every still-pending request
     /// for the target agent before any future endpoint can be registered.
     pub agent_action_requests: BTreeMap<String, AgentActionRequestProjection>,
-    /// AKP-0008 §4.5 / D3 — accepted, non-revoked agent key authorizations
-    /// keyed by `agent_id`. An entry is the set of authorized
-    /// `key_id`s the agent currently holds (cleared on
-    /// `ak.agent.key.revoke`). The capability evaluator reads this to decide
-    /// whether `effective_after_first_authorized_key` grants have activated:
-    /// an agent with at least one entry has completed runtime pairing.
+    /// Accepted, non-revoked agent key authorizations keyed by `agent_id`.
+    /// An entry is the set of authorized `key_id`s the agent currently holds
+    /// (cleared on `ak.agent.key.revoke`).
     /// Agent id -> (active key id -> accepted authorize Event id).
     pub agent_authorized_keys: BTreeMap<String, BTreeMap<String, String>>,
     /// R3 spec-sync — `ak.call.state.session_focus` write-once projection

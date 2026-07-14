@@ -980,9 +980,6 @@ async fn realm_event_visible_to_session_with_projection(
     if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
         return true;
     }
-    if personal_blocklist_blocks_sender_for_session(state, session, sender).await {
-        return false;
-    }
     match realm_history_visibility(state, realm_id).await.as_str() {
         "world_readable" => true,
         "shared" => {
@@ -1124,9 +1121,6 @@ pub(crate) async fn projection_record_visible_to_session(
     {
         return false;
     }
-    if personal_blocklist_blocks_sender_for_session(state, session, event.sender.as_deref()).await {
-        return false;
-    }
     let projection = state.projection.lock();
     let scope_circle_id = projection_event_scope_circle_id(&projection, event);
     circle_scope_visible_to_session(
@@ -1159,107 +1153,6 @@ pub(crate) async fn projection_event_value_visible_to_session(
     };
     let sender = event.get("sender").and_then(Value::as_str);
     realm_event_visible_to_session(state, realm_id, created_at, sender, session).await
-        && !personal_blocklist_blocks_sender_for_session(state, session, sender).await
-}
-
-pub(crate) async fn canonical_event_visible_to_personal_blocklist(
-    state: &AppState,
-    record: &crate::state::CanonicalEventRecord,
-    session: &SessionRecord,
-) -> bool {
-    !personal_blocklist_blocks_sender_for_session(state, Some(session), Some(&record.actor_id))
-        .await
-}
-
-async fn personal_blocklist_blocks_sender_for_session(
-    state: &AppState,
-    session: Option<&SessionRecord>,
-    sender: Option<&str>,
-) -> bool {
-    let (Some(session), Some(sender)) = (session, sender) else {
-        return false;
-    };
-    if sender == session.actor {
-        return false;
-    }
-    for data_type in PERSONAL_BLOCKLIST_DATA_TYPES.iter() {
-        match state
-            .persistence
-            .account_data()
-            .get(&session.actor, data_type)
-            .await
-        {
-            Ok(None) => {}
-            Ok(Some(record)) => {
-                return blocklist_payload_blocks_sender(&record.payload, sender);
-            }
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    actor = %session.actor,
-                    "failed to read personal blocklist policy"
-                );
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
-    if payload
-        .get("tombstone")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return false;
-    }
-    let Some(entries) = payload.get("entries").and_then(Value::as_array) else {
-        // Account data is opaque unless the holder has authorized a readable
-        // policy projection. An encrypted or otherwise unreadable blocklist
-        // cannot prove that this sender is allowed, so cross-actor fanout must
-        // fail closed.
-        return true;
-    };
-    entries
-        .iter()
-        .any(|entry| blocklist_entry_blocks_sender(entry, sender))
-}
-
-fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
-    let mode = entry
-        .get("mode")
-        .or_else(|| entry.get("kind"))
-        .and_then(Value::as_str)
-        .unwrap_or("block");
-    if mode != "block" {
-        return false;
-    }
-    if entry.get("expires_at").is_some_and(|expires_at| {
-        expires_at.as_str().is_some_and(|value| {
-            chrono::DateTime::parse_from_rfc3339(value)
-                .is_ok_and(|expires| expires <= chrono::Utc::now())
-        })
-    }) {
-        return false;
-    }
-    let Some(target) = entry.get("target") else {
-        return ["did", "actor", "id"]
-            .iter()
-            .any(|field| entry.get(*field).and_then(Value::as_str) == Some(sender));
-    };
-    if let Some(value) = target.as_str() {
-        return value == sender;
-    }
-    let Some(object) = target.as_object() else {
-        return false;
-    };
-    if object.get("kind").and_then(Value::as_str) != Some("actor") {
-        return false;
-    }
-    ["did", "actor", "id"]
-        .iter()
-        .any(|field| object.get(*field).and_then(Value::as_str) == Some(sender))
 }
 
 fn message_scope_circle_id(content: &Value) -> Option<&str> {

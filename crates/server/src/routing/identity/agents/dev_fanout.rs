@@ -18,7 +18,6 @@ use serde_json::{Value, json};
 
 use super::SessionRecord;
 use crate::error::{AppError, ErrorCode};
-use crate::ids;
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
 
@@ -28,9 +27,8 @@ const SCOPE_EVENTS_QUERY_SCAN: &str = "ak.self.events.query.scan";
 const SCOPE_EVENTS_STREAM_SUBSCRIBE: &str = "ak.self.events.stream.subscribe";
 #[cfg(test)]
 const SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ak.self.events.command.submit";
-const ACTION_EVENT_READ: &str = "ak.event.read";
+#[cfg(test)]
 const ACTION_MESSAGE_CREATE: &str = "ak.message.create";
-const ACTION_REACTION_ADD: &str = "ak.reaction.add";
 
 /// Build a server-authored envelope for `session.actor` and submit it via the
 /// shared internal event API. `actor_seq` is taken as
@@ -184,7 +182,7 @@ pub(super) async fn require_controller_principal_control_realm(
 
     // The Realm directory index and reducer projection are separate caches.
     // Repair the reducer-side owner from the durable Realm metadata before
-    // issuing the initial grant so this aggregate stays correct even when a
+    // issuing the accountability event so this aggregate stays correct even when a
     // running process has an indexed self Realm but a stale projection cache.
     // Startup hydration normally provides the same state, but correctness of
     // provisioning must not depend on a restart having rebuilt every cache.
@@ -262,18 +260,16 @@ fn reconcile_self_realm_owner_projection(
 
 /// Fan out the controller-owned provisioning facts. Agent Profile and Agent
 /// PCR genesis are intentionally absent: the controller E2EE client authors
-/// them after it has locally created the Agent PCR MLS state. Returns
-/// `(accountability_event, selector_event, capability_grant_ids)`. The
-/// initial capability grant carries `effective_after_first_authorized_key`
-/// so the evaluator fails closed until pairing completes (§4.3.2).
+/// them after it has locally created the Agent PCR MLS state. Provisioning
+/// records the global Agent scope ceiling but does not materialize Realm
+/// grants, so only the accountability and selector event ids are returned.
 pub(super) async fn fanout_provision_subevents(
     state: &AppState,
     session: &SessionRecord,
     realm_id: &str,
     agent_id: &str,
     agent_slug: &str,
-    requested_scope: &Value,
-) -> Result<(String, String, Vec<String>), AppError> {
+) -> Result<(String, String), AppError> {
     let controller = session.actor.clone();
     // 1. Accountability grant, issuer = controller and subject = Agent.
     let now_utc = Utc::now();
@@ -319,29 +315,7 @@ pub(super) async fn fanout_provision_subevents(
     )
     .await?;
 
-    // 3. Initial capability grant (`ak.capability.grant`), issuer = controller, subject = agent,
-    //    flagged inactive until pairing.
-    let actions = initial_grant_actions(requested_scope);
-    let constraints = initial_grant_constraints(requested_scope, &actions);
-    let mut grant_ids = Vec::new();
-    for (grant_realm_id, resources) in
-        initial_content_grant_resources_by_realm(requested_scope, &actions)?
-    {
-        let grant_id = ids::generate_grant_id();
-        let grant_payload = capability_grant_payload(
-            &grant_id,
-            &grant_realm_id,
-            &controller,
-            agent_id,
-            &actions,
-            &resources,
-            &constraints,
-            true,
-        );
-        materialize_grant(state, session, &grant_realm_id, grant_payload).await?;
-        grant_ids.push(grant_id);
-    }
-    Ok((accountability_event, selector_event, grant_ids))
+    Ok((accountability_event, selector_event))
 }
 
 fn insert_nested_dev_proof(
@@ -374,242 +348,6 @@ fn insert_nested_dev_proofs(payload: &mut Value, controller: &str) -> Result<(),
         }]),
     );
     Ok(())
-}
-
-/// Re-issue the initial pending capability grant for a pairing renewal
-/// (`ak.self.agent.command.renew_pairing`). The pairing-expiry cleanup
-/// auto-revoked the provision-time grant, so a renewed pairing re-runs step 3
-/// of [`fanout_provision_subevents`] with the persisted `requested_scope` —
-/// same actions, same `effective_after_first_authorized_key=true` flag.
-pub(super) async fn fanout_renewal_grants(
-    state: &AppState,
-    session: &SessionRecord,
-    agent_id: &str,
-    requested_scope: &Value,
-) -> Result<Vec<String>, AppError> {
-    let controller = session.actor.clone();
-    let actions = initial_grant_actions(requested_scope);
-    let constraints = initial_grant_constraints(requested_scope, &actions);
-    let mut grant_ids = Vec::new();
-    for (grant_realm_id, resources) in
-        initial_content_grant_resources_by_realm(requested_scope, &actions)?
-    {
-        let grant_id = ids::generate_grant_id();
-        let grant_payload = capability_grant_payload(
-            &grant_id,
-            &grant_realm_id,
-            &controller,
-            agent_id,
-            &actions,
-            &resources,
-            &constraints,
-            true,
-        );
-        materialize_grant(state, session, &grant_realm_id, grant_payload).await?;
-        grant_ids.push(grant_id);
-    }
-    Ok(grant_ids)
-}
-
-/// Expand `requested_scope` (the provision request DSL) into a minimal
-/// content capability action set. Service-surface actions may be present in
-/// `agent_key_scope.actions`, but they are never materialized as
-/// `ak.capability.grant.actions`. An omitted/empty scope grants no implicit
-/// content access.
-fn initial_grant_actions(requested_scope: &Value) -> Vec<String> {
-    let explicit_actions: Vec<String> = requested_scope
-        .get("actions")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|a| a.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    explicit_actions
-        .into_iter()
-        .filter(|action| initial_capability_grant_action(action))
-        .collect()
-}
-
-pub(super) fn validate_initial_content_grant_scope(
-    requested_scope: &Value,
-) -> Result<(), AppError> {
-    let actions = initial_grant_actions(requested_scope);
-    initial_content_grant_resources_by_realm(requested_scope, &actions).map(|_| ())
-}
-
-fn initial_content_grant_resources_by_realm(
-    requested_scope: &Value,
-    content_actions: &[String],
-) -> Result<Vec<(String, Vec<Value>)>, AppError> {
-    if content_actions.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut grouped = std::collections::BTreeMap::<String, Vec<Value>>::new();
-    for resource in requested_scope
-        .get("resources")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let kind = resource
-            .get("kind")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::invalid_param("requested_scope resource kind is missing"))?;
-        if matches!(kind, "operation" | "service") {
-            continue;
-        }
-        let realm_id = resource
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                AppError::invalid_param(format!(
-                    "requested_scope {kind} resource requires realm_id for a content grant"
-                ))
-            })?;
-        let selector = match kind {
-            "realm" => json!({
-                "kind": "realm",
-                "realm_id": realm_id,
-                "match_scope": "realm_wide",
-            }),
-            "strand" | "space" | "object" => {
-                let resource_ref = resource
-                    .get("resource_ref")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        AppError::invalid_param(format!(
-                            "requested_scope {kind} resource requires resource_ref"
-                        ))
-                    })?;
-                let expected_prefix = match kind {
-                    "strand" => "ak:strand:",
-                    "space" => "ak:space:",
-                    "object" => "ak:",
-                    _ => unreachable!(),
-                };
-                if !resource_ref.starts_with(expected_prefix) {
-                    return Err(AppError::invalid_param(format!(
-                        "requested_scope {kind} resource_ref has the wrong typed-id kind"
-                    )));
-                }
-                let id_field = match kind {
-                    "strand" => "strand_id",
-                    "space" => "space_id",
-                    "object" => "object_ref",
-                    _ => unreachable!(),
-                };
-                let mut selector = serde_json::Map::new();
-                selector.insert("kind".to_owned(), Value::String(kind.to_owned()));
-                selector.insert("realm_id".to_owned(), Value::String(realm_id.to_owned()));
-                selector.insert(id_field.to_owned(), Value::String(resource_ref.to_owned()));
-                Value::Object(selector)
-            }
-            _ => {
-                return Err(AppError::invalid_param(format!(
-                    "requested_scope resource kind `{kind}` cannot back a content grant"
-                )));
-            }
-        };
-        grouped
-            .entry(realm_id.to_owned())
-            .or_default()
-            .push(selector);
-    }
-    if grouped.is_empty() {
-        return Err(AppError::invalid_param(
-            "requested_scope content actions require at least one Realm-scoped content resource",
-        ));
-    }
-    Ok(grouped.into_iter().collect())
-}
-
-fn initial_grant_constraints(requested_scope: &Value, content_actions: &[String]) -> Vec<Value> {
-    requested_scope
-        .get("constraints")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|constraint| {
-            constraint
-                .get("applies_to_actions")
-                .and_then(Value::as_array)
-                .is_none_or(|applies_to| {
-                    applies_to.iter().any(|action| {
-                        action
-                            .as_str()
-                            .is_some_and(|action| content_actions.iter().any(|item| item == action))
-                    })
-                })
-        })
-        .cloned()
-        .collect()
-}
-
-fn initial_capability_grant_action(action: &str) -> bool {
-    matches!(
-        action,
-        ACTION_EVENT_READ
-            | ACTION_MESSAGE_CREATE
-            | ACTION_REACTION_ADD
-            | "ak.agent.draft.propose"
-            | "ak.agent.action_request"
-            | "ak.strand.create"
-            | "ak.strand.update"
-            | "ak.relation.create"
-    )
-}
-
-/// Build a `capability_grant_payload` (`{grant_id, grant}`) whose embedded
-/// `grant` satisfies `capability-grant.schema.json` (id / schema / issuer /
-/// subject / actions / resources / proofs all required). The embedded proof
-/// is a dev placeholder generic detached-JWS shape; the durable authority is
-/// the controller-authored envelope proof, this inner proof only satisfies
-/// the structural `minItems:1` schema requirement.
-fn capability_grant_payload(
-    grant_id: &str,
-    realm_id: &str,
-    issuer: &str,
-    subject: &str,
-    actions: &[String],
-    resources: &[Value],
-    constraints: &[Value],
-    effective_after_first_authorized_key: bool,
-) -> Value {
-    let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let mut grant = json!({
-        "id": grant_id,
-        "schema": "ak.schema.capability.v1",
-        "realm_id": realm_id,
-        "issuer": issuer,
-        "subject": subject,
-        "actions": actions,
-        "resources": resources,
-        "issued_at": issued_at,
-        "proofs": [{
-            "kind": "detached_jws",
-            "verification_method": format!("{issuer}#dev"),
-            "alg": "EdDSA",
-            "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            "created_at": issued_at,
-            "jws": "a..b",
-        }],
-    });
-    if effective_after_first_authorized_key {
-        grant.as_object_mut().expect("grant object").insert(
-            "effective_after_first_authorized_key".to_owned(),
-            Value::Bool(true),
-        );
-    }
-    if !constraints.is_empty() {
-        grant
-            .as_object_mut()
-            .expect("grant object")
-            .insert("constraints".to_owned(), Value::Array(constraints.to_vec()));
-    }
-    json!({ "grant_id": grant_id, "grant": grant })
 }
 
 async fn materialize_grant(
@@ -821,7 +559,6 @@ pub(super) async fn submit_revoke_agent_grants(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use serde_json::json;
     use soland_data::Db;
 
     use super::*;
@@ -911,13 +648,6 @@ mod tests {
     }
 
     #[test]
-    fn initial_grant_default_adds_no_content_access() {
-        let actions = initial_grant_actions(&Value::Null);
-
-        assert!(actions.is_empty());
-    }
-
-    #[test]
     fn runtime_agent_key_scope_service_actions_are_registered() {
         let registry = crate::artifacts::operation_ids();
         for action in [
@@ -946,112 +676,5 @@ mod tests {
                 "deprecated self-events shortcut `{action}` must not be used as an agent runtime scope"
             );
         }
-    }
-
-    #[test]
-    fn requested_scope_actions_filter_service_surface_from_content_grant() {
-        let requested = json!({
-            "actions": [SCOPE_EVENTS_STREAM_SUBSCRIBE, SCOPE_EVENTS_QUERY_SCAN, ACTION_MESSAGE_CREATE],
-            "resources": [{ "kind": "realm", "realm_id": "ak:realm:test" }]
-        });
-
-        assert_eq!(
-            initial_grant_actions(&requested),
-            vec![ACTION_MESSAGE_CREATE.to_owned()]
-        );
-    }
-
-    #[test]
-    fn requested_scope_service_only_creates_no_content_grant() {
-        let requested = json!({
-            "actions": [SCOPE_EVENTS_STREAM_SUBSCRIBE, SCOPE_EVENTS_QUERY_SCAN],
-            "resources": [{ "kind": "realm", "realm_id": "ak:realm:test" }]
-        });
-
-        assert!(initial_grant_actions(&requested).is_empty());
-    }
-
-    #[test]
-    fn requested_scope_preserves_content_grant_constraints() {
-        let requested = json!({
-            "actions": [ACTION_MESSAGE_CREATE],
-            "resources": [{
-                "kind": "realm",
-                "realm_id": "ak:realm:01964137-0000-7000-8000-000000000002"
-            }],
-            "constraints": [{
-                "constraint_type": "claim_based",
-                "effect": "require_review",
-                "subtype": "accountability",
-                "applies_to_actions": [ACTION_MESSAGE_CREATE],
-                "controller_approval_required": true
-            }]
-        });
-
-        let actions = initial_grant_actions(&requested);
-        let constraints = initial_grant_constraints(&requested, &actions);
-        let resources = initial_content_grant_resources_by_realm(&requested, &actions)
-            .expect("content resources")
-            .remove(0)
-            .1;
-        let payload = capability_grant_payload(
-            "ak:grant:01964137-0000-7000-8000-000000000001",
-            "ak:realm:01964137-0000-7000-8000-000000000002",
-            "did:web:controller.example",
-            "did:web:agent.example",
-            &actions,
-            &resources,
-            &constraints,
-            true,
-        );
-
-        assert_eq!(payload["grant"]["constraints"], requested["constraints"]);
-    }
-
-    #[test]
-    fn requested_scope_does_not_copy_service_only_constraints_to_content_grant() {
-        let requested = json!({
-            "actions": [ACTION_EVENT_READ, SCOPE_EVENTS_QUERY_SCAN],
-            "resources": [{ "kind": "operation", "operation": ACTION_EVENT_READ }],
-            "constraints": [{
-                "constraint_type": "scope_limitation",
-                "effect": "allow",
-                "applies_to_actions": [SCOPE_EVENTS_QUERY_SCAN]
-            }]
-        });
-        let actions = initial_grant_actions(&requested);
-
-        assert!(initial_grant_constraints(&requested, &actions).is_empty());
-    }
-
-    #[test]
-    fn requested_scope_content_grants_preserve_governed_realm() {
-        let realm_id = "ak:realm:01964137-0000-7000-8000-000000000002";
-        let requested = json!({
-            "actions": [ACTION_EVENT_READ],
-            "resources": [{ "kind": "realm", "realm_id": realm_id }]
-        });
-        let actions = initial_grant_actions(&requested);
-        let grants = initial_content_grant_resources_by_realm(&requested, &actions)
-            .expect("content scope must map to one grant");
-
-        assert_eq!(grants.len(), 1);
-        assert_eq!(grants[0].0, realm_id);
-        assert_eq!(grants[0].1[0]["realm_id"], realm_id);
-        assert_eq!(grants[0].1[0]["match_scope"], "realm_wide");
-    }
-
-    #[test]
-    fn requested_scope_rejects_content_actions_without_content_resources() {
-        let requested = json!({
-            "actions": [ACTION_EVENT_READ],
-            "resources": [{
-                "kind": "service",
-                "service_id": "did:web:soland.example"
-            }]
-        });
-        let actions = initial_grant_actions(&requested);
-
-        assert!(initial_content_grant_resources_by_realm(&requested, &actions).is_err());
     }
 }

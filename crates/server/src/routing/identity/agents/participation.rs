@@ -57,9 +57,13 @@ pub(super) async fn set_agent_participation(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
-    require_agent_controller(state, &session, &agent_id).await?;
+    let record = require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
-    let ceiling = resolve_effective_ceiling(state, &body.scope).await;
+    let governance_ceiling = resolve_effective_ceiling(state, &body.scope).await;
+    let ceiling = effective_participation(
+        governance_ceiling,
+        agent_requested_participation_ceiling(&record),
+    );
     validate_selection_within_ceiling(ceiling, body.selection).map_err(|_| {
         agent_participation_failed_precondition(
             arkret_sdk::error::REASON_AGENT_PARTICIPATION_EXCEEDS_CEILING,
@@ -249,7 +253,7 @@ pub(super) async fn get_agent_participation(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
-    require_agent_controller(state, &session, &agent_id).await?;
+    let record = require_agent_controller(state, &session, &agent_id).await?;
     let selections = state
         .persistence
         .agent_participation()
@@ -266,7 +270,11 @@ pub(super) async fn get_agent_participation(
             continue;
         };
         let selection = participation_from_value(row);
-        let ceiling = resolve_effective_ceiling(state, &scope).await;
+        let governance_ceiling = resolve_effective_ceiling(state, &scope).await;
+        let ceiling = effective_participation(
+            governance_ceiling,
+            agent_requested_participation_ceiling(&record),
+        );
         let effective = effective_participation(ceiling, selection);
         entries.push(AgentParticipationEntry {
             scope,

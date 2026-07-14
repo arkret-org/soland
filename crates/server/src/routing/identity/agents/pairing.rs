@@ -341,7 +341,6 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         &public_key_digest,
         &state.config.service_id,
     )?;
-    let expected_scope = agent_record.requested_scope.clone();
     let events = state
         .persistence
         .events()
@@ -370,9 +369,9 @@ pub(super) async fn reconcile_accepted_agent_authorization(
                 .get("accountable_principal_id")
                 .and_then(Value::as_str)
                 == Some(controller_id.as_str())
-            && expected_scope
-                .as_ref()
-                .is_none_or(|scope| payload.get("agent_key_scope") == Some(scope))
+            && payload
+                .get("agent_key_scope")
+                .is_some_and(|scope| agent_key_scope_within_requested_scope(&agent_record, scope))
             && payload
                 .get("audience")
                 .and_then(Value::as_array)
@@ -899,7 +898,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
             "authorize_event.payload.accountable_principal_id must match the authenticated controller",
         ));
     }
-    ensure_authorize_event_scope_matches_requested(agent_record, payload)?;
+    ensure_authorize_event_scope_within_requested(agent_record, payload)?;
     let audience = payload
         .get("audience")
         .and_then(Value::as_array)
@@ -1277,7 +1276,7 @@ pub(super) fn runtime_public_key_digest(
         .map_err(|error| AppError::invalid_param(format!("public_key is invalid: {error}")))
 }
 
-pub(super) fn ensure_authorize_event_scope_matches_requested(
+pub(super) fn ensure_authorize_event_scope_within_requested(
     agent_record: &AgentPrincipalRecord,
     payload: &Value,
 ) -> Result<(), AppError> {
@@ -1299,11 +1298,9 @@ pub(super) fn ensure_authorize_event_scope_matches_requested(
             "authorize_event.payload.agent_key_scope.actions must be non-empty strings",
         ));
     }
-    if let Some(expected) = agent_record.requested_scope.as_ref()
-        && scope != expected
-    {
+    if !agent_key_scope_within_requested_scope(agent_record, scope) {
         return Err(AppError::invalid_param(
-            "authorize_event.payload.agent_key_scope must match the provisioned requested_scope",
+            "authorize_event.payload.agent_key_scope must be within the provisioned requested_scope",
         ));
     }
     Ok(())
@@ -1377,4 +1374,105 @@ pub(super) fn decode_agent_pairing_token(pairing_token: &str) -> Option<Value> {
 
 pub(super) fn agent_pairing_not_found() -> AppError {
     AppError::not_found("agent pairing token not found")
+}
+
+#[cfg(test)]
+mod requested_scope_tests {
+    use super::*;
+
+    fn agent_record(requested_scope: Option<Value>) -> AgentPrincipalRecord {
+        let mut record = AgentPrincipalRecord::new(
+            "did:webvh:agent.example:agents:test".to_owned(),
+            "did:webvh:controller.example:users:test".to_owned(),
+            "ak:realm:019f6000-0000-7000-8000-000000000001".to_owned(),
+            "did:webvh:agent.example:agents:test#controller".to_owned(),
+            "pending_runtime_key".to_owned(),
+            chrono::Utc::now(),
+        );
+        record.requested_scope = requested_scope;
+        record
+    }
+
+    #[test]
+    fn authorize_scope_may_narrow_but_cannot_widen_provision_ceiling() {
+        let ceiling = json!({
+            "actions": ["ak.message.create", "ak.self.events.command.submit"],
+            "resources": [{
+                "kind": "operation",
+                "operation": "ak.self.events.command.submit"
+            }],
+            "constraints": [{"controller_approval_required": true}]
+        });
+        let payload = json!({
+            "agent_key_scope": {
+                "actions": ["ak.self.events.command.submit"],
+                "resources": ceiling["resources"].clone(),
+                "constraints": [
+                    {"controller_approval_required": true},
+                    {"rate_limit": {"max": 10}}
+                ]
+            }
+        });
+        assert!(
+            ensure_authorize_event_scope_within_requested(
+                &agent_record(Some(ceiling.clone())),
+                &payload,
+            )
+            .is_ok()
+        );
+
+        let widened = json!({
+            "agent_key_scope": {
+                "actions": [
+                    "ak.message.create",
+                    "ak.reaction.add",
+                    "ak.self.events.command.submit"
+                ],
+                "resources": ceiling["resources"].clone(),
+                "constraints": ceiling["constraints"].clone()
+            }
+        });
+        assert!(
+            ensure_authorize_event_scope_within_requested(
+                &agent_record(Some(ceiling.clone())),
+                &widened,
+            )
+            .is_err()
+        );
+
+        let dropped_constraint = json!({
+            "agent_key_scope": {
+                "actions": ["ak.self.events.command.submit"],
+                "resources": ceiling["resources"].clone()
+            }
+        });
+        assert!(
+            ensure_authorize_event_scope_within_requested(
+                &agent_record(Some(ceiling.clone())),
+                &dropped_constraint,
+            )
+            .is_err()
+        );
+
+        let escaped_resource = json!({
+            "agent_key_scope": {
+                "actions": ["ak.self.events.command.submit"],
+                "resources": [{
+                    "kind": "operation",
+                    "operation": "ak.self.events.query.scan"
+                }],
+                "constraints": ceiling["constraints"].clone()
+            }
+        });
+        assert!(
+            ensure_authorize_event_scope_within_requested(
+                &agent_record(Some(ceiling)),
+                &escaped_resource,
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_authorize_event_scope_within_requested(&agent_record(None), &payload).is_err()
+        );
+    }
 }

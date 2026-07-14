@@ -378,7 +378,6 @@ fn capability_grant_from_authz_grant(
         issued_at: grant.created_at,
         not_before: None,
         expires_at: grant.expires_at,
-        effective_after_first_authorized_key: None,
         updated_by: None,
         updated_at: None,
         revoked_by: None,
