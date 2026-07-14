@@ -733,9 +733,15 @@ pub(super) fn account_notification_context(
     agent_record: &AgentPrincipalRecord,
 ) -> Option<AccountNotificationContext> {
     Some(AccountNotificationContext {
-        notification_id: agent_record.approval_notification_id?.to_string(),
+        notification_id: ids::format_typed_uuid(
+            "notification",
+            &agent_record.approval_notification_id?,
+        ),
         recipient_id: agent_record.controller_id.clone(),
-        controller_account_id: agent_record.controller_account_id?.to_string(),
+        controller_account_id: ids::format_typed_uuid(
+            "account",
+            &agent_record.controller_account_id?,
+        ),
         recipient_service_id: agent_record.recipient_service_id.clone()?,
         approval_request_id: agent_record.approval_request_id.clone()?,
     })
@@ -1479,6 +1485,32 @@ mod requested_scope_tests {
         );
         assert!(
             ensure_authorize_event_scope_within_requested(&agent_record(None), &payload).is_err()
+        );
+    }
+
+    #[test]
+    fn account_notification_context_restores_typed_ids_from_persisted_uuids() {
+        let mut record = agent_record(None);
+        record.approval_notification_id = Some(
+            uuid::Uuid::parse_str("019f6131-3dc4-76f1-ade6-00f4225a8528")
+                .expect("valid notification uuid"),
+        );
+        record.controller_account_id = Some(
+            uuid::Uuid::parse_str("019f6131-3dc4-76f1-ade6-00f4225a8529")
+                .expect("valid account uuid"),
+        );
+        record.recipient_service_id = Some("did:webvh:soland.example".to_owned());
+        record.approval_request_id = Some("agent_runtime_approval:test".to_owned());
+
+        let context = account_notification_context(&record).expect("complete notification context");
+
+        assert_eq!(
+            context.notification_id,
+            "ak:notification:019f6131-3dc4-76f1-ade6-00f4225a8528"
+        );
+        assert_eq!(
+            context.controller_account_id,
+            "ak:account:019f6131-3dc4-76f1-ade6-00f4225a8529"
         );
     }
 }
