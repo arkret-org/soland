@@ -14,7 +14,8 @@ use std::collections::BTreeSet;
 use arkret_sdk::{
     CrossSigningPublishContent, CrossSigningResetContent, CrossSigningResetProof,
     DeviceEnrollmentAuthorityBinding, DeviceId, DeviceQuorumSignature, DeviceStatus,
-    DeviceTrustBinding, Did, EventId, MlsWelcomeClaimEnvelope, SignatureMaterial,
+    DeviceTrustBinding, Did, EventId, MlsRequesterTrustBinding, MlsWelcomeClaimEnvelope,
+    SignatureMaterial,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -747,23 +748,19 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     {
         return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
-    match (
-        envelope.ssk_generation,
-        envelope.requester_device_id.as_deref(),
-    ) {
-        (Some(generation), None) => {
-            verify_mls_welcome_claim_envelope_ssk_signature(state, envelope, generation)
+    match &envelope.trust_binding {
+        MlsRequesterTrustBinding::SskGeneration(generation) => {
+            verify_mls_welcome_claim_envelope_ssk_signature(state, envelope, generation.get())
         }
-        (None, Some(requester_device_id)) => {
+        MlsRequesterTrustBinding::RequesterDeviceId(requester_device_id) => {
             verify_mls_welcome_claim_envelope_device_signature(
                 state,
                 envelope,
-                requester_device_id,
+                requester_device_id.as_str(),
                 sender_device_id,
             )
             .await
         }
-        _ => Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH),
     }
 }
 

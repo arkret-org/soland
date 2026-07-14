@@ -432,7 +432,11 @@ fn canonical_event_ops(
                     op_type: LatticeOpType::Transition,
                     tag: None,
                     value: None,
-                    from: Some(serde_json::json!("invite")),
+                    // Realm creation is the sole bootstrap exception that
+                    // directly establishes creator membership. Model that
+                    // derived write from the membership FSM's normative
+                    // logical initial state (`leave`), not from `invite`.
+                    from: Some(serde_json::json!("leave")),
                     to: Some(serde_json::json!("join")),
                     reason: Some("realm_genesis".to_owned()),
                     issuer_seq: None,

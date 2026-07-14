@@ -637,6 +637,20 @@ fn verifying_key_for_service_id(
     if let Some(key) = configured_peer_verifying_key(service_id)? {
         return Ok(key);
     }
+    // did:key is self-resolving and binds its verification key directly in
+    // the identifier. Never replace that authoritative key with the
+    // development deterministic fallback: a peer using a durable notary key
+    // would otherwise sign correctly and still fail verification in dev mode.
+    if service_id.starts_with("did:key:") {
+        let verification_method = format!("{service_id}#federation-fanout-key");
+        return crate::jws_verify::resolve_ed25519_pubkey(state, &verification_method).map_err(
+            |_| {
+                signature_error(
+                    "source did:key service key unavailable; key_rotation_hint=refresh_origin_service_id",
+                )
+            },
+        );
+    }
     if state.config.development_mode {
         tracing::warn!(
             service_id,

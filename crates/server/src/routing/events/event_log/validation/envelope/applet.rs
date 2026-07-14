@@ -142,6 +142,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     validate_applet_registration_epoch_binding(
         state,
         object,
+        &record,
         package,
         grant,
         &applet_id,
@@ -154,6 +155,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
 pub(super) async fn validate_applet_registration_epoch_binding(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
+    record: &crate::routing::extensions::applet_bridge::AppletRecord,
     package: &arkret_sdk::AppletPackage,
     grant: &crate::authz::Grant,
     applet_id: &str,
@@ -173,9 +175,10 @@ pub(super) async fn validate_applet_registration_epoch_binding(
         )
     })?;
 
-    let evidence = package
+    let evidence = record
         .registration_epoch_evidence
         .as_ref()
+        .or(package.registration_epoch_evidence.as_ref())
         .ok_or_else(|| {
             event_validation_error(
                 StatusCode::FORBIDDEN,

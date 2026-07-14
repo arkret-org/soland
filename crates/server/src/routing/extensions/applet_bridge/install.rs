@@ -137,6 +137,7 @@ pub(super) async fn register_package_install(
         capabilities: approved_actions,
         manifest: manifest_from_package(&package),
         package: Some(package.clone()),
+        registration_epoch_evidence: package.registration_epoch_evidence.clone(),
         namespaces: Some(package.namespaces.clone()),
         allow_ghost_actors,
         status: effective_status.to_owned(),
@@ -566,6 +567,7 @@ pub(super) async fn register_verified_applet(
         capabilities: verified.capabilities,
         manifest,
         package: None,
+        registration_epoch_evidence: None,
         namespaces: None,
         allow_ghost_actors: false,
         status: "registered".to_owned(),
@@ -1560,6 +1562,7 @@ mod tests {
             ],
             manifest: manifest_from_package(package),
             package: Some(package.clone()),
+            registration_epoch_evidence: package.registration_epoch_evidence.clone(),
             namespaces: Some(package.namespaces.clone()),
             allow_ghost_actors: true,
             status: "installed".to_owned(),
@@ -1574,6 +1577,31 @@ mod tests {
             install_execution: None,
             ghosts: Vec::new(),
         }
+    }
+
+    #[test]
+    fn applet_record_round_trip_preserves_registration_epoch_evidence() {
+        let mut package = sample_package();
+        package.registration_epoch_evidence =
+            Some(arkret_sdk::applet::AppletRegistrationEpochEvidence::new(
+                package.service_id.clone(),
+                Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
+                arkret_sdk::applet::AppletDidMethodVersionEvidence::unversioned("did:web").unwrap(),
+                vec![arkret_sdk::applet::AppletAcceptedSigningKeyEvidence {
+                    key_ref: package.webhook_auth.key_ref.clone(),
+                    public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
+                }],
+            ));
+        let response = sample_response(&package);
+        let record = sample_record(&package, &response);
+
+        let stored = serde_json::to_value(&record).unwrap();
+        assert!(stored.get("registration_epoch_evidence").is_some());
+        let restored: AppletRecord = serde_json::from_value(stored).unwrap();
+        assert_eq!(
+            restored.registration_epoch_evidence,
+            package.registration_epoch_evidence
+        );
     }
 
     #[test]

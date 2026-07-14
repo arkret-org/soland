@@ -57,6 +57,10 @@ pub fn local_router() -> Router {
         .push(
             Router::with_path("self")
                 .hoop(crate::routing::identity::session_pop::verify_session_pop)
-                .push(sovereign::router()),
+                .push(sovereign::self_router()),
         )
+}
+
+pub fn admin_router() -> Router {
+    sovereign::admin_router()
 }

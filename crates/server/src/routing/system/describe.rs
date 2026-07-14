@@ -634,7 +634,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             IntegrationSurfaceDescriptor {
                 name: "extensions_sovereign".to_owned(),
                 method: "POST/GET".to_owned(),
-                path: "/_soland/self/deployment/*".to_owned(),
+                path: "/_soland/admin/deployment/*".to_owned(),
                 contract: "ak.profile.sovereign_enclave.v1".to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "local sovereign deployment scenario scaffold; outbound guard is not yet wired into every egress call site.".to_owned(),
