@@ -12,6 +12,8 @@
 //! the same audience/scope/proof validation as `/_arkret/gate/account/session-grants`.
 //! Spec rule: no DID in push payload / TURN username.
 
+use std::collections::BTreeMap;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};
@@ -45,22 +47,24 @@ const PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS: i64 = 24;
 pub(crate) const PUSH_TARGET_SALT_ROTATION_SECONDS: i64 = 30 * 24 * 60 * 60;
 const PUSH_TARGET_RETAIN_SECONDS: i64 = 24 * 60 * 60;
 
-pub(crate) fn push_target_privacy_derivation_claim(now: chrono::DateTime<chrono::Utc>) -> Value {
-    json!({
-        "push_target_id": {
-            "derivation_profile": "ak.push_target_id.hmac_sha256.v1",
-            "secret_scope": "per_service",
-            "salt_epoch_id": push_target_salt_epoch_id_at(now),
-            "salt_rotation_seconds": PUSH_TARGET_SALT_ROTATION_SECONDS,
-            "input_binding": [
-                "recipient_service_id",
-                "principal_id",
-                "device_id",
-                "push_route_id",
-                "salt_epoch_id"
-            ]
-        }
-    })
+pub(crate) fn push_target_privacy_derivation_claim(
+    now: chrono::DateTime<chrono::Utc>,
+) -> arkret_sdk::PrivacyDerivation {
+    arkret_sdk::PrivacyDerivation {
+        push_target_id: Some(arkret_sdk::PushTargetPrivacyDerivation {
+            derivation_profile: arkret_sdk::PushTargetDerivationProfile::HmacSha256V1,
+            secret_scope: arkret_sdk::PushTargetSecretScope::PerService,
+            salt_epoch_id: push_target_salt_epoch_id_at(now),
+            salt_rotation_seconds: PUSH_TARGET_SALT_ROTATION_SECONDS as u64,
+            input_binding: Some(vec![
+                arkret_sdk::PushTargetInputBinding::RecipientServiceId,
+                arkret_sdk::PushTargetInputBinding::PrincipalId,
+                arkret_sdk::PushTargetInputBinding::DeviceId,
+                arkret_sdk::PushTargetInputBinding::PushRouteId,
+                arkret_sdk::PushTargetInputBinding::SaltEpochId,
+            ]),
+        }),
+    }
 }
 
 fn push_target_salt_epoch_id_at(now: chrono::DateTime<chrono::Utc>) -> String {
@@ -425,7 +429,7 @@ pub(super) async fn push_notify(
             } else {
                 "unknown_device"
             };
-            rejected.push(push_rejection(device, reason, None));
+            rejected.push(push_rejection(push_target_id, device, reason, None));
             continue;
         };
         let actor = registered_device
@@ -466,6 +470,7 @@ pub(super) async fn push_notify(
             )
             .await;
             rejected.push(push_rejection(
+                push_target_id,
                 device,
                 "contract_drift",
                 Some(drift_label.to_owned()),
@@ -669,22 +674,32 @@ fn push_notification_leaks_private_payload(
     }
 }
 
-fn push_rejection(device: Value, reason: &str, detail: Option<String>) -> Value {
-    let mut rejected = match device {
-        Value::Object(object) => Value::Object(object),
-        other => json!({"device": other}),
-    };
-    if let Some(object) = rejected.as_object_mut() {
-        object.insert("reason".to_owned(), Value::String(reason.to_owned()));
-        if let Some(detail) = detail {
+fn push_rejection(
+    push_target_id: &str,
+    device: Value,
+    reason: &str,
+    detail: Option<String>,
+) -> arkret_sdk::PushNotifyRejection {
+    let device_id = device
+        .get("device_id")
+        .and_then(Value::as_str)
+        .and_then(|value| arkret_sdk::DeviceId::new(value.to_owned()).ok());
+    let extra = detail
+        .map(|detail| {
             let key = match reason {
                 "contract_drift" => "drift_result",
                 _ => "rule_id",
             };
-            object.insert(key.to_owned(), Value::String(detail));
-        }
+            BTreeMap::from([(key.to_owned(), Value::String(detail))])
+        })
+        .unwrap_or_default();
+    arkret_sdk::PushNotifyRejection {
+        push_target_id: push_target_id.to_owned(),
+        device_id,
+        reason_code: reason.to_owned(),
+        retry_after_ms: None,
+        extra,
     }
-    rejected
 }
 
 #[cfg(test)]

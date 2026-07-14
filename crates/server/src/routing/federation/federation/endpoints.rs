@@ -642,7 +642,12 @@ pub(crate) async fn federation_backfill_operations(
                 .into_iter()
                 .map(|operation_id| operation_id.to_string()),
         );
-        rejected.extend(result.rejected);
+        rejected.extend(
+            result
+                .rejected
+                .into_iter()
+                .filter_map(|item| serde_json::to_value(item).ok()),
+        );
         after_cursor = peer_next_cursor.clone();
         if !peer_has_more {
             break;

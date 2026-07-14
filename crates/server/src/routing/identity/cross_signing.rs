@@ -781,7 +781,7 @@ fn verify_mls_welcome_claim_envelope_ssk_signature(
             publish.self_signing_key.key.key_format.clone(),
         )
     };
-    if envelope_generation != accepted_generation || envelope.signature.kid != ssk_kid {
+    if envelope_generation != accepted_generation || envelope.signature.kid.as_str() != ssk_kid {
         return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let ssk = decode_ed25519_key(&ssk_public_key, &ssk_key_format)

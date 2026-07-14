@@ -26,10 +26,7 @@ impl ProjectionState {
             return rejected("realm_key_share_material_missing");
         }
 
-        let scope_realm_id = match realm_key_scope_realm_id(&share.key_scope.effective_scope) {
-            Ok(realm_id) => realm_id,
-            Err(reason) => return rejected(reason),
-        };
+        let scope_realm_id = share.key_scope.effective_scope.realm_id().as_str();
         if scope_realm_id != operation.realm_id.as_str() {
             return rejected("realm_key_share_scope_mismatch");
         }
@@ -46,7 +43,7 @@ impl ProjectionState {
         ProjectionEffect::RealmKeyShareProjected {
             realm_id: operation.realm_id.to_string(),
             recipient_principal_id: share.recipient_principal_id.to_string(),
-            recipient_device_id: share.recipient_device_id,
+            recipient_device_id: share.recipient_device_id.map(|value| value.to_string()),
         }
     }
 }
@@ -69,36 +66,6 @@ fn realm_key_share_wire_payload(payload: &Value) -> Value {
     wire_payload
 }
 
-fn realm_key_scope_realm_id(scope: &Value) -> Result<&str, &'static str> {
-    let Some(object) = scope.as_object() else {
-        return Err("realm_key_share_scope_invalid");
-    };
-    let Some(kind) = object.get("kind").and_then(Value::as_str) else {
-        return Err("realm_key_share_scope_invalid");
-    };
-    let Some(realm_id) = object.get("realm_id").and_then(Value::as_str) else {
-        return Err("realm_key_share_scope_invalid");
-    };
-    if realm_id.is_empty() {
-        return Err("realm_key_share_scope_invalid");
-    }
-    match kind {
-        "realm" if object.len() == 2 && !object.contains_key("circle_id") => Ok(realm_id),
-        "circle" => {
-            if object.len() == 3
-                && object
-                    .get("circle_id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|circle_id| !circle_id.is_empty())
-            {
-                Ok(realm_id)
-            } else {
-                Err("realm_key_share_scope_invalid")
-            }
-        }
-        _ => Err("realm_key_share_scope_invalid"),
-    }
-}
 
 fn rejected(reason: &str) -> ProjectionEffect {
     ProjectionEffect::Rejected {

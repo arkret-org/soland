@@ -178,6 +178,7 @@ pub(super) async fn provision_agent(
         agent_id: agent_principal_did,
         principal_control_realm_id,
         controller_authorization_ref,
+        requested_scope_digest,
         pcr_recovery: AgentProvisionPcrRecovery::default(),
         pairing_request_id,
         pairing_code: Some(pairing_code),
@@ -330,10 +331,13 @@ pub(super) async fn renew_agent_pairing(
     let pcr_recovery =
         crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, &record)
             .await?;
+    let requested_scope_digest =
+        crate::routing::identity::managed_agent_pcr::requested_scope_digest_for_record(&record)?;
     json_ok(AgentRenewPairingOutcome {
         agent_id: agent_principal_did,
         principal_control_realm_id,
         controller_authorization_ref,
+        requested_scope_digest,
         pcr_recovery,
         pairing_mode: if bootstrap_reopen {
             AgentPairingMode::Bootstrap

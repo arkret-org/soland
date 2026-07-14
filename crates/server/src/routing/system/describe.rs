@@ -249,9 +249,13 @@ async fn soland_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOu
     })
 }
 
-fn unsupported_profiles_from_limits(limits: &Value) -> Vec<UnsupportedProfileDescriptor> {
+fn unsupported_profiles_from_limits(
+    limits: &arkret_sdk::ServerLimits,
+) -> Vec<UnsupportedProfileDescriptor> {
     limits
-        .pointer("/profile_status/unsupported_profiles")
+        .extensions
+        .get("profile_status")
+        .and_then(|value| value.get("unsupported_profiles"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()

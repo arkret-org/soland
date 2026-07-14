@@ -652,6 +652,7 @@ fn realm_key_share_source(
 ) -> arkret_sdk::HistoryKeySource {
     if share.recipient_device_id.as_ref().map(arkret_sdk::DeviceId::as_str)
         == Some(share.sender_device_id.as_str())
+    {
         arkret_sdk::HistoryKeySource::OwnDevice
     } else if share.encrypted_key_ref.is_some() {
         arkret_sdk::HistoryKeySource::KeyBackup

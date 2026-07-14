@@ -22,12 +22,13 @@ use std::collections::BTreeMap;
 
 use arkret_sdk::models::proof_kind;
 use arkret_sdk::{
-    Did, EventId, Hash, MimiGroupInfoOutcome, MimiIdentifierQueryOutcome,
+    Base64UrlString, Did, EventId, Hash, MimiDelivery, MimiDeliveryStatus, MimiGroupInfo,
+    MimiGroupInfoOutcome, MimiIdentifierMatch, MimiIdentifierQueryOutcome,
     MimiIdentifierQueryRequestBody, MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody,
     MimiNotifyOutcome, MimiNotifyRequestBody, MimiProxyDownloadOutcome,
     MimiProxyDownloadRequestBody, MimiReportAbuseOutcome, MimiReportAbuseRequestBody,
     MimiRequestConsentOutcome, MimiRequestConsentRequestBody, MimiRoomUpdateOutcome,
-    MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody,
+    MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody, MlsGroupId,
     MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, Proof, ReportId, canonical,
 };
 use chrono::Duration;

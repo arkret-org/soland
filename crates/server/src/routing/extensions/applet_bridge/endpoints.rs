@@ -462,7 +462,20 @@ fn session_revoke_body_for_applet(
         applet_id: Some(AppletId::new(record.applet_id.clone()).map_err(|error| {
             AppError::internal(format!("stored applet_id is invalid: {error}"))
         })?),
-        effective_scope: Some(revoke.effective_scope.clone()),
+        effective_scope: Some(match &revoke.effective_scope {
+            arkret_sdk::applet::EffectiveScope::Realm { realm_id } => {
+                arkret_sdk::models::EffectiveScope::Realm {
+                    realm_id: realm_id.clone(),
+                }
+            }
+            arkret_sdk::applet::EffectiveScope::Circle {
+                realm_id,
+                circle_id,
+            } => arkret_sdk::models::EffectiveScope::Circle {
+                realm_id: realm_id.clone(),
+                circle_id: circle_id.clone(),
+            },
+        }),
         registration_epoch: Some(package.registration_epoch.clone()),
         service_id: Some(package.service_id.clone()),
         capability_grant_refs: grant_refs.to_vec(),
@@ -703,7 +716,7 @@ async fn resolve_realm_endpoint(
                     .and_then(|package| package.protocols.first().cloned())
                     .unwrap_or_else(|| "applet".to_owned()),
                 external_id: record.applet_id,
-                instance_id: Some(record.install_id),
+                instance_id: record.install_id,
                 display_name: None,
                 url: None,
             }),
@@ -748,7 +761,7 @@ async fn protocol_metadata_endpoint(
             external_ref: Some(ExternalRef {
                 protocol: protocol.clone(),
                 external_id: record.applet_id,
-                instance_id: Some(record.install_id),
+                instance_id: record.install_id,
                 display_name: None,
                 url: None,
             }),
@@ -815,7 +828,7 @@ async fn third_party_users_endpoint(
                             .and_then(|package| package.protocols.first().cloned())
                             .unwrap_or_else(|| "applet".to_owned()),
                         external_id: ghost.external_id.clone(),
-                        instance_id: Some(record.install_id.clone()),
+                        instance_id: record.install_id.clone(),
                         display_name: ghost.display_name.clone(),
                         url: None,
                     }),
@@ -868,7 +881,7 @@ async fn third_party_locations_endpoint(
                     .and_then(|package| package.protocols.first().cloned())
                     .unwrap_or_else(|| "applet".to_owned()),
                 external_id: location,
-                instance_id: Some(record.install_id),
+                instance_id: record.install_id,
                 display_name: None,
                 url: None,
             }),

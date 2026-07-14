@@ -10,6 +10,8 @@
 //! projection. Dynamic, signed, or obligation-bearing decisions are served by
 //! `/_arkret/self/policy/check`.
 
+use std::collections::BTreeMap;
+
 use arkret_sdk::models::{
     AuthzDecision, CapabilityGrant, CapabilitySubject, Facet,
     GrantConstraint as WireGrantConstraint, GrantConstraintEffect as WireGrantConstraintEffect,
@@ -538,7 +540,7 @@ fn insert_constraint_extension(
 ) -> Result<(), AppError> {
     let key = GrantConstraintExtensionKey::new(key)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    constraint.extensions.insert(key, value);
+    constraint.extensions.insert(key.into_string(), value);
     Ok(())
 }
 
@@ -673,13 +675,26 @@ fn invite_record_to_sdk(invite: crate::state::RealmInviteRecord) -> Result<Invit
         invite_delivery_target,
         introduction_evidence_digest,
         third_party_id: invite.third_party_id,
-        join_rule_snapshot: invite.join_rule_snapshot.unwrap_or_else(|| {
-            json!({
-                "join_rule": "invite",
-                "invite_token": invite.invite_token,
-                "introduction_evidence_digest": invite.introduction_evidence_digest,
+        join_rule_snapshot: invite
+            .join_rule_snapshot
+            .and_then(|value| {
+                value.as_object().map(|object| {
+                    object
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect()
+                })
             })
-        }),
+            .unwrap_or_else(|| {
+                BTreeMap::from([
+                    ("join_rule".to_owned(), json!("invite")),
+                    ("invite_token".to_owned(), json!(invite.invite_token)),
+                    (
+                        "introduction_evidence_digest".to_owned(),
+                        json!(invite.introduction_evidence_digest),
+                    ),
+                ])
+            }),
         capability_grant_refs: Vec::new(),
         expires_at,
         state: invite_state_from_record(&invite.status),

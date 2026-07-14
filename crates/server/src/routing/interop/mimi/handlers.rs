@@ -54,8 +54,9 @@ pub(super) async fn mimi_key_material(
     );
     json_ok(MimiKeyMaterialOutcome {
         key_packages: Vec::new(),
-        group_info: Value::Null,
-        failures: json!([]),
+        group_info: None,
+        failures: Vec::new(),
+        signature: None,
     })
 }
 
@@ -389,9 +390,10 @@ pub(super) async fn mimi_room_message(
         .map_err(|error| AppError::internal(format!("MIMI mapped event ref: {error}")))?;
     json_ok(MimiSubmitMessageOutcome {
         event_ref: Some(event_ref),
-        delivery: json!({
-            "status": "accepted",
-        }),
+        delivery: MimiDelivery {
+            status: MimiDeliveryStatus::Accepted,
+            delivered_to: Vec::new(),
+        },
         rejected: Vec::new(),
     })
 }
@@ -416,6 +418,15 @@ pub(super) async fn mimi_group_info(
             .with_wire_code(MIMI_REASON_GOVERNANCE_BINDING_MISSING)
     })?;
     let projection = mimi_room_projection(state, &room_id, &realm_id);
+    let projection_bytes = serde_json::to_vec(&projection)
+        .map_err(|error| AppError::internal(format!("MIMI group info serialize: {error}")))?;
+    let projection = MimiGroupInfo {
+        mls_group_id: MlsGroupId::new(format!("mls:{room_id}"))
+            .map_err(|error| AppError::internal(format!("MIMI group id invalid: {error}")))?,
+        epoch: 0,
+        group_info: Base64UrlString::new(arkret_sdk::base64url_encode(&projection_bytes))
+            .map_err(|error| AppError::internal(format!("MIMI group info invalid: {error}")))?,
+    };
     let _receipt = mimi_receipt(
         state,
         "ak.open.mimi.query.group_info",
@@ -628,10 +639,13 @@ pub(super) async fn mimi_identifiers_query(
             })?;
         Hash::new(commitment.to_owned())
             .map_err(|_| AppError::invalid_param("identifier_commitment must be a hash"))?;
-        matches.push(json!({
-            "identifier_commitment": commitment,
-            "matched": false,
-        }));
+        matches.push(MimiIdentifierMatch {
+            identifier_commitment: Hash::new(commitment.to_owned())
+                .map_err(|_| AppError::invalid_param("identifier_commitment must be a hash"))?,
+            matched: false,
+            mimi_uri: None,
+            subject: None,
+        });
     }
     let _receipt = mimi_receipt(
         state,

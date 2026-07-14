@@ -656,6 +656,11 @@ pub(super) fn agent_key_state_from_record(
             "persisted Agent controller DID is invalid: {error}"
         ))
     })?;
+    let requested_scope_digest =
+        arkret_sdk::agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
+            .map_err(|error| {
+                AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
+            })?;
     Ok(KeyState {
         agent_id,
         controller_id,
@@ -667,6 +672,7 @@ pub(super) fn agent_key_state_from_record(
         status: agent_projection_from_record(record).status,
         pcr_recovery,
         requested_scope,
+        requested_scope_digest,
         pairing_request_id: record.pairing_request_id.clone(),
         pairing_code: record.pairing_code.clone(),
         pairing_expires_at: record.pairing_expires_at,

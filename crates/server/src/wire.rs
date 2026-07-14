@@ -856,7 +856,7 @@ pub fn describe(
         methods,
         did_binding_methods: Vec::new(),
         read: None,
-        extra: std::collections::BTreeMap::new(),
+        extra: Default::default(),
     };
     let supported_operations = canonical_supported_operations();
     let local_extension_operations = local_extension_operations();
@@ -938,7 +938,7 @@ pub fn describe(
             "Soland only accepts private plaintext when the current Realm policy lists this service DID with matching plaintext_visible_services.data_classes; otherwise it fails closed."
                 .to_owned(),
         ),
-        extra: std::collections::BTreeMap::new(),
+        extra: Default::default(),
     };
 
     ServerDescription {
@@ -1105,7 +1105,9 @@ pub fn describe(
         auth_metadata,
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
         receive_policy_constraints: None,
-        limits: serde_json::json!({
+        limits: arkret_sdk::ServerLimits {
+            max_get_query_selectors: None,
+            extensions: serde_json::from_value(serde_json::json!({
             "storage": storage,
             "max_limit": 100,
             // Spec media-and-blob.md §2.1 limits keys for the resumable
@@ -1329,7 +1331,9 @@ pub fn describe(
                     "principal_conformance": "not_claimed"
                 }
             }
-        }),
+            }))
+            .expect("server limits must be a JSON object"),
+        },
         frontier: Vec::new(),
         snapshot_frontier: Vec::new(),
         reducer_profile: Some("ak.reducer.v1".to_owned()),

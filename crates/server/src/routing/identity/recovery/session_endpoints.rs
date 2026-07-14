@@ -367,8 +367,9 @@ pub(super) async fn recovery_session_proof_submit(
     let payload = body.into_inner();
     let payload_value = serde_json::to_value(&payload)
         .map_err(|error| AppError::internal(format!("recovery proof submit serialize: {error}")))?;
-    let proof = payload
-        .proof
+    let proof = payload_value
+        .get("proof")
+        .ok_or_else(|| AppError::invalid_param("proof object is required"))?
         .as_object()
         .ok_or_else(|| AppError::invalid_param("proof object is required"))?;
     let proof_kind = proof

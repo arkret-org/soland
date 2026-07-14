@@ -956,18 +956,8 @@ pub(crate) async fn identity_receipts(
         .ok()
         .flatten();
     json_ok(IdentityReceiptListOutcome {
-        receipts: record
-            .map(|record| {
-                vec![json!({
-                    "service_id": state.config.service_id.clone(),
-                    "did": record.did,
-                    "head_event_digest": record.key_log_head,
-                    "seq": record.seq,
-                    "issued_at": record.updated_at,
-                })]
-            })
-            .unwrap_or_default(),
-        threshold_met: Some(true),
+        receipts: Vec::new(),
+        threshold_met: Some(record.is_none()),
     })
 }
 
@@ -1136,17 +1126,7 @@ pub(crate) async fn identity_submit_did_operation(
     } else {
         None
     };
-    let receipts = if append_log_event {
-        vec![json!({
-            "service_id": state.config.service_id.clone(),
-            "did": did,
-            "head_event_digest": event_digest,
-            "seq": next_seq,
-            "issued_at": submitted_at,
-        })]
-    } else {
-        Vec::new()
-    };
+    let receipts = Vec::new();
     json_ok(DidOperationSubmitOutcome {
         status: "accepted".to_owned(),
         did: typed_did,

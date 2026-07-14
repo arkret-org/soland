@@ -13,6 +13,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signature;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{bearer_token, is_device_revoked, now, sha256_hex};
@@ -88,9 +89,15 @@ async fn keys_upload(
     let one_time_key_count = body.one_time_keys.len() as u64;
     let mut one_time_key_alg_counts = BTreeMap::new();
     for key_id in body.one_time_keys.keys() {
-        let algorithm = key_id.split(':').next().unwrap_or(key_id.as_str());
+        let algorithm = key_id
+            .as_str()
+            .split(':')
+            .next()
+            .unwrap_or(key_id.as_str());
         *one_time_key_alg_counts
-            .entry(algorithm.to_owned())
+            .entry(arkret_sdk::NonEmptyString::new(algorithm.to_owned()).map_err(|error| {
+                AppError::invalid_param(format!("one-time key algorithm is invalid: {error}"))
+            })?)
             .or_insert(0) += 1;
     }
     let one_time_keys = body.one_time_keys;
@@ -174,14 +181,21 @@ async fn keys_upload(
         .put(
             session.actor,
             device_id,
-            one_time_keys.into_values().collect(),
+            one_time_keys
+                .into_values()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| AppError::internal(format!("serialize one-time key: {error}")))?,
         )
         .await
     {
         tracing::error!(%error, "failed to persist one-time keys");
     }
 
-    one_time_key_alg_counts.insert("total".to_owned(), one_time_key_count);
+    one_time_key_alg_counts.insert(
+        arkret_sdk::NonEmptyString::new("total").expect("total is non-empty"),
+        one_time_key_count,
+    );
     json_ok(KeysUploadOutcome {
         one_time_key_counts: one_time_key_alg_counts,
         fallback_keys,
@@ -242,8 +256,11 @@ async fn keys_query(
             // single `algorithms` map (key→value) rather than per-algorithm
             // key_records; the directory facet below is the real signing-key data.
             let mut algorithms = match store.get(actor.as_str(), device_id.as_str()).await {
-                Ok(Some(Value::Object(map))) => map.into_iter().collect(),
-                Ok(Some(other)) => BTreeMap::from([("key".to_owned(), other)]),
+                Ok(Some(value)) => value
+                    .get("one_time_keys")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default(),
                 _ => BTreeMap::new(),
             };
             // Signing-key directory facet from the authoritative devices-table
@@ -264,9 +281,34 @@ async fn keys_query(
                 device_id,
                 QueryDeviceRecord {
                     algorithms,
-                    device_signing_key: facet.signing_key_did,
-                    hpke_key: facet.hpke_key,
-                    trust_algorithms: facet.trust_algorithms,
+                    device_signing_key: facet
+                        .signing_key_did
+                        .map(arkret_sdk::DidKey::new)
+                        .transpose()
+                        .map_err(|error| {
+                            AppError::internal(format!(
+                                "stored device signing key is invalid: {error}"
+                            ))
+                        })?,
+                    hpke_key: facet
+                        .hpke_key
+                        .map(arkret_sdk::NonEmptyString::new)
+                        .transpose()
+                        .map_err(|error| {
+                            AppError::internal(format!("stored HPKE key is invalid: {error}"))
+                        })?,
+                    trust_algorithms: facet
+                        .trust_algorithms
+                        .map(|algorithms| {
+                            algorithms
+                                .into_iter()
+                                .map(arkret_sdk::NonEmptyString::new)
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                        .transpose()
+                        .map_err(|error| {
+                            AppError::internal(format!("stored trust algorithm is invalid: {error}"))
+                        })?,
                     device_status: Some(facet.status),
                     cross_signing_binding: facet.cross_signing_binding,
                     enrollment_authority_binding: facet.enrollment_authority_binding,
@@ -300,8 +342,8 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
 
 fn keys_upload_signing_input(
     device_id: &str,
-    one_time_keys: &BTreeMap<String, Value>,
-    fallback_keys: &BTreeMap<String, Value>,
+    one_time_keys: &impl Serialize,
+    fallback_keys: &impl Serialize,
 ) -> Result<Vec<u8>, AppError> {
     let body = json!({
         "device_id": device_id,
@@ -344,9 +386,9 @@ fn verify_keys_upload_device_signature(
     actor: &str,
     device_id: &str,
     current_device: Option<&DeviceInventoryRecord>,
-    one_time_keys: &BTreeMap<String, Value>,
-    fallback_keys: &BTreeMap<String, Value>,
-    device_signature: &Value,
+    one_time_keys: &impl Serialize,
+    fallback_keys: &impl Serialize,
+    device_signature: &arkret_sdk::KeyOperationSignature,
 ) -> Result<(), AppError> {
     let record = current_device.ok_or_else(|| {
         AppError::invalid_param("keys/upload requires an authorized device_public_key")
@@ -366,33 +408,36 @@ fn verify_keys_upload_device_signature(
             AppError::invalid_param("keys/upload requires authoritative device_public_key")
         })?;
     let alg = device_signature
-        .get("alg")
-        .and_then(Value::as_str)
+        .alg
+        .as_ref()
+        .map(arkret_sdk::NonEmptyString::as_str)
         .unwrap_or_default();
     if alg != "EdDSA" {
         return Err(AppError::invalid_param(
             "keys/upload device_signature.alg must be EdDSA",
         ));
     }
-    let kid = device_signature
-        .get("kid")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param("keys/upload device_signature.kid is required"))?;
+    let kid = device_signature.kid.as_str();
     if !device_signature_kid_points_to_device_key(kid, actor, device_public_key) {
         return Err(AppError::invalid_param(
             "keys/upload device_signature.kid does not point to the authorized device key",
         ));
     }
-    let jws = device_signature
-        .get("jws")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param("keys/upload device_signature.jws is required"))?;
     let signing_input = keys_upload_signing_input(device_id, one_time_keys, fallback_keys)?;
-    verify_detached_jws_ed25519_with_device_key(device_public_key, &signing_input, jws)
+    let signature_bytes = URL_SAFE_NO_PAD
+        .decode(device_signature.sig.as_bytes())
+        .map_err(|_| AppError::invalid_param("keys/upload signature is not base64url"))?;
+    let signature = Signature::from_slice(&signature_bytes)
+        .map_err(|_| AppError::invalid_param("keys/upload signature must be 64 bytes"))?;
+    let verifying_key = crate::routing::identity::cross_signing::decode_ed25519_key(
+        device_public_key,
+        "multibase",
+    )
+    .map_err(|error| AppError::invalid_param(format!("device signing key is invalid: {error}")))?;
+    use ed25519_dalek::Verifier as _;
+    verifying_key
+        .verify(&signing_input, &signature)
+        .map_err(|_| AppError::invalid_param("keys/upload signature verification failed"))
 }
 
 fn verify_detached_jws_ed25519_with_device_key(
@@ -462,9 +507,12 @@ async fn keys_claim(
     let mut claimed = BTreeMap::new();
     for (actor, devices) in body.one_time_keys {
         let mut device_map = BTreeMap::new();
-        for (device_id, _algorithm) in devices {
+        for (device_id, algorithm) in devices {
             if let Ok(Some(key)) = store.claim(actor.as_str(), device_id.as_str()).await {
-                device_map.insert(device_id, key);
+                let key = serde_json::from_value(key).map_err(|error| {
+                    AppError::internal(format!("stored one-time key is invalid: {error}"))
+                })?;
+                device_map.insert(device_id, BTreeMap::from([(algorithm, key)]));
             }
         }
         claimed.insert(actor, device_map);

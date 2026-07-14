@@ -380,19 +380,7 @@ async fn upload_keypackage(
             continue;
         }
         let keypackage_ref = entry.keypackage_ref.clone();
-        let Some(key_package_bytes_b64) = entry
-            .key_package
-            .as_str()
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-        else {
-            rejected.push(keypackage_failure(
-                &entry,
-                &device_id,
-                "key_package_missing",
-            ));
-            continue;
-        };
+        let key_package_bytes_b64 = entry.key_package.to_string();
         let key_package_bytes = match decode_key_package(&key_package_bytes_b64) {
             Ok(bytes) => bytes,
             Err(reason) => {

@@ -241,14 +241,17 @@ pub(super) async fn resolve_target(
     json_ok(DirectoryTargetResolutionOutcome {
         target_kind,
         realm_preview: Some(realm_preview),
-        object_preview: object_preview_for_address(&parsed),
+        object_preview: None,
         join_rule: Some(join_rule_enum(&join_rule)),
         as_of: now(),
         source_refs: Vec::new(),
         join_candidates,
-        policy_revision,
-        stale: None,
-        divergent: None,
+        policy_revision: arkret_sdk::NonEmptyString::new(policy_revision.unwrap_or_else(|| {
+            arkret_sdk::canonical::sha256_digest(
+                format!("{}:{discoverability}:{join_rule}", realm_entry.realm_id).as_bytes(),
+            )
+        }))
+        .map_err(|error| AppError::internal(format!("policy revision is invalid: {error}")))?,
     })
 }
 

@@ -177,7 +177,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescriptio
         ],
         supported_features: supported_features.clone(),
         auth_metadata: arkret_sdk::AuthMetadata::minimal("public_no_auth"),
-        limits: json!({}),
+        limits: Default::default(),
         plaintext_visibility: arkret_sdk::PlaintextVisibility::none(),
         privacy_derivation: None,
         receive_policy_constraints: None,

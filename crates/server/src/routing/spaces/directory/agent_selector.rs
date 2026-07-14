@@ -100,14 +100,16 @@ pub(super) fn signed_agent_selector_claim(
     );
     let signature = MoveSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("agent selector claim signing failed: {err}")))?;
-    let proof = json!({
-        "kind": "detached_jws",
-        "alg": signature.alg,
-        "verification_method": signature.verification_method,
-        "payload_digest": signature.payload_digest.as_str(),
-        "created_at": signature.created_at.to_rfc3339(),
-        "jws": signature.jws,
-    });
+    let proof = arkret_sdk::Proof {
+        kind: "detached_jws".to_owned(),
+        alg: signature.alg,
+        verification_method: signature.verification_method,
+        event_digest: signature.payload_digest,
+        created_at: signature.created_at,
+        domain: None,
+        audience: None,
+        jws: signature.jws,
+    };
     Ok(AgentSelectorClaim {
         schema: AGENT_SELECTOR_CLAIM_SCHEMA.to_owned(),
         controller_subject,
