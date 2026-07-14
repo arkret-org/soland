@@ -14,8 +14,8 @@ pub struct ServiceIdentityRecord {
     /// log — or `"adopted_config"` — a pre-existing / external `service_id`
     /// recorded from config on first boot.
     pub provenance: String,
-    /// The minted DID document for a locally bootstrapped identity; `{}` for an
-    /// adopted external identity whose document lives at its own host.
+    /// The authoritative DID document whose notary verification method was
+    /// matched to the locally held signing seed at startup.
     pub did_document: Value,
     /// Multibase-encoded ed25519 update-key seed for future rotation of a
     /// locally minted DID; `None` for adopted identities (their keys live

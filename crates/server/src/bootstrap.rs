@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use ed25519_dalek::SigningKey;
 use rand_chacha::rand_core::SeedableRng;
 use soland_data::Db;
 
@@ -86,6 +87,7 @@ async fn resolve_service_identity(
                     );
                 }
             }
+            validate_persisted_service_identity(persistence, config, &record).await?;
             tracing::info!(
                 service_id = %record.service_id,
                 provenance = %record.provenance,
@@ -95,15 +97,23 @@ async fn resolve_service_identity(
         }
         None => match configured {
             // I-3 — first boot with an operator-supplied DID: adopt it as the
-            // authoritative identity (backward-compatible migration) and pin
-            // future boots against it.
+            // authoritative identity and pin future boots against it.
             Some(configured_did) => {
+                let signing_seed = configured_service_signing_seed(config, &configured_did)?;
+                let did_document = authoritative_service_document(
+                    persistence,
+                    &configured_did,
+                    None,
+                    &signing_seed,
+                )
+                .await?;
+                validate_service_signing_binding(&configured_did, &did_document, &signing_seed)?;
                 persistence
                     .service_identity()
                     .put(ServiceIdentityRecord {
                         service_id: configured_did.clone(),
                         provenance: "adopted_config".to_owned(),
-                        did_document: serde_json::json!({}),
+                        did_document,
                         update_key_seed_multibase: None,
                         created_at: chrono::Utc::now(),
                     })
@@ -138,6 +148,197 @@ async fn resolve_service_identity(
     // SOLAND_TRUST_DOMAIN override inside `derive_trust_domain`). The value
     // computed at config load may have been derived from the placeholder.
     config.trust_domain = derive_trust_domain(&config.service_id)?;
+    Ok(())
+}
+
+async fn validate_persisted_service_identity(
+    persistence: &dyn PersistenceStore,
+    config: &AppConfig,
+    record: &ServiceIdentityRecord,
+) -> anyhow::Result<()> {
+    let signing_seed = configured_service_signing_seed(config, &record.service_id)?;
+    let did_document = authoritative_service_document(
+        persistence,
+        &record.service_id,
+        Some(&record.did_document),
+        &signing_seed,
+    )
+    .await?;
+    validate_service_signing_binding(&record.service_id, &did_document, &signing_seed)
+}
+
+async fn authoritative_service_document(
+    persistence: &dyn PersistenceStore,
+    service_id: &str,
+    persisted_document: Option<&serde_json::Value>,
+    signing_seed: &[u8; 32],
+) -> anyhow::Result<serde_json::Value> {
+    if service_id.starts_with("did:key:") {
+        return did_key_document_for_signing_seed(service_id, signing_seed);
+    }
+
+    if let Some(record) = persistence
+        .webvh()
+        .get_document(service_id)
+        .await
+        .map_err(|error| anyhow::anyhow!("reading service DID document failed: {error}"))?
+    {
+        return Ok(record.did_document);
+    }
+
+    if let Some(document) = persisted_document
+        && document
+            .as_object()
+            .is_some_and(|object| !object.is_empty())
+    {
+        return Ok(document.clone());
+    }
+
+    anyhow::bail!(
+        "service identity {service_id} has no authoritative DID document in the durable identity \
+         store; refusing to adopt an unverifiable configured identity (identity-did.md §3.7 I-3)"
+    )
+}
+
+fn did_key_document_for_signing_seed(
+    service_id: &str,
+    signing_seed: &[u8; 32],
+) -> anyhow::Result<serde_json::Value> {
+    let verifying_key = SigningKey::from_bytes(signing_seed).verifying_key();
+    let key_multibase = arkret_sdk::ed25519_pubkey_to_did_key_multibase(verifying_key.as_bytes());
+    let derived_did = format!("did:key:{key_multibase}");
+    if service_id != derived_did {
+        anyhow::bail!(
+            "configured service identity {service_id} does not match the available notary signing \
+             key (derived {derived_did}); refusing startup (identity-did.md §3.7 I-3)"
+        );
+    }
+    let did = arkret_sdk::Did::new(service_id.to_owned())
+        .map_err(|error| anyhow::anyhow!("configured service DID is invalid: {error}"))?;
+    serde_json::to_value(arkret_sdk::identity::DidDocument::new(
+        did,
+        format!("{service_id}#{key_multibase}"),
+        key_multibase,
+    ))
+    .map_err(|error| anyhow::anyhow!("serializing configured did:key document failed: {error}"))
+}
+
+fn configured_service_signing_seed(
+    config: &AppConfig,
+    service_id: &str,
+) -> anyhow::Result<[u8; 32]> {
+    let configured_seed = config.notary_signing_key_seed;
+    if !config.use_keystore {
+        return configured_seed.ok_or_else(|| {
+            anyhow::anyhow!(
+                "service identity {service_id} cannot be verified without a durable notary signing \
+                 key; configure SOLAND_NOTARY_SIGNING_KEY or SOLAND_USE_KEYSTORE=true"
+            )
+        });
+    }
+
+    let app_id = format!("soland.{service_id}");
+    let key_id = format!("arkret:signer:soland-notary:{service_id}");
+    let store = arkret_sdk::durable_platform_keystore(&app_id)
+        .map_err(|error| anyhow::anyhow!("opening service identity KeyStore failed: {error}"))?;
+    match store.load(&key_id) {
+        Ok(bytes) => {
+            if bytes.len() != 32 {
+                anyhow::bail!(
+                    "service identity KeyStore entry {key_id} must be 32 bytes, got {}",
+                    bytes.len()
+                );
+            }
+            let mut stored_seed = [0u8; 32];
+            stored_seed.copy_from_slice(&bytes);
+            if let Some(configured_seed) = configured_seed
+                && configured_seed != stored_seed
+            {
+                anyhow::bail!(
+                    "SOLAND_NOTARY_SIGNING_KEY does not match the durable KeyStore entry for \
+                     {service_id}; refusing startup to avoid signing under a different identity"
+                );
+            }
+            Ok(stored_seed)
+        }
+        Err(error) => configured_seed.ok_or_else(|| {
+            anyhow::anyhow!(
+                "service identity {service_id} has no usable durable notary signing key in the \
+                 KeyStore ({error}); refusing startup"
+            )
+        }),
+    }
+}
+
+fn validate_service_signing_binding(
+    service_id: &str,
+    did_document: &serde_json::Value,
+    signing_seed: &[u8; 32],
+) -> anyhow::Result<()> {
+    let document: arkret_sdk::identity::DidDocument = serde_json::from_value(did_document.clone())
+        .map_err(|error| {
+            anyhow::anyhow!("authoritative service DID document is invalid: {error}")
+        })?;
+    if document.id.as_str() != service_id {
+        anyhow::bail!(
+            "authoritative service DID document id ({}) does not match service identity \
+             {service_id}; refusing startup",
+            document.id
+        );
+    }
+    document.validate().map_err(|error| {
+        anyhow::anyhow!("authoritative service DID document is invalid: {error}")
+    })?;
+
+    let expected_key = SigningKey::from_bytes(signing_seed).verifying_key();
+    if service_id.starts_with("did:key:") {
+        let expected_did = format!(
+            "did:key:{}",
+            arkret_sdk::ed25519_pubkey_to_did_key_multibase(expected_key.as_bytes())
+        );
+        if service_id != expected_did {
+            anyhow::bail!(
+                "service identity {service_id} does not match the available notary signing key \
+                 (derived {expected_did}); refusing startup"
+            );
+        }
+        return Ok(());
+    }
+
+    let verification_method = format!("{service_id}#notary-key");
+    if !document
+        .verification_methods
+        .contains_key(&verification_method)
+    {
+        return Err(anyhow::anyhow!(
+            "authoritative service DID document does not publish required verification method \
+             {verification_method}; refusing startup"
+        ));
+    }
+    let published_key = arkret_sdk::identity::resolve_verification_method_key_from_document(
+        &document,
+        &verification_method,
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "authoritative service DID verification method {verification_method} is invalid: \
+             {error}"
+        )
+    })?
+    .public_key
+    .ed25519_bytes()
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "authoritative service DID verification method {verification_method} is invalid: \
+             {error}"
+        )
+    })?;
+    if published_key != *expected_key.as_bytes() {
+        anyhow::bail!(
+            "authoritative service DID verification method {verification_method} does not match \
+             the available notary signing key; refusing startup"
+        );
+    }
     Ok(())
 }
 
@@ -290,6 +491,39 @@ mod tests {
 
     use super::*;
 
+    fn did_key_for_seed(seed: [u8; 32]) -> String {
+        let key = SigningKey::from_bytes(&seed).verifying_key();
+        format!(
+            "did:key:{}",
+            arkret_sdk::ed25519_pubkey_to_did_key_multibase(key.as_bytes())
+        )
+    }
+
+    fn webvh_document_record(did: &str, signing_seed: [u8; 32]) -> WebvhDocumentRecord {
+        let key = SigningKey::from_bytes(&signing_seed).verifying_key();
+        let now = chrono::Utc::now();
+        WebvhDocumentRecord {
+            did: did.to_owned(),
+            did_document: serde_json::json!({
+                "id": did,
+                "verificationMethod": [{
+                    "id": format!("{did}#notary-key"),
+                    "type": "Multikey",
+                    "controller": did,
+                    "publicKeyMultibase": arkret_sdk::ed25519_pubkey_to_did_key_multibase(
+                        key.as_bytes(),
+                    ),
+                }],
+            }),
+            key_log_head: None,
+            seq: 1,
+            method_evidence: serde_json::json!({"mode": "test"}),
+            fetched_at: now,
+            expires_at: now,
+            updated_at: now,
+        }
+    }
+
     #[test]
     fn bootstrap_rejects_ephemeral_service_signing_key() {
         let config = AppConfig::test_default();
@@ -299,6 +533,121 @@ mod tests {
                 .to_string()
                 .contains("SOLAND_NOTARY_SIGNING_KEY or SOLAND_USE_KEYSTORE=true"),
             "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_did_key_is_adopted_only_when_notary_key_matches() {
+        let signing_seed = [0x41u8; 32];
+        let service_id = did_key_for_seed(signing_seed);
+        let mut config = AppConfig {
+            service_id: service_id.clone(),
+            notary_signing_key_seed: Some(signing_seed),
+            ..AppConfig::test_default()
+        };
+        let persistence = SolandMemoryPersistenceStore::new();
+
+        resolve_service_identity(&persistence, &mut config)
+            .await
+            .expect("matching configured identity");
+
+        let record = persistence
+            .service_identity()
+            .get()
+            .await
+            .expect("service identity lookup")
+            .expect("adopted service identity");
+        assert_eq!(record.service_id, service_id);
+        assert_eq!(record.provenance, "adopted_config");
+        assert_eq!(record.did_document["id"], service_id);
+        assert!(!record.did_document.as_object().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn configured_did_key_mismatch_rejects_before_persistence() {
+        let configured_did = did_key_for_seed([0x42u8; 32]);
+        let mut config = AppConfig {
+            service_id: configured_did,
+            notary_signing_key_seed: Some([0x43u8; 32]),
+            ..AppConfig::test_default()
+        };
+        let persistence = SolandMemoryPersistenceStore::new();
+
+        let error = resolve_service_identity(&persistence, &mut config)
+            .await
+            .expect_err("mismatched configured identity must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the available notary signing key")
+        );
+        assert!(
+            persistence
+                .service_identity()
+                .get()
+                .await
+                .expect("service identity lookup")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_webvh_identity_rejects_mismatched_notary_method() {
+        let service_id = "did:webvh:z6mkfixture:soland.example";
+        let mut config = AppConfig {
+            service_id: service_id.to_owned(),
+            notary_signing_key_seed: Some([0x45u8; 32]),
+            ..AppConfig::test_default()
+        };
+        let persistence = SolandMemoryPersistenceStore::new();
+        persistence
+            .webvh()
+            .put_document(webvh_document_record(service_id, [0x44u8; 32]))
+            .await
+            .expect("store authoritative DID document");
+
+        let error = resolve_service_identity(&persistence, &mut config)
+            .await
+            .expect_err("mismatched authoritative notary method must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the available notary signing key")
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_identity_is_revalidated_against_current_notary_key() {
+        let persisted_seed = [0x46u8; 32];
+        let service_id = did_key_for_seed(persisted_seed);
+        let mut config = AppConfig {
+            service_id: service_id.clone(),
+            notary_signing_key_seed: Some([0x47u8; 32]),
+            ..AppConfig::test_default()
+        };
+        let persistence = SolandMemoryPersistenceStore::new();
+        persistence
+            .service_identity()
+            .put(ServiceIdentityRecord {
+                service_id,
+                provenance: "adopted_config".to_owned(),
+                did_document: serde_json::json!({}),
+                update_key_seed_multibase: None,
+                created_at: chrono::Utc::now(),
+            })
+            .await
+            .expect("persist service identity");
+
+        let error = resolve_service_identity(&persistence, &mut config)
+            .await
+            .expect_err("persisted identity key drift must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the available notary signing key")
         );
     }
 
