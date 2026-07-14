@@ -102,7 +102,8 @@ pub fn router_with_rate_limiter_and_request_size_config(
                 .push(admin::spec_router())
                 .push(admin::admin_router())
                 .push(admin::router())
-                .push(federation::admin_seal_sign_router())
+        .push(federation::admin_seal_sign_router())
+                .push(Router::with_path("admin").push(extensions::admin_router()))
                 .push(soland_local_router()),
         )
         .push(api_v1_router(conformance_harness_enabled));

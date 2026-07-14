@@ -420,23 +420,24 @@ fn unknown_did() -> String {
     "did:webvh:unknown".to_owned()
 }
 
-pub(super) fn router() -> Router {
+pub(super) fn admin_router() -> Router {
+    Router::with_path("deployment")
+        .push(Router::with_path("info").get(deployment_info))
+        .push(Router::with_path("configure").post(configure_deployment))
+        .push(Router::with_path("register-enclave").post(register_enclave))
+        .push(Router::with_path("realm.create").post(realm_create))
+        .push(Router::with_path("external-invite").post(external_invite))
+        .push(Router::with_path("network/link").post(set_network_link))
+        .push(Router::with_path("store-and-forward/messages").post(store_forward_message))
+        .push(Router::with_path("store-and-forward/drain").post(drain_store_forward))
+        .push(Router::with_path("store-and-forward/ingest").post(ingest_store_forward))
+        .push(Router::with_path("enclave-frontier").get(enclave_frontier))
+        .push(Router::with_path("audit").get(deployment_audit))
+}
+
+pub(super) fn self_router() -> Router {
     Router::new()
-        .push(
-            Router::with_path("deployment")
-                .push(Router::with_path("info").get(deployment_info))
-                .push(Router::with_path("configure").post(configure_deployment))
-                .push(Router::with_path("register-enclave").post(register_enclave))
-                .push(Router::with_path("realm.create").post(realm_create))
-                .push(Router::with_path("external-invite").post(external_invite))
-                .push(Router::with_path("network/link").post(set_network_link))
-                .push(Router::with_path("store-and-forward/messages").post(store_forward_message))
-                .push(Router::with_path("store-and-forward/drain").post(drain_store_forward))
-                .push(Router::with_path("store-and-forward/ingest").post(ingest_store_forward))
-                .push(Router::with_path("enclave-proxy").post(enclave_proxy))
-                .push(Router::with_path("enclave-frontier").get(enclave_frontier))
-                .push(Router::with_path("audit").get(deployment_audit)),
-        )
+        .push(Router::with_path("deployment/enclave-proxy").post(enclave_proxy))
         .push(Router::with_path("realm/{realm_id}").get(realm_info))
         .push(Router::with_path("account/accept-external-invite").post(accept_external_invite))
         .push(Router::with_path("account/{did}").get(external_account_status))

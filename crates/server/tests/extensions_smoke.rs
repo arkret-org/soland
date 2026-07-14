@@ -950,7 +950,7 @@ fn safe_did_token(value: &str) -> String {
 }
 
 // S-00 regression: the sovereign deployment surface
-// (`/_soland/self/deployment/*`, `/_soland/self/account/*`, etc.) MUST
+// (`/_soland/admin/deployment/*`, `/_soland/self/account/*`, etc.) MUST
 // reject unauthenticated callers. Before the fix the whole `self` segment
 // mounted `sovereign::router()` with no auth hoop and no per-handler
 // `authenticated_session`, exposing every read/write handler to anonymous
@@ -963,7 +963,7 @@ async fn sovereign_deployment_configure_rejects_unauthenticated() {
     state.hydrate().await.unwrap();
     let app = service(state);
 
-    let response = TestClient::post("http://server/_soland/self/deployment/configure")
+    let response = TestClient::post("http://server/_soland/admin/deployment/configure")
         .json(&json!({ "upstream_available": true }))
         .send(&app)
         .await;
@@ -980,7 +980,7 @@ async fn sovereign_deployment_audit_rejects_unauthenticated() {
     state.hydrate().await.unwrap();
     let app = service(state);
 
-    let response = TestClient::get("http://server/_soland/self/deployment/audit")
+    let response = TestClient::get("http://server/_soland/admin/deployment/audit")
         .send(&app)
         .await;
     assert_eq!(
