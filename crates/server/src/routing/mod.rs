@@ -30,9 +30,9 @@ pub(crate) mod realm_organization;
 
 use access::policy::policy_document_to_response;
 use admin::audit::append_audit_log;
+use events::operations::validate_canonical_json_value;
 #[cfg(test)]
 use events::operations::validate_operation_semantics;
-use events::operations::{validate_canonical_json_value, validate_device_message_target};
 use events::projection::{
     accept_local_operations, ingest_federation_operations, operation_is_visible,
     projection_event_from_operation, redaction_targets_from_operations,

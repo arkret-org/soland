@@ -14,7 +14,6 @@
 //!   shape.
 //! - `validate_encrypted_payload_envelope` — `ak.profile.encrypted_envelope.v1` envelope shape (MLS
 //!   sender / scheme / version / `key_ref`).
-//! - `validate_device_message_target` — to-device transport shape (typed `DeviceMessageTarget`).
 //! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields is validated via the SDK
 //!   `arkret_sdk::canonical::validate_timestamp_canonical`.
 //! - `canonical_json_digest` — sha256 over canonical-JSON bytes.
@@ -31,7 +30,7 @@
 //! - `content` — canonical-JSON, content-block, mention, and device-message shape checks.
 //! - `payload_schemas` — the static `PayloadRequirement` tables.
 
-use arkret_sdk::{DeviceMessageTarget, Operation};
+use arkret_sdk::Operation;
 use serde_json::Value;
 
 use super::{is_valid_hash_digest, validate_did};
@@ -76,9 +75,6 @@ mod policy_tests;
 #[cfg(test)]
 mod schema_tests;
 
-#[cfg(test)]
-#[path = "operations_device_message_payload_tests.rs"]
-mod device_message_payload_tests;
 #[cfg(test)]
 #[path = "operations_minimal_metadata_aad_tests.rs"]
 mod minimal_metadata_aad_tests;

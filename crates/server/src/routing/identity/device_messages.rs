@@ -15,10 +15,7 @@ use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{
-    SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync,
-    validate_device_message_target,
-};
+use super::{SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
@@ -86,13 +83,6 @@ async fn send_device_messages(
     let sender_verified = device_is_active_verified(sender_device.as_ref());
     let mut deliverable_targets = BTreeSet::new();
     let mut unknown_devices = BTreeMap::new();
-    for devices in body.messages.values() {
-        for target in devices.values() {
-            if let Err(message) = validate_device_message_target(target) {
-                return Err(AppError::invalid_param(message));
-            }
-        }
-    }
     let devices_store = state.persistence.devices();
     for (recipient, devices) in &body.messages {
         for (device_id, target) in devices {
@@ -441,22 +431,36 @@ fn note_unknown_device(
 fn device_message_envelope_from_record(
     message: &DeviceMessageRecord,
 ) -> Option<DeviceMessageEnvelope> {
-    let kind = message
-        .content
-        .get("kind")
-        .or_else(|| message.content.get("type"))
-        .and_then(Value::as_str)?
-        .to_owned();
+    let kind = arkret_sdk::ProtocolKind::new(
+        message
+            .content
+            .get("kind")
+            .or_else(|| message.content.get("type"))
+            .and_then(Value::as_str)?,
+    )
+    .ok()?;
     let content = message
         .content
         .get("content")
-        .cloned()
-        .unwrap_or(Value::Null);
+        .and_then(Value::as_object)?
+        .clone()
+        .into_iter()
+        .collect();
     let expires_at = message
         .content
         .get("expires_at")
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1));
+    let device_proof = match message.content.get("device_proof") {
+        Some(Value::Object(object)) => Some(object.clone().into_iter().collect()),
+        Some(_) => return None,
+        None => None,
+    };
+    let unsigned = match message.content.get("unsigned") {
+        Some(Value::Object(object)) => Some(object.clone().into_iter().collect()),
+        Some(_) => return None,
+        None => None,
+    };
     Some(DeviceMessageEnvelope {
         kind,
         sender_principal_id: arkret_sdk::Did::new(message.sender.clone()).ok()?,
@@ -473,7 +477,7 @@ fn device_message_envelope_from_record(
         sent_at: message.created_at,
         expires_at,
         content,
-        device_proof: message.content.get("device_proof").cloned(),
-        unsigned: message.content.get("unsigned").cloned(),
+        device_proof,
+        unsigned,
     })
 }

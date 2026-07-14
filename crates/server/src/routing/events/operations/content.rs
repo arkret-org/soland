@@ -247,32 +247,6 @@ pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &s
         })
 }
 
-// Transport-shape check for a to-device target. `DeviceMessageTarget` already
-// guarantees the outer object shape, a present `kind`, and a present `content`
-// at deserialization, so the only runtime checks left are a non-blank `kind`
-// and a JSON-object `content`.
-//
-// Per crypto-media/device-lifecycle.md §7, to-device content SHOULD be
-// end-to-end encrypted, but cleartext is explicitly permitted for capability
-// discovery and verification bootstrap (`ak.key.verification.*`), and the
-// secret-share request (`ak.secret.request`) carries only a one-time HPKE
-// public key. The secret response (`ak.secret.send`) is HPKE-sealed but uses
-// its own envelope shape (§10.7), not the MLS Realm `encrypted_envelope`. The
-// to-device queue is zero-knowledge and does not validate E2EE content
-// semantics; it only requires a content object so routing and
-// `DeviceMessageEnvelope` materialization succeed. Forcing the MLS
-// `encrypted_envelope` shape here would reject the very `ak.key.verification.*`
-// strand advertised by the device_messages describe surface.
-pub fn validate_device_message_target(target: &DeviceMessageTarget) -> Result<(), &'static str> {
-    if target.kind.trim().is_empty() {
-        return Err("device message requires kind");
-    }
-    if !target.content.is_object() {
-        return Err("device message content must be a JSON object");
-    }
-    Ok(())
-}
-
 pub fn validate_content_blocks(content: &serde_json::Value) -> Result<(), &'static str> {
     validate_content_block(content)
 }
