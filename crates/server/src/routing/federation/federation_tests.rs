@@ -30,11 +30,10 @@ fn verify_actor_body() -> arkret_sdk::FederationVerifyActorRequestBody {
         actor_id: arkret_sdk::Did::new("did:web:alice.example").unwrap(),
         challenge: Some("challenge-1".to_owned()),
         signed_payload_digest: None,
-        signature: serde_json::json!({
-            "kid": "did:web:alice.example#key-1",
-            "alg": "EdDSA",
-            "sig": "test-signature"
-        }),
+        signature: arkret_sdk::VerifyActorChallengeSignature {
+            key_id: "did:web:alice.example#key-1".to_owned(),
+            signature: "test-signature".to_owned(),
+        },
         purpose: "federation.verify_actor".to_owned(),
         realm_id: None,
     }

@@ -11,8 +11,8 @@ use std::net::SocketAddr;
 
 use arkret_sdk::applet::WebhookSignatureAlg;
 use arkret_sdk::{
-    AppletNamespaceEntry, AppletPackage, AppletWireNamespaces, Did, Ed25519MoveSigner, Hash,
-    WebhookAuth,
+    AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry,
+    AppletPackage, AppletWireNamespaces, Did, Ed25519MoveSigner, Hash, WebhookAuth,
 };
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
@@ -795,21 +795,21 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         "ak.applet.ghost.provision".to_owned(),
     ];
     package.endpoint_policy = arkret_sdk::applet::AppletEndpointPolicy {
-        extra: BTreeMap::from([
-            (
-                "transactions".to_owned(),
-                json!("/_arkret/edge/applet/transactions"),
-            ),
-            (
-                "actors".to_owned(),
-                json!("/_arkret/edge/applet/actors/{actor_id}"),
-            ),
-            (
-                "realms".to_owned(),
-                json!("/_arkret/edge/applet/realms/{realm_id_or_alias}"),
-            ),
-        ]),
-        ..Default::default()
+        endpoints: [
+            "/_arkret/edge/applet/transactions",
+            "/_arkret/edge/applet/actors/{actor_id}",
+            "/_arkret/edge/applet/realms/{realm_id_or_alias}",
+        ]
+        .into_iter()
+        .map(|path| AppletEndpointEntry {
+            method: AppletEndpointMethod::Post,
+            path: path.to_owned(),
+            auth: Some(AppletEndpointAuth::WebhookSignature),
+            description: None,
+            extra: Default::default(),
+        })
+        .collect(),
+        extra: Default::default(),
     };
     package.ghost_policy = arkret_sdk::applet::AppletGhostPolicy {
         enabled: true,

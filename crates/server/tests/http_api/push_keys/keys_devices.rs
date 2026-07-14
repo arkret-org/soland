@@ -995,10 +995,14 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     let binding: QueryDeviceCrossSigningBinding =
         serde_json::from_value(entry["cross_signing_binding"].clone()).unwrap();
     let trust_binding = DeviceTrustBinding {
-        verification_method: binding.verification_method.clone(),
-        alg: binding.alg.clone().unwrap_or_else(|| "EdDSA".to_owned()),
+        verification_method: binding.verification_method.to_string(),
+        alg: binding
+            .alg
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "EdDSA".to_owned()),
         ssk_generation: binding.ssk_generation,
-        signature: binding.signature.clone(),
+        signature: binding.signature.to_string(),
     };
     let device_id_typed = DeviceId::new(alice_device.to_owned()).unwrap();
     let principal_did = Did::new(alice.to_owned()).unwrap();

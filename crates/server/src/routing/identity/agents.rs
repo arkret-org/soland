@@ -269,20 +269,28 @@ mod tests {
         use ed25519_dalek::{Signer as _, SigningKey};
 
         let signing_key = SigningKey::from_bytes(&[42u8; 32]);
-        let public_key = json!({
+        let encoded_public_key = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(signing_key.verifying_key().as_bytes());
+        let public_key_value = json!({
             "kty": "OKP",
             "kid": verification_method,
             "alg": "Ed25519",
-            "key": base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(signing_key.verifying_key().as_bytes()),
+            "key": encoded_public_key.clone(),
         });
+        let public_key = PublicKey {
+            kty: arkret_sdk::NonEmptyString::new("OKP").unwrap(),
+            kid: arkret_sdk::NonEmptyString::new(verification_method).unwrap(),
+            alg: arkret_sdk::NonEmptyString::new("Ed25519").unwrap(),
+            key: arkret_sdk::Base64UrlString::new(encoded_public_key).unwrap(),
+            key_digest: None,
+        };
         let agent_id = Did::new(agent.to_owned()).expect("agent did");
         let pairing_request_id = "agent_pairing_request:01999999-0000-7000-8000-00000000feed";
         let request_digest = arkret_sdk::agent_key_pair_proof_request_binding_digest(
             pairing_request_id,
             &agent_id,
             verification_method,
-            &public_key,
+            &public_key_value,
             None,
         )
         .expect("pop digest");
@@ -302,18 +310,32 @@ mod tests {
                 .expect("pop signing canonical bytes"),
         );
         AgentKeyPairRequestBody {
-            pairing_request_id: pairing_request_id.to_owned(),
+            pairing_request_id: arkret_sdk::NonEmptyString::new(pairing_request_id).unwrap(),
             agent_id,
-            verification_method: verification_method.to_owned(),
+            verification_method: arkret_sdk::DidUrl::new(verification_method).unwrap(),
             public_key,
-            proof_of_possession: json!({
-                "challenge": pairing_request_id,
-                "audience": service_id,
-                "request_canonical_digest": request_digest.as_str(),
-                "expires_at": expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-                "signature": base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .encode(signature.to_bytes()),
-            }),
+            proof_of_possession: arkret_sdk::NonEmptyJsonObject::new(
+                std::collections::BTreeMap::from([
+                    ("challenge".to_owned(), json!(pairing_request_id)),
+                    ("audience".to_owned(), json!(service_id)),
+                    (
+                        "request_canonical_digest".to_owned(),
+                        json!(request_digest.as_str()),
+                    ),
+                    (
+                        "expires_at".to_owned(),
+                        json!(expires_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+                    ),
+                    (
+                        "signature".to_owned(),
+                        json!(
+                            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                                .encode(signature.to_bytes())
+                        ),
+                    ),
+                ]),
+            )
+            .unwrap(),
             runtime_attestation: None,
             authorize_event: arkret_sdk::Event::new(
                 "ak.agent.key.authorize",
@@ -533,7 +555,7 @@ mod tests {
         let service_id = "did:web:soland.local";
         let key_pair = key_pair_request_body(agent, verification_method, service_id);
         let request = AgentRuntimeApprovalRequestBody {
-            pairing_code: "12345678".to_owned(),
+            pairing_code: arkret_sdk::NonEmptyString::new("12345678").unwrap(),
             pairing_request_id: key_pair.pairing_request_id.clone(),
             agent_id: key_pair.agent_id.clone(),
             verification_method: key_pair.verification_method.clone(),
@@ -547,7 +569,7 @@ mod tests {
         assert!(controller_request.get("pairing_code").is_none());
         assert_eq!(
             controller_request["pairing_request_id"],
-            key_pair.pairing_request_id
+            key_pair.pairing_request_id.as_str()
         );
         assert_eq!(
             controller_request["verification_method"],
