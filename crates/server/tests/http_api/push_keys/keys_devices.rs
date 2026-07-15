@@ -18,8 +18,16 @@ async fn auth_keys_device_messages_and_blobs_work() {
         alice,
         alice_device,
         &alice_device_key,
-        serde_json::json!({"signed_curve25519:otk1": {"key": "one-time"}}),
-        serde_json::json!({"signed_curve25519:fallback": {"key": "fallback-key"}}),
+        serde_json::json!({"signed_curve25519:otk1": {
+            "key": "one-time",
+            "algorithm": "signed_curve25519",
+            "signature": {"kid": format!("{alice}#device"), "alg": "EdDSA", "sig": "c2ln"}
+        }}),
+        serde_json::json!({"signed_curve25519:fallback": {
+            "key": "fallback-key",
+            "algorithm": "signed_curve25519",
+            "signature": {"kid": format!("{alice}#device"), "alg": "EdDSA", "sig": "c2ln"}
+        }}),
     );
 
     let upload: Value = TestClient::post("http://server/_arkret/self/keys/upload")
@@ -30,7 +38,10 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(upload["one_time_key_counts"]["signed_curve25519"], 1);
+    assert_eq!(
+        upload["one_time_key_counts"]["signed_curve25519"], 1,
+        "upload response: {upload}"
+    );
 
     let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -45,11 +56,11 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert!(query["device_keys"].is_object());
     let alice_desktop = &query["device_keys"][alice][alice_device];
     assert_eq!(
-        alice_desktop["algorithms"]["one_time_keys"]["signed_curve25519:otk1"]["key"],
+        alice_desktop["algorithms"]["signed_curve25519:otk1"]["key"],
         "one-time"
     );
     assert_eq!(
-        alice_desktop["algorithms"]["fallback_keys"]["signed_curve25519:fallback"]["key"],
+        upload["fallback_keys"]["signed_curve25519:fallback"]["key"],
         "fallback-key"
     );
     assert_eq!(alice_desktop["device_status"], "active");
@@ -678,9 +689,8 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     let device_key = SigningKey::from_bytes(&[202u8; 32]);
     let multibase = test_ed25519_multibase_public(&device_key);
 
-    // No cross_signing_binding → the ingest binding gate is a no-op
-    // (bootstrap/first-device authorizations are validated elsewhere), so the
-    // projection write is exercised directly.
+    // Exercise the delegated-authority (A-model) projection directly. The
+    // accepted authorize must carry exactly one trust binding.
     let control_realm = soland::test_support::principal_control_realm_for_did(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
     let expected_authorize_event_id = operation_id.replacen("ak:operation:", "ak:event:", 1);
@@ -702,6 +712,11 @@ async fn device_authorize_projects_public_key_into_devices_table() {
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": alice,
             "not_before": "2026-05-08T10:00:00Z",
+            "enrollment_authority_binding": {
+                "kind": "service_attested",
+                "authority_did": alice,
+                "authorization_ref": format!("{alice}#device-enrollment")
+            }
         }),
     );
     soland::test_support::project_accepted_operations(&state, alice, &[operation]).await;
@@ -896,6 +911,7 @@ fn tier2_publish_and_authorize(
         "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
         "authorized_by": principal,
         "not_before": "2026-05-08T10:00:00Z",
+        "device_signature": "c2ln",
         "cross_signing_binding": {
             "verification_method": format!("{principal}#ak_self_signing_v1"),
             "alg": "EdDSA",
@@ -1087,8 +1103,16 @@ async fn keys_query_hides_revoked_device() {
             "did:web:alice.example",
             desktop_device,
             &desktop_key,
-            serde_json::json!({"signed_curve25519:desktop": {"key": "desktop-device-key"}}),
-            serde_json::json!({"signed_curve25519:desktop": {"key": "fallback-desktop"}}),
+            serde_json::json!({"signed_curve25519:desktop": {
+                "key": "desktop-device-key",
+                "algorithm": "signed_curve25519",
+                "signature": {"kid": "did:web:alice.example#device", "alg": "EdDSA", "sig": "c2ln"}
+            }}),
+            serde_json::json!({"signed_curve25519:desktop": {
+                "key": "fallback-desktop",
+                "algorithm": "signed_curve25519",
+                "signature": {"kid": "did:web:alice.example#device", "alg": "EdDSA", "sig": "c2ln"}
+            }}),
         ))
         .send(&app_from_state(state.clone()))
         .await
@@ -1102,8 +1126,16 @@ async fn keys_query_hides_revoked_device() {
             "did:web:alice.example",
             mobile_device,
             &mobile_key,
-            serde_json::json!({"signed_curve25519:phone": {"key": "phone-device-key"}}),
-            serde_json::json!({"signed_curve25519:phone": {"key": "fallback-phone"}}),
+            serde_json::json!({"signed_curve25519:phone": {
+                "key": "phone-device-key",
+                "algorithm": "signed_curve25519",
+                "signature": {"kid": "did:web:alice.example#device", "alg": "EdDSA", "sig": "c2ln"}
+            }}),
+            serde_json::json!({"signed_curve25519:phone": {
+                "key": "fallback-phone",
+                "algorithm": "signed_curve25519",
+                "signature": {"kid": "did:web:alice.example#device", "alg": "EdDSA", "sig": "c2ln"}
+            }}),
         ))
         .send(&app_from_state(state.clone()))
         .await
@@ -1123,12 +1155,12 @@ async fn keys_query_hides_revoked_device() {
         .unwrap();
     assert_eq!(
         pre_revoke_query["device_keys"]["did:web:alice.example"]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["algorithms"]["one_time_keys"]["signed_curve25519:desktop"]["key"],
+            ["algorithms"]["signed_curve25519:desktop"]["key"],
         "desktop-device-key"
     );
     assert_eq!(
         pre_revoke_query["device_keys"]["did:web:alice.example"]["ak:device:01904100-0000-7000-8000-9b04e0000007"]
-            ["algorithms"]["one_time_keys"]["signed_curve25519:phone"]["key"],
+            ["algorithms"]["signed_curve25519:phone"]["key"],
         "phone-device-key"
     );
 
@@ -1157,7 +1189,7 @@ async fn keys_query_hides_revoked_device() {
     assert!(revoked_phone["algorithms"].as_object().unwrap().is_empty());
     assert_eq!(
         post_revoke_query["device_keys"]["did:web:alice.example"]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["algorithms"]["one_time_keys"]["signed_curve25519:desktop"]["key"],
+            ["algorithms"]["signed_curve25519:desktop"]["key"],
         "desktop-device-key"
     );
 }
@@ -1201,7 +1233,7 @@ async fn revoked_device_blocks_encrypted_writes() {
     .await;
     assert_eq!(blocked_send.as_u16(), 401);
 
-    let blocked_upload = TestClient::post("http://server/_arkret/self/keys/upload")
+    let mut blocked_upload = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {stale_session}"), true)
         .json(&serde_json::json!({
             "device_id": "ak:device:01904100-0000-7000-8000-30b11e000005",
@@ -1211,5 +1243,7 @@ async fn revoked_device_blocks_encrypted_writes() {
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(blocked_upload.status_code.unwrap().as_u16(), 401);
+    assert_eq!(blocked_upload.status_code.unwrap().as_u16(), 422);
+    let blocked_upload_body: Value = blocked_upload.take_json().await.unwrap();
+    assert_eq!(blocked_upload_body["error"]["code"], "schema_violation");
 }

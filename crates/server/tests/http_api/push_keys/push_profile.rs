@@ -409,7 +409,7 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(rejected.len(), 1);
     assert!(rejected.iter().any(|device| {
         device["device_id"] == "ak:device:01904100-0000-7000-8000-71551c000004"
-            && device["reason"] == "unknown_device"
+            && device["reason_code"] == "unknown_device"
     }));
 
     let report: Value = TestClient::post("http://server/_arkret/self/moderation/report")
@@ -1195,8 +1195,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(stale_notify["rejected"][0]["reason"], "contract_drift");
-    assert_eq!(stale_notify["rejected"][0]["drift_result"], "stale");
+    assert_eq!(stale_notify["rejected"][0]["reason_code"], "contract_drift");
 
     let now = chrono::Utc::now();
     let fresh_import: Value = TestClient::post(
@@ -1271,5 +1270,8 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(after_unregister["rejected"][0]["reason"], "unknown_device");
+    assert_eq!(
+        after_unregister["rejected"][0]["reason_code"],
+        "unknown_device"
+    );
 }

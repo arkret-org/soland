@@ -304,7 +304,10 @@ async fn mimi_provider_facade_contracts_work() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(room_binding["accepted"], true);
+    assert_eq!(
+        room_binding["accepted"], true,
+        "room update: {room_binding}"
+    );
     assert!(room_binding["room_state_ref"].as_str().is_some());
 
     let group_info: Value =
@@ -444,7 +447,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(update_resp["accepted"], true);
+    assert_eq!(update_resp["accepted"], true, "room update: {update_resp}");
     let binding_event_id = update_resp["room_state_ref"]
         .as_str()
         .expect("room_state_ref missing");
@@ -665,7 +668,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(update_resp["accepted"], true);
+    assert_eq!(update_resp["accepted"], true, "room update: {update_resp}");
 
     let mut unmarked = signed_mimi_post!(
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),

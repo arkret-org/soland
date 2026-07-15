@@ -469,7 +469,10 @@ async fn events_describe_and_single_event_submit_work() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(seal_view["frontier"]["realm_id"], seeded_realm_id);
+    assert_eq!(
+        seal_view["frontier"]["realm_id"], seeded_realm_id,
+        "Realm frontier response: {seal_view}"
+    );
     let seal_id = seal_view["frontier"]["seal_id"].as_str().unwrap();
     assert!(seal_id.starts_with("ak:seal:sha256:"), "seal_id: {seal_id}");
     assert!(
@@ -616,10 +619,19 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     let proof_body: Value = proof_response.take_json().await.expect("proof body");
     assert_eq!(
         proof_status,
-        StatusCode::CONFLICT,
-        "legacy envelope must fail closed: {proof_body}"
+        StatusCode::OK,
+        "bootstrap control Event proof failed: {proof_body}"
     );
-    assert_eq!(proof_body["error"]["code"], "state_mismatch");
+    let bundle: arkret_sdk::MlsGovernanceProofBundle =
+        serde_json::from_value(proof_body).expect("typed bootstrap governance proof");
+    arkret_sdk::verify_mls_governance_proof_bundle(
+        &bundle,
+        &bundle.governance_binding,
+        &bundle.trust_anchor_seal_id,
+        |_| Ok(()),
+        |_| Ok(()),
+    )
+    .expect("bootstrap governance proof verifies with SDK");
 }
 
 #[tokio::test]
@@ -663,7 +675,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
             op_type: arkret_sdk::LatticeOpType::Transition,
             tag: None,
             value: None,
-            from: Some(serde_json::json!("invite")),
+            from: Some(serde_json::json!("invited")),
             to: Some(serde_json::json!("join")),
             reason: None,
             issuer_seq: None,

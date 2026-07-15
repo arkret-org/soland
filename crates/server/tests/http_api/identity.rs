@@ -234,7 +234,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .await;
     assert_eq!(unauthorized.status_code.unwrap(), StatusCode::UNAUTHORIZED);
 
-    let reused_key = TestClient::post("http://server/_soland/root/identity/webvh/register")
+    let mut reused_key = TestClient::post("http://server/_soland/root/identity/webvh/register")
         .add_header("authorization", "Bearer test-webvh-token", true)
         .json(&serde_json::json!({
             "local_id": "reused",
@@ -243,7 +243,12 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(reused_key.status_code.unwrap(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        reused_key.status_code.unwrap(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let reused_key_body: Value = reused_key.take_json().await.unwrap();
+    assert_eq!(reused_key_body["error"]["code"], "schema_violation");
 
     let did_signing = SigningKey::from_bytes(&[41u8; 32]);
     let update_signing = SigningKey::from_bytes(&[42u8; 32]);

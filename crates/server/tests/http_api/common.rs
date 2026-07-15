@@ -1030,15 +1030,23 @@ pub(crate) fn test_embedded_webvh_proof(
             Value::String(format!("1-{entry_hash}")),
         );
     }
-    let payload = arkret_sdk::canonical::canonical_json_bytes(&entry).unwrap();
-    let signature = update_signing.sign(&payload);
-    serde_json::json!({
+    let mut proof = serde_json::json!({
         "type": "DataIntegrityProof",
         "cryptosuite": "eddsa-jcs-2022",
-        "proofPurpose": "authentication",
+        "proofPurpose": "assertionMethod",
         "verificationMethod": format!("{did}#{update_public_key_multibase}"),
-        "proofValue": format!("z{}", bs58::encode(signature.to_bytes()).into_string()),
-    })
+    });
+    let proof_config = arkret_sdk::canonical::canonical_json_bytes(&proof).unwrap();
+    let document = arkret_sdk::canonical::canonical_json_bytes(&entry).unwrap();
+    let mut signing_input = Vec::with_capacity(64);
+    signing_input.extend_from_slice(&arkret_sdk::canonical::sha256_bytes(&proof_config));
+    signing_input.extend_from_slice(&arkret_sdk::canonical::sha256_bytes(&document));
+    let signature = update_signing.sign(&signing_input);
+    proof["proofValue"] = Value::String(format!(
+        "z{}",
+        bs58::encode(signature.to_bytes()).into_string()
+    ));
+    proof
 }
 
 pub(crate) fn test_webvh_method_authority(url: &str) -> String {

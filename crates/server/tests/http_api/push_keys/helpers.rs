@@ -55,7 +55,7 @@ pub(crate) fn signed_keys_upload_body(
     fallback_keys: Value,
 ) -> Value {
     let signing_input = keys_upload_signing_input(device_id, &one_time_keys, &fallback_keys);
-    let jws = arkret_sdk::jws::sign_jws_ed25519(&signing_input, signing_key).unwrap();
+    let sig = arkret_sdk::base64url_encode(signing_key.sign(&signing_input).to_bytes());
     serde_json::json!({
         "device_id": device_id,
         "one_time_keys": one_time_keys,
@@ -63,7 +63,7 @@ pub(crate) fn signed_keys_upload_body(
         "device_signature": {
             "alg": "EdDSA",
             "kid": format!("{actor}#device"),
-            "jws": jws,
+            "sig": sig,
         }
     })
 }
@@ -91,6 +91,12 @@ pub(crate) async fn seed_verified_device_with_public_key(
                 "device_id": device_id,
                 "verification": "verified",
                 "device_public_key": device_public_key,
+                "device_authorize_event_id": "ak:event:01904100-0000-7000-8000-a11ce00000aa",
+                "enrollment_authority_binding": {
+                    "kind": "service_attested",
+                    "authority_did": "did:web:auth.example",
+                    "authorization_ref": format!("{actor}#device-enrollment")
+                }
             }),
             created_at: now,
             updated_at: now,
