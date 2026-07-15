@@ -99,6 +99,7 @@ fn mimi_room_uri(room_id: &str) -> String {
 fn mimi_opaque_payload(value: Value, digest_field: &str) -> Value {
     let bytes = arkret_sdk::canonical::canonical_json_bytes(&value).unwrap();
     let mut object = serde_json::Map::new();
+    object.insert("content_type".to_owned(), json!("application/arkret+json"));
     object.insert(
         digest_field.to_owned(),
         json!(arkret_sdk::canonical::sha256_digest(&bytes)),
@@ -167,10 +168,6 @@ fn mimi_submit_body(
         "device_id": MIMI_TEST_DEVICE_ID,
         "mls_group_id": group_id,
         "epoch": epoch,
-        "associated_data": {
-            "governance_binding": governance_binding,
-            "covered_seals_cell": covered_seals_cell,
-        },
         "ciphertext": mimi_opaque_payload(message, "ciphertext_digest")
     })
 }
@@ -317,12 +314,21 @@ async fn mimi_provider_facade_contracts_work() {
             .take_json()
             .await
             .unwrap();
+    let encoded_group_info = group_info["group_info"]["group_info"]
+        .as_str()
+        .expect("encoded group_info");
+    let decoded_group_info: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(encoded_group_info)
+            .expect("base64url group_info"),
+    )
+    .expect("JSON group_info");
     assert_eq!(
-        group_info["group_info"]["mimi_room_uri"], "mimi://soland.local/rooms/01JSMIMI",
+        decoded_group_info["mimi_room_uri"], "mimi://soland.local/rooms/01JSMIMI",
         "group_info response: {group_info}"
     );
     assert_eq!(
-        group_info["group_info"]["canonical_truth"],
+        decoded_group_info["canonical_truth"],
         "arkret_signed_event_reducer"
     );
 

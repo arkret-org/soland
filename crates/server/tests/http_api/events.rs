@@ -447,8 +447,8 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     // Realm selector → spec Realm Seal view: the registered sourcing for
-    // single-leaf seal_basis / seal_ref. The Genesis Seal is materialized on
-    // demand for a Realm this deployment notarizes.
+    // single-leaf seal_basis / seal_ref. Reading never materializes a
+    // synthetic genesis Seal for a Realm without accepted Seal history.
     let seeded = seed_test_realm(
         &state,
         "did:web:alice.example",
@@ -460,32 +460,20 @@ async fn events_describe_and_single_event_submit_work() {
     )
     .await;
     let seeded_realm_id = seeded["realm_id"].as_str().unwrap();
-    let seal_view: Value = TestClient::get(format!(
+    let mut seal_view_response = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?realm_id={seeded_realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    .await;
     assert_eq!(
-        seal_view["frontier"]["realm_id"], seeded_realm_id,
-        "Realm frontier response: {seal_view}"
+        seal_view_response.status_code.unwrap(),
+        StatusCode::NOT_FOUND
     );
-    let seal_id = seal_view["frontier"]["seal_id"].as_str().unwrap();
-    assert!(seal_id.starts_with("ak:seal:sha256:"), "seal_id: {seal_id}");
-    assert!(
-        seal_view["frontier"]["control_event_set_root"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:")
-    );
-    assert!(
-        seal_view["frontier"]["state_root"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:")
+    let seal_view: Value = seal_view_response.take_json().await.unwrap();
+    assert_eq!(
+        seal_view["error"]["message"],
+        "realm has no accepted Seal on this deployment"
     );
 
     // Inaccessible realm must read as not_found (no existence leak).
@@ -675,7 +663,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
             op_type: arkret_sdk::LatticeOpType::Transition,
             tag: None,
             value: None,
-            from: Some(serde_json::json!("invited")),
+            from: Some(serde_json::json!("leave")),
             to: Some(serde_json::json!("join")),
             reason: None,
             issuer_seq: None,

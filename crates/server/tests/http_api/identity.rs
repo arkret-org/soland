@@ -228,7 +228,8 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .json(&serde_json::json!({
             "local_id": "mallory",
             "did_public_key_multibase": "z6Mkmallory",
-            "update_public_key_multibase": "z6Mkmalloryupdate"
+            "update_public_key_multibase": "z6Mkmalloryupdate",
+            "next_update_public_key_multibase": "z6Mkmallorynext"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -239,27 +240,28 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .json(&serde_json::json!({
             "local_id": "reused",
             "did_public_key_multibase": "z6Mkreused",
-            "update_public_key_multibase": "z6Mkreused"
+            "update_public_key_multibase": "z6Mkreused",
+            "next_update_public_key_multibase": "z6Mkreusednext"
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(
-        reused_key.status_code.unwrap(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    assert_eq!(reused_key.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let reused_key_body: Value = reused_key.take_json().await.unwrap();
-    assert_eq!(reused_key_body["error"]["code"], "schema_violation");
+    assert_eq!(reused_key_body["error"]["code"], "invalid_param");
 
     let did_signing = SigningKey::from_bytes(&[41u8; 32]);
     let update_signing = SigningKey::from_bytes(&[42u8; 32]);
+    let next_update_signing = SigningKey::from_bytes(&[43u8; 32]);
     let did_public_key = test_ed25519_multibase_public(&did_signing);
     let update_public_key = test_ed25519_multibase_public(&update_signing);
+    let next_update_public_key = test_ed25519_multibase_public(&next_update_signing);
     let version_time = "2026-05-12T00:00:00Z";
     let proof = test_embedded_webvh_proof(
         "https://soland.example",
         "alice",
         &did_public_key,
         &update_public_key,
+        &next_update_public_key,
         "did-key-1",
         &update_signing,
         version_time,
@@ -271,6 +273,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
             "local_id": "alice",
             "did_public_key_multibase": did_public_key,
             "update_public_key_multibase": update_public_key,
+            "next_update_public_key_multibase": next_update_public_key,
             "did_key_id": "did-key-1",
             "update_key_id": "update-key-1",
             "also_known_as": ["acct:alice@example.com"],
