@@ -1246,6 +1246,71 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
 }
 
 #[tokio::test]
+async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_token() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let service = app_from_state(state.clone());
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+
+    let register = |push_key: &str| {
+        TestClient::post("http://server/_arkret/edge/push/register-device")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({
+                "device_id": device_id,
+                "push_gateway": "https://push.example/_arkret/edge/push/notify",
+                "push_key": push_key,
+                "platform": "desktop",
+                "app_id": "inkson"
+            }))
+    };
+
+    let first: Value = register("opaque-token-old")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let repeated: Value = register("opaque-token-old")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(first["registration_id"], repeated["registration_id"]);
+
+    let after_repeat = state
+        .persistence
+        .push_devices()
+        .snapshot_all()
+        .await
+        .unwrap();
+    assert_eq!(after_repeat.len(), 1);
+    assert_eq!(after_repeat[0]["push_key"], "opaque-token-old");
+
+    let rotated: Value = register("opaque-token-new")
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(first["registration_id"], rotated["registration_id"]);
+
+    let after_rotation = state
+        .persistence
+        .push_devices()
+        .snapshot_all()
+        .await
+        .unwrap();
+    assert_eq!(after_rotation.len(), 1);
+    assert_eq!(after_rotation[0]["push_key"], "opaque-token-new");
+    assert!(
+        after_rotation
+            .iter()
+            .all(|registration| registration["push_key"] != "opaque-token-old")
+    );
+}
+
+#[tokio::test]
 async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
