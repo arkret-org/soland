@@ -471,18 +471,6 @@ pub(super) async fn submit_event_value_with_context(
         }
     }
 
-    // SEC-04 — receiver-side independent 24h inception-key online-window cap
-    // (`identity/key-management.md` §5.0.1 step 5). When an inception-bootstrap
-    // self-authorization (`ak.device.authorize` / `ak.session.grant` carrying a
-    // `refs[role=did_inception]` evidence ref) is signed by the inception key,
-    // the receiver MUST seal on the verifiable bootstrap timestamp
-    // (`did:webvh` entry-0 `versionTime`) and reject the event when the
-    // inception key age exceeds the 24h protocol hard cap — regardless of any
-    // longer window the deployment self-reports. Runs against the full envelope
-    // because the `did_inception` evidence ref lives on the envelope `refs[]`,
-    // not on the projection operation payload.
-    enforce_inception_key_online_window(state, &parsed, &envelope).await?;
-
     // SPEC-SOL-003 follow-through — an accepted durable `ak.device.revoke`
     // is the canonical revocation trigger (device-lifecycle.md §2.2).
     // Validate the revocation against the submitting session, then flip the

@@ -10,12 +10,6 @@
 pub mod reasons {
     use arkret_sdk::error as core_error;
 
-    // SEC-04 — receiver-side independent 24h inception-key online-window cap
-    // (`identity/key-management.md` §5.0.1 step 5). Re-exported from arkret-sdk
-    // so soland never inlines the wire literal.
-    pub const INCEPTION_KEY_WINDOW_EXCEEDED: &str =
-        core_error::REASON_INCEPTION_KEY_WINDOW_EXCEEDED;
-
     // S3 — `did:web` → `did:webvh` upgrade evidence.
     pub const INCEPTION_UPGRADE_FINGERPRINT_MISMATCH: &str =
         core_error::REASON_INCEPTION_UPGRADE_FINGERPRINT_MISMATCH;

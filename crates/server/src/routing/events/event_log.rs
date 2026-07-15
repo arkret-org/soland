@@ -72,10 +72,7 @@ mod governance_proof;
 pub(in crate::routing::events) use endpoints::router;
 
 mod inception;
-use inception::{
-    canonical_value_digest, enforce_inception_key_online_window, event_ref_list,
-    require_object_field,
-};
+use inception::{canonical_value_digest, event_ref_list, require_object_field};
 
 mod realm_index;
 pub(in crate::routing) use realm_index::realm_is_indexed;
@@ -104,9 +101,6 @@ pub(crate) use sdk_projection::*;
 #[path = "event_log/admission_tests.rs"]
 mod admission_tests;
 
-#[cfg(test)]
-#[path = "event_log_inception_key_window_tests.rs"]
-mod inception_key_window_tests;
 #[cfg(test)]
 #[path = "event_log_proof_strictness_tests.rs"]
 mod proof_strictness_tests;
