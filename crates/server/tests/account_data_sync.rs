@@ -4,8 +4,7 @@ use arkret_sdk::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
 use soland_data::Db;
@@ -129,63 +128,6 @@ async fn add_realm_member(state: AppState, _token: &str, realm_id: &str, member:
     realms.upsert(updated);
 }
 
-async fn send_plaintext_message(
-    state: AppState,
-    token: &str,
-    actor: &str,
-    realm_id: &str,
-    body: &str,
-) -> Value {
-    let payload = json!({
-        "strand_id": strand_id_for_realm(realm_id),
-        "track_name": "discussion",
-        "content": {"kind": "ak.content.text", "body": body}
-    });
-    let mut event = json!({
-        "event_id": arkret_sdk::new_prefixed_uuid7("ak:event:"),
-        "kind": "ak.message.create",
-        "schema_id": "ak.schema.message.v1",
-        "actor_id": actor,
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": realm_id,
-        "device_id": "ak:device:01904100-0000-7000-8000-b0b000000001",
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": [],
-        "auth_refs": [],
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor}#01904100-0000-7000-8000-b0b000000001"),
-            "device_id": "ak:device:01904100-0000-7000-8000-b0b000000001",
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let mut response: Value = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&event)
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    if response["event_id"].is_null()
-        && let Some(event_id) = response["accepted"]
-            .as_array()
-            .and_then(|events| events.first())
-    {
-        response["event_id"] = event_id.clone();
-    }
-    assert!(
-        response["event_id"].is_string(),
-        "message event submit must return event_id, got {response}"
-    );
-    response
-}
-
 fn signed_actor_private_event_envelope(
     actor: &str,
     device_id: &str,
@@ -193,29 +135,30 @@ fn signed_actor_private_event_envelope(
     kind: &str,
     payload: Value,
 ) -> Value {
+    let now = chrono::Utc::now();
+    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut event = json!({
         "event_id": arkret_sdk::new_prefixed_uuid7("ak:event:"),
         "kind": kind,
-        "schema_id": "ak.schema.event.v1",
+        "realm_id": realm_id,
         "actor_id": actor,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": realm_id,
-        "device_id": device_id,
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
+        "created_at": created_at,
+        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
         "prev_refs": [],
-        "auth_refs": [],
+        "refs": [],
         "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor}#{device_id}"),
-            "device_id": device_id,
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
+        "proofs": []
     });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let event_digest = event_canonical_digest(&event);
+    event["proofs"] = json!([{
+        "kind": "detached_jws",
+        "alg": "EdDSA",
+        "verification_method": format!("{actor}#{device_id}"),
+        "event_digest": event_digest,
+        "created_at": created_at,
+        "jws": "dev-mode-fixture"
+    }]);
     event
 }
 
@@ -294,13 +237,6 @@ fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>)
         .collect()
 }
 
-fn sha256_json(value: &Value) -> String {
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("sha256:{}", hex::encode(hasher.finalize()))
-}
-
 fn event_canonical_digest(event: &Value) -> String {
     let mut canonical = event.clone();
     if let Value::Object(object) = &mut canonical {
@@ -309,7 +245,9 @@ fn event_canonical_digest(event: &Value) -> String {
         object.remove("canonical_digest");
         object.remove("canonical_hash");
     }
-    sha256_json(&canonical)
+    let bytes =
+        arkret_sdk::canonical::canonical_json_bytes(&canonical).expect("json canonicalizes");
+    arkret_sdk::canonical::sha256_digest(&bytes)
 }
 
 fn encrypted_account_data_value(actor_id: &str, data_type: &str, plaintext: &Value) -> Value {

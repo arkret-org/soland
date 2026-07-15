@@ -629,7 +629,14 @@ pub(super) async fn submit_event_value_with_context(
         if let Some(scope) = scope
             && let Some(object) = envelope.as_object_mut()
         {
-            object.insert("effective_scope".to_owned(), Value::String(scope));
+            object.insert(
+                "effective_scope".to_owned(),
+                json!({
+                    "kind": "circle",
+                    "realm_id": parsed.realm_id,
+                    "circle_id": scope,
+                }),
+            );
         }
     }
 

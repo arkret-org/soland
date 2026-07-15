@@ -905,10 +905,10 @@ async fn accepted_event(state: &AppState, event_id: &str) -> Option<arkret_sdk::
         .await
         .ok()
         .flatten()?;
-    match serde_json::from_value(record.envelope) {
+    match super::super::event_log::sdk_event_for_state(state, &record) {
         Ok(event) => Some(event),
         Err(error) => {
-            tracing::warn!(%error, event_id, "canonical event envelope failed SDK decoding");
+            tracing::warn!(%error, event_id, "canonical event record failed SDK projection");
             None
         }
     }
@@ -934,7 +934,7 @@ async fn account_data_events(
         {
             continue;
         }
-        let Ok(event) = serde_json::from_value::<arkret_sdk::Event>(record.envelope) else {
+        let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record) else {
             continue;
         };
         let Some(key) = event.payload.get("key").and_then(Value::as_str) else {

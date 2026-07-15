@@ -410,9 +410,6 @@ pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     let object = envelope.as_object()?;
     // Server-stamped authoritative scope. For messages this is set at ingest
     // from the message's Strand (see submit_event_value); it always wins.
-    if let Some(scope) = object.get("effective_scope").and_then(Value::as_str) {
-        return Some(scope.to_owned());
-    }
     if let Some(scope) = object.get("effective_scope").and_then(Value::as_object) {
         return match scope.get("kind").and_then(Value::as_str) {
             Some("circle") => scope

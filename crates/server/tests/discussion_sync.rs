@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use arkret_sdk::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use soland::config::AppConfig;
 use soland::reducer::{
     CircleLifecycleState, CircleMembershipState, CircleProjection, ObjectLifecycleState,
@@ -156,30 +155,15 @@ async fn admit_member(
         "membership": "join",
         "delivery_status": "unroutable",
     });
-    let mut event = json!({
-        "event_id": new_prefixed_uuid7("ak:event:"),
-        "kind": "ak.member.state",
-        "schema_id": "ak.schema.event.v1",
-        "actor_id": owner_did,
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": realm_id,
-        "device_id": owner_device_id,
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": [],
-        "auth_refs": [],
-        "refs": [],
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{owner_did}#{owner_device_id}"),
-            "device_id": owner_device_id,
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let event_id = new_prefixed_uuid7("ak:event:");
+    let event = signed_event(
+        &event_id,
+        owner_did,
+        owner_device_id,
+        realm_id,
+        "ak.member.state",
+        payload,
+    );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {owner_token}"), true)
         .json(&event)
@@ -240,30 +224,15 @@ async fn accept_invite(
     let payload = json!({
         "invite_id": invite_id,
     });
-    let mut event = json!({
-        "event_id": new_prefixed_uuid7("ak:event:"),
-        "kind": "ak.invite.accept",
-        "schema_id": "ak.schema.invite.v1",
-        "actor_id": actor_did,
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": realm_id,
-        "device_id": device_id,
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": [],
-        "auth_refs": [],
-        "refs": [],
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor_did}#{device_id}"),
-            "device_id": device_id,
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let event_id = new_prefixed_uuid7("ak:event:");
+    let event = signed_event(
+        &event_id,
+        actor_did,
+        device_id,
+        realm_id,
+        "ak.invite.accept",
+        payload,
+    );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -288,29 +257,15 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
             "format": "plain"
         }
     });
-    let mut event = json!({
-        "event_id": new_prefixed_uuid7("ak:event:"),
-        "kind": "ak.message.create",
-        "schema_id": "ak.schema.message.v1",
-        "actor_id": "did:web:alice.example",
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": realm_id,
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": [],
-        "auth_refs": [],
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let event_id = new_prefixed_uuid7("ak:event:");
+    let event = signed_event(
+        &event_id,
+        "did:web:alice.example",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        realm_id,
+        "ak.message.create",
+        payload,
+    );
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -453,29 +408,14 @@ async fn send_circle_scoped_encrypted_message(
             "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
         }
     });
-    let mut event = json!({
-        "event_id": event_id,
-        "kind": "ak.message.create",
-        "schema_id": "ak.schema.message.v1",
-        "actor_id": actor_id,
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": realm_id,
-        "device_id": device_id,
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": [],
-        "auth_refs": [],
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor_id}#{device_id}"),
-            "device_id": device_id,
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let event = signed_event(
+        &event_id,
+        actor_id,
+        device_id,
+        realm_id,
+        "ak.message.create",
+        payload,
+    );
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -501,30 +441,7 @@ async fn submit_projection_event(
     payload: Value,
 ) -> String {
     let event_id = new_prefixed_uuid7("ak:event:");
-    let mut event = json!({
-        "event_id": event_id.clone(),
-        "kind": kind,
-        "schema_id": "ak.schema.event.v1",
-        "actor_id": actor_id,
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": realm_id,
-        "device_id": device_id,
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": [],
-        "auth_refs": [],
-        "refs": [],
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor_id}#{device_id}"),
-            "device_id": device_id,
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let event = signed_event(&event_id, actor_id, device_id, realm_id, kind, payload);
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -550,30 +467,7 @@ async fn submit_projection_event_status(
     payload: Value,
 ) -> (u16, String) {
     let event_id = new_prefixed_uuid7("ak:event:");
-    let mut event = json!({
-        "event_id": event_id.clone(),
-        "kind": kind,
-        "schema_id": "ak.schema.event.v1",
-        "actor_id": actor_id,
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": realm_id,
-        "device_id": device_id,
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": [],
-        "auth_refs": [],
-        "refs": [],
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor_id}#{device_id}"),
-            "device_id": device_id,
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let event = signed_event(&event_id, actor_id, device_id, realm_id, kind, payload);
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -584,11 +478,39 @@ async fn submit_projection_event_status(
     (status, body)
 }
 
-fn sha256_json(value: &Value) -> String {
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("sha256:{}", hex::encode(hasher.finalize()))
+fn signed_event(
+    event_id: &str,
+    actor_id: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+) -> Value {
+    let now = chrono::Utc::now();
+    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut event = json!({
+        "event_id": event_id,
+        "kind": kind,
+        "realm_id": realm_id,
+        "actor_id": actor_id,
+        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        "created_at": created_at,
+        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
+        "prev_refs": [],
+        "refs": [],
+        "payload": payload,
+        "proofs": []
+    });
+    let event_digest = event_canonical_digest(&event);
+    event["proofs"] = json!([{
+        "kind": "detached_jws",
+        "alg": "EdDSA",
+        "verification_method": format!("{actor_id}#{device_id}"),
+        "event_digest": event_digest,
+        "created_at": created_at,
+        "jws": "dev-mode-fixture"
+    }]);
+    event
 }
 
 fn strand_id_for_realm(realm_id: &str) -> String {
@@ -606,7 +528,8 @@ fn event_canonical_digest(event: &Value) -> String {
         object.remove("canonical_digest");
         object.remove("canonical_hash");
     }
-    sha256_json(&canonical)
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(&canonical).expect("json canonicalizes");
+    arkret_sdk::canonical::sha256_digest(&bytes)
 }
 
 fn sync_bodies(sync: &Value, realm_id: &str) -> Vec<String> {
@@ -614,7 +537,11 @@ fn sync_bodies(sync: &Value, realm_id: &str) -> Vec<String> {
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|event| event["content"]["body"].as_str().map(ToOwned::to_owned))
+        .filter_map(|event| {
+            event["payload"]["content"]["body"]
+                .as_str()
+                .map(ToOwned::to_owned)
+        })
         .collect()
 }
 
@@ -877,9 +804,15 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         .iter()
         .find(|event| event["event_id"].as_str() == Some(event_id.as_str()))
         .unwrap_or_else(|| panic!("Circle member did not receive scoped event: {bob_sync:?}"));
-    assert_eq!(bob_event["scope_circle_id"], circle_id);
-    assert_eq!(bob_event["effective_scope"], circle_id);
-    assert_eq!(bob_event["encrypted"], true);
+    assert_eq!(
+        bob_event["effective_scope"],
+        json!({
+            "kind": "circle",
+            "realm_id": realm_id,
+            "circle_id": circle_id,
+        })
+    );
+    assert!(bob_event["payload"]["encrypted_content"].is_object());
 
     let mallory_sync = account_subscribe_frame(state.clone(), &mallory, "catchup=true").await;
     let mallory_events = mallory_sync["realms"][&realm_id]["timeline"]["events"]
@@ -1036,42 +969,34 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         .iter()
         .find(|event| event["event_id"] == root_event_id)
         .unwrap_or_else(|| panic!("root message missing from sync projection: {timeline:?}"));
-    assert_eq!(root["mention_routing_hint"]["mentioned"], json!([bob_did]));
-    assert_eq!(root["mentions"][0]["subject_id"], bob_did);
-    assert_eq!(root["reaction_summary"]["+1"], json!([alice_did]));
+    assert_eq!(
+        root["payload"]["content"]["mention_routing_hint"]["mentioned"],
+        json!([bob_did])
+    );
+    assert_eq!(
+        root["payload"]["content"]["mentions"][0]["subject_id"],
+        bob_did
+    );
+
+    let projection = state.projection.lock();
+    let reactions = projection.reactions_for_event(&root_event_id);
     assert!(
-        !root["reaction_summary"]["+1"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|actor| actor.as_str() == Some(bob_did)),
-        "{root:?}"
+        reactions.iter().any(|reaction| {
+            reaction.actor == alice_did && reaction.key == "+1" && reaction.active
+        }),
+        "{reactions:?}"
     );
     assert!(
-        root["reactions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|reaction| {
-                reaction["actor"] == alice_did
-                    && reaction["key"] == "+1"
-                    && reaction["active"] == true
-            }),
-        "{root:?}"
+        reactions.iter().all(|reaction| reaction.actor != bob_did),
+        "{reactions:?}"
     );
+    drop(projection);
 
     let reply = timeline
         .iter()
         .find(|event| event["event_id"] == reply_event_id)
         .unwrap_or_else(|| panic!("reply message missing from sync projection: {timeline:?}"));
-    assert_eq!(reply["reply_to"], root_message_ref);
-    assert_eq!(
-        reply["relations"][0],
-        json!({
-            "kind": "reply_to",
-            "target_ref": root_message_ref.clone()
-        })
-    );
+    assert_eq!(reply["payload"]["reply_to"], root_message_ref);
 }
 
 #[tokio::test]
@@ -1205,12 +1130,26 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         .iter()
         .find(|event| event["event_id"] == poll_event_id)
         .unwrap_or_else(|| panic!("poll missing from sync projection: {timeline:?}"));
-    assert_eq!(poll["poll"]["results"][0]["count"], 0);
-    assert_eq!(poll["poll"]["results"][1]["count"], 2);
-    assert_eq!(
-        poll["poll"]["results"][1]["voters"],
-        json!([bob_did, carol_did])
+    assert_eq!(poll["payload"]["content"]["kind"], "ak.content.poll");
+    let projection = state.projection.lock();
+    let poll_state = projection.poll(&poll_ref).expect("poll projection");
+    assert!(
+        poll_state
+            .votes
+            .values()
+            .all(|choices| !choices.contains("now")),
+        "{poll_state:?}"
     );
+    assert_eq!(
+        poll_state
+            .votes
+            .iter()
+            .filter(|(_, choices)| choices.contains("backup"))
+            .map(|(actor, _)| actor.as_str())
+            .collect::<Vec<_>>(),
+        vec![bob_did, carol_did]
+    );
+    drop(projection);
 
     submit_projection_event(
         state.clone(),

@@ -2,8 +2,7 @@ use chrono::{Duration, SecondsFormat, Utc};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+use soland::config::AppConfig;
 use soland::state::AppState;
 use soland::{ids, service};
 use soland_data::Db;
@@ -217,14 +216,6 @@ async fn revoke_cell(
     .unwrap()
 }
 
-fn sha256_json(value: &Value) -> String {
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(value)
-        .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("sha256:{}", hex::encode(hasher.finalize()))
-}
-
 fn event_canonical_digest(event: &Value) -> String {
     let mut canonical = event.clone();
     if let Value::Object(object) = &mut canonical {
@@ -233,7 +224,8 @@ fn event_canonical_digest(event: &Value) -> String {
         object.remove("canonical_digest");
         object.remove("canonical_hash");
     }
-    sha256_json(&canonical)
+    let bytes = arkret_sdk::canonical::canonical_json_bytes(&canonical).unwrap();
+    arkret_sdk::canonical::sha256_digest(&bytes)
 }
 
 fn iso_now() -> String {
@@ -241,33 +233,30 @@ fn iso_now() -> String {
 }
 
 fn signed_event(actor: &str, realm_id: &str, kind: &str, actor_seq: u64, payload: Value) -> Value {
-    let operation_id = ids::generate_operation_id();
+    let now = Utc::now();
+    let created_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
     let mut event = serde_json::json!({
         "event_id": ids::generate_event_id(),
         "kind": kind,
-        "schema_id": "ak.schema.event.v1",
+        "realm_id": realm_id,
         "actor_id": actor,
         "actor_seq": actor_seq,
-        "realm_id": realm_id,
+        "created_at": created_at,
+        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
         "prev_refs": [],
         "refs": [],
-        "requirements": {
-            "schema": ["ak.schema.event.v1"],
-            "features": [],
-            "critical_extensions": []
-        },
-        "created_at": iso_now(),
         "payload": payload,
-        "unsigned": {
-            "local_operation_idempotency_alias": operation_id
-        },
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor}#device"),
-            "payload_digest": sha256_json(&payload)
-        }]
+        "proofs": []
     });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let event_digest = event_canonical_digest(&event);
+    event["proofs"] = serde_json::json!([{
+        "kind": "detached_jws",
+        "alg": "EdDSA",
+        "verification_method": format!("{actor}#device"),
+        "event_digest": event_digest,
+        "created_at": created_at,
+        "jws": "dev-mode-fixture"
+    }]);
     event
 }
 
@@ -339,7 +328,7 @@ async fn create_realm(app: &salvo::Service, token: &str, actor: &str) -> String 
 }
 
 #[tokio::test]
-async fn consent_pending_grant_revoke_regrant_controls_contact_gate() {
+async fn consent_grant_revoke_regrant_does_not_implicitly_accept_contact_request() {
     let state = AppState::new(test_config(), Db { pool: None });
     let app = service(state);
     let alice = "did:web:consent-alice.example";
@@ -357,8 +346,8 @@ async fn consent_pending_grant_revoke_regrant_controls_contact_gate() {
 
     let granted = grant_cell(&app, &alice_token, alice, bob, "message", None).await;
     assert_eq!(granted["state"], "active");
-    let accepted_contact = request_contact(&app, &bob_token, alice, "message").await;
-    assert_eq!(accepted_contact["status"], "accepted");
+    let repeated_contact = request_contact(&app, &bob_token, alice, "message").await;
+    assert_eq!(repeated_contact["status"], "pending");
 
     let revoked = revoke_cell(&app, &alice_token, alice, bob, "message").await;
     assert_eq!(revoked["state"], "revoked");
@@ -367,12 +356,12 @@ async fn consent_pending_grant_revoke_regrant_controls_contact_gate() {
 
     let regranted = grant_cell(&app, &alice_token, alice, bob, "message", None).await;
     assert_eq!(regranted["state"], "active");
-    let accepted_again = request_contact(&app, &bob_token, alice, "message").await;
-    assert_eq!(accepted_again["status"], "accepted");
+    let repeated_again = request_contact(&app, &bob_token, alice, "message").await;
+    assert_eq!(repeated_again["status"], "pending");
 }
 
 #[tokio::test]
-async fn consent_events_project_cells_and_contact_gate() {
+async fn consent_events_project_cells_without_implicitly_accepting_contact_request() {
     let state = AppState::new(test_config(), Db { pool: None });
     let app = service(state);
     let alice = "did:web:event-consent-alice.example";
@@ -417,8 +406,8 @@ async fn consent_events_project_cells_and_contact_gate() {
             .iter()
             .any(|dot| dot.as_str() == Some(&grant_dot))
     );
-    let accepted_contact = request_contact(&app, &bob_token, alice, "message").await;
-    assert_eq!(accepted_contact["status"], "accepted");
+    let repeated_contact = request_contact(&app, &bob_token, alice, "message").await;
+    assert_eq!(repeated_contact["status"], "pending");
 
     submit_event(
         &app,
@@ -469,7 +458,7 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
 
     grant_cell(&app, &alice_token, alice, bob, "invite", None).await;
     let invite_contact = request_contact(&app, &bob_token, alice, "invite").await;
-    assert_eq!(invite_contact["status"], "accepted");
+    assert_eq!(invite_contact["status"], "pending");
     let call_contact = request_contact(&app, &bob_token, alice, "call").await;
     assert_eq!(call_contact["status"], "pending");
     assert_eq!(
@@ -481,7 +470,7 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
     grant_cell(&app, &alice_token, alice, pairwise_bob, "message", None).await;
     assert_eq!(
         request_contact(&app, &pairwise_token, alice, "message").await["status"],
-        "accepted"
+        "pending"
     );
     assert_eq!(
         request_contact(&app, &bob_token, alice, "message").await["status"],
