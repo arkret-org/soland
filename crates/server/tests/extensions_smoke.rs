@@ -7,12 +7,11 @@
 //! posts to each route and verifies the spec-shaped envelope.
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 
 use arkret_sdk::applet::WebhookSignatureAlg;
 use arkret_sdk::{
     AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry,
-    AppletPackage, AppletWireNamespaces, Did, Ed25519MoveSigner, Hash, WebhookAuth,
+    AppletPackage, AppletWireNamespaces, Did, Ed25519MoveSigner, WebhookAuth,
 };
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
@@ -20,7 +19,7 @@ use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::service;
 use soland::state::AppState;
 use soland_data::Db;
@@ -38,6 +37,29 @@ fn test_config() -> AppConfig {
         seed_demo_data: true,
         ..AppConfig::test_default()
     }
+}
+
+async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
+    let service_id = state.config.service_id.clone();
+    let mut meta = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    meta.plaintext_visible_services.insert(service_id.clone());
+    meta.plaintext_visible_service_classes.insert(
+        service_id,
+        std::collections::BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
+    );
+    meta.updated_at = chrono::Utc::now();
+    state
+        .persistence
+        .realm_meta()
+        .put(realm_id, &meta)
+        .await
+        .unwrap();
 }
 
 async fn dev_token(state: AppState) -> String {
@@ -206,8 +228,9 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         "display_name": "Alice on Slack",
         "realm_id": realm_id,
         "external_ref": {
-            "team_id": "T123",
-            "user_id": "U123"
+            "protocol": "slack",
+            "external_id": "U123",
+            "instance_id": "T123"
         }
     }))
     .send(&app)
@@ -341,7 +364,11 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
         "tenant": "T123",
         "external_user_id": "U-denied",
         "realm_id": realm_id,
-        "external_ref": {"team_id": "T123", "user_id": "U-denied"}
+        "external_ref": {
+            "protocol": "slack",
+            "external_id": "U-denied",
+            "instance_id": "T123"
+        }
     }))
     .send(&app)
     .await
@@ -385,7 +412,11 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
         "tenant": "T123",
         "external_user_id": "U123",
         "realm_id": realm_id,
-        "external_ref": {"team_id": "T123", "user_id": "U123"}
+        "external_ref": {
+            "protocol": "slack",
+            "external_id": "U123",
+            "instance_id": "T123"
+        }
     }))
     .send(&app)
     .await
@@ -583,6 +614,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
+    allow_service_message_plaintext(&state, DEMO_REALM_ID).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let applet_id = arkret_sdk::new_prefixed_uuid7("ak:applet:");
@@ -621,7 +653,11 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         "external_user_id": "ext-user-x",
         "display_name": "External X",
         "realm_id": realm_id,
-        "external_ref": {"tenant": "T-smoke", "user_id": "ext-user-x"}
+        "external_ref": {
+            "protocol": "smoke",
+            "external_id": "ext-user-x",
+            "instance_id": "T-smoke"
+        }
     }))
     .send(&app)
     .await;
@@ -759,7 +795,6 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         safe_did_token(namespace)
     ))
     .unwrap();
-    let registration_epoch = Hash::new(format!("sha256:{}", "42".repeat(32))).unwrap();
     let mut package = AppletPackage::new(
         format!("package:{applet_id}"),
         applet_id.to_owned(),
@@ -777,19 +812,17 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
             ..Default::default()
         },
     );
-    package.registration_epoch = registration_epoch;
     package.webhook_auth = WebhookAuth::http_message_signature(
         format!("{}#applet-service-key", package.service_id),
         vec![WebhookSignatureAlg::EdDsa],
     );
     let service_document = applet_service_id_document(&package);
-    package.registration_epoch_evidence = Some(
+    let registration_epoch_evidence =
         arkret_sdk::AppletRegistrationEpochEvidence::from_did_document(
             &service_document,
             arkret_sdk::AppletDidMethodVersionEvidence::unversioned("did:web").unwrap(),
         )
-        .unwrap(),
-    );
+        .unwrap();
     package.requested_scopes = vec![
         "ak.message.create".to_owned(),
         "ak.applet.ghost.provision".to_owned(),
@@ -818,6 +851,9 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
     };
     package.receive_events = true;
     package.receive_ephemeral = true;
+    package
+        .seal_registration_epoch(registration_epoch_evidence)
+        .unwrap();
     package.seal().unwrap();
     let verification_method = format!("{controller_id}#applet-package");
     let signer =
@@ -841,21 +877,23 @@ fn applet_service_id_document(package: &AppletPackage) -> arkret_sdk::identity::
 async fn ingest_applet_service_id_document(state: &AppState, package: &AppletPackage) {
     let now = chrono::Utc::now();
     let document = applet_service_id_document(package);
+    let record = soland::state::WebvhDocumentRecord {
+        did: package.service_id.to_string(),
+        did_document: serde_json::to_value(document).unwrap(),
+        key_log_head: Some(package.registration_epoch.to_string()),
+        seq: 1,
+        method_evidence: json!({ "mode": "test_fixture" }),
+        fetched_at: now,
+        expires_at: now + chrono::Duration::minutes(15),
+        updated_at: now,
+    };
     state
         .persistence
         .webvh()
-        .put_document(soland::state::WebvhDocumentRecord {
-            did: package.service_id.to_string(),
-            did_document: serde_json::to_value(document).unwrap(),
-            key_log_head: Some(package.registration_epoch.to_string()),
-            seq: 1,
-            method_evidence: json!({ "mode": "test_fixture" }),
-            fetched_at: now,
-            expires_at: now + chrono::Duration::minutes(15),
-            updated_at: now,
-        })
+        .put_document(record.clone())
         .await
         .unwrap();
+    state.did_resolver.cache_webvh_record(record).unwrap();
 }
 
 async fn install_applet_package(

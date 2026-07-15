@@ -806,8 +806,10 @@ pub(super) fn applet_response(record: &AppletRecord) -> AppletView {
 
 pub(super) fn validate_applet_package(
     state: &AppState,
-    package: &AppletPackage,
+    package: &mut AppletPackage,
 ) -> Result<(), AppError> {
+    let evidence = registration_epoch_evidence_from_resolved_document(state, package)?;
+    package.registration_epoch_evidence = Some(evidence);
     package
         .validate()
         .map_err(|error| AppError::invalid_param(format!("applet package invalid: {error}")))?;
@@ -859,7 +861,6 @@ pub(super) fn validate_applet_package(
     // fail closed (`proof_invalid`) when the controller proof is invalid or its
     // key cannot be resolved.
     validate_controller_proof(state, package, &unsigned_canonical_bytes)?;
-    validate_registration_epoch_evidence(state, package)?;
     Ok(())
 }
 
@@ -919,23 +920,32 @@ fn validate_controller_proof(
     })
 }
 
-fn validate_registration_epoch_evidence(
+fn registration_epoch_evidence_from_resolved_document(
     state: &AppState,
     package: &AppletPackage,
-) -> Result<(), AppError> {
-    let evidence = package
-        .registration_epoch_evidence
-        .as_ref()
-        .ok_or_else(|| {
-            AppError::invalid_param("applet package registration_epoch_evidence is required")
-                .with_wire_code("applet_registration_epoch_evidence_missing")
-        })?;
+) -> Result<arkret_sdk::AppletRegistrationEpochEvidence, AppError> {
     let document =
         crate::jws_verify::resolve_did_document(state, &package.service_id).map_err(|reason| {
             AppError::invalid_param("applet service DID document could not be resolved")
                 .with_wire_code("applet_registration_epoch_evidence_mismatch")
                 .with_reason_detail(reason)
         })?;
+    let method_evidence = arkret_sdk::AppletDidMethodVersionEvidence::unversioned(format!(
+        "did:{}",
+        package.service_id.method()
+    ))
+    .map_err(|reason| {
+        AppError::invalid_param("applet service DID method evidence is invalid")
+            .with_wire_code("applet_registration_epoch_evidence_mismatch")
+            .with_reason_detail(reason.to_string())
+    })?;
+    let evidence =
+        arkret_sdk::AppletRegistrationEpochEvidence::from_did_document(&document, method_evidence)
+            .map_err(|reason| {
+                AppError::invalid_param("applet registration_epoch evidence could not be derived")
+                    .with_wire_code("applet_registration_epoch_evidence_mismatch")
+                    .with_reason_detail(reason.to_string())
+            })?;
     evidence
         .validate_against_did_document(&document)
         .map_err(|reason| {
@@ -951,7 +961,7 @@ fn validate_registration_epoch_evidence(
         )
         .with_wire_code("applet_registration_epoch_signing_key_mismatch"));
     }
-    Ok(())
+    Ok(evidence)
 }
 
 pub(super) fn approved_scopes_from_approval_request(

@@ -528,7 +528,8 @@ fn event_canonical_digest(event: &Value) -> String {
         object.remove("canonical_digest");
         object.remove("canonical_hash");
     }
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(&canonical).expect("json canonicalizes");
+    let bytes =
+        arkret_sdk::canonical::canonical_json_bytes(&canonical).expect("json canonicalizes");
     arkret_sdk::canonical::sha256_digest(&bytes)
 }
 
