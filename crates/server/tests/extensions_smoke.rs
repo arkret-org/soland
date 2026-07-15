@@ -870,7 +870,8 @@ fn applet_service_id_document(package: &AppletPackage) -> arkret_sdk::identity::
             "dev-applet-service-key-material".to_owned(),
         )]),
         also_known_as: Vec::new(),
-        updated_at: package.created_at,
+        updated_at: Some(package.created_at),
+        raw_properties: BTreeMap::new(),
     }
 }
 

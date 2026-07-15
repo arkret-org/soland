@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn event_semantic_refs(
+pub(in crate::routing) fn event_semantic_refs(
     object: &serde_json::Map<String, Value>,
     max_len: usize,
 ) -> Result<Vec<String>, EventValidationError> {
@@ -87,7 +87,9 @@ fn event_canonical_source(envelope: &Value) -> Value {
     value
 }
 
-pub(crate) fn event_canonical_bytes(envelope: &Value) -> Result<Vec<u8>, EventValidationError> {
+pub(in crate::routing) fn event_canonical_bytes(
+    envelope: &Value,
+) -> Result<Vec<u8>, EventValidationError> {
     canonical::canonical_json_bytes(&event_canonical_source(envelope)).map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -108,7 +110,7 @@ pub(crate) fn is_valid_event_id(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
 }
 
-pub(crate) async fn event_submit_response(
+pub(in crate::routing) async fn event_submit_response(
     state: &AppState,
     status: EventsSubmitStatus,
     event_id: String,
@@ -132,7 +134,7 @@ pub(crate) async fn event_submit_response(
     }
 }
 
-pub(crate) fn projection_operation_from_event(
+pub(in crate::routing) fn projection_operation_from_event(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) -> Option<Operation> {
@@ -796,7 +798,7 @@ fn sdk_audience(value: &Value) -> Option<Audience> {
 /// realm binding itself is enforced by
 /// `validate_principal_control_realm_binding`; payload field presence by
 /// the registry payload schema.
-pub(crate) fn validate_device_revoke_submission(
+pub(in crate::routing) fn validate_device_revoke_submission(
     session: &SessionRecord,
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
