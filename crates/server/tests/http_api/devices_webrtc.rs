@@ -92,7 +92,10 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
             .unwrap()
             .starts_with("ak:event:")
     );
-    assert_eq!(paired["device_grant"]["status"], "active");
+    // The durable device inventory is the authorization truth. The gate may
+    // omit the optional capability-grant snapshot when no separate grant is
+    // minted for same-principal pairing.
+    assert!(paired.get("device_grant").is_none_or(Value::is_null));
 
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
