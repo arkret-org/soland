@@ -709,7 +709,7 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
         arkret_sdk::webvh::prepare_principal_rotation(&arkret_sdk::webvh::PrincipalRotationInput {
             did: &inception.did,
             local_id: "rotation",
-            previous_entry: &inception.log_entry,
+            previous_entries: std::slice::from_ref(&inception.log_entry),
             version_time: chrono::DateTime::parse_from_rfc3339("2026-07-16T00:00:00Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
@@ -744,7 +744,7 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
         arkret_sdk::webvh::prepare_principal_rotation(&arkret_sdk::webvh::PrincipalRotationInput {
             did: &inception.did,
             local_id: "rotation",
-            previous_entry: &inception.log_entry,
+            previous_entries: std::slice::from_ref(&inception.log_entry),
             version_time: chrono::DateTime::parse_from_rfc3339("2026-07-16T00:00:00Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),

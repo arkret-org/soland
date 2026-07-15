@@ -12,7 +12,7 @@
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
-use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+use soland::config::AppConfig;
 use soland::service;
 use soland::state::AppState;
 use soland_data::Db;
