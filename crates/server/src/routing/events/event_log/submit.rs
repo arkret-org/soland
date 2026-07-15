@@ -96,6 +96,7 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) realm_id: String,
     pub(in crate::routing) actor_id: String,
     pub(in crate::routing) identity_anchor_event_id: Option<String>,
+    pub(in crate::routing) self_principal_pcr_bootstrap: bool,
 }
 
 const DELIVERY_BINDING_HANDOVER_GRACE_SECONDS: i64 = 86_400;
@@ -297,6 +298,7 @@ pub(super) async fn submit_event_batch_outcome(
                         realm_id,
                         actor_id,
                         identity_anchor_event_id: None,
+                        self_principal_pcr_bootstrap: false,
                     });
                 }
             }

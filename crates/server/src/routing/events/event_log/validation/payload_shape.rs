@@ -106,6 +106,7 @@ pub(super) fn validate_conflict_repair_event_payload(
 pub(super) fn validate_realm_create_policy_constraints(
     kind: &str,
     payload: &Value,
+    is_self_principal_pcr_bootstrap_create: bool,
 ) -> Result<(), EventValidationError> {
     if kind != arkret_sdk::events::kinds::REALM_CREATE {
         return Ok(());
@@ -118,6 +119,7 @@ pub(super) fn validate_realm_create_policy_constraints(
         .and_then(Value::as_str)
         .unwrap_or("joined");
     if history_visibility == "restricted"
+        && !is_self_principal_pcr_bootstrap_create
         && object
             .get("history_sharing_policy")
             .and_then(Value::as_object)
@@ -202,4 +204,38 @@ pub(super) fn validate_event_audience_fields(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn restricted_realm_create_payload() -> Value {
+        json!({
+            "object": {
+                "history_visibility": "restricted"
+            }
+        })
+    }
+
+    #[test]
+    fn ordinary_restricted_realm_still_requires_history_sharing_policy() {
+        let error = validate_realm_create_policy_constraints(
+            arkret_sdk::events::kinds::REALM_CREATE,
+            &restricted_realm_create_payload(),
+            false,
+        )
+        .expect_err("ordinary restricted Realm must not receive the PCR exception");
+        assert_eq!(error.code, "history_sharing_policy_missing");
+    }
+
+    #[test]
+    fn recognized_self_principal_pcr_does_not_require_a_third_bootstrap_slot() {
+        validate_realm_create_policy_constraints(
+            arkret_sdk::events::kinds::REALM_CREATE,
+            &restricted_realm_create_payload(),
+            true,
+        )
+        .expect("strict SDK-validated PCR bootstrap is exactly two slots");
+    }
 }

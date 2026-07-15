@@ -990,6 +990,7 @@ fn event_payload_validator_rejects_registered_payload_shape_errors() {
         "ak.schema.event.v1",
         &envelope,
         object,
+        false,
     )
     .expect_err("strand.move without target/rank must fail payload validation");
     assert_eq!(err.code, "schema_violation");
@@ -1014,6 +1015,7 @@ fn member_state_invite_accept_uses_canonical_invite_ref() {
         "ak.schema.event.v1",
         &valid,
         valid.as_object().unwrap(),
+        false,
     )
     .expect("ak.member.state invite accept should allow invite_ref");
 }
@@ -1039,6 +1041,7 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
         "ak.schema.event.v1",
         &valid,
         valid.as_object().unwrap(),
+        false,
     )
     .expect("canonical ak.strand.update strand_patch_payload should validate");
 
@@ -1059,6 +1062,7 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
         "ak.schema.event.v1",
         &invalid_patch_op,
         invalid_patch_op.as_object().unwrap(),
+        false,
     )
     .expect_err("ak.strand.update patch operations must match ak.patch.v1 exactly");
     assert_eq!(err.code, "schema_violation");
@@ -1260,6 +1264,7 @@ fn realm_create_shape_allows_world_readable_encrypted_history() {
         "ak.schema.event.v1",
         &envelope,
         object,
+        false,
     )
     .expect("shape validation defers encrypted history scheme compatibility to operation policy");
 }

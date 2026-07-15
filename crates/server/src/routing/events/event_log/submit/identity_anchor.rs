@@ -62,13 +62,34 @@ pub(super) async fn submit_identity_anchor_batch(
     if let Some(outcome) = identical_historical_retry(state, &envelopes).await? {
         return Ok(outcome);
     }
-
-    let first = validate_event_envelope_with_context(state, session, &envelopes[0], &[]).await?;
-    let identity_anchor_context = RealmBootstrapBatchContext {
-        realm_id: first.realm_id.clone(),
-        actor_id: first.actor_id.clone(),
-        identity_anchor_event_id: Some(first.event_id.clone()),
+    let self_principal_pcr_context = if is_bootstrap {
+        Some(validate_self_principal_pcr_bootstrap_context(&envelopes)?)
+    } else {
+        None
     };
+
+    let first_contexts = self_principal_pcr_context
+        .as_ref()
+        .map(std::slice::from_ref)
+        .unwrap_or_default();
+    let first =
+        validate_event_envelope_with_context(state, session, &envelopes[0], first_contexts).await?;
+    let identity_anchor_context =
+        self_principal_pcr_context.unwrap_or(RealmBootstrapBatchContext {
+            realm_id: first.realm_id.clone(),
+            actor_id: first.actor_id.clone(),
+            identity_anchor_event_id: Some(first.event_id.clone()),
+            self_principal_pcr_bootstrap: false,
+        });
+    if identity_anchor_context.realm_id != first.realm_id
+        || identity_anchor_context.actor_id != first.actor_id
+        || identity_anchor_context.identity_anchor_event_id.as_deref()
+            != Some(first.event_id.as_str())
+    {
+        return Err(unit_error(
+            "validated self-principal PCR context does not match the admitted create Event",
+        ));
+    }
     let second_contexts = std::slice::from_ref(&identity_anchor_context);
     let second =
         validate_event_envelope_with_context(state, session, &envelopes[1], second_contexts)
@@ -357,6 +378,42 @@ pub(super) async fn submit_identity_anchor_batch(
             Some(super::super::super::sync::sync_token_for_state(state).await),
         ))
     }
+}
+
+fn validate_self_principal_pcr_bootstrap_context(
+    envelopes: &[Value],
+) -> Result<RealmBootstrapBatchContext, SubmitOneError> {
+    let create: arkret_sdk::Event =
+        serde_json::from_value(envelopes[0].clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("self-principal PCR create is not a canonical Event: {error}"),
+            )
+        })?;
+    let authorize: arkret_sdk::Event =
+        serde_json::from_value(envelopes[1].clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("self-principal PCR authorize is not a canonical Event: {error}"),
+            )
+        })?;
+    arkret_sdk::identity::validate_self_principal_bootstrap_unit(&create, &authorize).map_err(
+        |error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("self-principal PCR bootstrap unit violates the closed profile: {error}"),
+            )
+        },
+    )?;
+    Ok(RealmBootstrapBatchContext {
+        realm_id: create.realm_id.to_string(),
+        actor_id: create.actor_id.to_string(),
+        identity_anchor_event_id: Some(create.event_id.to_string()),
+        self_principal_pcr_bootstrap: true,
+    })
 }
 
 async fn identical_historical_retry(
@@ -1370,6 +1427,142 @@ mod tests {
 
     fn event_id(suffix: &str) -> String {
         format!("ak:event:01904100-0000-7000-8000-{suffix}")
+    }
+
+    fn attach_bootstrap_fixture_proof(event: &mut arkret_sdk::Event, verification_method: &str) {
+        let digest = arkret_sdk::Hash::new(event.event_digest().unwrap()).unwrap();
+        event.proofs = vec![arkret_sdk::Proof {
+            kind: arkret_sdk::proof_kind::DETACHED_JWS.to_owned(),
+            alg: "EdDSA".to_owned(),
+            verification_method: verification_method.to_owned(),
+            event_digest: digest,
+            created_at: event.created_at,
+            domain: None,
+            audience: None,
+            jws: "fixture.signature".to_owned(),
+        }];
+    }
+
+    fn sdk_canonical_self_principal_bootstrap_unit() -> Vec<Value> {
+        let principal =
+            arkret_sdk::Did::new("did:webvh:z6mkfixture:users.example:alice".to_owned()).unwrap();
+        let realm_id = arkret_sdk::RealmId::new(
+            crate::routing::identity::recovery::principal_control_realm_for_did(principal.as_str()),
+        )
+        .unwrap();
+        let created_at = "2026-07-15T00:00:00Z".parse().unwrap();
+        let mut create = arkret_sdk::identity::build_self_principal_pcr_create(
+            arkret_sdk::identity::SelfPrincipalPcrCreateInput {
+                principal_id: principal.clone(),
+                realm_id: realm_id.clone(),
+                trust_domain: arkret_sdk::TypedTrustDomainId::new(
+                    "ak:trust_domain:example.net".to_owned(),
+                )
+                .unwrap(),
+                did_inception_ref: arkret_sdk::EventRef::new(
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    arkret_sdk::identity::DID_INCEPTION_REF_ROLE,
+                ),
+                event_id: arkret_sdk::EventId::new(event_id("000000000001")).unwrap(),
+                created_at,
+                hlc: arkret_sdk::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
+            },
+        )
+        .unwrap();
+        attach_bootstrap_fixture_proof(
+            &mut create,
+            "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ#z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ",
+        );
+
+        let authority = arkret_sdk::Did::new(
+            "did:key:z6MkgZb469vbyZCg3L7kx1PbQuUD4NToPpcy1utdLxUUfpsh".to_owned(),
+        )
+        .unwrap();
+        let authorization_ref =
+            arkret_sdk::NonEmptyString::new(format!("{}#enrollment-authority", create.actor_id))
+                .unwrap();
+        let payload = arkret_sdk::DeviceAuthorizePayload {
+            principal_id: create.actor_id.clone(),
+            device_id: arkret_sdk::DeviceId::new(
+                "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+            )
+            .unwrap(),
+            device_public_key: arkret_sdk::NonEmptyString::new("z6MkDeviceKey".to_owned()).unwrap(),
+            hpke_key: arkret_sdk::NonEmptyString::new("z6LSDeviceHpkeKey".to_owned()).unwrap(),
+            algorithms: vec![
+                arkret_sdk::NonEmptyString::new(
+                    "ak.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
+                )
+                .unwrap(),
+            ],
+            device_key_algorithm: Some(
+                arkret_sdk::NonEmptyString::new("EdDSA".to_owned()).unwrap(),
+            ),
+            authorized_by: arkret_sdk::DeviceOrPrincipalRef::Did(authority.clone()),
+            scopes: None,
+            not_before: create.created_at,
+            expires_at: None,
+            device_signature: None,
+            proof: None,
+            cross_signing_binding: None,
+            enrollment_authority_binding: Some(arkret_sdk::DeviceEnrollmentAuthorityBinding {
+                kind: arkret_sdk::DeviceEnrollmentAuthorityBindingKind::ServiceAttested,
+                authority_did: authority.clone(),
+                authorization_ref: authorization_ref.clone(),
+            }),
+            recovery_session_id: None,
+        };
+        let mut authorize = arkret_sdk::Event::new(
+            arkret_sdk::events::kinds::DEVICE_AUTHORIZE,
+            realm_id,
+            principal,
+            1,
+            arkret_sdk::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),
+            serde_json::to_value(payload).unwrap(),
+        )
+        .unwrap();
+        authorize.event_id = arkret_sdk::EventId::new(event_id("000000000002")).unwrap();
+        authorize.created_at = create.created_at;
+        authorize.prev_refs = vec![create.event_id.clone()];
+        authorize.executed_by = Some(authority.clone());
+        authorize.authorization_ref = Some(authorization_ref.to_string());
+        attach_bootstrap_fixture_proof(
+            &mut authorize,
+            &format!("{authority}#z6MkgZb469vbyZCg3L7kx1PbQuUD4NToPpcy1utdLxUUfpsh"),
+        );
+
+        vec![
+            serde_json::to_value(create).unwrap(),
+            serde_json::to_value(authorize).unwrap(),
+        ]
+    }
+
+    #[test]
+    fn sdk_canonical_two_slot_pcr_bootstrap_gets_closed_context() {
+        let envelopes = sdk_canonical_self_principal_bootstrap_unit();
+        let context = validate_self_principal_pcr_bootstrap_context(&envelopes)
+            .expect("SDK canonical two-slot bootstrap must be recognized");
+        assert!(context.self_principal_pcr_bootstrap);
+        assert_eq!(
+            context.identity_anchor_event_id.as_deref(),
+            envelopes[0].get("event_id").and_then(Value::as_str)
+        );
+    }
+
+    #[test]
+    fn managed_agent_create_cannot_get_self_principal_pcr_context() {
+        let mut envelopes = sdk_canonical_self_principal_bootstrap_unit();
+        let mut create: arkret_sdk::Event = serde_json::from_value(envelopes[0].clone()).unwrap();
+        create.executed_by = Some(arkret_sdk::Did::new("did:web:controller.example").unwrap());
+        create.authorization_ref = Some("ak:capability:managed-agent".to_owned());
+        create.proofs.clear();
+        attach_bootstrap_fixture_proof(
+            &mut create,
+            "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ#z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ",
+        );
+        envelopes[0] = serde_json::to_value(create).unwrap();
+
+        assert!(validate_self_principal_pcr_bootstrap_context(&envelopes).is_err());
     }
 
     fn stored_record(envelope: &Value, actor_seq: u64) -> CanonicalEventRecord {
