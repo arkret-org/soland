@@ -22,6 +22,7 @@ pub(crate) mod managed_agent_pcr;
 // endpoints (HTTP-4 / REC-1). pub(crate) so the control-realm derivation
 // (`principal_control_realm_for_did`) is reachable from the events policy gate.
 pub(crate) mod recovery;
+mod service_registration;
 // SPEC-CR-001 — RFC 9421 sender-constrained (PoP) verification hoop for the
 // `/_arkret/self/*` surface. pub(in crate::routing) so `routing::mod` can mount
 // `verify_session_pop` on the self routers.
@@ -56,6 +57,14 @@ pub fn protocol_router() -> Router {
                     .push(Router::with_path("resolve").post(did::identity_resolve))
                     .push(Router::with_path("document").get(did::identity_document))
                     .push(Router::with_path("log").get(did::identity_log))
+                    .push(
+                        Router::with_path("service-registrations:ensure")
+                            .post(service_registration::ensure),
+                    )
+                    .push(
+                        Router::with_path("service-registrations")
+                            .get(service_registration::get),
+                    )
                     .push(
                         Router::with_path("submit-did-operation")
                             .post(did::identity_submit_did_operation),

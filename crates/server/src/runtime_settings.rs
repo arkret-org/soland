@@ -76,7 +76,9 @@ pub struct RuntimeSettings {
     /// Principal DIDs allowed to call the production-gated admin surfaces
     /// when `development_mode` is false.
     pub admin_principal_dids: Vec<String>,
-    /// Federation broadcast / hub-upstream target set (`base_url|service_id`).
+    /// Federation broadcast / hub-upstream target set. Boot config may contain
+    /// endpoints only; runtime discovery replaces them with
+    /// `base_url|service_id` entries before use.
     pub federation_peers: Vec<String>,
     /// Mesh vs hub outbound fanout topology.
     pub federation_fanout_topology: FederationFanoutTopology,

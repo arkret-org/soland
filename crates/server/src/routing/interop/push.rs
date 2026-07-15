@@ -140,8 +140,8 @@ pub(super) async fn push_register(
         .recipient_service_id
         .as_ref()
         .map(|did| did.as_str())
-        .unwrap_or(state.config.service_id.as_str());
-    if recipient_service_id != state.config.service_id {
+        .unwrap_or(state.service_id.as_str());
+    if recipient_service_id != state.service_id {
         return Err(AppError::invalid_param(
             "recipient_service_id must match this service",
         ));
@@ -150,7 +150,7 @@ pub(super) async fn push_register(
     let salt_epoch_id = push_target_salt_epoch_id_at(now());
     let push_target_id = derive_push_target_id(
         &state.push_target_hmac_key,
-        &state.config.service_id,
+        &state.service_id,
         &principal_id,
         &device_id,
         &push_route_id,
@@ -196,7 +196,7 @@ pub(super) async fn push_register(
             "app_id": app_id,
             "push_gateway": push_gateway,
             "push_key": push_key,
-            "recipient_service_id": state.config.service_id.as_str(),
+            "recipient_service_id": state.service_id.as_str(),
             "push_route_id": push_route_id,
             "push_target_id": push_target_id,
             "salt_epoch_id": salt_epoch_id,
@@ -609,7 +609,7 @@ async fn push_register_session_grant_bridge(
         token_hash: format!("grant-bridge:{}", sha256_hex(grant.as_bytes())),
         actor: principal_id.to_owned(),
         device_id: body.device_id.as_str().to_owned(),
-        audience: state.config.service_id.clone(),
+        audience: state.service_id.clone(),
         session_public_key,
         agent_session: None,
         expires_at,

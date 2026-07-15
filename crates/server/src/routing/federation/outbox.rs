@@ -144,7 +144,7 @@ fn rfc9421_sign(
 
     let created = now_unix_secs();
     let expires = created + 300;
-    let keyid = format!("{}#federation-fanout-key", state.config.service_id);
+    let keyid = super::federation_service_signature_key_id(&state.service_id);
     let covered = [
         "\"@method\"",
         "\"@target-uri\"",
@@ -365,11 +365,7 @@ impl FederationDispatcher {
         if let Ok(value) = reqwest::header::HeaderValue::from_str(&digest) {
             headers.insert("content-digest", value);
         }
-        insert_header_if_valid(
-            &mut headers,
-            "source-service-id",
-            &self.state.config.service_id,
-        );
+        insert_header_if_valid(&mut headers, "source-service-id", &self.state.service_id);
         insert_header_if_valid(&mut headers, "destination-service-id", &row.peer_did);
         insert_header_if_valid(
             &mut headers,

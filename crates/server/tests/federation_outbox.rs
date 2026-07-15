@@ -79,7 +79,6 @@ fn spawn_mock_peer_with_status(
 
 fn outbox_test_config() -> AppConfig {
     AppConfig {
-        service_id: "did:web:soland-outbox.local".to_owned(),
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-outbox-test")),
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],

@@ -161,7 +161,7 @@ pub(super) async fn enqueue_peer_event_fanout(
             }
         };
         let mut hasher_input = Vec::new();
-        hasher_input.extend_from_slice(state.config.service_id.as_bytes());
+        hasher_input.extend_from_slice(state.service_id.as_bytes());
         hasher_input.extend_from_slice(b"|");
         hasher_input.extend_from_slice(peer.service_id.as_bytes());
         hasher_input.extend_from_slice(b"|");
@@ -192,7 +192,7 @@ pub(super) async fn enqueue_peer_event_fanout(
                 continue;
             }
         };
-        if peer.service_id == state.config.service_id {
+        if peer.service_id == state.service_id {
             continue;
         }
         if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
@@ -256,7 +256,7 @@ fn dynamic_peer_event_targets(
             let Some(service_id) = member.recipient_service_id.as_deref() else {
                 continue;
             };
-            if service_id == state.config.service_id {
+            if service_id == state.service_id {
                 continue;
             }
             if revoked_peers.contains(service_id) {
@@ -297,7 +297,7 @@ fn dynamic_peer_event_targets(
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|did| !did.is_empty())
-            && service_id != state.config.service_id
+            && service_id != state.service_id
             && !revoked_peers.contains(service_id)
         {
             service_frontiers.entry(service_id.to_owned()).or_default();

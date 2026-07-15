@@ -37,7 +37,6 @@ use soland_data::Db;
 
 fn test_config() -> AppConfig {
     AppConfig {
-        service_id: "did:web:soland-mls-test.local".to_owned(),
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-mls-blobs")),
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],

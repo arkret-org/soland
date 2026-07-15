@@ -1162,9 +1162,7 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
         .await
         .ok()
         .flatten()
-        .is_some_and(|record| {
-            record.allows_plaintext_data_class(&state.config.service_id, data_class)
-        })
+        .is_some_and(|record| record.allows_plaintext_data_class(&state.service_id, data_class))
 }
 
 async fn realm_public_content_for_id(state: &AppState, realm_id: &str) -> bool {

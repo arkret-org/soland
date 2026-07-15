@@ -23,7 +23,7 @@ pub(crate) async fn append_encrypted_message_franking(
         "realm_id": parsed.realm_id,
         "target_event_id": parsed.event_id,
         "sender_did": parsed.actor_id,
-        "receiving_service_id": state.config.service_id,
+        "receiving_service_id": state.service_id,
         "ciphertext_digest": ciphertext_digest,
         "event_canonical_digest": parsed.canonical_digest,
         "timestamp": now(),

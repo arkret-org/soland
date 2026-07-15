@@ -19,7 +19,7 @@ async fn policy_check_and_validation_work() {
             "action": "message.send",
             "actor_id": "did:web:alice.example",
             "source": {
-                "service_id": "did:web:soland.local",
+                "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                 "service_type": "soland",
                 "signed_transport": true
             }
@@ -96,7 +96,7 @@ async fn policy_check_and_validation_work() {
             "action": "message.send",
             "actor_id": "did:web:alice.example",
             "source": {
-                "service_id": "did:web:soland.local",
+                "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                 "service_type": "soland",
                 "signed_transport": true
             }
@@ -133,7 +133,7 @@ async fn policy_check_and_validation_work() {
             "action": "message.send",
             "actor_id": "did:web:alice.example",
             "source": {
-                "service_id": "did:web:soland.local",
+                "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                 "service_type": "soland",
                 "signed_transport": true
             }

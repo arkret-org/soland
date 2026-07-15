@@ -16,7 +16,7 @@ pub(super) async fn search_actors(
     let body = body.into_inner();
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     if let Some(organization_did) = body.organization_did.as_ref()
-        && organization_did.as_str() != state.config.service_id
+        && organization_did.as_str() != state.service_id
     {
         return json_ok(DirectoryActorSearchOutcome {
             actors: Vec::new(),

@@ -74,7 +74,7 @@ impl FrontierExchangeWorker {
                 }
             };
             for peer in &peers {
-                if peer.did == self.state.config.service_id {
+                if peer.did == self.state.service_id {
                     continue;
                 }
                 let result = self.probe_peer(&peer.url, &peer.did, &realm_id).await;
@@ -193,7 +193,7 @@ impl FrontierExchangeWorker {
 
 fn signed_get_headers(state: &AppState, peer_did: &str, target_url: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    insert_header(&mut headers, "source-service-id", &state.config.service_id);
+    insert_header(&mut headers, "source-service-id", &state.service_id);
     insert_header(&mut headers, "destination-service-id", peer_did);
     insert_header(
         &mut headers,
@@ -208,7 +208,7 @@ fn signed_get_headers(state: &AppState, peer_did: &str, target_url: &str) -> Hea
 
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
-    let keyid = format!("{}#federation-fanout-key", state.config.service_id);
+    let keyid = super::federation_service_signature_key_id(&state.service_id);
     let covered = [
         "\"@method\"",
         "\"@target-uri\"",

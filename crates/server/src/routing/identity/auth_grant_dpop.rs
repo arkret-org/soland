@@ -71,11 +71,11 @@ fn unauthenticated(message: &'static str) -> AuthError {
 }
 
 fn configured_service_audience(state: &AppState) -> Result<Did, AuthError> {
-    Did::new(state.config.service_id.clone()).map_err(|_| {
+    Did::new(state.service_id.clone()).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "auth_misconfigured",
-            "principal service_id is not a DID",
+            "runtime principal service_id is not a DID",
         )
     })
 }
@@ -157,7 +157,7 @@ fn prune_introspection_cache_locked(
 /// next introspection of that grant goes to coauth and observes `active=false`
 /// (account-lifecycle.md §4.1 step 3 — the local-side invalidation).
 pub(crate) fn invalidate_cached_grant(state: &AppState, grant_jwt: &str) {
-    let key = introspection_cache_key(grant_jwt, &state.config.service_id);
+    let key = introspection_cache_key(grant_jwt, &state.service_id);
     {
         let mut cache = INTROSPECTION_CACHE.lock();
         cache.remove(&key);
@@ -176,7 +176,7 @@ pub(crate) async fn introspect_session_grant_cached(
     grant_jwt: &str,
     force_fresh: bool,
 ) -> Result<SessionGrantIntrospectGrant, AuthError> {
-    let key = introspection_cache_key(grant_jwt, &state.config.service_id);
+    let key = introspection_cache_key(grant_jwt, &state.service_id);
     if !force_fresh && let Some(grant) = cache_lookup(&key) {
         // Cached grants can still expire between introspection and use.
         if grant.expires_at <= crate::wire::now() {
@@ -554,21 +554,19 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
     grant_jwt: &str,
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<SessionRecord, AuthError> {
-    if grant.audience.as_str() != state.config.service_id {
+    if grant.audience.as_str() != state.service_id {
         return Err(unauthenticated(
             "session grant audience does not match this principal server",
         ));
     }
     let (device_id, agent_session) = session_binding_from_introspection(grant)?;
-    let token_hash = crate::routing::identity::auth::session_credential_hash(
-        grant_jwt,
-        &state.config.service_id,
-    );
+    let token_hash =
+        crate::routing::identity::auth::session_credential_hash(grant_jwt, &state.service_id);
     Ok(SessionRecord {
         token_hash,
         actor: grant.subject.clone(),
         device_id,
-        audience: state.config.service_id.clone(),
+        audience: state.service_id.clone(),
         session_public_key: Some(grant.session_public_key.clone()),
         agent_session,
         expires_at: grant.expires_at,
@@ -655,7 +653,7 @@ pub(crate) async fn grant_dpop_session(
     let grant = introspect_session_grant_cached(state, grant_jwt, force_fresh).await?;
 
     // 5. audience == this service's service_id.
-    if grant.audience.as_str() != state.config.service_id {
+    if grant.audience.as_str() != state.service_id {
         return Err(unauthenticated(
             "session grant audience does not match this principal server",
         ));
@@ -681,15 +679,13 @@ pub(crate) async fn grant_dpop_session(
     // grant-derived value so downstream code that keys on it (e.g. self-path
     // session-revoke of the calling session) resolves to this grant; it is NOT
     // a persisted local bearer.
-    let token_hash = crate::routing::identity::auth::session_credential_hash(
-        grant_jwt,
-        &state.config.service_id,
-    );
+    let token_hash =
+        crate::routing::identity::auth::session_credential_hash(grant_jwt, &state.service_id);
     Ok(SessionRecord {
         token_hash,
         actor: grant.subject,
         device_id,
-        audience: state.config.service_id.clone(),
+        audience: state.service_id.clone(),
         session_public_key: Some(grant.session_public_key),
         agent_session,
         expires_at: grant.expires_at,
@@ -890,7 +886,7 @@ mod tests {
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
             ),
-            audience: Did::new("did:web:soland.local".to_owned()).unwrap(),
+            audience: Did::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
             scopes: vec![
                 PRINCIPAL_SESSION_BIND_SCOPE.to_owned(),
                 format!("{DEVICE_SCOPE_PREFIX}ak:device:0196419b-0000-7000-8000-000000000001"),

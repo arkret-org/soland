@@ -106,7 +106,7 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.ping"))]
 async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_id = Did::new(state.config.service_id.clone()).map_err(|error| {
+    let service_id = Did::new(state.service_id.clone()).map_err(|error| {
         AppError::internal(format!("configured service_id is invalid: {error}"))
     })?;
     json_ok(AppletPingOutcome {

@@ -202,7 +202,7 @@ async fn session_signing_key_jwk(
             .map_err(|(_, _, message)| AppError::unauthenticated(message))?;
         return Ok(grant.session_public_key);
     }
-    let token_hash = session_credential_hash(token, &state.config.service_id);
+    let token_hash = session_credential_hash(token, &state.service_id);
     let session = state
         .persistence
         .sessions()

@@ -307,7 +307,7 @@ async fn create_realm(app: &salvo::Service, token: &str, actor: &str) -> String 
                 "default_join_rule": "invite",
                 "history_visibility": "shared",
                 "encryption_profile": "none",
-                "plaintext_visible_services": ["did:web:soland.local"],
+                "plaintext_visible_services": ["did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"],
                 "security_class": "standard",
                 "federation_policy": "restricted",
                 "notary_profile": "single_did",

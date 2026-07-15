@@ -13,7 +13,6 @@ const FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST: &str = "federation request authe
 fn config_with_policy(topology: FederationFanoutTopology, peers: Vec<String>) -> AppConfig {
     AppConfig {
         public_base_url: "http://test".to_owned(),
-        service_id: "did:web:test.local".to_owned(),
         object_storage: crate::config::ObjectStorageConfig::local(std::env::temp_dir()),
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned()],

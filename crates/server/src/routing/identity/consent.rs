@@ -1457,7 +1457,7 @@ async fn consent_invalidation_peer_service_ids(
             if let Some(service_id) = record
                 .peer_service_id
                 .as_deref()
-                .filter(|value| *value != state.config.service_id)
+                .filter(|value| *value != state.service_id)
             {
                 services.insert(service_id.to_owned());
             }
@@ -1656,7 +1656,6 @@ mod tests {
     fn test_config() -> AppConfig {
         AppConfig {
             public_base_url: "http://test".to_owned(),
-            service_id: "did:web:test.local".to_owned(),
             object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
             development_mode: true,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],

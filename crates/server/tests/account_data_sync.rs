@@ -96,10 +96,10 @@ async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> S
                 asset_privacy_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services: std::collections::BTreeSet::from([
-                    "did:web:soland.local".to_owned(),
+                    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
                 ]),
                 plaintext_visible_service_classes: std::collections::BTreeMap::from([(
-                    "did:web:soland.local".to_owned(),
+                    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
                     std::collections::BTreeSet::from([
                         arkret_sdk::PlaintextDataClassKind::MessageContent,
                     ]),

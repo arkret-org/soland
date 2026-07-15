@@ -53,11 +53,10 @@ pub(crate) fn test_config() -> AppConfig {
     }
 }
 
-pub(crate) fn test_config_with_service_id(service_id: &str) -> AppConfig {
-    AppConfig {
-        service_id: service_id.to_owned(),
-        ..test_config()
-    }
+pub(crate) fn test_state_with_service_id(service_id: &str) -> AppState {
+    let mut state = AppState::new(test_config(), Db { pool: None });
+    state.service_id = service_id.to_owned();
+    state
 }
 
 pub(crate) fn app() -> salvo::Service {
@@ -381,7 +380,7 @@ pub(crate) async fn seed_test_realm(
                 inviter: owner.to_owned(),
                 invitee: Some((*invitee).to_owned()),
                 invite_delivery_target: Some(serde_json::json!({
-                    "recipient_service_id": state.config.service_id.clone(),
+                    "recipient_service_id": state.service_id.clone(),
                     "recipient_service_type": "principal_server"
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
@@ -872,9 +871,9 @@ pub(crate) async fn authorize_test_plaintext_message_service(
             updated_at: now,
         });
     meta.plaintext_visible_services
-        .insert(state.config.service_id.clone());
+        .insert(state.service_id.clone());
     meta.plaintext_visible_service_classes
-        .entry(state.config.service_id.clone())
+        .entry(state.service_id.clone())
         .or_default()
         .insert(arkret_sdk::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;

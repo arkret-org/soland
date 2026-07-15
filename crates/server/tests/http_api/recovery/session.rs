@@ -468,7 +468,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
     .await;
     let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
     let challenge = session["challenge"].as_str().unwrap().to_owned();
-    let audience = state.config.service_id.clone();
+    let audience = state.service_id.clone();
     let signature = sign_trusted_recovery_service_proof(
         &service_key,
         &session,
@@ -581,7 +581,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
     .await;
     let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
     let challenge = session["challenge"].as_str().unwrap().to_owned();
-    let audience = state.config.service_id.clone();
+    let audience = state.service_id.clone();
     let rejected_signature = sign_trusted_recovery_service_proof(
         &attacker_service_key,
         &session,
@@ -625,10 +625,10 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
         &session,
         &service_id,
         &service_vm,
-        &state.config.service_id,
+        &state.service_id,
         None,
     );
-    let accepted_audience = state.config.service_id.clone();
+    let accepted_audience = state.service_id.clone();
     let accepted_body = serde_json::json!({
         "proof": {
             "kind": "trusted_recovery_service",

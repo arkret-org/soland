@@ -433,7 +433,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         "Workflow Realm",
         Some("created by lifecycle workflow"),
         "invite_only",
-        &["did:web:soland.local"],
+        &["did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"],
         &[],
     )
     .await;
@@ -477,7 +477,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     // third-party/3PID invites and only holds a verification_service_id.
     assert_eq!(
         bob_invites["invites"][0]["invite_delivery_target"]["recipient_service_id"],
-        "did:web:soland.local"
+        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
     );
     assert_eq!(
         bob_invites["invites"][0]["join_rule_snapshot"]["introduction_evidence_digest"],
@@ -996,7 +996,10 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .find(|session| session.actor == "did:web:bob.example")
             .expect("hashed bob session remains for revocation audit");
         assert_ne!(bob_session.token_hash, bob);
-        assert_eq!(bob_session.audience, "did:web:soland.local");
+        assert_eq!(
+            bob_session.audience,
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+        );
         assert!(bob_session.revoked_at.is_some());
     }
     let revoked_me = TestClient::get("http://server/_soland/self/account/me")

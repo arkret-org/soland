@@ -302,8 +302,8 @@ async fn admin_reconfigure_notary_rejects_self_in_proposed_member_set() {
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "kind": "open_set",
-            // service DID `did:web:soland.local` IS the admin signer.
-            "open_set_members": ["did:web:soland.local", "did:ak:other"],
+            // service DID `did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service` IS the admin signer.
+            "open_set_members": ["did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service", "did:ak:other"],
         }))
         .send(&app)
         .await;
@@ -359,13 +359,11 @@ async fn notary_worker_is_idempotent_when_no_pending_moves() {
     );
 }
 
-/// `admin_rotate_signing_key` mints a fresh ed25519 seed,
-/// hot-swaps the NotaryWorker key via `AppState::rotate_notary_signing_key`,
-/// and returns `{kid, did, rotated_at, origin, keystore_persisted, keystore_warning}`.
-/// The pre-rotation key MUST differ byte-for-byte from the post-rotation key
-/// (proves the swap actually published a new key into the ArcSwap).
+/// A signing-key-only swap would split the runtime signer from the DID
+/// document and identity bundle. Until the service has an atomic WebVH
+/// rotation transaction, the route must fail closed and leave the key intact.
 #[tokio::test]
-async fn admin_rotate_signing_key_publishes_a_fresh_key() {
+async fn admin_rotate_signing_key_fails_closed_without_mutating_the_signer() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
@@ -375,36 +373,18 @@ async fn admin_rotate_signing_key_publishes_a_fresh_key() {
         "http://server/_soland/admin/realms/{}/notary/rotate-signing-key",
         realm_id().as_str()
     );
-    let resp: Value = TestClient::post(&url)
+    let mut response = TestClient::post(&url)
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({}))
         .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-
-    assert_eq!(
-        resp["did"], "did:web:soland.local",
-        "rotate response did mirrors service_id (got {resp:?})"
-    );
-    assert_eq!(
-        resp["kid"], "did:web:soland.local#notary-key",
-        "rotate response kid is `<did>#notary-key` (got {resp:?})"
-    );
-    assert!(resp.get("rotated_at").is_some(), "rotated_at present");
-    assert_eq!(
-        resp["origin"], "Configured",
-        "post-rotation origin is Configured (got {resp:?})"
-    );
-    // use_keystore=false in test_config → keystore_persisted is false but
-    // a non-fatal warning is surfaced.
-    assert_eq!(resp["keystore_persisted"], false);
-    assert!(resp["keystore_warning"].is_string(), "warning surfaced");
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::NOT_IMPLEMENTED));
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "unsupported_feature");
 
     let post = state.notary_signing_key().to_bytes();
-    assert_ne!(
+    assert_eq!(
         pre, post,
-        "rotate-signing-key MUST publish a fresh key (pre and post seeds matched)"
+        "failed rotation must not alter the active signer"
     );
 }

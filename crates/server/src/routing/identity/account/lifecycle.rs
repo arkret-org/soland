@@ -614,7 +614,7 @@ pub(crate) fn deactivation_peer_service_targets_for_actor(
             let Some(service_id) = member.recipient_service_id.as_deref() else {
                 continue;
             };
-            if service_id == state.config.service_id {
+            if service_id == state.service_id {
                 continue;
             }
             let entry = targets.entry(service_id.to_owned()).or_default();
@@ -1063,7 +1063,7 @@ fn build_erasure_receipt_value(
     erased_classes: Vec<ErasedClass>,
     completed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, AppError> {
-    let issuer = Did::new(state.config.service_id.clone())
+    let issuer = Did::new(state.service_id.clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let retained_stub = erasure_retained_stub(&receipt_id, &subject, &scope, completed_at)?;
     let retained_stub_value = serde_json::to_value(&retained_stub)

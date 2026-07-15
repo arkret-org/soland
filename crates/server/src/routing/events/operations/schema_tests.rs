@@ -351,7 +351,7 @@ mod realm_plaintext_visible_services_schema_tests {
             arkret_sdk::events::kinds::REALM_PLAINTEXT_VISIBLE_SERVICES,
             json!({
                 "services": [{
-                    "service_id": "did:web:soland.local",
+                    "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                     "service_type": "principal_server",
                     "data_classes": ["message_content", "notification_summary"],
                     "purposes": ["message_index", "notification_fanout"],

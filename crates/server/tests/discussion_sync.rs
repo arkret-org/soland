@@ -94,10 +94,10 @@ async fn seed_realm(
                 asset_privacy_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services: std::collections::BTreeSet::from([
-                    "did:web:soland.local".to_owned(),
+                    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
                 ]),
                 plaintext_visible_service_classes: std::collections::BTreeMap::from([(
-                    "did:web:soland.local".to_owned(),
+                    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
                     std::collections::BTreeSet::from([PlaintextDataClassKind::MessageContent]),
                 )]),
                 minimal_metadata_realm: false,
@@ -112,7 +112,7 @@ async fn seed_realm(
 }
 
 async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
-    let service_id = state.config.service_id.clone();
+    let service_id = state.service_id.clone();
     let mut meta = state
         .persistence
         .realm_meta()
@@ -195,7 +195,7 @@ async fn seed_pending_invite(
             inviter: inviter.to_owned(),
             invitee: Some(invitee.to_owned()),
             invite_delivery_target: Some(json!({
-                "recipient_service_id": state.config.service_id.clone(),
+                "recipient_service_id": state.service_id.clone(),
                 "recipient_service_type": "principal_server"
             })),
             introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),

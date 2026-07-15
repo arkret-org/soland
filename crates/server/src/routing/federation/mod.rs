@@ -31,6 +31,13 @@ pub(crate) fn rfc9530_content_digest(bytes: &[u8]) -> String {
     crate::routing::http_signature::rfc9530_content_digest(bytes)
 }
 
+/// DID verification method used by the service's persistent assertion key
+/// for federation HTTP Message Signatures. Service identity bootstrap
+/// publishes this method in the Provider-registered DID document.
+pub fn federation_service_signature_key_id(service_id: &str) -> String {
+    format!("{service_id}#federation-fanout-key")
+}
+
 /// Operator seal-signing endpoint (`POST /_soland/admin/seals/sign`). Mounted
 /// at the bare deployment-local `/admin/*` namespace on the root router
 /// (NOT under `/_arkret/...`), alongside the rest of the admin surface.

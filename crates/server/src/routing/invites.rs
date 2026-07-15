@@ -171,7 +171,7 @@ async fn peer_invites_submit(
         ),
         actor,
         device_id: format!("peer-invite:{source_service_id}"),
-        audience: state.config.service_id.clone(),
+        audience: state.service_id.clone(),
         session_public_key: None,
         agent_session: None,
         expires_at: now() + Duration::minutes(5),
@@ -288,7 +288,7 @@ async fn resolve_invite_locator(
         .map(serde_json::from_value::<PrincipalLocatorDisplayHint>)
         .transpose()
         .map_err(|_| invite_locator_not_found())?;
-    let recipient_service_id = Did::new(state.config.service_id.clone()).map_err(|error| {
+    let recipient_service_id = Did::new(state.service_id.clone()).map_err(|error| {
         AppError::internal(format!(
             "configured service DID invalid for principal locator: {error}"
         ))
@@ -324,7 +324,7 @@ async fn resolve_invite_locator(
         proof_purpose: PrincipalLocatorProofPurpose::RecipientServiceAcceptance,
         proof: DetachedPayloadProof {
             kind: "detached_jws".to_owned(),
-            verification_method: format!("{}#server-key-1", state.config.service_id),
+            verification_method: format!("{}#server-key-1", state.service_id),
             alg: "EdDSA".to_owned(),
             payload_digest,
             created_at: issued_at,
@@ -1334,7 +1334,7 @@ fn validate_invite_delivery_consistency(
     delivery: &InviteDeliveryRequest,
     state: &AppState,
 ) -> Result<(), AppError> {
-    if delivery.invite_address.recipient_service_id.as_str() != state.config.service_id {
+    if delivery.invite_address.recipient_service_id.as_str() != state.service_id {
         return Err(super::events::peer::cross_domain_replay(
             "invite_address.recipient_service_id does not match this service",
         ));

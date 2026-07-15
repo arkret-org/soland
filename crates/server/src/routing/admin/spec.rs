@@ -184,7 +184,7 @@ async fn get_server_status(
     let realm_count = state.realms.lock().search(Default::default()).len();
     json_ok(AdminServerStatusOutcome {
         status: "ok".to_owned(),
-        service_id: state.config.service_id.clone(),
+        service_id: state.service_id.clone(),
         storage: state.db.mode().to_owned(),
         development_mode: state.config.development_mode,
         checked_by: session.actor,
@@ -215,9 +215,9 @@ async fn get_server_info(
     json_ok(AdminServerInfoOutcome {
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
         protocol_version: Some(arkret_sdk::PROTOCOL_VERSION.to_owned()),
-        server_name: Some(state.config.service_id.clone()),
+        server_name: Some(state.service_id.clone()),
         uptime: None,
-        service_id: state.config.service_id.clone(),
+        service_id: state.service_id.clone(),
         trust_domain: state.config.trust_domain.clone(),
         development_mode: state.config.development_mode,
         allow_public_registration: state.account_registration_policy.lock().enabled,

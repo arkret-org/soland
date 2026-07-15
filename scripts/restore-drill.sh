@@ -19,13 +19,17 @@ if [ ! -f "$TARBALL" ]; then
 fi
 
 DATABASE_URL="${SOLAND_DATABASE_URL:-${DATABASE_URL:-${PASION_DATABASE_URL:-}}}"
-SERVICE_ID="${SOLAND_SERVICE_ID:-did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service}"
+BUNDLE_DIR="${SOLAND_SERVICE_IDENTITY_BUNDLE_DIR:-}"
 USE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"
 WORKDIR="$(mktemp -d -t soland-restore-XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 if [ -z "$DATABASE_URL" ]; then
     echo "[restore-drill] FATAL: SOLAND_DATABASE_URL or DATABASE_URL is unset" >&2
+    exit 2
+fi
+if [ -z "$BUNDLE_DIR" ]; then
+    echo "[restore-drill] FATAL: SOLAND_SERVICE_IDENTITY_BUNDLE_DIR is unset" >&2
     exit 2
 fi
 
@@ -36,7 +40,7 @@ for cmd in pg_restore psql sha256sum tar jq; do
     fi
 done
 
-echo "[restore-drill] tarball=$TARBALL service_id=$SERVICE_ID workdir=$WORKDIR"
+echo "[restore-drill] tarball=$TARBALL workdir=$WORKDIR"
 tar -xzf "$TARBALL" -C "$WORKDIR"
 
 MANIFEST="$WORKDIR/manifest.json"
@@ -50,7 +54,7 @@ while IFS=$'\t' read -r name sha; do
     EXPECTED_SHA[$name]="$sha"
 done < <(jq -r '.artifacts | to_entries[] | "\(.key)\t\(.value.sha256)"' "$MANIFEST")
 
-for name in soland-database.dump keystore.json multisig_pending.jsonl; do
+for name in soland-database.dump service-identity-bundle.json keystore.json multisig_pending.jsonl; do
     f="$WORKDIR/$name"
     if [ ! -f "$f" ]; then
         echo "[restore-drill] FATAL: tarball missing artifact '$name'" >&2
@@ -67,22 +71,50 @@ for name in soland-database.dump keystore.json multisig_pending.jsonl; do
 done
 echo "[restore-drill] manifest checksums verified"
 
-echo "[restore-drill] step 1/3: pg_restore (clean+if-exists)"
+BUNDLE_PATH="$WORKDIR/service-identity-bundle.json"
+SERVICE_ID="$(jq -er '.identity.identity.service_id | select(startswith("did:webvh:"))' "$BUNDLE_PATH")" || {
+    echo "[restore-drill] FATAL: identity bundle has no did:webvh service_id" >&2
+    exit 1
+}
+MANIFEST_SERVICE_ID="$(jq -er '.service_id' "$MANIFEST")"
+if [ "$SERVICE_ID" != "$MANIFEST_SERVICE_ID" ]; then
+    echo "[restore-drill] FATAL: identity bundle service_id does not match manifest" >&2
+    exit 1
+fi
+BUNDLE_BACKEND_FILE="$(jq -er '.identity_bundle_backend_file' "$MANIFEST")"
+case "$BUNDLE_BACKEND_FILE" in
+    ""|"."|".."|*/*|*\\*)
+        echo "[restore-drill] FATAL: unsafe identity_bundle_backend_file in manifest" >&2
+        exit 1
+        ;;
+esac
+MANIFEST_USE_KEYSTORE="$(jq -er '.use_keystore | tostring' "$MANIFEST")"
+if [ "$USE_KEYSTORE" != "$MANIFEST_USE_KEYSTORE" ]; then
+    echo "[restore-drill] FATAL: SOLAND_USE_KEYSTORE=$USE_KEYSTORE does not match backup manifest $MANIFEST_USE_KEYSTORE" >&2
+    exit 1
+fi
+echo "[restore-drill] service_id=$SERVICE_ID identity_bundle_backend_file=$BUNDLE_BACKEND_FILE"
+
+echo "[restore-drill] step 1/4: pg_restore (clean+if-exists)"
 pg_restore --clean --if-exists --no-owner --no-acl \
     --dbname="$DATABASE_URL" "$WORKDIR/soland-database.dump"
 
+echo "[restore-drill] step 2/4: restore SDK identity bundle"
+mkdir -p "$BUNDLE_DIR"
+cp "$BUNDLE_PATH" "$BUNDLE_DIR/$BUNDLE_BACKEND_FILE"
+
 if [ "$USE_KEYSTORE" = "true" ] && \
    [ "$(jq -r '.skipped // false' "$WORKDIR/keystore.json")" != "true" ]; then
-    echo "[restore-drill] step 2/3: keystore restore via soland-rotate-drill --import-only"
+    echo "[restore-drill] step 3/4: keystore restore via soland-rotate-drill --import-only"
     cargo run --quiet --bin soland-rotate-drill -- \
         --import-only \
-        --service-id "$SERVICE_ID" \
+        --identity-bundle "$BUNDLE_PATH" \
         --input "$WORKDIR/keystore.json"
 else
-    echo "[restore-drill] step 2/3: keystore restore skipped"
+    echo "[restore-drill] step 3/4: keystore restore skipped"
 fi
 
-echo "[restore-drill] step 3/3: walk multisig_pending - per-row aggregability check"
+echo "[restore-drill] step 4/4: walk multisig_pending - per-row aggregability check"
 
 ROWS_TOTAL=0
 ROWS_OK=0

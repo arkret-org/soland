@@ -281,7 +281,7 @@ pub(super) async fn mimi_room_message(
             // id + message id when the envelope omits one. Real
             // deployments will normalise this via the identifier
             // mapping layer per spec §10.
-            format!("{}#mimi-anonymous", state.config.service_id,)
+            format!("{}#mimi-anonymous", state.service_id,)
         });
     let mapped_content = map_mimi_message_content(&message, source_format)?;
     let thread_id = message
@@ -817,7 +817,7 @@ pub(super) async fn mimi_report_abuse(
         tracing::error!(%error, "mimi: failed to mirror report into projection_events");
     }
 
-    let routed_to = Did::new(state.config.service_id.clone()).map_or_else(
+    let routed_to = Did::new(state.service_id.clone()).map_or_else(
         |error| {
             tracing::warn!(%error, "mimi: service DID could not be represented in report outcome");
             Vec::new()
@@ -830,7 +830,7 @@ pub(super) async fn mimi_report_abuse(
         &body,
         json!({
             "e2ee_evidence_plaintext_required": false,
-            "routed_to": [format!("{}#moderation", state.config.service_id)],
+            "routed_to": [format!("{}#moderation", state.service_id)],
             "moderation_event_emitted": true,
             "report_event_id": report_event_id,
             "reporter_resolution": "holder_claim_or_consent",

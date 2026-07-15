@@ -209,7 +209,7 @@ mod tests {
                     "kind": "realm",
                     "realm_id": "ak:realm:01999999-0000-7000-8000-000000000099"
                 },
-                { "kind": "service", "service_id": "did:web:soland.local" }
+                { "kind": "service", "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service" }
             ]
         })
     }
@@ -502,7 +502,8 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_id = "did:web:soland.local";
+        let service_id =
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
@@ -540,7 +541,8 @@ mod tests {
     fn key_pair_proof_of_possession_verifies_runtime_key() {
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_id = "did:web:soland.local";
+        let service_id =
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let body = key_pair_request_body(agent, verification_method, service_id);
 
         verify_runtime_key_pair_proof_of_possession(&body, agent, service_id)
@@ -551,7 +553,8 @@ mod tests {
     fn runtime_approval_request_for_controller_omits_pairing_code() {
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_id = "did:web:soland.local";
+        let service_id =
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let key_pair = key_pair_request_body(agent, verification_method, service_id);
         let request = AgentRuntimeApprovalRequestBody {
             pairing_code: arkret_sdk::NonEmptyString::new("12345678").unwrap(),
@@ -791,7 +794,8 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_id = "did:web:soland.local";
+        let service_id =
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
@@ -834,7 +838,8 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_id = "did:web:soland.local";
+        let service_id =
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
@@ -875,7 +880,8 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_id = "did:web:soland.local";
+        let service_id =
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
@@ -937,7 +943,8 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_id = "did:web:soland.local";
+        let service_id =
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let expected_scope = requested_agent_scope();
@@ -1005,7 +1012,8 @@ mod tests {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
-        let service_id = "did:web:soland.local";
+        let service_id =
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();

@@ -16,8 +16,8 @@
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
-use arkret_sdk::ServiceDescribe;
 use arkret_sdk::http::ServerDescribeOutcome;
+use arkret_sdk::{ServiceDescribe, ServiceIdentityState};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -109,7 +109,9 @@ pub(super) fn local_router() -> Router {
 async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let database_ok = database_ready(state).await;
-    let ok = database_ok;
+    let identity_state = state.service_identity_state();
+    let service_identity_ok = identity_state.is_ready();
+    let ok = database_ok && service_identity_ok;
     if !ok {
         res.status_code(StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -125,6 +127,7 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutco
             "events": {
                 "ok": true,
             },
+            "service_identity": service_identity_health(identity_state.as_ref()),
         }),
         development_mode: state.config.development_mode,
         proof_verifier_mode: state.config.proof_verifier_mode(),
@@ -152,11 +155,13 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
         || state.config.session_grant_introspection_bearer.is_some();
     let external_webvh_provider_ready = state.config.external_webvh_provider_url.is_none()
         || state.config.external_webvh_provider_active;
+    let service_identity_ready = state.service_identity_state().is_ready();
     let pq_hybrid_tls_ready = state.config.pq_hybrid_tls_ready();
     let ok = database_ok
         && migrations_applied
         && session_grant_introspection_ready
         && external_webvh_provider_ready
+        && service_identity_ready
         && pq_hybrid_tls_ready;
     if !ok {
         res.status_code(StatusCode::SERVICE_UNAVAILABLE);
@@ -170,6 +175,8 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
         Some("database_unreachable".to_owned())
     } else if !pq_hybrid_tls_ready {
         Some("pq_hybrid_tls_probe_missing".to_owned())
+    } else if !service_identity_ready {
+        Some("service_identity_unavailable".to_owned())
     } else {
         None
     };
@@ -212,6 +219,82 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
             },
         },
     })
+}
+
+fn service_identity_health(state: &ServiceIdentityState) -> Value {
+    match state {
+        ServiceIdentityState::Ready { identity } => json!({
+            "state": "ready",
+            "service_id": identity.service_id,
+            "provider_endpoint": identity.provider.as_ref().map(|provider| provider.endpoint.as_str()),
+            "last_verified_at": identity.last_verified_at,
+            "retry_at": null,
+            "next_action": null,
+        }),
+        ServiceIdentityState::DegradedStored {
+            identity,
+            retry_at,
+            last_error,
+        } => json!({
+            "state": "degraded_stored",
+            "service_id": identity.service_id,
+            "provider_endpoint": identity.provider.as_ref().map(|provider| provider.endpoint.as_str()),
+            "last_verified_at": identity.last_verified_at,
+            "retry_at": retry_at,
+            "last_error": last_error,
+            "next_action": null,
+        }),
+        ServiceIdentityState::WaitingProvider {
+            registration_key,
+            retry_at,
+        } => json!({
+            "state": "waiting_provider",
+            "service_id": null,
+            "provider_endpoint": null,
+            "registration_key": registration_key,
+            "last_verified_at": null,
+            "retry_at": retry_at,
+            "next_action": null,
+        }),
+        ServiceIdentityState::RegistrationKeyDrift {
+            identity,
+            stored_key,
+            computed_key,
+        } => json!({
+            "state": "registration_key_drift",
+            "service_id": identity.service_id,
+            "provider_endpoint": identity.provider.as_ref().map(|provider| provider.endpoint.as_str()),
+            "stored_key": stored_key,
+            "computed_key": computed_key,
+            "last_verified_at": identity.last_verified_at,
+            "retry_at": null,
+            "next_action": "run `soland service-identity migrate-base` after verifying the computed registration key",
+        }),
+        ServiceIdentityState::Conflict {
+            stored_service_id,
+            provider_service_id,
+        } => json!({
+            "state": "conflict",
+            "service_id": stored_service_id,
+            "provider_service_id": provider_service_id,
+            "provider_endpoint": null,
+            "last_verified_at": null,
+            "retry_at": null,
+            "next_action": "run `soland service-identity doctor` and restore the authoritative identity",
+        }),
+        ServiceIdentityState::Faulted {
+            diagnostic,
+            next_action,
+        } => json!({
+            "state": "faulted",
+            "diagnostic": diagnostic,
+            "service_id": null,
+            "provider_endpoint": null,
+            "last_verified_at": null,
+            "retry_at": null,
+            "next_action": next_action,
+        }),
+    }
 }
 
 async fn database_ready(state: &AppState) -> bool {
@@ -271,7 +354,7 @@ fn unsupported_profiles_from_limits(
 
 pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     let mut description = describe(
-        &state.config.service_id,
+        &state.service_id,
         &state.config.public_base_url,
         state.db.mode(),
         state.config.development_mode,
@@ -525,7 +608,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
                     "proof_kind": "did_bound_signature",
                     "challenge": "challenge-01js0000000000000000000000",
                     "request_canonical_digest": "sha256:7e4f3a0b6f0d0f3d9f8c3a2b1e0d9c8b7a6f5e4d3c2b1a009988776655443322",
-                    "audience": "did:web:soland.local",
+                    "audience": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                     "signature": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWxpY2UuZXhhbXBsZSNkZXZpY2Uta2V5In0.example"
                 }
             }),

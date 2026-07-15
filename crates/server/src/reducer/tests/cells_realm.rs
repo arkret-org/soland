@@ -477,7 +477,7 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
             serde_json::json!({
                 "receipt_id": "ak:receipt:01",
                 "schema": "ak.schema.erasure_receipt.v1",
-                "issuer": "did:web:soland.local",
+                "issuer": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                 "subject": {"kind": "realm", "subject_ref": "ak:realm:01904100-0000-7000-8000-cfc039892036"},
                 "scope": {
                     "storage_boundary": "projection_store",

@@ -158,7 +158,7 @@ impl PolicyGateRejection {
 fn policy_client_for_state(state: &AppState) -> Result<PolicyClient, PolicyGateRejection> {
     let http = crate::security::build_default_egress_http_client(Duration::from_secs(10))
         .map_err(|error| PolicyGateRejection::internal(format!("policy client: {error}")))?;
-    Ok(PolicyClient::new(http, state.config.service_id.clone())
+    Ok(PolicyClient::new(http, state.service_id.clone())
         .with_private_network_egress(crate::security::private_networks_allowed(
             state.config.development_mode,
         ))
@@ -182,7 +182,7 @@ async fn policy_request_for_operation(
     let actor_id = Did::new(actor_id.to_owned()).map_err(|error| {
         PolicyGateRejection::forbidden_request(format!("invalid actor DID: {error}"))
     })?;
-    let source_service_id = Did::new(state.config.service_id.clone()).map_err(|error| {
+    let source_service_id = Did::new(state.service_id.clone()).map_err(|error| {
         PolicyGateRejection::internal(format!("invalid local service DID: {error}"))
     })?;
     let event_preview = serde_json::to_value(operation).map_err(|error| {

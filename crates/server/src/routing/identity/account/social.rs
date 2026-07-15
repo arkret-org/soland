@@ -56,7 +56,7 @@ pub(crate) async fn contact_request(
         .filter(|did| !did.is_empty());
     let is_remote_target = recipient_service_id
         .as_deref()
-        .is_some_and(|did| did != state.config.service_id);
+        .is_some_and(|did| did != state.service_id);
     if !is_remote_target {
         let target_account = state
             .persistence
@@ -541,7 +541,7 @@ pub(crate) async fn contact_respond(
         .requester_service_id
         .as_ref()
         .map(|did| did.as_str().trim().to_owned())
-        .filter(|did| !did.is_empty() && did != &state.config.service_id)
+        .filter(|did| !did.is_empty() && did != &state.service_id)
     {
         super::super::contact_federation::federate_contact_fact(
             state,
@@ -735,7 +735,7 @@ pub(crate) async fn contact_tombstone(
         .map(|did| did.as_str().trim().to_owned())
         .filter(|did| !did.is_empty())
         .or(row_peer_service_id)
-        .filter(|did| did != &state.config.service_id)
+        .filter(|did| did != &state.service_id)
     {
         super::super::contact_federation::federate_contact_fact(
             state,

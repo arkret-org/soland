@@ -398,7 +398,7 @@ async fn policy_check(
         .await;
     }
 
-    let policy_server_id = Did::new(state.config.service_id.clone())
+    let policy_server_id = Did::new(state.service_id.clone())
         .map_err(|error| AppError::internal(format!("invalid service DID: {error}")))?;
     let expires_at = now() + chrono::Duration::minutes(5);
     let bound_to = PolicyCheckBoundTo {
@@ -419,7 +419,7 @@ async fn policy_check(
         policy_frontier_digest,
         membership_frontier_digest,
         signature: PolicyCheckSignature {
-            kid: format!("{}#policy-binding-key", state.config.service_id),
+            kid: format!("{}#policy-binding-key", state.service_id),
             sig: String::new(),
         },
         next_retry_at,
@@ -814,7 +814,11 @@ mod tests {
 
     #[test]
     fn policy_check_actor_must_match_session_by_default() {
-        let request = policy_request("did:web:alice.example", "did:web:soland.local", Value::Null);
+        let request = policy_request(
+            "did:web:alice.example",
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+            Value::Null,
+        );
         assert!(policy_check_actor_bound_to_session(
             &request,
             "did:web:alice.example"

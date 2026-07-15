@@ -3,11 +3,10 @@
 //! Implements the deterministic, well-bounded validations the resolver
 //! used to skip:
 //!
-//! 1. **prev_hash chain validation** — every non-genesis entry MUST link to the prior entry by
-//!    carrying that entry's `versionId` in its own `previousVersionId` field, AND the hash portion
-//!    of the entry's own `versionId` MUST match the canonical hash of the (proof- /
-//!    versionId-stripped) entry. Spec: `identity/identity-did.md` §3.4 ("entry hash chain") and the
-//!    DIF didwebvh v1.0 method spec.
+//! 1. **versionId hash-chain validation** — the hash portion of every entry's `versionId` MUST
+//!    match the canonical hash of the proof-stripped entry after replacing its `versionId` with the
+//!    SCID for genesis or the accepted predecessor's `versionId` for later entries. Spec:
+//!    `identity/identity-did.md` §3.4 ("entry hash chain") and the DIF didwebvh v1.0 method spec.
 //! 2. **SCID mismatch rejection** — the SCID embedded in the DID string MUST equal the SCID
 //!    derivable from the genesis entry (§3 / §3.4, covering DNS hijack protection and auditable DID
 //!    control history).
@@ -71,12 +70,6 @@ impl WebvhLogEntry {
     pub fn version_id(&self) -> Option<&str> {
         self.payload.get("versionId").and_then(Value::as_str)
     }
-
-    pub fn previous_version_id(&self) -> Option<&str> {
-        self.payload
-            .get("previousVersionId")
-            .and_then(Value::as_str)
-    }
 }
 
 /// Stable error envelope for webvh validation failures. Maps to the
@@ -84,9 +77,8 @@ impl WebvhLogEntry {
 /// any other typed handler error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WebvhValidationError {
-    /// Entry at `at_index` declares `previousVersionId = actual` but the
-    /// prior entry's `versionId` is `expected`, OR the entry's own
-    /// versionId hash does not match the canonical hash of its content.
+    /// The entry's own versionId hash does not match the canonical hash of
+    /// its content anchored on the accepted predecessor.
     ChainBreak {
         at_index: usize,
         expected: String,
@@ -276,8 +268,9 @@ pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationEr
     if log.is_empty() {
         return Err(WebvhValidationError::EmptyLog);
     }
+    let mut previous_version_time = entry_version_time(&log[0], 0)?;
     // Genesis check — versionId hash must equal canonical hash of the
-    // stripped entry. (We do not require previousVersionId on entry 0.)
+    // stripped entry anchored on its SCID.
     let genesis_version_id =
         log[0]
             .version_id()
@@ -285,12 +278,18 @@ pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationEr
                 at_index: 0,
                 reason: "missing versionId".to_owned(),
             })?;
-    let (_genesis_seq, genesis_hash) = split_version_id(genesis_version_id).ok_or_else(|| {
+    let (genesis_seq, genesis_hash) = split_version_id(genesis_version_id).ok_or_else(|| {
         WebvhValidationError::MalformedEntry {
             at_index: 0,
             reason: "versionId must be \"<seq>-<hash>\"".to_owned(),
         }
     })?;
+    if genesis_seq != 1 {
+        return Err(WebvhValidationError::MalformedEntry {
+            at_index: 0,
+            reason: "genesis versionId sequence must be 1".to_owned(),
+        });
+    }
     // The genesis entry-hash preimage anchors on the SCID.
     let genesis_scid = log[0]
         .payload
@@ -317,29 +316,34 @@ pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationEr
     for index in 1..log.len() {
         let prev = &log[index - 1];
         let current = &log[index];
+        let current_version_time = entry_version_time(current, index)?;
+        if current_version_time <= previous_version_time {
+            return Err(WebvhValidationError::MalformedEntry {
+                at_index: index,
+                reason: "versionTime must advance strictly across the accepted history".to_owned(),
+            });
+        }
+        previous_version_time = current_version_time;
+        if let Some(scid) = current
+            .payload
+            .pointer("/parameters/scid")
+            .and_then(Value::as_str)
+            && scid != genesis_scid
+        {
+            return Err(WebvhValidationError::MalformedEntry {
+                at_index: index,
+                reason: "parameters.scid cannot change after inception".to_owned(),
+            });
+        }
         let prev_version_id =
             prev.version_id()
                 .ok_or_else(|| WebvhValidationError::MalformedEntry {
                     at_index: index - 1,
                     reason: "missing versionId".to_owned(),
                 })?;
-        let declared_prev =
-            current
-                .previous_version_id()
-                .ok_or_else(|| WebvhValidationError::MalformedEntry {
-                    at_index: index,
-                    reason: "non-genesis entry must declare previousVersionId".to_owned(),
-                })?;
-        if declared_prev != prev_version_id {
-            return Err(WebvhValidationError::ChainBreak {
-                at_index: index,
-                expected: prev_version_id.to_owned(),
-                actual: declared_prev.to_owned(),
-            });
-        }
-        // Recompute current entry's hash against the hash portion of
-        // its own versionId — this catches in-place tampering with the
-        // payload even when previousVersionId still happens to match.
+        // did:webvh v1.0 carries no separate previousVersionId field. Its
+        // native chain link is the current entry hash recomputed after
+        // replacing versionId with the accepted predecessor's versionId.
         let current_version_id =
             current
                 .version_id()
@@ -347,12 +351,35 @@ pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationEr
                     at_index: index,
                     reason: "missing versionId".to_owned(),
                 })?;
-        let (_seq, current_hash) = split_version_id(current_version_id).ok_or_else(|| {
+        let (previous_seq, _) = split_version_id(prev_version_id).ok_or_else(|| {
             WebvhValidationError::MalformedEntry {
-                at_index: index,
+                at_index: index - 1,
                 reason: "versionId must be \"<seq>-<hash>\"".to_owned(),
             }
         })?;
+        let (current_seq, current_hash) =
+            split_version_id(current_version_id).ok_or_else(|| {
+                WebvhValidationError::MalformedEntry {
+                    at_index: index,
+                    reason: "versionId must be \"<seq>-<hash>\"".to_owned(),
+                }
+            })?;
+        let expected_seq =
+            previous_seq
+                .checked_add(1)
+                .ok_or_else(|| WebvhValidationError::MalformedEntry {
+                    at_index: index,
+                    reason: "versionId sequence overflow".to_owned(),
+                })?;
+        if current_seq != expected_seq {
+            return Err(WebvhValidationError::MalformedEntry {
+                at_index: index,
+                reason: format!(
+                    "versionId sequence must advance exactly once from {previous_seq} to {}",
+                    expected_seq
+                ),
+            });
+        }
         let recomputed =
             webvh_entry_hash_multibase(&current.payload, prev_version_id).map_err(|reason| {
                 WebvhValidationError::MalformedEntry {
@@ -369,6 +396,26 @@ pub fn validate_log_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationEr
         }
     }
     Ok(())
+}
+
+fn entry_version_time(
+    entry: &WebvhLogEntry,
+    at_index: usize,
+) -> Result<chrono::DateTime<chrono::FixedOffset>, WebvhValidationError> {
+    let version_time = entry
+        .payload
+        .get("versionTime")
+        .and_then(Value::as_str)
+        .ok_or_else(|| WebvhValidationError::MalformedEntry {
+            at_index,
+            reason: "versionTime is required".to_owned(),
+        })?;
+    chrono::DateTime::parse_from_rfc3339(version_time).map_err(|_| {
+        WebvhValidationError::MalformedEntry {
+            at_index,
+            reason: "versionTime must be an RFC3339 timestamp".to_owned(),
+        }
+    })
 }
 
 /// Derive the SCID a DID claims, from its genesis log entry.
@@ -1331,7 +1378,6 @@ mod tests {
     fn build_entry_two(prev: &WebvhLogEntry, scid: &str) -> WebvhLogEntry {
         let body = json!({
             "versionTime": "2026-05-22T00:00:00Z",
-            "previousVersionId": prev.version_id().unwrap(),
             "parameters": {
                 "scid": scid,
                 "method": "did:webvh:1.0",
@@ -1360,23 +1406,17 @@ mod tests {
     }
 
     #[test]
-    fn chain_break_detects_tampered_previous_version_id() {
+    fn chain_break_detects_entry_hashed_against_forged_predecessor() {
         let signing = fresh_signing_key();
         let pubkey_mb = encode_pubkey_multibase(&signing.verifying_key());
         let (scid, genesis) = build_genesis(&pubkey_mb);
-        let genesis_version_id = genesis.version_id().unwrap().to_owned();
         let mut entry_two = build_entry_two(&genesis, &scid).payload;
         if let Value::Object(map) = &mut entry_two {
-            map.insert(
-                "previousVersionId".to_owned(),
-                json!("1-QmForgedPreviousHash00000000000000000000000"),
-            );
-            // Recompute this entry's own versionId (anchored on the genuine
-            // predecessor) so we isolate the failure to the
-            // previousVersionId mismatch rather than the self-hash check.
-            let recomputed =
-                webvh_entry_hash_multibase(&Value::Object(map.clone()), &genesis_version_id)
-                    .unwrap();
+            let recomputed = webvh_entry_hash_multibase(
+                &Value::Object(map.clone()),
+                "1-QmForgedPreviousHash00000000000000000000000",
+            )
+            .unwrap();
             map.insert("versionId".to_owned(), json!(format!("2-{recomputed}")));
         }
         let log = vec![genesis, WebvhLogEntry::new(entry_two)];
@@ -1510,7 +1550,6 @@ mod tests {
         }));
         let rotation = WebvhLogEntry::new(json!({
             "versionId": "2-zRotation",
-            "previousVersionId": "1-zGenesis",
             "versionTime": "2026-05-25T00:30:00Z",
             "parameters": {
                 "method": "did:webvh:1.0",

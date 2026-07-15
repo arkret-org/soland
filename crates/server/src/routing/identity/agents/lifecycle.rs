@@ -68,7 +68,7 @@ pub(super) async fn provision_agent(
             "slug is already bound to an active or open agent for this controller",
         ));
     }
-    let agent_id = generate_agent_principal_did(&state.config.service_id);
+    let agent_id = generate_agent_principal_did(&state.service_id);
     let agent_principal_did = Did::new(agent_id.clone()).map_err(|err| {
         AppError::internal(format!("generated agent principal DID invalid: {err}"))
     })?;
@@ -139,7 +139,7 @@ pub(super) async fn provision_agent(
     );
     principal.controller_account_id =
         Some(ids::typed_uuid_part_expect_internal(&controller_account.id));
-    principal.recipient_service_id = Some(state.config.service_id.clone());
+    principal.recipient_service_id = Some(state.service_id.clone());
     principal.display_name = display_name.clone();
     principal.agent_slug = Some(agent_slug.clone());
     principal.avatar_blob_ref = avatar_blob_ref.clone();

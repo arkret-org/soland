@@ -819,7 +819,7 @@ pub fn ensure_materialized_event_seal(
     generation_fence: Option<&FirstGenerationEventSealRequirement>,
 ) -> Result<MaterializedEventSealView, NotaryError> {
     let _guard = EVENT_SEAL_MATERIALIZE_LOCK.lock();
-    let worker = NotaryWorker::for_service(state.config.service_id.clone());
+    let worker = NotaryWorker::for_service(state.service_id.clone());
     if !device_generation_seal_required && !worker.is_authorized_for(state, realm_id)? {
         return Err(NotaryError::NotAuthorized(realm_id.to_string()));
     }
@@ -1075,7 +1075,7 @@ pub fn run_one_signing_pass(
     realm_id: &RealmId,
     max_control_moves: usize,
 ) -> Result<Option<NotaryOutcome>, NotaryError> {
-    let worker = NotaryWorker::for_service(state.config.service_id.clone());
+    let worker = NotaryWorker::for_service(state.service_id.clone());
     worker.sign_pending_for_realm(state, realm_id, max_control_moves)
 }
 

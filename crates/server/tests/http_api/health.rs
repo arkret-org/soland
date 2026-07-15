@@ -325,7 +325,7 @@ async fn private_federation_write_rail_is_local_only() {
     let mut response = TestClient::post("http://server/_soland/peer/federation/operations")
         .json(&serde_json::json!({
             "origin": "did:web:peer.example",
-            "destination": "did:web:soland.local",
+            "destination": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             "operations": []
         }))
         .send(&service)

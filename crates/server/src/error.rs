@@ -576,5 +576,8 @@ impl EndpointOutRegister for AppError {
         operation
             .responses
             .insert("500", response("Internal server error"));
+        operation
+            .responses
+            .insert("501", response("Unsupported feature or not implemented"));
     }
 }

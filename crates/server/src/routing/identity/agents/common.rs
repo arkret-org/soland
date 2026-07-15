@@ -12,7 +12,7 @@ pub(super) fn controller_service_session(controller_id: &str, state: &AppState) 
         token_hash: format!("agent-pair-commit:{controller_id}"),
         actor: controller_id.to_owned(),
         device_id: "agent-pair-commit".to_owned(),
-        audience: state.config.service_id.clone(),
+        audience: state.service_id.clone(),
         session_public_key: None,
         agent_session: None,
         expires_at: now() + chrono::Duration::minutes(5),

@@ -57,7 +57,10 @@ fn input(bypass_cache: bool) -> PolicyCheckRequestInput {
         realm_id: RealmId::new(REALM_ID).unwrap(),
         actor_id: Did::new("did:web:alice.example").unwrap(),
         action: "ak.message.create".to_owned(),
-        source_service_id: Did::new("did:web:soland.local").unwrap(),
+        source_service_id: Did::new(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        )
+        .unwrap(),
         source_service_type: "principal_server".to_owned(),
         source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
         signed_transport: true,
@@ -215,9 +218,12 @@ async fn policy_server_integration_hits_mock() {
 
     let url = format!("http://{addr}/_arkret/self/policy/check");
     let cfg = config_for(&url, 2000);
-    let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
-        .with_private_network_egress(true)
-        .with_policy_did_resolver(policy_resolver(&signing));
+    let client = PolicyClient::new(
+        reqwest::Client::new(),
+        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+    )
+    .with_private_network_egress(true)
+    .with_policy_did_resolver(policy_resolver(&signing));
     let engine = SolandAuthzEngine::new();
 
     let mut ctx = RequestContext {
@@ -275,8 +281,11 @@ async fn policy_server_integration_timeout_fails_closed() {
 
     let url = format!("http://{addr}/_arkret/self/policy/check");
     let cfg = config_for(&url, 250);
-    let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
-        .with_private_network_egress(true);
+    let client = PolicyClient::new(
+        reqwest::Client::new(),
+        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+    )
+    .with_private_network_egress(true);
     let engine = SolandAuthzEngine::new();
 
     let mut ctx = RequestContext {
@@ -319,7 +328,7 @@ async fn policy_server_integration_timeout_fails_closed() {
                 remote
                     .signature
                     .kid
-                    .starts_with("did:web:soland.local#proxy-"),
+                    .starts_with("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#proxy-"),
                 "synthetic timeout response must be marked as proxy: {}",
                 remote.signature.kid
             );

@@ -457,7 +457,7 @@ async fn validate_franking_event_time_anchor(
         RealmId::new(record_realm_id.to_owned()).map_err(|error| {
             franking_proof_invalid(format!("invalid event anchor realm_id: {error}"))
         })?,
-        Did::new(state.config.service_id.clone()).map_err(|error| {
+        Did::new(state.service_id.clone()).map_err(|error| {
             franking_proof_invalid(format!("invalid local franking service DID: {error}"))
         })?,
         record.received_at,
@@ -644,7 +644,7 @@ async fn moderation_report(
     let report_id = ids::generate_report_id();
     // Internal assignment keeps the `<did>#moderation` role form; the wire
     // `routed_to` carries bare DIDs only (spec pattern forbids fragments).
-    let moderation_role = format!("{}#moderation", state.config.service_id);
+    let moderation_role = format!("{}#moderation", state.service_id);
     let audit_policy = audit_disclosure_policy_for_realm(state, body.realm_id.as_str()).await;
     let mut report_fields = serde_json::Map::new();
     report_fields.insert("report_id".to_owned(), json!(report_id));
@@ -727,10 +727,10 @@ async fn moderation_report(
         notify_audit_agent_for_report(state, audit_policy.as_ref(), &report_payload).await;
     let mut routed_to = Vec::new();
     if moderation_routing_visible_to_actor(state, &realm_id, &session.actor).await {
-        match validate_did(&state.config.service_id) {
+        match validate_did(&state.service_id) {
             Ok(did) => routed_to.push(did),
             Err(()) => tracing::warn!(
-                service_id = %state.config.service_id,
+                service_id = %state.service_id,
                 "service_id is not a valid bare DID; omitted from routed_to"
             ),
         }
@@ -1454,7 +1454,7 @@ mod report_safety_tests {
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000333",
                 "mls_group_id_digest": hash('f'),
             },
-            "received_by": "did:web:soland.local",
+            "received_by": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             "received_at": FRANKING_RECEIVED_AT,
             "replay_nonce": "nonce_0123456789",
             "signature": "sig",

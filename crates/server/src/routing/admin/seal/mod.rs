@@ -75,7 +75,7 @@ pub(super) use notary::{admin_get_notary, admin_reconfigure_notary};
 /// the JWS the NotaryWorker emits — so a single DID-document publication
 /// covers both the worker and the admin endpoints.
 pub(super) fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError> {
-    let service_id = state.config.service_id.as_str();
+    let service_id = state.service_id.as_str();
     let did = Did::new(service_id.to_owned())
         .map_err(|e| app_error!(InternalError, "invalid service DID `{service_id}`: {e}"))?;
     let kid = format!("{service_id}#notary-key");

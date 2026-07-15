@@ -17,10 +17,10 @@ async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
         .persistence
         .sessions()
         .put(&soland::state::SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.config.service_id),
+            token_hash: test_session_credential_hash(token, &state.service_id),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
-            audience: state.config.service_id.clone(),
+            audience: state.service_id.clone(),
             session_public_key: None,
             agent_session: None,
             expires_at: now + chrono::Duration::minutes(5),
@@ -142,7 +142,7 @@ async fn production_agent_provision_fails_closed_without_durable_fanout() {
                 ],
                 "resources": [{
                     "kind": "service",
-                    "service_id": "did:web:soland.local"
+                    "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
                 }]
             }
         }))

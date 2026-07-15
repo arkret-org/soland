@@ -39,7 +39,7 @@ pub(super) fn verify_mimi_write_service_proof(
         ));
     }
     let destination_service_id = mimi_required_header(req, "destination-service-id")?;
-    if destination_service_id != state.config.service_id {
+    if destination_service_id != state.service_id {
         return Err(mimi_signature_error_invalid(
             "Destination-Service-ID does not match this service",
         ));

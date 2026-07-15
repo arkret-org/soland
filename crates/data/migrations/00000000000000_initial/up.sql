@@ -1252,18 +1252,26 @@ CREATE TABLE public.webvh_log_events (
 );
 
 -- The deployment's own authoritative service identity (identity-did.md §3.7).
--- Singleton: at most one row keyed by the fixed id 'self'. `provenance` is
--- 'bootstrapped_local' (soland self-minted its did:webvh + hosts the log) or
--- 'adopted_config' (a pre-existing / external service_id recorded from config
--- on first boot). This row is the fail-closed source of truth; a configured
--- SOLAND_SERVICE_ID that disagrees with it MUST reject startup.
+-- Singleton: at most one row keyed by the fixed id 'self'. `identity` is the
+-- SDK StoredServiceIdentity document: public DID/receipt evidence plus opaque
+-- KeyRefs. Private signing and WebVH control seeds MUST remain in the selected
+-- Secrets/KeyStore backend and MUST NOT be copied into PostgreSQL.
 CREATE TABLE public.service_identity (
     id text NOT NULL,
+    identity jsonb NOT NULL
+);
+
+CREATE TABLE public.service_identity_registrations (
+    service_type text NOT NULL,
+    public_base text NOT NULL,
     service_id text NOT NULL,
-    provenance text NOT NULL,
-    did_document jsonb DEFAULT '{}'::jsonb NOT NULL,
-    update_key_seed_multibase text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    version_id text NOT NULL,
+    inception_digest text NOT NULL,
+    outcome jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT service_identity_registrations_pkey PRIMARY KEY (service_type, public_base),
+    CONSTRAINT service_identity_registrations_service_id_key UNIQUE (service_id)
 );
 
 ALTER TABLE ONLY public.projection_events ALTER COLUMN id SET DEFAULT nextval('public.projection_events_ordinal_seq'::regclass);

@@ -56,7 +56,7 @@ pub(super) async fn register_package_install(
                 let mut recovered = existing.clone();
                 if recovered.install_execution.is_none() {
                     recovered.install_execution = Some(build_install_execution_record(
-                        &state.config.service_id,
+                        &state.service_id,
                         owner_actor_id,
                         &idempotency_key,
                         &body_digest,
@@ -162,7 +162,7 @@ pub(super) async fn register_package_install(
         ghosts: Vec::new(),
     };
     record.install_execution = Some(build_install_execution_record(
-        &state.config.service_id,
+        &state.service_id,
         owner_actor_id,
         record.idempotency_key.as_deref().unwrap_or_default(),
         record.install_body_digest.as_deref().unwrap_or_default(),
@@ -219,7 +219,7 @@ async fn recover_applet_install_fanout(
             .unwrap_or_default()
             .to_owned();
         record.install_execution = Some(build_install_execution_record(
-            &state.config.service_id,
+            &state.service_id,
             &record.owner_actor_id,
             record.idempotency_key.as_deref().unwrap_or_default(),
             record.install_body_digest.as_deref().unwrap_or_default(),
@@ -1700,7 +1700,7 @@ mod tests {
         let submitted_plan_digest = format!("sha256:{}", "33".repeat(32));
 
         let pending = build_install_execution_record(
-            "did:web:soland.local",
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             &record.owner_actor_id,
             record.idempotency_key.as_deref().unwrap(),
             body_digest,
@@ -1742,7 +1742,7 @@ mod tests {
         );
 
         let accepted = build_install_execution_record(
-            "did:web:soland.local",
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             &record.owner_actor_id,
             record.idempotency_key.as_deref().unwrap(),
             body_digest,
@@ -1776,7 +1776,7 @@ mod tests {
         assert_eq!(
             accepted,
             build_install_execution_record(
-                "did:web:soland.local",
+                "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                 &record.owner_actor_id,
                 record.idempotency_key.as_deref().unwrap(),
                 body_digest,

@@ -331,7 +331,7 @@ async fn account_notification_delta(
         .notifications()
         .list_for_account(
             &account.id,
-            &state.config.service_id,
+            &state.service_id,
             is_incremental.then_some(after_cursor.notification_position),
         )
         .await
@@ -549,7 +549,7 @@ impl<'a> RosterDisclosureContext<'a> {
     ) -> Self {
         let caller = session.map(|session| session.actor.as_str());
         Self {
-            service_id: &state.config.service_id,
+            service_id: &state.service_id,
             realm_public: realm_entry.public,
             caller,
             caller_is_realm_member: caller.is_some_and(|actor_id| {
@@ -584,7 +584,7 @@ fn roster_handle_claim_audience(
         .and_then(Value::as_str)
         .map(str::to_owned)
         .or_else(|| session.map(|session| session.audience.clone()))
-        .unwrap_or_else(|| state.config.service_id.clone())
+        .unwrap_or_else(|| state.service_id.clone())
 }
 
 /// ROST-SOL-2/3 — subject and companion fields disclose only when the Realm

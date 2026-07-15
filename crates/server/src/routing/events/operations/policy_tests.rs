@@ -658,7 +658,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
             "inviter": "did:web:alice.example",
             "invitee": "did:web:charlie.example",
             "invite_delivery_target": {
-                "recipient_service_id": "did:web:soland.local",
+                "recipient_service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                 "recipient_service_type": "principal_server"
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"

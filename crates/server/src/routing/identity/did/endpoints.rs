@@ -124,7 +124,7 @@ pub(crate) async fn identity_describe(
     if did_webvh["enabled"].as_bool().unwrap_or(false) {
         profiles.push("ak.identity.webvh.provider.v1".to_owned());
     }
-    let service_id = Did::new(state.config.service_id.clone())
+    let service_id = Did::new(state.service_id.clone())
         .map_err(|error| AppError::internal(format!("invalid configured service_id: {error}")))?;
     let supported_did_methods = state
         .config
@@ -155,6 +155,8 @@ pub(crate) async fn identity_describe(
             "ak.root.identity.log.query.list".to_owned(),
             "ak.root.identity.receipts.query.list".to_owned(),
             "ak.root.identity.command.submit_did_operation".to_owned(),
+            arkret_sdk::SERVICE_REGISTRATION_ENSURE_OPERATION.to_owned(),
+            arkret_sdk::SERVICE_REGISTRATION_GET_OPERATION.to_owned(),
         ],
         supported_bindings: vec![IdentityRegistryBinding {
             kind: "http".to_owned(),
@@ -166,6 +168,8 @@ pub(crate) async fn identity_describe(
                 "/_arkret/root/identity/log".to_owned(),
                 "/_arkret/root/identity/receipts".to_owned(),
                 "/_arkret/root/identity/submit-did-operation".to_owned(),
+                arkret_sdk::SERVICE_REGISTRATION_ENSURE_PATH.to_owned(),
+                arkret_sdk::SERVICE_REGISTRATION_GET_PATH.to_owned(),
             ],
         }],
         supported_features: supported_features.clone(),
@@ -441,6 +445,12 @@ pub(crate) async fn embedded_webvh_register(
         return Err(AppError::new(ErrorCode::InvalidSignature, message)
             .with_status(StatusCode::UNAUTHORIZED));
     }
+    let inception = [WebvhLogEntry::new(log_entry.clone())];
+    validate_log_chain(&inception)?;
+    verify_scid_against_did(&location.did, &inception[0])?;
+    verify_log_subject(&location.did, &inception)?;
+    validate_witness_policy_for_log(&inception, now.timestamp())?;
+    validate_rotation_authorization_for_log(&inception)?;
     let document_record = WebvhDocumentRecord {
         did: location.did.clone(),
         did_document: did_document.clone(),
@@ -462,36 +472,30 @@ pub(crate) async fn embedded_webvh_register(
         expires_at: now,
         updated_at: now,
     };
-    if let Err(error) = state
+    let commit = state
         .persistence
         .webvh()
-        .put_document(document_record.clone())
+        .commit_log_operation(
+            None,
+            document_record.clone(),
+            WebvhLogRecord {
+                event_digest: event_digest.clone(),
+                did: location.did.clone(),
+                seq: 1,
+                operation: log_entry.clone(),
+                created_at: now,
+            },
+        )
         .await
-    {
-        tracing::error!(%error, "failed to persist embedded webvh document");
-        return Err(AppError::internal(
-            "failed to persist embedded webvh document",
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if commit != WebvhLogCommitOutcome::Accepted {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "embedded did:webvh inception conflicts with existing history",
         ));
     }
     if let Err(error) = state.did_resolver.cache_webvh_record(document_record) {
         tracing::warn!(%error, "failed to cache embedded webvh DID document");
-    }
-    if let Err(error) = state
-        .persistence
-        .webvh()
-        .append_log_event(WebvhLogRecord {
-            event_digest: event_digest.clone(),
-            did: location.did.clone(),
-            seq: 1,
-            operation: log_entry.clone(),
-            created_at: now,
-        })
-        .await
-    {
-        tracing::error!(%error, "failed to append embedded webvh log entry");
-        return Err(AppError::internal(
-            "failed to append embedded webvh log entry",
-        ));
     }
     append_audit_log(
         state,
@@ -530,8 +534,7 @@ pub struct EmbeddedWebvhRotateRequestBody {
     /// The DID whose `did.jsonl` history a rotation entry is appended to.
     pub did: String,
     /// The next `did:webvh` log entry, already shaped by the client:
-    /// `versionId` (`<seq>-<multibase-multihash>`), `previousVersionId`
-    /// (the current head's `versionId`), `versionTime`, `parameters`
+    /// `versionId` (`<seq>-<multibase-multihash>`), `versionTime`, `parameters`
     /// (`updateKeys`, optional `witnesses` / `witness_threshold`), `state`
     /// (the new DID document), `proof[]` (controller / recovery / governance
     /// signatures), and optional `witness[]` attestations. soland appends it
@@ -553,9 +556,9 @@ pub struct EmbeddedWebvhRotateOutcome {
 
 /// Append a client-signed rotation entry to an embedded `did:webvh` history.
 ///
-/// Unlike `submit-did-operation` (a method-neutral document replace), this
-/// endpoint appends a real `did:webvh` log entry to `did.jsonl` and then runs
-/// the full resolver validation gate over the resulting chain
+/// Like the standard `submit-did-operation` adapter, this provider-specific
+/// endpoint appends a real `did:webvh` log entry to `did.jsonl` and runs the
+/// full resolver validation gate over the resulting chain
 /// (`run_webvh_resolution_checks`): hash chain link, SCID, witness quorum /
 /// degraded window, and rotation control authorisation (controller proof,
 /// recovery key, or organization governance quorum). It fails closed on any
@@ -617,7 +620,14 @@ pub(crate) async fn embedded_webvh_rotate(
             "no existing did:webvh history for did; register the genesis entry first",
         ));
     }
-    let next_seq = events.iter().map(|event| event.seq).max().unwrap_or(0) + 1;
+    let current_head = events.last().expect("non-empty checked above");
+    let next_seq = current_head.seq.checked_add(1).ok_or_else(|| {
+        AppError::new(
+            ErrorCode::CasConflict,
+            "current did:webvh sequence cannot advance",
+        )
+    })?;
+    let expected_current_head = Some(current_head.event_digest.clone());
 
     // Build the candidate chain (existing entries + the new entry) and run the
     // full resolver validation gate over it before persisting anything.
@@ -628,6 +638,7 @@ pub(crate) async fn embedded_webvh_rotate(
     candidate.push(WebvhLogEntry::new(entry.clone()));
     validate_log_chain(&candidate)?;
     verify_scid_against_did(&did, &candidate[0])?;
+    verify_log_subject(&did, &candidate)?;
     validate_witness_policy_for_log(&candidate, now().timestamp())?;
     validate_rotation_authorization_for_log(&candidate)?;
 
@@ -647,27 +658,31 @@ pub(crate) async fn embedded_webvh_rotate(
         expires_at: submitted_at,
         updated_at: submitted_at,
     };
-    state
+    let commit = state
         .persistence
         .webvh()
-        .put_document(document_record.clone())
+        .commit_log_operation(
+            expected_current_head,
+            document_record.clone(),
+            WebvhLogRecord {
+                event_digest: event_digest.clone(),
+                did: did.clone(),
+                seq: next_seq,
+                operation: entry,
+                created_at: submitted_at,
+            },
+        )
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    if commit != WebvhLogCommitOutcome::Accepted {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "did:webvh rotation lost the current head comparison",
+        ));
+    }
     if let Err(error) = state.did_resolver.cache_webvh_record(document_record) {
         tracing::warn!(%error, "failed to cache rotated webvh DID document");
     }
-    state
-        .persistence
-        .webvh()
-        .append_log_event(WebvhLogRecord {
-            event_digest: event_digest.clone(),
-            did: did.clone(),
-            seq: next_seq,
-            operation: entry,
-            created_at: submitted_at,
-        })
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
     events.push(WebvhLogRecord {
         event_digest: event_digest.clone(),
         did: did.clone(),
@@ -1009,7 +1024,7 @@ pub(crate) async fn identity_receipts(
 #[endpoint(
     operation_id = "ak.root.identity.command.submit_did_operation",
     tags("identity"),
-    summary = "Submit a method-neutral DID operation to the local registry",
+    summary = "Submit a native did:webvh log operation to the local registry",
     status_codes(200, 400, 401, 409, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.command.submit_did_operation"))]
@@ -1018,137 +1033,180 @@ pub(crate) async fn identity_submit_did_operation(
     body: JsonBody<DidOperationSubmitRequestBody>,
 ) -> JsonResult<DidOperationSubmitOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = serde_json::to_value(body.into_inner())
-        .map_err(|error| AppError::internal(format!("DID operation serialize: {error}")))?;
-    let did = string_field(&body, "did")
-        .or_else(|| {
-            body.get("operation")
-                .and_then(|operation| operation.get("did"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| {
-            body.get("operation")
-                .and_then(|operation| operation.get("state"))
-                .and_then(|state| state.get("id"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| {
-            body.get("did_document")
-                .and_then(|document| document.get("id"))
-                .and_then(Value::as_str)
-        })
-        .ok_or_else(|| AppError::invalid_param("did is required"))?
-        .to_owned();
-    if validate_did(&did).is_err() {
-        return Err(AppError::invalid_param("invalid did"));
+    let body = body.into_inner();
+    let did = body.did.as_str().to_owned();
+    let typed_did = body.did;
+    let did_method = did
+        .strip_prefix("did:")
+        .and_then(|value| value.split(':').next())
+        .ok_or_else(|| AppError::invalid_param("invalid did"))?;
+    if body.did_method != did_method {
+        return Err(AppError::invalid_param(
+            "did_method must exactly match the DID method discriminator",
+        ));
     }
-    let typed_did = Did::new(did.clone()).map_err(|_| AppError::invalid_param("invalid did"))?;
-
+    if did_method != "webvh" {
+        return Err(AppError::invalid_param(
+            "DID method is not supported by this operation adapter",
+        ));
+    }
+    let next_seq = body
+        .seq
+        .ok_or_else(|| AppError::invalid_param("seq is required for did:webvh submission"))?;
+    if next_seq > i64::MAX as u64 {
+        return Err(AppError::invalid_param(
+            "seq exceeds the supported persistence range",
+        ));
+    }
+    let expected_previous_head = body
+        .prev_event_digest
+        .as_ref()
+        .map(|digest| digest.as_str().to_owned());
+    let operation = Value::Object(body.operation.into_iter().collect());
+    let version_id = operation
+        .get("versionId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("operation.versionId is required"))?;
+    let operation_seq = version_id
+        .split_once('-')
+        .and_then(|(sequence, hash)| (!hash.is_empty()).then_some(sequence))
+        .and_then(|sequence| sequence.parse::<u64>().ok())
+        .ok_or_else(|| AppError::invalid_param("operation.versionId must be <seq>-<hash>"))?;
+    if operation_seq != next_seq {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "request seq must equal the native operation versionId sequence",
+        ));
+    }
+    let document = operation
+        .get("state")
+        .filter(|document| document.is_object())
+        .cloned()
+        .ok_or_else(|| AppError::invalid_param("operation.state is required"))?;
+    ensure_webvh_document_id(&did, &document)?;
+    let event_digest = did_log_event_digest(&operation)?;
     let existing = state
         .persistence
         .webvh()
         .get_document(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let next_seq = body
-        .get("seq")
-        .and_then(Value::as_u64)
-        .unwrap_or_else(|| existing.as_ref().map_or(1, |record| record.seq + 1));
-    if existing
+    let events = state
+        .persistence
+        .webvh()
+        .list_log_events(&did)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if let Some(existing_event) = events.iter().find(|event| {
+        event.seq == next_seq
+            || event.operation.get("versionId").and_then(Value::as_str) == Some(version_id)
+    }) {
+        if existing_event.event_digest == event_digest && existing_event.operation == operation {
+            return did_operation_submit_outcome("duplicate", typed_did, next_seq, &event_digest);
+        }
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "DID operation conflicts with an existing sequence or versionId",
+        ));
+    }
+    let expected_next_seq = match events.last() {
+        None => 1,
+        Some(event) => event.seq.checked_add(1).ok_or_else(|| {
+            AppError::new(
+                ErrorCode::CasConflict,
+                "current DID operation sequence cannot advance",
+            )
+        })?,
+    };
+    if next_seq != expected_next_seq {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "DID operation seq must advance the current log head exactly once",
+        ));
+    }
+    let current_head = events.last().map(|event| event.event_digest.clone());
+    if expected_previous_head
         .as_ref()
-        .is_some_and(|record| next_seq <= record.seq)
+        .is_some_and(|expected| current_head.as_ref() != Some(expected))
     {
         return Err(AppError::new(
             ErrorCode::CasConflict,
-            "DID operation seq must advance the current document",
+            "prev_event_digest does not match the current log head",
+        ));
+    }
+    let stored_state_matches_log = match (existing.as_ref(), events.last()) {
+        (None, None) => true,
+        (Some(document), Some(head)) => {
+            document.seq == head.seq
+                && document.key_log_head.as_deref() == Some(head.event_digest.as_str())
+        }
+        _ => false,
+    };
+    if !stored_state_matches_log {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "stored DID document and native log head are inconsistent",
         ));
     }
 
-    let operation = did_operation_from_body(&body)?;
-    let mut document = did_document_from_operation(&did, existing.as_ref(), &body, &operation)?;
-    ensure_did_document_id(&did, &mut document)?;
+    let mut candidate: Vec<WebvhLogEntry> = events
+        .iter()
+        .map(|event| WebvhLogEntry::new(event.operation.clone()))
+        .collect();
+    candidate.push(WebvhLogEntry::new(operation.clone()));
+    validate_log_chain(&candidate)?;
+    verify_scid_against_did(&did, &candidate[0])?;
+    verify_log_subject(&did, &candidate)?;
+    validate_witness_policy_for_log(&candidate, now().timestamp())?;
+    validate_rotation_authorization_for_log(&candidate)?;
+
     let submitted_at = now();
-    let event_payload = json!({
-        "did": did.clone(),
-        "seq": next_seq,
-        "previous": existing.as_ref().and_then(|record| record.key_log_head.clone()),
-        "operation": operation.clone(),
-        "submitted_at": submitted_at,
-    });
-    let submit_event_digest = format!(
-        "sha256:{}",
-        sha256_hex(&serde_json::to_vec(&event_payload).unwrap_or_default())
-    );
-    let operation_version_id = operation
-        .get("versionId")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let is_webvh_did = did.starts_with("did:webvh:");
-    let is_webvh_log_operation = is_webvh_did && operation_version_id.is_some();
-    let append_log_event = !is_webvh_did || is_webvh_log_operation;
-    let (event_digest, log_operation) = if is_webvh_log_operation {
-        (did_log_event_digest(&operation)?, operation.clone())
-    } else {
-        (submit_event_digest, event_payload.clone())
-    };
-    let previous_method_evidence = existing
-        .as_ref()
-        .map(|record| record.method_evidence.clone())
-        .unwrap_or_else(|| json!({"mode": "development_local"}));
-    let method_evidence = if let Some(version_id) = operation_version_id {
-        json!({
-            "mode": "submitted_operation",
-            "source": "ak.root.identity.command.submit_did_operation",
-            "version_id": version_id,
-            "previous": previous_method_evidence,
-        })
-    } else if is_webvh_did {
-        json!({
-            "mode": "submitted_document",
-            "source": "ak.root.identity.command.submit_did_operation",
-            "previous": previous_method_evidence,
-        })
-    } else {
-        json!({
-            "mode": "submitted_operation",
-            "source": "ak.root.identity.command.submit_did_operation",
-            "previous": previous_method_evidence,
-        })
-    };
     let document_record = WebvhDocumentRecord {
         did: did.clone(),
         did_document: document.clone(),
-        key_log_head: append_log_event.then(|| event_digest.clone()),
+        key_log_head: Some(event_digest.clone()),
         seq: next_seq,
-        method_evidence,
+        method_evidence: json!({
+            "mode": "submitted_operation",
+            "source": "ak.root.identity.command.submit_did_operation",
+            "version_id": version_id,
+        }),
         // put_document authoritatively overwrites freshness evidence with
         // the ingestion instant, so placeholders are enough here.
         fetched_at: submitted_at,
         expires_at: submitted_at,
         updated_at: submitted_at,
     };
-    state
+    let commit = state
         .persistence
         .webvh()
-        .put_document(document_record.clone())
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if let Err(error) = state.did_resolver.cache_webvh_record(document_record) {
-        tracing::warn!(%error, "failed to cache submitted DID document");
-    }
-    if append_log_event {
-        state
-            .persistence
-            .webvh()
-            .append_log_event(WebvhLogRecord {
+        .commit_log_operation(
+            current_head,
+            document_record.clone(),
+            WebvhLogRecord {
                 event_digest: event_digest.clone(),
                 did: did.clone(),
                 seq: next_seq,
-                operation: log_operation,
+                operation,
                 created_at: submitted_at,
-            })
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
+            },
+        )
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    match commit {
+        WebvhLogCommitOutcome::Conflict => {
+            return Err(AppError::new(
+                ErrorCode::CasConflict,
+                "DID operation lost a concurrent head comparison",
+            ));
+        }
+        WebvhLogCommitOutcome::Duplicate => {
+            return did_operation_submit_outcome("duplicate", typed_did, next_seq, &event_digest);
+        }
+        WebvhLogCommitOutcome::Accepted => {}
+    }
+    if let Err(error) = state.did_resolver.cache_webvh_record(document_record) {
+        tracing::warn!(%error, "failed to cache submitted DID document");
     }
     append_audit_log(
         state,
@@ -1157,27 +1215,31 @@ pub(crate) async fn identity_submit_did_operation(
         json!({
             "did": did.clone(),
             "seq": next_seq,
-            "head_event_digest": append_log_event.then(|| event_digest.clone()),
+            "head_event_digest": event_digest.clone(),
         }),
         "accepted",
     )
     .await;
-    let head_event_digest = if append_log_event {
-        Some(Hash::new(event_digest.clone()).map_err(|error| {
-            AppError::internal(format!(
-                "DID operation digest failed SDK type validation: {error}"
-            ))
-        })?)
-    } else {
-        None
-    };
-    let receipts = Vec::new();
+    did_operation_submit_outcome("accepted", typed_did, next_seq, &event_digest)
+}
+
+fn did_operation_submit_outcome(
+    status: &str,
+    did: Did,
+    seq: u64,
+    event_digest: &str,
+) -> JsonResult<DidOperationSubmitOutcome> {
+    let head_event_digest = Hash::new(event_digest.to_owned()).map_err(|error| {
+        AppError::internal(format!(
+            "DID operation digest failed SDK type validation: {error}"
+        ))
+    })?;
     json_ok(DidOperationSubmitOutcome {
-        status: "accepted".to_owned(),
-        did: typed_did,
-        seq: Some(next_seq),
-        head_event_digest,
+        status: status.to_owned(),
+        did,
+        seq: Some(seq),
+        head_event_digest: Some(head_event_digest),
         operation_ref: None,
-        receipts,
+        receipts: Vec::new(),
     })
 }

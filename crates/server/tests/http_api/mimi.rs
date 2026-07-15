@@ -6,7 +6,8 @@ use serde_json::json;
 use super::common::*;
 
 const MIMI_SOURCE_SERVICE_ID: &str = "did:web:remote-mimi.example";
-const MIMI_DESTINATION_SERVICE_ID: &str = "did:web:soland.local";
+const MIMI_DESTINATION_SERVICE_ID: &str =
+    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
 const MIMI_PROVIDER_ID: &str = "mimi://remote-mimi.example/provider";
 const MIMI_TEST_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const MIMI_TEST_STRAND_ID: &str = "ak:strand:01964180-0000-7000-8000-000000000000";

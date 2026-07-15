@@ -135,7 +135,8 @@ pub(crate) async fn federation_transaction(
     // service verification key that passed the HTTP Message Signature
     // check, so idempotency no longer falls back to placeholder material.
     let origin_key_state_digest = origin_key_state_digest_for_service(state, body.origin.as_str())?;
-    let origin_verification_method = format!("{}#federation-fanout-key", body.origin.as_str());
+    let origin_verification_method =
+        crate::routing::federation::federation_service_signature_key_id(body.origin.as_str());
     let local_peer_policy_digest =
         local_peer_policy_digest_for_transaction(state, body.origin.as_str(), &body)?;
     // Whether this request is taking over a stale `processing` claim left by

@@ -91,7 +91,7 @@ pub(super) async fn verify_inbound_transaction_signature(
         ));
     }
     let destination_service_id = applet_required_header(req, "destination-service-id")?;
-    if destination_service_id != state.config.service_id {
+    if destination_service_id != state.service_id {
         return Err(applet_signature_error_invalid(
             "Destination-Service-ID does not match this edge service",
         ));

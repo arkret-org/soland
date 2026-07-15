@@ -58,7 +58,7 @@ pub(super) fn signed_agent_selector_claim(
     subject: &str,
     request: &DirectoryResolveAgentSelectorRequestBody,
 ) -> Result<AgentSelectorClaim, AppError> {
-    let service_id = state.config.service_id.clone();
+    let service_id = state.service_id.clone();
     let issuer = Did::new(service_id.clone())
         .map_err(|err| AppError::internal(format!("invalid service DID: {err}")))?;
     let controller_subject = Did::new(controller_subject.to_owned())
@@ -118,7 +118,7 @@ pub(super) fn signed_agent_selector_claim(
         subject,
         issuer,
         issuer_service_id: Some(
-            Did::new(state.config.service_id.clone())
+            Did::new(state.service_id.clone())
                 .map_err(|err| AppError::internal(format!("invalid issuer service DID: {err}")))?,
         ),
         binding_state: HandleBindingState::Verified,

@@ -64,25 +64,70 @@ async fn run() -> anyhow::Result<()> {
         }
     }
     // Connect the database and resolve this deployment's own service identity
-    // (identity-did.md §3.7) BEFORE anything derived from `service_id` — notary
-    // key, HLC, DID resolver, trust domain — is constructed in AppState. This
-    // mutates `config.service_id` + `config.trust_domain` in place and returns
-    // the persistence instance the resolution used, so a self-minted / adopted
-    // identity is the one the running server serves.
+    // before anything derived from it is constructed. The DID remains runtime
+    // state; only the derived trust-domain value is copied into operational
+    // config for existing policy consumers.
     let db = Db::from_env().await?;
-    let persistence = soland::bootstrap::resolve_and_build_persistence(&mut config, &db).await?;
+    let bootstrap = soland::bootstrap::resolve_and_build_persistence(&config, &db).await?;
+    let bootstrap = if matches!(
+        bootstrap.state,
+        arkret_sdk::ServiceIdentityState::WaitingProvider { .. }
+    ) {
+        tracing::warn!(
+            retry_seconds = 5,
+            "service identity Provider is unavailable; serving fail-closed health endpoints while retrying"
+        );
+        if config.tls_enabled() {
+            let keycert = Keycert::new()
+                .cert_from_path(
+                    config
+                        .tls_cert_path
+                        .as_ref()
+                        .expect("tls_enabled guarantees cert path"),
+                )
+                .context("failed to read SOLAND_TLS_CERT_PATH")?
+                .key_from_path(
+                    config
+                        .tls_key_path
+                        .as_ref()
+                        .expect("tls_enabled guarantees key path"),
+                )
+                .context("failed to read SOLAND_TLS_KEY_PATH")?;
+            let acceptor = TcpListener::new(config.bind.to_string())
+                .rustls(RustlsConfig::new(keycert))
+                .bind()
+                .await;
+            wait_for_service_identity(acceptor, config.clone(), bootstrap).await?
+        } else {
+            let acceptor = TcpListener::new(config.bind.to_string()).bind().await;
+            wait_for_service_identity(acceptor, config.clone(), bootstrap).await?
+        }
+    } else {
+        bootstrap
+    };
+    let service_id = bootstrap
+        .state
+        .identity()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "service identity bootstrap did not produce a serving identity: {:?}",
+                bootstrap.state
+            )
+        })?
+        .service_id
+        .to_string();
+    config.trust_domain = soland::config::derive_trust_domain(&service_id)?;
     // Probe the optional external webvh provider before advertising it as
     // active. The configured URL remains visible in `/identity/describe` even
     // when the probe fails so coauth can show the operator's intended setup.
     if let Some(url) = config.external_webvh_provider_url.clone() {
-        let expected_service_id = std::env::var("SOLAND_EXTERNAL_WEBVH_PROVIDER_SERVICE_ID").ok();
         let expected_trust_domain = std::env::var("SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN")
             .ok()
             .unwrap_or_else(|| config.trust_domain.clone());
         match soland::state::did_resolver_chain::probe_webvh_provider_describe(
             &url,
             std::time::Duration::from_secs(3),
-            expected_service_id.as_deref(),
+            None,
             Some(expected_trust_domain.as_str()),
             config.development_mode,
         )
@@ -104,10 +149,20 @@ async fn run() -> anyhow::Result<()> {
             }
         }
     }
-    let state = AppState::new_with_persistence(config.clone(), db, persistence);
+    let supervisor_persistence = bootstrap.persistence.clone();
+    let supervisor_key_store = bootstrap.key_store.clone();
+    let state = AppState::new_with_service_identity(
+        config.clone(),
+        db,
+        bootstrap.persistence,
+        bootstrap.state,
+        bootstrap.signing_seed,
+    );
+    spawn_service_identity_supervisor(state.clone(), supervisor_persistence, supervisor_key_store);
     // Finish boot: seed demo data + hydrate the Realm directory and
     // projections from the (now async) persistence store.
     state.hydrate().await?;
+    spawn_federation_peer_discovery(state.clone());
 
     // G3.S9 — sovereign enclave profile invariants. When
     // `SOLAND_SOVEREIGN_ENCLAVE=1` the configured posture MUST satisfy:
@@ -138,12 +193,12 @@ async fn run() -> anyhow::Result<()> {
     // unleased row, and aggregates via SDK `ThresholdAggregator`. Returns
     // a JoinHandle we drop on the floor — the task lives for the process
     // lifetime and shutdown_signal teardown closes the runtime.
-    let watchdog_config = MultisigWatchdogConfig::for_service(&state.config.service_id);
+    let watchdog_config = MultisigWatchdogConfig::for_service(&state.service_id);
     let _watchdog = MultisigWatchdog::new(state.clone(), watchdog_config).spawn();
     tracing::info!(
         worker = "multisig_watchdog",
         enabled = true,
-        service_id = %state.config.service_id,
+        service_id = %state.service_id,
         "background worker configured"
     );
 
@@ -228,7 +283,7 @@ async fn run() -> anyhow::Result<()> {
         bind = %config.bind,
         metrics_bind = %config.metrics_bind,
         public_base_url = %config.public_base_url,
-        service_id = %config.service_id,
+        service_id = %state.service_id,
         tls_enabled = config.tls_enabled(),
         tls_cert_path = ?config.tls_cert_path,
         tls_key_path = ?config.tls_key_path,
@@ -397,6 +452,409 @@ where
         handle.stop_graceful(shutdown_grace);
     });
     server.serve(service(state)).await;
+}
+
+async fn wait_for_service_identity<A>(
+    acceptor: A,
+    config: AppConfig,
+    bootstrap: soland::bootstrap::ServiceIdentityBootstrap,
+) -> anyhow::Result<soland::bootstrap::ServiceIdentityBootstrap>
+where
+    A: Acceptor + Send + 'static,
+{
+    let persistence = bootstrap.persistence;
+    let key_store = bootstrap.key_store;
+    let server = Server::new(acceptor);
+    let handle = server.handle();
+    let server_task = tokio::spawn(async move {
+        server.serve(waiting_service()).await;
+    });
+    let resolve = async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            match soland::bootstrap::retry_service_identity(
+                &config,
+                persistence.clone(),
+                key_store.clone(),
+            )
+            .await
+            {
+                Ok(bootstrap) if bootstrap.state.identity().is_some() => break Ok(bootstrap),
+                Ok(bootstrap)
+                    if matches!(
+                        bootstrap.state,
+                        arkret_sdk::ServiceIdentityState::WaitingProvider { .. }
+                    ) =>
+                {
+                    tracing::warn!("service identity Provider remains unavailable; retrying");
+                }
+                Ok(bootstrap) => {
+                    break Err(anyhow::anyhow!(
+                        "service identity cannot become ready: {:?}",
+                        bootstrap.state
+                    ));
+                }
+                Err(error) => {
+                    tracing::error!(%error, "service identity retry failed; retaining waiting state");
+                }
+            }
+        }
+    };
+    let result = tokio::select! {
+        result = resolve => result,
+        _ = shutdown_signal() => Err(anyhow::anyhow!("shutdown requested while waiting for service identity Provider")),
+    };
+    handle.stop_graceful(Some(std::time::Duration::from_secs(2)));
+    let _ = server_task.await;
+    result
+}
+
+fn waiting_service() -> Service {
+    Service::new(
+        Router::new()
+            .push(Router::with_path("health").get(service_identity_waiting))
+            .push(Router::with_path("readyz").get(service_identity_waiting))
+            .push(Router::with_path("_arkret/describe").get(service_identity_waiting)),
+    )
+}
+
+#[handler]
+async fn service_identity_waiting(res: &mut Response) {
+    res.status_code(StatusCode::SERVICE_UNAVAILABLE);
+    res.headers_mut().insert(
+        salvo::http::header::RETRY_AFTER,
+        salvo::http::HeaderValue::from_static("5"),
+    );
+    res.render(Json(serde_json::json!({
+        "ok": false,
+        "errcode": "service_identity_unavailable",
+        "error": "service identity Provider is temporarily unavailable",
+        "service_identity": {
+            "state": "waiting_provider",
+            "service_id": null,
+            "retry_after_seconds": 5
+        }
+    })));
+}
+
+fn spawn_service_identity_supervisor(
+    state: AppState,
+    persistence: std::sync::Arc<dyn soland::persistence::PersistenceStore>,
+    key_store: Option<std::sync::Arc<dyn arkret_sdk::KeyStore>>,
+) {
+    if !matches!(
+        state.service_identity_state().as_ref(),
+        arkret_sdk::ServiceIdentityState::DegradedStored { .. }
+    ) {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            match soland::bootstrap::retry_service_identity(
+                &state.config,
+                persistence.clone(),
+                key_store.clone(),
+            )
+            .await
+            {
+                Ok(bootstrap) => {
+                    let keep_retrying = matches!(
+                        bootstrap.state,
+                        arkret_sdk::ServiceIdentityState::DegradedStored { .. }
+                            | arkret_sdk::ServiceIdentityState::WaitingProvider { .. }
+                    );
+                    if let Some(identity) = bootstrap.state.identity()
+                        && identity.service_id.as_str() != state.service_id
+                    {
+                        tracing::error!(
+                            runtime_service_id = %state.service_id,
+                            provider_service_id = %identity.service_id,
+                            "service identity supervisor rejected a runtime identity switch"
+                        );
+                        break;
+                    }
+                    state
+                        .service_identity
+                        .store(std::sync::Arc::new(bootstrap.state));
+                    if !keep_retrying {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(%error, "service identity supervisor retry failed");
+                }
+            }
+        }
+    });
+}
+
+/// Resolve federation peers through the standard service describe and DID
+/// document operations. Runtime settings retain the discovered DID and the
+/// in-memory verifier retains its endpoint-bound assertion key; boot
+/// configuration remains free of copied identities and public-key pins.
+fn spawn_federation_peer_discovery(state: AppState) {
+    tokio::spawn(async move {
+        let initial_retry = std::time::Duration::from_millis(250);
+        let max_retry = std::time::Duration::from_secs(5);
+        let mut retry_delay = initial_retry;
+        loop {
+            tokio::time::sleep(retry_delay).await;
+            let peers = state
+                .settings()
+                .federation_peers
+                .iter()
+                .filter_map(|entry| {
+                    federation_peer_endpoint(entry).map(|endpoint| (entry.clone(), endpoint))
+                })
+                .collect::<Vec<_>>();
+            if peers.is_empty() {
+                retry_delay = max_retry;
+                continue;
+            }
+
+            let mut resolved = std::collections::HashMap::new();
+            for (configured, endpoint) in peers {
+                let base_url = match url::Url::parse(endpoint.as_str()) {
+                    Ok(base_url) => base_url,
+                    Err(error) => {
+                        tracing::warn!(%endpoint, %error, "invalid federation peer endpoint");
+                        continue;
+                    }
+                };
+                let client = match arkret_sdk::ClientBuilder::new(base_url)
+                    .allow_insecure_localhost()
+                    .build()
+                {
+                    Ok(client) => client,
+                    Err(error) => {
+                        tracing::warn!(%endpoint, %error, "invalid federation peer endpoint");
+                        continue;
+                    }
+                };
+                match client.describe().await {
+                    Ok(description)
+                        if description.service_type
+                            == arkret_sdk::ServiceType::PrincipalServer.as_str()
+                            && description.service_id.as_str() != state.service_id =>
+                    {
+                        let document_view = match client
+                            .identity_document(description.service_id.as_str(), None)
+                            .await
+                        {
+                            Ok(document) => document,
+                            Err(error) => {
+                                tracing::debug!(
+                                    %endpoint,
+                                    peer_service_id = %description.service_id,
+                                    %error,
+                                    "federation peer DID document is not ready; retrying"
+                                );
+                                continue;
+                            }
+                        };
+                        let document_value = serde_json::Value::Object(
+                            document_view.did_document.into_iter().collect(),
+                        );
+                        let document = match serde_json::from_value::<arkret_sdk::ServiceDidDocument>(
+                            document_value,
+                        ) {
+                            Ok(document) => document,
+                            Err(error) => {
+                                tracing::warn!(
+                                    %endpoint,
+                                    peer_service_id = %description.service_id,
+                                    %error,
+                                    "federation peer returned an invalid service DID document"
+                                );
+                                continue;
+                            }
+                        };
+                        let public_base = match arkret_sdk::CanonicalServiceUrl::canonicalize(
+                            endpoint.as_str(),
+                        ) {
+                            Ok(public_base) => public_base,
+                            Err(error) => {
+                                tracing::warn!(%endpoint, %error, "invalid federation peer endpoint");
+                                continue;
+                            }
+                        };
+                        let registration_key = match arkret_sdk::ServiceRegistrationKey::new(
+                            arkret_sdk::ServiceType::PrincipalServer,
+                            public_base,
+                        ) {
+                            Ok(key) => key,
+                            Err(error) => {
+                                tracing::warn!(%endpoint, %error, "invalid federation peer registration key");
+                                continue;
+                            }
+                        };
+                        let expected_verification_method =
+                            soland::routing::federation::federation_service_signature_key_id(
+                                description.service_id.as_str(),
+                            );
+                        if document.id != description.service_id
+                            || document.validate_for(&registration_key).is_err()
+                            || !document
+                                .assertion_method
+                                .iter()
+                                .any(|method| method == &expected_verification_method)
+                        {
+                            tracing::warn!(
+                                %endpoint,
+                                peer_service_id = %description.service_id,
+                                "federation peer DID document does not bind the described Principal Server identity"
+                            );
+                            continue;
+                        }
+                        let Some(public_key_multibase) = document
+                            .verification_method
+                            .iter()
+                            .find(|method| method.id == expected_verification_method)
+                            .map(|method| method.public_key_multibase.as_str())
+                        else {
+                            tracing::warn!(
+                                %endpoint,
+                                peer_service_id = %description.service_id,
+                                "federation peer DID document has no active assertion key"
+                            );
+                            continue;
+                        };
+                        let verifying_key =
+                            match arkret_sdk::decode_ed25519_multibase(public_key_multibase)
+                                .map_err(|error| error.to_string())
+                                .and_then(|raw| {
+                                    ed25519_dalek::VerifyingKey::from_bytes(&raw)
+                                        .map_err(|error| error.to_string())
+                                }) {
+                                Ok(key) => key,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        %endpoint,
+                                        peer_service_id = %description.service_id,
+                                        %error,
+                                        "federation peer assertion key is invalid"
+                                    );
+                                    continue;
+                                }
+                            };
+                        let discovered = format!(
+                            "{}|{}",
+                            endpoint.trim_end_matches('/'),
+                            description.service_id
+                        );
+                        let previous_service_id = federation_peer_service_id(&configured);
+                        let key_changed = state
+                            .federation_peer_verifying_key(description.service_id.as_str())
+                            .as_ref()
+                            != Some(&verifying_key);
+                        state.federation_peer_verifying_keys.rcu(|current| {
+                            let mut next = (**current).clone();
+                            if let Some(previous_service_id) = previous_service_id.as_deref()
+                                && previous_service_id != description.service_id.as_str()
+                            {
+                                next.remove(previous_service_id);
+                            }
+                            next.insert(description.service_id.to_string(), verifying_key);
+                            std::sync::Arc::new(next)
+                        });
+                        if configured != discovered || key_changed {
+                            tracing::info!(
+                                peer_endpoint = %endpoint,
+                                peer_service_id = %description.service_id,
+                                peer_verification_method = %expected_verification_method,
+                                "resolved federation peer service identity and assertion key"
+                            );
+                        }
+                        resolved.insert(configured, discovered);
+                    }
+                    Ok(description) => {
+                        tracing::warn!(
+                            peer_endpoint = %endpoint,
+                            peer_service_type = %description.service_type.as_str(),
+                            peer_service_id = %description.service_id,
+                            "federation peer describe returned an ineligible service"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::debug!(%endpoint, %error, "federation peer identity is not ready; retrying");
+                    }
+                }
+            }
+            if resolved.is_empty() {
+                retry_delay = retry_delay.saturating_mul(2).min(max_retry);
+                continue;
+            }
+            state.settings.rcu(|current| {
+                let mut next = (**current).clone();
+                for entry in &mut next.federation_peers {
+                    if let Some(discovered) = resolved.get(entry) {
+                        *entry = discovered.clone();
+                    }
+                }
+                std::sync::Arc::new(next)
+            });
+            retry_delay = max_retry;
+        }
+    });
+}
+
+fn federation_peer_endpoint(entry: &str) -> Option<String> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return None;
+    }
+    let (left, right) = entry
+        .split_once('|')
+        .map(|(left, right)| (left.trim(), right.trim()))
+        .unwrap_or((entry, entry));
+    [left, right]
+        .into_iter()
+        .find(|candidate| candidate.starts_with("https://") || candidate.starts_with("http://"))
+        .map(|endpoint| endpoint.trim_end_matches('/').to_owned())
+}
+
+fn federation_peer_service_id(entry: &str) -> Option<String> {
+    entry
+        .split('|')
+        .map(str::trim)
+        .find(|candidate| candidate.starts_with("did:"))
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+fn unresolved_federation_peer_endpoint(entry: &str) -> Option<String> {
+    if federation_peer_service_id(entry).is_some() {
+        return None;
+    }
+    federation_peer_endpoint(entry)
+}
+
+#[cfg(test)]
+mod federation_peer_discovery_tests {
+    use super::{federation_peer_endpoint, unresolved_federation_peer_endpoint};
+
+    #[test]
+    fn endpoint_only_peer_requires_runtime_discovery() {
+        assert_eq!(
+            unresolved_federation_peer_endpoint("https://peer.example/"),
+            Some("https://peer.example".to_owned())
+        );
+        assert_eq!(
+            unresolved_federation_peer_endpoint(
+                "https://peer.example|did:webvh:zPeer:peer.example:webvh:service"
+            ),
+            None
+        );
+        assert_eq!(
+            federation_peer_endpoint(
+                "https://peer.example|did:webvh:zPeer:peer.example:webvh:service"
+            ),
+            Some("https://peer.example".to_owned())
+        );
+    }
 }
 
 /// Resolves once an OS shutdown signal arrives. On Unix this is `SIGINT`

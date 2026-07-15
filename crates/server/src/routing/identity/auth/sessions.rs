@@ -73,7 +73,7 @@ pub async fn authenticated_session(
             "session grant requires DPoP proof",
         ));
     }
-    let token_hash = session_credential_hash(token, &state.config.service_id);
+    let token_hash = session_credential_hash(token, &state.service_id);
     let session = state
         .persistence
         .sessions()
@@ -93,7 +93,7 @@ pub async fn authenticated_session(
             "invalid bearer token",
         ));
     };
-    if session.audience != state.config.service_id {
+    if session.audience != state.service_id {
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",

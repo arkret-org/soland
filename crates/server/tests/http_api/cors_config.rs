@@ -296,9 +296,9 @@ async fn server_describe_advertises_account_authority_and_oidc_method_when_confi
 }
 
 #[tokio::test]
-async fn service_id_is_config_driven_across_public_metadata() {
+async fn runtime_service_id_is_used_across_public_metadata() {
     let service_id = "did:web:configured.example";
-    let state = AppState::new(test_config_with_service_id(service_id), Db { pool: None });
+    let state = test_state_with_service_id(service_id);
     let resolved_realm = seed_test_realm(
         &state,
         "did:web:alice.example",

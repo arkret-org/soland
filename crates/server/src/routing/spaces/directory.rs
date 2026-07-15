@@ -148,7 +148,7 @@ pub(crate) fn protocol_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "directory_describe"))]
 async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_id = Did::new(state.config.service_id.clone())
+    let service_id = Did::new(state.service_id.clone())
         .map_err(|error| AppError::internal(format!("invalid configured service_id: {error}")))?;
     let trust_domain = arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|error| AppError::internal(format!("invalid configured trust_domain: {error}")))?;

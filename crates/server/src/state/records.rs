@@ -683,7 +683,7 @@ pub struct FederationTransactionRecord {
 pub struct FederationOutboxRecord {
     /// ULID/UUID — primary key.
     pub id: String,
-    /// Peer service DID from the `base_url|service_id` federation peer entry.
+    /// Peer service DID discovered from the configured federation endpoint.
     pub peer_did: String,
     /// Fully-qualified peer base URL (no trailing slash) the dispatcher
     /// concatenates with `endpoint` to form the POST target.

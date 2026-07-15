@@ -220,26 +220,12 @@ pub(crate) async fn admin_list_multisig_pending(
     json_ok(MultisigPendingOutcome { entries })
 }
 
-/// `POST /_soland/admin/realms/{realm_id}/notary/rotate-signing-key` —
-/// mint a fresh ed25519 seed, persist via the platform `KeyStore` (when
-/// `state.config.use_keystore` is true), hot-swap the NotaryWorker key
-/// via `AppState::rotate_notary_signing_key`, return `{kid, did, rotated_at}`.
-///
-/// Response shape (locked for sodmin H'8):
-/// ```json
-/// { "kid": "did:web:soland.local#notary-key",
-///   "did": "did:web:soland.local",
-///   "rotated_at": "2026-05-09T12:00:00Z" }
-/// ```
-///
-/// When `use_keystore=true`, the new seed is also stored under
-/// `arkret:signer:soland-notary:<service_id>` so it survives
-/// process restart. When `use_keystore=false`, the rotation lives only
-/// in the running process's `ArcSwap` (suitable for dev/test, not
-/// production — the next restart re-loads the env-supplied seed). The
-/// realm_id path param is required for symmetry with the other
-/// per-Realm notary endpoints; the signing key itself is process-wide,
-/// not Realm-scoped.
+/// This route currently fails closed. Rotating the service signing key is a
+/// service-identity transition: the KeyStore write, WebVH update, DID
+/// document, persisted `StoredServiceIdentity`, and recovery bundle must
+/// commit as one recoverable operation. The current persistence API cannot
+/// provide that transaction, so an in-process or KeyStore-only swap would
+/// publish a signer that no longer matches the authoritative DID document.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct RotateSigningKeyOutcome {
     pub kid: String,
@@ -287,69 +273,21 @@ pub(crate) async fn admin_rotate_signing_key(
             .with_status(StatusCode::BAD_REQUEST)
     })?;
 
-    let mut seed = [0u8; 32];
-    crate::state::getrandom_seed(&mut seed);
-
-    // Persist via the platform KeyStore if configured. Failure to persist
-    // is non-fatal — the in-process key still gets rotated; we surface a
-    // warning for ops.
-    let mut keystore_persisted = false;
-    let mut keystore_warning: Option<String> = None;
-    if state.config.use_keystore {
-        let app_id = format!("soland.{}", state.config.service_id);
-        let key_id = format!("arkret:signer:soland-notary:{}", state.config.service_id);
-        match arkret_sdk::durable_platform_keystore(&app_id) {
-            Ok(store) => match store.store(&key_id, &seed) {
-                Ok(()) => {
-                    keystore_persisted = true;
-                    tracing::info!(%key_id, "rotated notary signing key persisted to platform KeyStore");
-                }
-                Err(error) => {
-                    let msg = format!(
-                        "platform KeyStore rejected rotated key write ({error}); rotation applied in-process only"
-                    );
-                    tracing::warn!(%error, %key_id, "rotate-signing-key: KeyStore write failed");
-                    keystore_warning = Some(msg);
-                }
-            },
-            Err(error) => {
-                let msg = format!(
-                    "durable platform KeyStore unavailable ({error}); rotation applied in-process only"
-                );
-                tracing::warn!(%error, %key_id, "rotate-signing-key: durable KeyStore unavailable");
-                keystore_warning = Some(msg);
-            }
-        }
-    } else {
-        keystore_warning = Some(
-            "use_keystore=false; rotation is in-process only and will not survive restart"
-                .to_owned(),
-        );
-    }
-
-    let _new_key =
-        state.rotate_notary_signing_key(&seed, crate::config::NotarySigningKeyOrigin::Configured);
-
-    let did = state.config.service_id.clone();
-    let kid = format!("{did}#notary-key");
-    let rotated_at = chrono::Utc::now();
+    let did = state.service_id.clone();
     crate::routing::append_audit_log(
         state,
         Some(did.as_str()),
         "admin.notary.rotate_signing_key",
-        json!({"realm_id": realm_id_str, "kid": kid, "keystore_persisted": keystore_persisted}),
-        "accepted",
+        json!({
+            "realm_id": realm_id_str,
+            "reason": "atomic_service_identity_rotation_unavailable"
+        }),
+        "rejected",
     )
     .await;
-
-    json_ok(RotateSigningKeyOutcome {
-        kid,
-        did,
-        rotated_at,
-        origin: "Configured".to_owned(),
-        keystore_persisted,
-        keystore_warning,
-    })
+    Err(AppError::unsupported_feature(
+        "service signing-key rotation requires an atomic WebVH/DID/identity-bundle transition; no safe rotation transaction is available",
+    ))
 }
 
 fn persistence_to_app_err(e: crate::persistence::PersistenceError) -> AppError {

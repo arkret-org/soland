@@ -21,10 +21,10 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
         .persistence
         .sessions()
         .put(&soland::state::SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.config.service_id),
+            token_hash: test_session_credential_hash(token, &state.service_id),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
-            audience: state.config.service_id.clone(),
+            audience: state.service_id.clone(),
             session_public_key: Some("{}".to_owned()),
             agent_session: Some(soland::state::AgentSessionRecord {
                 granted_scope: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
@@ -526,7 +526,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             "default_join_rule": "invite",
             "history_visibility": "shared",
             "encryption_profile": "none",
-            "plaintext_visible_services": ["did:web:soland.local"],
+            "plaintext_visible_services": ["did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"],
             "security_class": "standard",
             "federation_policy": "restricted",
             "notary_profile": "single_did",
@@ -746,7 +746,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         "invite_id": invite_id,
         "invitee": "did:web:carol.example",
         "invite_delivery_target": {
-            "recipient_service_id": "did:web:soland.local",
+            "recipient_service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             "recipient_service_type": "principal_server"
         },
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",

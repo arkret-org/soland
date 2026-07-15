@@ -35,11 +35,15 @@ SOLAND_PUBLIC_BASE_URL=https://soland.example
 SOLAND_TLS_CERT_PATH=/etc/soland/tls/fullchain.pem
 SOLAND_TLS_KEY_PATH=/etc/soland/tls/privkey.pem
 SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified
-SOLAND_SERVICE_ID=did:webvh:<scid>:soland.example:webvh:service
+# One-time only on the first production boot; remove after identity creation.
+SOLAND_FIRST_PROVISIONING=true
 SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED=true
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # Optional: use a standalone webvh provider instead of, or alongside, the embedded provider.
 # SOLAND_EXTERNAL_WEBVH_PROVIDER_URL=https://webvh.example
+# SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER=<provider-registration-secret>
+# With both values set, Soland's own identity is Provider-backed (class A), so
+# SOLAND_FIRST_PROVISIONING is not required.
 # SOLAND_DEFAULT_WEBVH_PROVIDER_ID=soland.embedded
 SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect
@@ -86,7 +90,6 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` | `50` | Maximum pruning candidates examined per realm walk. |
 | `SOLAND_DID_RESOLVER_ALLOW_METHODS` | `web,key,uuid` | Comma-separated DID methods accepted by outbound DID resolution. |
 | `SOLAND_ERASURE_PROPAGATION_WINDOW_MS` | `604800000` | Erasure receipt propagation window. |
-| `SOLAND_EXTERNAL_WEBVH_PROVIDER_SERVICE_ID` | unset | Expected service DID when probing `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL`. |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN` | derived trust domain | Expected trust domain for the external webvh provider probe. |
 | `SOLAND_FEDERATION_POLICY` | `mesh` | Federation policy mode (`mesh` or `hub`). |
 | `SOLAND_HEALTHCHECK_URL` | derived from `SOLAND_BIND` | URL used by the built-in healthcheck command. |
@@ -159,7 +162,7 @@ docker run --name soland --restart=always -d \
   -p 127.0.0.1:8698:8698 \
   -e SOLAND_BIND=0.0.0.0:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
-  -e SOLAND_SERVICE_ID=did:webvh:<scid>:soland.example:webvh:service \
+  -e SOLAND_FIRST_PROVISIONING=true \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
@@ -186,7 +189,7 @@ helm template soland ./deploy/helm/soland \
   --namespace arkret \
   --set image.tag=<tag> \
   --set env.SOLAND_PUBLIC_BASE_URL=https://soland.example \
-  --set env.SOLAND_SERVICE_ID=did:webvh:<scid>:soland.example:webvh:service \
+  --set env.SOLAND_FIRST_PROVISIONING=true \
   --set env.SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   --set secretEnv.DATABASE_URL='postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full' \
   --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
@@ -280,9 +283,9 @@ external webvh provider has passed the startup `/describe` probe.
 | --- | --- | --- |
 | PostgreSQL | All tables | `pg_dump` daily, plus continuous WAL archiving for point-in-time recovery |
 | Object storage bucket/volume | Uploaded media | enable bucket versioning or snapshot the local volume on the same cadence as the database; align so blob references in the DB stay resolvable |
-| `SOLAND_SERVICE_ID` material | DID rotation history | Out of scope — manage via the DID method (`did:web` vs `did:plc`) |
+| Service identity database rows + identity bundle | Stable DID, WebVH history, and public recovery evidence | Back up the database and `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR`; keep private keys in the configured secret store |
 
-Restore order: stop soland → restore DB → restore object storage bucket/volume → start soland.
+Restore order: stop soland → restore DB and identity bundle → restore object storage bucket/volume → start soland.
 The startup migrations are idempotent.
 
 ## 7. Observability

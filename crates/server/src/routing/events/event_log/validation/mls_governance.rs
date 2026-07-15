@@ -5,7 +5,7 @@ pub(crate) async fn projected_media_plaintext_service_present(
     realm_id: &str,
     payload: &Value,
 ) -> bool {
-    payload_declares_media_plaintext_service(payload, &state.config.service_id)
+    payload_declares_media_plaintext_service(payload, &state.service_id)
         || realm_allows_plaintext_service_for_data_class(
             state,
             realm_id,

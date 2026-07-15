@@ -9,7 +9,7 @@ pub(super) struct HandleLookup {
 
 pub(super) fn service_handle_domain(state: &AppState) -> String {
     handle_domain_from_public_base_url(&state.config.public_base_url)
-        .or_else(|| service_id_handle_domain(&state.config.service_id))
+        .or_else(|| service_id_handle_domain(&state.service_id))
         .unwrap_or_else(|| "soland.local".to_owned())
 }
 
@@ -296,7 +296,7 @@ async fn fetch_remote_handle_from_peer(
     if remote_body.audience.is_none() {
         remote_body.audience = Some(resolve_handle_audience(
             &remote_body,
-            state.config.service_id.as_str(),
+            state.service_id.as_str(),
         ));
     }
     let endpoint = format!(
@@ -535,7 +535,7 @@ pub(super) async fn resolve_handle(
             // bind the claim to the requester's invocation context. We
             // default to the explicit `audience` param, falling back to
             // `realm_id` for membership-builder resolves, then `requester`.
-            let audience = resolve_handle_audience(&body, &state.config.service_id);
+            let audience = resolve_handle_audience(&body, &state.service_id);
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
             let handle_claim =
                 signed_handle_claim(state, &lookup.canonical, &did, &audience, true).await?;
@@ -543,15 +543,15 @@ pub(super) async fn resolve_handle(
                 .member_delivery_binding
                 .as_ref()
                 .map(|binding| binding.recipient_service_id.as_str())
-                .unwrap_or(state.config.service_id.as_str());
-            let resolved_by = Did::new(state.config.service_id.clone()).ok();
+                .unwrap_or(state.service_id.as_str());
+            let resolved_by = Did::new(state.service_id.clone()).ok();
             if !crate::routing::invites::directory_handle_claim_resolve_allowed(
                 state,
                 body.intent,
                 body.requester.as_ref(),
                 &did,
                 recipient_service_id,
-                state.config.service_id.as_str(),
+                state.service_id.as_str(),
                 &handle_claim,
                 resolved_by,
             ) {
@@ -626,7 +626,7 @@ pub(super) async fn signed_handle_claim(
             rejection.message,
         ));
     }
-    let service_id = state.config.service_id.clone();
+    let service_id = state.service_id.clone();
     let default_domain = service_handle_domain(state);
     let lookup = handle_lookup(handle, &default_domain)
         .ok_or_else(|| AppError::invalid_param("handle must be canonicalizable"))?;
@@ -766,7 +766,7 @@ pub(super) async fn list_handles_for_subject(
                 .as_ref()
                 .map(RealmId::as_str)
                 .or_else(|| body.requester.as_ref().map(Did::as_str))
-                .unwrap_or(state.config.service_id.as_str());
+                .unwrap_or(state.service_id.as_str());
             generated_claim =
                 Some(signed_handle_claim(state, handle, &subject, audience, false).await?);
         }
@@ -793,7 +793,7 @@ pub(super) async fn list_handles_for_subject(
                 .as_ref()
                 .map(RealmId::as_str)
                 .or_else(|| body.requester.as_ref().map(Did::as_str))
-                .unwrap_or(state.config.service_id.as_str());
+                .unwrap_or(state.service_id.as_str());
             crate::routing::identity::account::local_account_primary_handle_claim(
                 state, &subject, audience,
             )
@@ -933,8 +933,8 @@ pub(super) fn subject_handle_claim_visible(
     }
     let issuer = claim.get("issuer").and_then(Value::as_str);
     let issuer_service_id = claim.get("issuer_service_id").and_then(Value::as_str);
-    if issuer != Some(state.config.service_id.as_str())
-        && issuer_service_id != Some(state.config.service_id.as_str())
+    if issuer != Some(state.service_id.as_str())
+        && issuer_service_id != Some(state.service_id.as_str())
     {
         return false;
     }
@@ -942,7 +942,7 @@ pub(super) fn subject_handle_claim_visible(
         return true;
     };
     let mut allowed_audiences = BTreeSet::new();
-    allowed_audiences.insert(state.config.service_id.as_str());
+    allowed_audiences.insert(state.service_id.as_str());
     if let Some(realm_id) = request.realm_id.as_ref() {
         allowed_audiences.insert(realm_id.as_str());
     }

@@ -236,10 +236,7 @@ pub(crate) async fn admin_get_notary(
         let proj = state.projection.lock();
         proj.cell_value(&cell).cloned()
     };
-    json_ok(notary_value_from_cell(
-        value.as_ref(),
-        &state.config.service_id,
-    )?)
+    json_ok(notary_value_from_cell(value.as_ref(), &state.service_id)?)
 }
 
 /// `POST /_soland/admin/realms/{realm_id}/notary/reconfigure` —
@@ -302,7 +299,7 @@ pub(crate) async fn admin_reconfigure_notary(
     // notary set; landing either inside the set is a self-authentication
     // primitive. Once per-admin signing keys land (KeyStore-backed) the
     // signer DID and operator DID converge for that admin.
-    let service_signer_did = state.config.service_id.clone();
+    let service_signer_did = state.service_id.clone();
     let operator_did = admin_session.actor.clone();
     let proposed_members: Vec<&str> = match &proposed_notary {
         SdkNotaryValue::SingleDid { did, .. } => vec![did.as_str()],

@@ -143,7 +143,7 @@ impl SolandIceConfigOutcome {
             force_turn: unsigned.force_turn,
             signature: IceConfigSignature {
                 alg: "EdDSA".to_owned(),
-                kid: format!("{}#notary-key", state.config.service_id),
+                kid: format!("{}#notary-key", state.service_id),
                 signature_input: ICE_CONFIG_SIGNING_LABEL.to_owned(),
                 payload_digest,
                 sig,

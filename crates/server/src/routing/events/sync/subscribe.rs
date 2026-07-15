@@ -386,7 +386,7 @@ async fn account_subscribe_notification_should_wake(
         let Some(session) = session else {
             return false;
         };
-        if recipient_service_id != &state.config.service_id {
+        if recipient_service_id != &state.service_id {
             return false;
         }
         return state

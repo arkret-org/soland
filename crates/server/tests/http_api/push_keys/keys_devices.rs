@@ -385,7 +385,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "did:web:blob-bob.example",
     );
 
-    let service_id = state.config.service_id.clone();
+    let service_id = state.service_id.clone();
     let shared_plaintext_realm = seed_test_realm(
         &state,
         "did:web:alice.example",

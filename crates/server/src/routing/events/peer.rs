@@ -68,7 +68,7 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.describe"))]
 async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_id = Did::new(state.config.service_id.clone())
+    let service_id = Did::new(state.service_id.clone())
         .map_err(|_| AppError::internal("service_id is invalid"))?;
     json_ok(PeerEventsDescribeOutcome {
         service_id,
@@ -350,7 +350,7 @@ async fn peer_events_frontier(
     let typed_actor_bounds = super::frontier::typed_actor_upper_bounds(actor_frontier.clone());
     let frontier_root = super::frontier::frontier_root(&typed_realm_frontier, &typed_actor_bounds)
         .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
-    let service_id = Did::new(state.config.service_id.clone())
+    let service_id = Did::new(state.service_id.clone())
         .map_err(|_| AppError::internal("service_id is invalid"))?;
     let observed_at = now();
     let signature = super::frontier::sign_frontier_root(
@@ -1459,7 +1459,7 @@ pub(in crate::routing) async fn validate_peer_request(
     if validate_did(&destination_service_id).is_err() {
         return Err(schema_violation("destination-service-id must be a DID"));
     }
-    if destination_service_id != state.config.service_id {
+    if destination_service_id != state.service_id {
         return Err(cross_domain_replay(
             "destination-service-id header does not match this service",
         ));

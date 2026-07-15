@@ -80,7 +80,7 @@ pub(crate) async fn federate_contact_fact(
     contact_event_id: &str,
 ) -> Result<bool, AppError> {
     let recipient_service_id = recipient_service_id.trim();
-    if recipient_service_id.is_empty() || recipient_service_id == state.config.service_id {
+    if recipient_service_id.is_empty() || recipient_service_id == state.service_id {
         // Same Principal Server: nothing to federate, the local operation
         // already projected the fact for both holders.
         return Ok(false);
@@ -111,7 +111,7 @@ pub(crate) async fn federate_contact_fact(
         contact_event_id,
     )?;
     let idempotency_key = contact_delivery_idempotency_key(
-        &state.config.service_id,
+        &state.service_id,
         recipient_service_id,
         fact_kind.as_str(),
         issuer,
@@ -251,7 +251,7 @@ async fn peer_contacts_submit(
     let issuer = delivery.contact_event.actor_id.as_str().to_owned();
     let subject_id = delivery.contact_address.subject_id.as_str().to_owned();
     let recipient_service_id = delivery.contact_address.recipient_service_id.as_str();
-    if recipient_service_id != state.config.service_id {
+    if recipient_service_id != state.service_id {
         return Err(super::super::events::peer::cross_domain_replay(
             "contact_address.recipient_service_id does not match this service",
         ));
@@ -863,7 +863,6 @@ mod tests {
     fn test_config() -> AppConfig {
         AppConfig {
             public_base_url: "http://test".to_owned(),
-            service_id: "did:web:recipient.local".to_owned(),
             object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
             development_mode: true,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
@@ -922,7 +921,7 @@ mod tests {
             Some(source_service_id),
             "peer_service_id must be the originating requester's PS, not the recipient's own \
              service_id ({})",
-            state.config.service_id,
+            state.service_id,
         );
         assert_eq!(
             record.request_event_ref.as_deref(),
@@ -930,7 +929,7 @@ mod tests {
         );
         assert_ne!(
             record.peer_service_id.as_deref(),
-            Some(state.config.service_id.as_str()),
+            Some(state.service_id.as_str()),
             "peer_service_id must not point at this recipient service",
         );
     }

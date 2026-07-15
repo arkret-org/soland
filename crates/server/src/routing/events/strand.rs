@@ -89,7 +89,7 @@ pub async fn strand_projection_for_realm(
     let owner = meta
         .as_ref()
         .map(|meta| meta.owner.clone())
-        .unwrap_or_else(|| state.config.service_id.clone());
+        .unwrap_or_else(|| state.service_id.clone());
     let created_at = meta
         .as_ref()
         .map(|meta| meta.created_at)

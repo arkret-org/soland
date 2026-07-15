@@ -34,7 +34,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         "hlc": state.hlc.now(),
         "prev_refs": [],
         "payload": payload,
-        "executed_by": state.config.service_id,
+        "executed_by": state.service_id,
     });
     let canonical_source = mimi_event_canonical_source(&envelope);
     let canonical_bytes = canonical::canonical_json_bytes(&canonical_source).map_err(|error| {
@@ -82,7 +82,7 @@ pub(super) fn mimi_event_proof(
     event_digest: &str,
     created_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Proof, AppError> {
-    let verification_method = format!("{}#mimi-provider-facade-key", state.config.service_id);
+    let verification_method = format!("{}#mimi-provider-facade-key", state.service_id);
     let binding = json!({
         "kind": "mimi_provider_service_proof",
         "event_digest": event_digest,
@@ -209,11 +209,11 @@ pub(super) fn mimi_provider_directory_value(
     use arkret_sdk::models::{ProviderDirectory, ProviderDirectoryMimi, ProviderDirectoryProof};
 
     let signature =
-        sha256_hex(format!("{}:ak.profile.mimi_interop.v1", state.config.service_id).as_bytes());
+        sha256_hex(format!("{}:ak.profile.mimi_interop.v1", state.service_id).as_bytes());
     ProviderDirectory {
         schema: Some("ak.schema.mimi_interop.v1".to_owned()),
         service_id: Some(
-            arkret_sdk::Did::new(state.config.service_id.clone())
+            arkret_sdk::Did::new(state.service_id.clone())
                 .expect("validated service_id must be a DID"),
         ),
         service_type: "mimi_provider_facade".to_owned(),
@@ -269,7 +269,7 @@ pub(super) fn mimi_provider_directory_value(
             extra: Default::default(),
         },
         proof: Some(ProviderDirectoryProof {
-            verification_method: format!("{}#mimi-provider", state.config.service_id),
+            verification_method: format!("{}#mimi-provider", state.service_id),
             signature,
             extra: [
                 ("type".to_owned(), json!("dev_service_digest")),
@@ -290,7 +290,7 @@ pub(super) fn mimi_base_url(state: &AppState) -> String {
 }
 
 pub(super) fn mimi_provider_id(state: &AppState) -> String {
-    service_id_mimi_provider_id(&state.config.service_id)
+    service_id_mimi_provider_id(&state.service_id)
 }
 
 pub(super) fn service_id_mimi_provider_id(service_id: &str) -> String {
@@ -322,7 +322,7 @@ pub(super) fn mimi_receipt(
     json!({
         "profile": "ak.profile.mimi_interop.v1",
         "operation_id": operation_id,
-        "service_id": state.config.service_id,
+        "service_id": state.service_id,
         "provider_id": mimi_provider_id(state),
         "request_hash": arkret_sdk::canonical::sha256_digest(body.to_string().as_bytes()),
         "accepted_at": now(),

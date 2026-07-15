@@ -40,7 +40,7 @@ fn test_config() -> AppConfig {
 }
 
 async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
-    let service_id = state.config.service_id.clone();
+    let service_id = state.service_id.clone();
     let mut meta = state
         .persistence
         .realm_meta()
@@ -481,7 +481,7 @@ async fn post_signed_applet_message_transaction(
     let signature_base = applet_signature_base(
         &content_digest,
         package.service_id.as_str(),
-        "did:web:soland.local",
+        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
         idempotency_key,
         &signature_params,
     );
@@ -494,7 +494,11 @@ async fn post_signed_applet_message_transaction(
     TestClient::post("http://server/_arkret/edge/applet/transactions")
         .add_header("Content-Digest", content_digest, true)
         .add_header("Source-Service-ID", package.service_id.to_string(), true)
-        .add_header("Destination-Service-ID", "did:web:soland.local", true)
+        .add_header(
+            "Destination-Service-ID",
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+            true,
+        )
         .add_header("Idempotency-Key", idempotency_key.to_owned(), true)
         .add_header("Signature-Input", format!("sig1={signature_params}"), true)
         .add_header("Signature", signature_header, true)

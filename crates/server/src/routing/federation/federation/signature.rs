@@ -1,7 +1,5 @@
 use std::time::{Duration as StdDuration, Instant};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -178,9 +176,7 @@ fn verify_inbound_federation_http_signature_inner(
     let destination_service_id = required_header(req, "destination-service-id")?;
     let source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
-    if destination_service_id != body_destination
-        || destination_service_id != state.config.service_id
-    {
+    if destination_service_id != body_destination || destination_service_id != state.service_id {
         return Err(signature_error(
             "Destination-Service-ID does not match the federation request destination",
         ));
@@ -319,7 +315,7 @@ fn verify_inbound_peer_http_signature_inner(
     let source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
 
-    if destination_service_id != state.config.service_id {
+    if destination_service_id != state.service_id {
         return Err(signature_error(
             "Destination-Service-ID does not match this service",
         ));
@@ -524,7 +520,7 @@ fn validate_destination_authority(
             ));
         }
         // Sanity: the digest must be for *this* service's destination DID.
-        debug_assert_eq!(destination_service_id, state.config.service_id);
+        debug_assert_eq!(destination_service_id, state.service_id);
         return Ok(Some(observed_digest));
     }
     Ok(None)
@@ -550,7 +546,8 @@ pub(super) fn validate_signature_params(
     expected_service_id: &str,
     label: &str,
 ) -> Result<(), AppError> {
-    let expected_keyid = format!("{expected_service_id}#federation-fanout-key");
+    let expected_keyid =
+        crate::routing::federation::federation_service_signature_key_id(expected_service_id);
     let observed_keyid = http_signature::signature_param_value(signature_params, "keyid")
         .ok_or_else(|| {
             signature_error(format!(
@@ -631,10 +628,10 @@ fn verifying_key_for_service_id(
     state: &AppState,
     service_id: &str,
 ) -> Result<VerifyingKey, AppError> {
-    if service_id == state.config.service_id {
+    if service_id == state.service_id {
         return Ok(state.notary_signing_key().verifying_key());
     }
-    if let Some(key) = configured_peer_verifying_key(service_id)? {
+    if let Some(key) = state.federation_peer_verifying_key(service_id) {
         return Ok(key);
     }
     // did:key is self-resolving and binds its verification key directly in
@@ -642,7 +639,8 @@ fn verifying_key_for_service_id(
     // development deterministic fallback: a peer using a durable notary key
     // would otherwise sign correctly and still fail verification in dev mode.
     if service_id.starts_with("did:key:") {
-        let verification_method = format!("{service_id}#federation-fanout-key");
+        let verification_method =
+            crate::routing::federation::federation_service_signature_key_id(service_id);
         return crate::jws_verify::resolve_ed25519_pubkey(state, &verification_method).map_err(
             |_| {
                 signature_error(
@@ -658,56 +656,14 @@ fn verifying_key_for_service_id(
         );
         return Ok(development_service_signing_key(service_id).verifying_key());
     }
-    let verification_method = format!("{service_id}#federation-fanout-key");
+    let verification_method =
+        crate::routing::federation::federation_service_signature_key_id(service_id);
     if let Ok(key) = crate::jws_verify::resolve_ed25519_pubkey(state, &verification_method) {
         return Ok(key);
     }
     Err(signature_error(
         "source service key unavailable; key_rotation_hint=refresh_origin_service_id",
     ))
-}
-
-fn configured_peer_verifying_key(service_id: &str) -> Result<Option<VerifyingKey>, AppError> {
-    let Ok(raw) = std::env::var("SOLAND_FEDERATION_PEER_PUBLIC_KEYS") else {
-        return Ok(None);
-    };
-    let expected_method = format!("{service_id}#federation-fanout-key");
-    for entry in raw.split([',', ';', '\n']) {
-        let entry = entry.trim();
-        if entry.is_empty() {
-            continue;
-        }
-        let Some((id, material)) = entry
-            .split_once('=')
-            .or_else(|| entry.split_once(':'))
-            .map(|(id, material)| (id.trim(), material.trim()))
-        else {
-            continue;
-        };
-        if id != service_id && id != expected_method {
-            continue;
-        }
-        return decode_peer_verifying_key(material)
-            .map(Some)
-            .map_err(|message| signature_error(format!("peer public key invalid: {message}")));
-    }
-    Ok(None)
-}
-
-fn decode_peer_verifying_key(material: &str) -> Result<VerifyingKey, String> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(material.as_bytes())
-        .or_else(|_| STANDARD.decode(material.as_bytes()))
-        .map_err(|error| format!("public key is not base64/base64url: {error}"))?;
-    if bytes.len() != 32 {
-        return Err(format!(
-            "Ed25519 public key must be 32 bytes, got {}",
-            bytes.len()
-        ));
-    }
-    let mut raw = [0u8; 32];
-    raw.copy_from_slice(&bytes);
-    VerifyingKey::from_bytes(&raw).map_err(|error| format!("invalid Ed25519 key: {error}"))
 }
 
 fn development_service_signing_key(service_id: &str) -> SigningKey {

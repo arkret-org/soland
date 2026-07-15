@@ -84,7 +84,7 @@ pub(crate) async fn record_handle_release(
 fn principal_handle_domain(state: &AppState) -> String {
     handle_domain_from_public_base_url(&state.config.public_base_url)
         .or_else(|| {
-            did_host_candidate(&state.config.service_id)
+            did_host_candidate(&state.service_id)
                 .and_then(|host| valid_handle_domain_candidate(&host))
         })
         .unwrap_or_else(|| "soland.local".to_owned())
@@ -139,7 +139,7 @@ async fn resolve_registration_localpart(
 /// demand from the primary `account_localparts` row. `None` means the account
 /// has no published localpart binding, so the client renders "not published".
 async fn account_primary_handle_claim(state: &AppState, account: &AccountRecord) -> Option<Value> {
-    account_primary_handle_claim_for(state, account, state.config.service_id.as_str()).await
+    account_primary_handle_claim_for(state, account, state.service_id.as_str()).await
 }
 
 /// Re-derive `account`'s Principal-Server-signed primary handle claim

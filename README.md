@@ -164,7 +164,9 @@ DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
 ```bash
 docker run --rm -p 8698:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
-  -e SOLAND_SERVICE_ID=did:webvh:<scid>:soland.example:webvh:service \
+  -e SOLAND_FIRST_PROVISIONING=1 \
+  -e SOLAND_USE_KEYSTORE=true \
+  -e SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=/var/lib/soland/identity-bundle \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
@@ -174,6 +176,11 @@ docker run --rm -p 8698:8698 \
   -v soland-objects:/var/lib/soland \
   ghcr.io/arkret/soland:latest
 ```
+
+The container must have access to a supported durable SDK KeyStore or an
+equivalent configured Secrets backend. The identity bundle contains only
+public recovery evidence and KeyRefs; it is not a substitute for control-key
+custody. Soland fails closed instead of writing control seeds to PostgreSQL.
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for a full Docker / PostgreSQL / TLS guide.
 
@@ -189,10 +196,13 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_TLS_CERT_PATH` | unset | TLS certificate PEM path; when paired with `SOLAND_TLS_KEY_PATH`, soland serves HTTPS via rustls |
 | `SOLAND_TLS_KEY_PATH` | unset | TLS private-key PEM path paired with `SOLAND_TLS_CERT_PATH` |
 | `SOLAND_PQ_TLS_DEPLOYMENT_PROBE` | unset | Set to `verified` only after an external TLS 1.3 probe proves `X25519MLKEM768` negotiation and fail-closed classical fallback |
-| `SOLAND_SERVICE_ID` | `did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service` | Service DID — also the proof `audience` binding |
+| `SOLAND_FIRST_PROVISIONING` | unset | One-time class-B production authorization to create a new service identity when no stored identity, local registration, or bundle exists |
+| `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR` | unset | SDK identity-bundle backend used to recover the same service DID after database loss; contains public evidence and KeyRefs, never private keys |
+| `SOLAND_USE_KEYSTORE` | `false` | Use a durable SDK platform KeyStore for the service signing key and current/precommitted WebVH control keys; self-provisioning fails closed without a durable secret backend |
 | `SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED` | `true` | Enable soland's built-in `did:webvh` provider for coauth registration |
 | `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER` | unset | Shared bearer token coauth must present to write embedded `did:webvh` registrations |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider, such as a standalone StarID service |
+| `SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER` / `_FILE` | unset | When set with the external Provider URL, stores Soland's own service identity there (class A); no first-provisioning flag or configured DID is used |
 | `SOLAND_DEFAULT_WEBVH_PROVIDER_ID` | unset | Optional coauth default provider id: `soland.embedded` or `external.webvh` |
 | `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_arkret/describe.auth_metadata.account_authority` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ak.session.grant + DPoP` |
@@ -252,9 +262,10 @@ and the `local.host.pem` / `local.host-key.pem` file names.
 4. Configure soland to use the generated files:
 
    ```dotenv
-   SOLAND_BIND=127.0.0.1:443
-   SOLAND_PUBLIC_BASE_URL=https://local.host:443
-   SOLAND_SERVICE_ID=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service
+    SOLAND_BIND=127.0.0.1:443
+    SOLAND_PUBLIC_BASE_URL=https://local.host:443
+    SOLAND_USE_KEYSTORE=true
+    SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=./identity-bundle
    SOLAND_TLS_CERT_PATH=./local.host.pem
    SOLAND_TLS_KEY_PATH=./local.host-key.pem
    SOLAND_OBJECT_STORAGE_BACKEND=filesystem
@@ -268,8 +279,8 @@ and the `local.host.pem` / `local.host-key.pem` file names.
    cargo run
    ```
 
-If you choose a different hostname, update `SOLAND_PUBLIC_BASE_URL`,
-`SOLAND_SERVICE_ID`, and the TLS file paths together. Use a host name that
+If you choose a different hostname, update `SOLAND_PUBLIC_BASE_URL` and the TLS
+file paths together. Use a host name that
 contains a dot so embedded `did:webvh` URLs remain valid.
 
 ### Run local Caddy for coauth integration
@@ -287,7 +298,8 @@ Start soland on `127.0.0.1:8698`, start coauth on `127.0.0.1:7080`, then run:
 ```dotenv
 SOLAND_BIND=127.0.0.1:8698
 SOLAND_PUBLIC_BASE_URL=https://local.host
-SOLAND_SERVICE_ID=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service
+SOLAND_USE_KEYSTORE=true
+SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=./identity-bundle
 SOLAND_DEVELOPMENT_MODE=true
 SOLAND_ACCOUNT_AUTHORITY_URL=https://auth.local.host
 SOLAND_OAUTH_CLIENT_ID=01GFWR28C4KNE04WG3HKXB7C9R
@@ -317,8 +329,8 @@ your hosts file:
 When `SOLAND_DEVELOPMENT_MODE=false` (the default), submitted commits must use
 production proof material — no `alg: none` or `dev-proof`, proof `payload_digest`
 must match the canonical commit digest, the verification method must be rooted
-in the commit author DID, and proof `domain`/`audience` must bind to
-`SOLAND_SERVICE_ID`.
+in the commit author DID, and proof `domain`/`audience` must bind to the
+service DID resolved from the durable service identity record.
 
 `GET /_arkret/root/identity/describe` exposes `did_webvh.providers[]` for coauth.
 When the embedded provider is enabled, coauth can register through
@@ -426,7 +438,7 @@ The same list is computed at runtime and surfaced on
 - [ ] Log redaction enabled (default outside dev mode)
 - [ ] Admin auth in production mode (`SOLAND_ADMIN_PRINCIPAL_DIDS`, with browser sessions backed by `SOLAND_SESSION_GRANT_INTROSPECTION_URL`)
 - [ ] Rate limit enabled (default; do not disable in production)
-- [ ] Provider credential rotation scheduled (KeyStore + `rotate-signing-key`)
+- [ ] Service signing-key rotation remains disabled until the deployment can atomically commit the KeyStore key, WebVH history, DID document, durable identity, and recovery bundle; the current admin route fails closed with `unsupported_feature`
 - [ ] `SOLAND_SEED_DEMO_DATA=false` (default — never on a federated production deployment)
 
 ## License

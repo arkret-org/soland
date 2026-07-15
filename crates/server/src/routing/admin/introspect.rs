@@ -163,7 +163,7 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         // a valid DID. This only kicks in for dev-login tokens whose
         // actor field is a handle, not a DID — production sessions
         // always carry a DID.
-        arkret_sdk::Did::new(format!("did:web:{}", state.config.service_id))
+        arkret_sdk::Did::new(format!("did:web:{}", state.service_id))
             .expect("service_id is a valid DID")
     });
     SessionGrantIntrospection {
@@ -212,9 +212,9 @@ pub(crate) async fn introspect_admin_scopes(
         )
         .with_status(StatusCode::UNAUTHORIZED)
     })?;
-    let audience = Did::new(state.config.service_id.clone()).map_err(|error| {
+    let audience = Did::new(state.service_id.clone()).map_err(|error| {
         AppError::internal(format!(
-            "configured principal service_id is not a DID: {error}"
+            "runtime principal service_id is not a DID: {error}"
         ))
     })?;
     let request = SessionGrantIntrospectRequestBody {

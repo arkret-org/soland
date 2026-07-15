@@ -55,7 +55,9 @@ mod tests {
 
     #[test]
     fn hlc_generates_valid_format() {
-        let hlc = ServerHlc::new("did:web:soland.local");
+        let hlc = ServerHlc::new(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        );
         let val = hlc.now();
         assert_eq!(val.len(), 26);
         assert!(val.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
@@ -66,7 +68,9 @@ mod tests {
 
     #[test]
     fn hlc_is_monotonic() {
-        let hlc = ServerHlc::new("did:web:soland.local");
+        let hlc = ServerHlc::new(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        );
         let v1 = hlc.now();
         let v2 = hlc.now();
         let v3 = hlc.now();
@@ -76,7 +80,9 @@ mod tests {
 
     #[test]
     fn hlc_clone_shares_state() {
-        let hlc1 = ServerHlc::new("did:web:soland.local");
+        let hlc1 = ServerHlc::new(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        );
         let hlc2 = hlc1.clone();
         let v1 = hlc1.now();
         let v2 = hlc2.now();

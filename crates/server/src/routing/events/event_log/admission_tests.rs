@@ -176,7 +176,8 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
 
 #[test]
 fn media_plaintext_authority_requires_matching_service_and_data_class() {
-    let service_id = "did:web:soland.local";
+    let service_id =
+        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
     assert!(payload_declares_media_plaintext_service(
         &json!({
             "plaintext_visible_services": [{

@@ -110,7 +110,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
             idempotency_key_header: "Idempotency-Key".to_owned(),
             payload_mode: format!(
                 "blind_wakeup_from_principal_service_id={}",
-                state.config.service_id
+                state.service_id
             ),
         },
         examples: OutboundPushBridgeExamples {
@@ -123,7 +123,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                 "force_refresh": true
             }),
             notify_headers: json!({
-                "X-Arkret-Origin-Service-ID": state.config.service_id,
+                "X-Arkret-Origin-Service-ID": state.service_id,
                 "X-Arkret-Destination-Service-ID": "did:web:floria.example",
                 "X-Arkret-Request-Id": "req_01js0000000000000000000000",
                 "Idempotency-Key": "notify-01js0000000000000000000000"

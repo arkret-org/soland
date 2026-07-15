@@ -728,10 +728,10 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
         .persistence
         .sessions()
         .put(&SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.config.service_id),
+            token_hash: test_session_credential_hash(token, &state.service_id),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
-            audience: state.config.service_id.clone(),
+            audience: state.service_id.clone(),
             session_public_key: None,
             agent_session: None,
             expires_at: now + chrono::Duration::minutes(10),

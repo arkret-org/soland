@@ -29,7 +29,7 @@ async fn identity_surface_works() {
         trust_roots
             .iter()
             .any(|root| root["id"] == "soland.local_identity_store"
-                && root["service_id"] == "did:web:soland.local"
+                && root["service_id"] == "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
                 && root["kind"] == "local_identity_store"
                 && root["proof_verification"]["webvh_witness_quorum"]
                     == "required_when_policy_present"),
@@ -175,6 +175,125 @@ async fn identity_describe_keeps_external_webvh_provider_when_probe_fails() {
         describe["did_webvh"]["providers"][0]["health"]["probe"],
         "probe_failed_at_boot"
     );
+}
+
+#[tokio::test]
+async fn standard_service_registration_is_idempotent_and_rejects_forks() {
+    use rand_chacha::rand_core::SeedableRng;
+
+    let mut config = test_config();
+    config.public_base_url = "https://soland.example".to_owned();
+    config.embedded_webvh_provider_enabled = true;
+    config.embedded_webvh_registration_bearer = Some("test-webvh-token".to_owned());
+    config.did_resolver_allow_methods =
+        vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
+    let state = AppState::new(config, Db { pool: None });
+    let key = arkret_sdk::ServiceRegistrationKey::new(
+        arkret_sdk::ServiceType::AuthServer,
+        arkret_sdk::CanonicalServiceUrl::new("https://auth.example/").unwrap(),
+    )
+    .unwrap();
+    let provider_endpoint = url::Url::parse("https://soland.example/").unwrap();
+    let mut rng = rand_chacha::ChaCha20Rng::from_seed([81u8; 32]);
+    let prepared = arkret_sdk::webvh::prepare_service_registration_inception(
+        &mut rng,
+        &arkret_sdk::webvh::ServiceRegistrationInceptionInput {
+            provider_endpoint: &provider_endpoint,
+            registration_key: &key,
+            also_known_as: &[],
+            version_time: chrono::Utc::now(),
+            did_key_fragment: Some("service-key"),
+        },
+    )
+    .unwrap();
+    let request = arkret_sdk::ServiceRegistrationEnsureRequestBody::new(
+        key.clone(),
+        prepared.service_registration_operation().unwrap(),
+        None,
+    )
+    .unwrap();
+
+    let unauthorized =
+        TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
+            .json(&request)
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(unauthorized.status_code.unwrap(), StatusCode::UNAUTHORIZED);
+
+    let mut created_response =
+        TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
+            .add_header("authorization", "Bearer test-webvh-token", true)
+            .json(&request)
+            .send(&app_from_state(state.clone()))
+            .await;
+    let created_status = created_response.status_code.unwrap();
+    let created_body: Value = created_response.take_json().await.unwrap();
+    assert_eq!(
+        created_status,
+        StatusCode::OK,
+        "service registration response: {created_body}"
+    );
+    let created: arkret_sdk::ServiceRegistrationOutcome =
+        serde_json::from_value(created_body).unwrap();
+    assert!(created.created);
+    assert_eq!(created.service_id, request.inception_operation.state.id);
+    created.validate_for(&key).unwrap();
+
+    let existing: arkret_sdk::ServiceRegistrationOutcome =
+        TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
+            .add_header("authorization", "Bearer test-webvh-token", true)
+            .json(&request)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert!(!existing.created);
+    assert_eq!(existing.service_id, created.service_id);
+    assert_eq!(
+        existing.registration_receipt.receipt_id,
+        created.registration_receipt.receipt_id
+    );
+
+    let fetched: arkret_sdk::ServiceRegistrationOutcome = TestClient::get(
+        "http://server/_arkret/root/identity/service-registrations?service_type=auth_server&public_base=https%3A%2F%2Fauth.example%2F",
+    )
+    .add_header("authorization", "Bearer test-webvh-token", true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert!(!fetched.created);
+    assert_eq!(fetched.service_id, created.service_id);
+
+    let mut fork_rng = rand_chacha::ChaCha20Rng::from_seed([82u8; 32]);
+    let fork = arkret_sdk::webvh::prepare_service_registration_inception(
+        &mut fork_rng,
+        &arkret_sdk::webvh::ServiceRegistrationInceptionInput {
+            provider_endpoint: &provider_endpoint,
+            registration_key: &key,
+            also_known_as: &[],
+            version_time: chrono::Utc::now(),
+            did_key_fragment: Some("service-key"),
+        },
+    )
+    .unwrap();
+    let fork_request = arkret_sdk::ServiceRegistrationEnsureRequestBody::new(
+        key,
+        fork.service_registration_operation().unwrap(),
+        None,
+    )
+    .unwrap();
+    let mut fork_response =
+        TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
+            .add_header("authorization", "Bearer test-webvh-token", true)
+            .json(&fork_request)
+            .send(&app_from_state(state))
+            .await;
+    assert_eq!(fork_response.status_code.unwrap(), StatusCode::CONFLICT);
+    let error: Value = fork_response.take_json().await.unwrap();
+    assert_eq!(error["error"]["code"], "service_identity_conflict");
 }
 
 #[tokio::test]
@@ -365,15 +484,11 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
     assert_eq!(resolved["key_log_head"], registered["key_log_head"]);
 }
 
-/// Regression: a `did:webvh` document provisioned through
-/// `submit-did-operation` (the path coauth account registration uses) MUST be
-/// resolvable at its canonical `/webvh/{local_id}/did.json` URL, exactly like an
-/// embedded-provider registration. Previously the public document endpoint only
-/// matched records whose `method_evidence.mode == "embedded_webvh_provider"`,
-/// so submit-provisioned DIDs (mode `submitted_operation`, no `local_id` in
-/// evidence) 404'd — breaking every cross-actor did:webvh resolution (MLS
-/// Welcome / KeyPackage / event signature verification) for coauth-registered
-/// accounts.
+/// The standard operation endpoint admits only a complete, client-signed
+/// did:webvh native log entry. It validates an SDK-built principal inception,
+/// serves the resulting canonical resources, treats
+/// an exact retry as a duplicate, and rejects collisions and generic fallback
+/// operations.
 #[tokio::test]
 async fn submit_did_operation_webvh_serves_canonical_did_json() {
     let mut config = test_config();
@@ -381,30 +496,81 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
     config.embedded_webvh_provider_enabled = true;
     config.did_resolver_allow_methods =
         vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
+    let endpoint = url::Url::parse("https://soland.example").unwrap();
+    let next_root = SigningKey::from_bytes(&[52u8; 32]);
+    let inception = arkret_sdk::webvh::prepare_principal_inception(
+        &arkret_sdk::webvh::PrincipalInceptionInput {
+            principal_endpoint: &endpoint,
+            local_id: "bobwebvh",
+            also_known_as: &["acct:alice@example.com".to_owned()],
+            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            root_seed: &[51u8; 32],
+            next_root_public_key_multibase: &test_ed25519_multibase_public(&next_root),
+            enrollment: arkret_sdk::webvh::PrincipalEnrollmentDelegation::ExternalAuthority {
+                authority_did: "did:web:enrollment.example",
+            },
+        },
+    )
+    .unwrap();
+    let did = inception.did.clone();
+    let operation = inception.log_entry.clone();
+    let request = serde_json::to_value(&inception.submit_body).unwrap();
     let state = AppState::new(config, Db { pool: None });
 
-    let did = "did:webvh:zQmTestScidValueForRegression123456:soland.example:webvh:bobwebvh";
+    let mut mismatched_method = request.clone();
+    mismatched_method["did_method"] = Value::String("did:webvh".to_owned());
+    let mismatched_method_response =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&mismatched_method)
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(
+        mismatched_method_response.status_code.unwrap(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let mut mismatched_seq = request.clone();
+    mismatched_seq["seq"] = Value::from(2);
+    let mismatched_seq_response =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&mismatched_seq)
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(
+        mismatched_seq_response.status_code.unwrap(),
+        StatusCode::CONFLICT
+    );
+
+    let mut wrong_head = request.clone();
+    wrong_head["prev_event_digest"] = Value::String(format!("sha256:{}", "0".repeat(64)));
+    let wrong_head_response =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&wrong_head)
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(
+        wrong_head_response.status_code.unwrap(),
+        StatusCode::CONFLICT
+    );
+
+    let mut invalid_proof = request.clone();
+    invalid_proof["operation"]["proof"][0]["proofValue"] =
+        Value::String("zinvalidSignature".to_owned());
+    let invalid_proof_response =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&invalid_proof)
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(
+        invalid_proof_response.status_code.unwrap(),
+        StatusCode::UNAUTHORIZED
+    );
+
     let submitted: Value =
         TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
-            .json(&serde_json::json!({
-                "did": did,
-                "did_method": "did:webvh",
-                "seq": 1,
-                "operation": {
-                    "type": "replace",
-                    "state": {
-                        "id": did,
-                        "verificationMethod": [{
-                            "id": format!("{did}#did-key-1"),
-                            "type": "Multikey",
-                            "controller": did,
-                            "publicKeyMultibase": "z6MkbobwebvhRegressionKey"
-                        }],
-                        "authentication": [format!("{did}#did-key-1")],
-                        "assertionMethod": [format!("{did}#did-key-1")]
-                    }
-                }
-            }))
+            .json(&request)
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -412,7 +578,6 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
             .unwrap();
     assert_eq!(submitted["status"], "accepted");
 
-    // The canonical did:webvh document URL must now resolve (200), not 404.
     let mut did_json = TestClient::get("http://server/webvh/bobwebvh/did.json")
         .send(&app_from_state(state.clone()))
         .await;
@@ -420,19 +585,178 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
     let document: Value = did_json.take_json().await.unwrap();
     assert_eq!(document["id"], did);
 
-    // A document-only submission (no webvh log-entry `versionId` in the
-    // operation, method_evidence mode `submitted_document`) appends no
-    // `did.jsonl` history: serving non-webvh-shaped lines there would violate
-    // the did:webvh log format, so the canonical log URL stays 404 until a
-    // real log entry is submitted.
-    let log_response = TestClient::get("http://server/webvh/bobwebvh/did.jsonl")
+    let mut log_response = TestClient::get("http://server/webvh/bobwebvh/did.jsonl")
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(log_response.status_code.unwrap(), StatusCode::NOT_FOUND);
+    assert_eq!(log_response.status_code.unwrap(), StatusCode::OK);
+    assert!(
+        log_response
+            .take_string()
+            .await
+            .unwrap()
+            .contains("versionId")
+    );
 
-    // An unknown local_id still 404s (the suffix match is exact, not a prefix).
+    let duplicate: Value =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&request)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(duplicate["status"], "duplicate");
+    assert_eq!(
+        duplicate["head_event_digest"],
+        submitted["head_event_digest"]
+    );
+
+    let mut conflicting_request = request.clone();
+    conflicting_request["operation"]["proof"][0]["proofValue"] =
+        Value::String("zconflictingSignature".to_owned());
+    let conflicting = TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+        .json(&conflicting_request)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(conflicting.status_code.unwrap(), StatusCode::CONFLICT);
+
+    let generic_replace =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&serde_json::json!({
+                "did": did,
+                "did_method": "webvh",
+                "seq": 2,
+                "prev_event_digest": submitted["head_event_digest"],
+                "operation": {"type": "replace", "state": {"id": did}},
+            }))
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(
+        generic_replace.status_code.unwrap(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let unsupported_method =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&serde_json::json!({
+                "did": "did:web:alice.example",
+                "did_method": "web",
+                "seq": 1,
+                "operation": operation,
+            }))
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(
+        unsupported_method.status_code.unwrap(),
+        StatusCode::BAD_REQUEST
+    );
+
     let unknown = TestClient::get("http://server/webvh/nosuchlocalid/did.json")
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unknown.status_code.unwrap(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling() {
+    let mut config = test_config();
+    config.public_base_url = "https://soland.example".to_owned();
+    config.did_resolver_allow_methods =
+        vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
+    let state = AppState::new(config, Db { pool: None });
+    let endpoint = url::Url::parse("https://soland.example").unwrap();
+    let root_seed = [61u8; 32];
+    let committed_root_seed = [62u8; 32];
+    let next_root_seed = [63u8; 32];
+    let sibling_next_root_seed = [64u8; 32];
+    let committed_root = SigningKey::from_bytes(&committed_root_seed);
+    let next_root = SigningKey::from_bytes(&next_root_seed);
+    let sibling_next_root = SigningKey::from_bytes(&sibling_next_root_seed);
+    let committed_root_public = test_ed25519_multibase_public(&committed_root);
+    let next_root_public = test_ed25519_multibase_public(&next_root);
+    let sibling_next_root_public = test_ed25519_multibase_public(&sibling_next_root);
+    let also_known_as = vec!["acct:rotation@example.com".to_owned()];
+    let inception = arkret_sdk::webvh::prepare_principal_inception(
+        &arkret_sdk::webvh::PrincipalInceptionInput {
+            principal_endpoint: &endpoint,
+            local_id: "rotation",
+            also_known_as: &also_known_as,
+            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            root_seed: &root_seed,
+            next_root_public_key_multibase: &committed_root_public,
+            enrollment: arkret_sdk::webvh::PrincipalEnrollmentDelegation::ExternalAuthority {
+                authority_did: "did:web:enrollment.example",
+            },
+        },
+    )
+    .unwrap();
+    let inception_request = serde_json::to_value(&inception.submit_body).unwrap();
+    let inception_outcome: Value =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&inception_request)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(inception_outcome["status"], "accepted");
+    assert_eq!(inception_outcome["seq"], 1);
+
+    let state_document = inception.log_entry["state"].clone();
+    let rotation =
+        arkret_sdk::webvh::prepare_principal_rotation(&arkret_sdk::webvh::PrincipalRotationInput {
+            did: &inception.did,
+            local_id: "rotation",
+            previous_entry: &inception.log_entry,
+            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-16T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            current_root_seed: &committed_root_seed,
+            next_root_public_key_multibase: &next_root_public,
+            state: &state_document,
+        })
+        .unwrap();
+    let rotation_request = serde_json::to_value(&rotation.submit_body).unwrap();
+    let rotation_outcome: Value =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&rotation_request)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(rotation_outcome["status"], "accepted");
+    assert_eq!(rotation_outcome["seq"], 2);
+
+    let duplicate: Value =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&rotation_request)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(duplicate["status"], "duplicate");
+
+    let sibling =
+        arkret_sdk::webvh::prepare_principal_rotation(&arkret_sdk::webvh::PrincipalRotationInput {
+            did: &inception.did,
+            local_id: "rotation",
+            previous_entry: &inception.log_entry,
+            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-16T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            current_root_seed: &committed_root_seed,
+            next_root_public_key_multibase: &sibling_next_root_public,
+            state: &state_document,
+        })
+        .unwrap();
+    let sibling_response =
+        TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+            .json(&serde_json::to_value(&sibling.submit_body).unwrap())
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(sibling_response.status_code.unwrap(), StatusCode::CONFLICT);
 }

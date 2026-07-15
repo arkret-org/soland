@@ -111,7 +111,7 @@ pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value
     let mut assertion_method = Vec::new();
     let also_known_as = default_also_known_as(state, did);
     if let Some(state) = state
-        && did == state.config.service_id
+        && did == state.service_id
     {
         let public_key = arkret_sdk::ed25519_pubkey_to_did_key_multibase(
             state.notary_signing_key().verifying_key().as_bytes(),
@@ -150,7 +150,6 @@ fn default_also_known_as(state: Option<&AppState>, did: &str) -> Vec<String> {
         .and_then(|url| url.host_str().and_then(valid_handle_domain_candidate))
         .or_else(|| {
             state
-                .config
                 .service_id
                 .strip_prefix("did:web:")
                 .and_then(|value| valid_handle_domain_candidate(&value.replace(':', ".")))
@@ -196,96 +195,6 @@ fn with_default_also_known_as(
         }
     }
     record
-}
-
-pub(super) fn did_operation_from_body(body: &Value) -> Result<Value, AppError> {
-    if let Some(operation) = body.get("operation") {
-        if !operation.is_object() {
-            return Err(AppError::invalid_param("operation must be an object"));
-        }
-        return Ok(operation.clone());
-    }
-    if let Some(document) = body.get("did_document") {
-        if !document.is_object() {
-            return Err(AppError::invalid_param("did_document must be an object"));
-        }
-        return Ok(json!({"type": "replace", "state": document}));
-    }
-    if let Some(patch) = body.get("patch") {
-        if !patch.is_object() {
-            return Err(AppError::invalid_param("patch must be an object"));
-        }
-        return Ok(json!({"type": "patch", "patch": patch}));
-    }
-    Err(AppError::invalid_param(
-        "operation, did_document, or patch is required",
-    ))
-}
-
-pub(super) fn string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-pub(super) fn did_document_from_operation(
-    did: &str,
-    existing: Option<&WebvhDocumentRecord>,
-    body: &Value,
-    operation: &Value,
-) -> Result<Value, AppError> {
-    if let Some(state) = operation.get("state") {
-        if !state.is_object() {
-            return Err(AppError::invalid_param("operation.state must be an object"));
-        }
-        return Ok(state.clone());
-    }
-    if let Some(document) = body.get("did_document") {
-        if !document.is_object() {
-            return Err(AppError::invalid_param("did_document must be an object"));
-        }
-        return Ok(document.clone());
-    }
-    let mut document = existing
-        .map(|record| record.did_document.clone())
-        .unwrap_or_else(|| default_did_document(None, did));
-    if let Some(patch) = operation
-        .get("patch")
-        .or_else(|| body.get("patch"))
-        .and_then(Value::as_object)
-    {
-        let Some(target) = document.as_object_mut() else {
-            return Err(AppError::invalid_param(
-                "existing DID document is not an object",
-            ));
-        };
-        for (key, value) in patch {
-            if value.is_null() {
-                target.remove(key);
-            } else {
-                target.insert(key.clone(), value.clone());
-            }
-        }
-    }
-    Ok(document)
-}
-
-pub(super) fn ensure_did_document_id(did: &str, document: &mut Value) -> Result<(), AppError> {
-    let Some(map) = document.as_object_mut() else {
-        return Err(AppError::invalid_param("DID document must be an object"));
-    };
-    match map.get("id").and_then(Value::as_str) {
-        Some(value) if value == did => Ok(()),
-        Some(_) => Err(AppError::invalid_param(
-            "DID document id does not match did",
-        )),
-        None => {
-            map.insert("id".to_owned(), Value::String(did.to_owned()));
-            Ok(())
-        }
-    }
 }
 
 #[cfg(test)]

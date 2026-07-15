@@ -26,8 +26,9 @@
 //! local signature is produced using the soland service signing key
 //! ([`PolicyClient::local_signer`]); coauth-style verifiers won't
 //! validate it, but soland's own audit path can — and the `kid` is
-//! prefixed with `did:web:soland.local#proxy-` so it's never confused
-//! with a genuine signature.
+//! prefixed with
+//! `did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#proxy-`
+//! so it's never confused with a genuine signature.
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §5–§6.
 
@@ -814,7 +815,7 @@ mod tests {
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
             actor_id: Did::new("did:web:alice.example").unwrap(),
             action: "ak.message.create".to_owned(),
-            source_service_id: Did::new("did:web:soland.local").unwrap(),
+            source_service_id: Did::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
             source_service_type: "principal_server".to_owned(),
             source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
             signed_transport: true,
@@ -879,9 +880,12 @@ mod tests {
     }
 
     fn client_with_policy_key(signing: &SigningKey) -> PolicyClient {
-        PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
-            .with_private_network_egress(true)
-            .with_policy_did_resolver(test_policy_resolver(signing))
+        PolicyClient::new(
+            reqwest::Client::new(),
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        )
+        .with_private_network_egress(true)
+        .with_policy_did_resolver(test_policy_resolver(signing))
     }
 
     fn signed_sample_response(
@@ -950,8 +954,11 @@ mod tests {
 
     #[tokio::test]
     async fn check_cache_hit_returns_cached() {
-        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
-            .with_private_network_egress(true);
+        let client = PolicyClient::new(
+            reqwest::Client::new(),
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        )
+        .with_private_network_egress(true);
         let cfg = realm_config("http://127.0.0.1:1/never-reached");
         let input = sample_input(false);
         let key = input.canonical_request_hash();
@@ -1079,8 +1086,11 @@ mod tests {
         let url = format!("http://{addr}/_arkret/self/policy/check");
         let mut cfg = realm_config(&url);
         cfg.timeout_ms = 150;
-        let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
-            .with_private_network_egress(true);
+        let client = PolicyClient::new(
+            reqwest::Client::new(),
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        )
+        .with_private_network_egress(true);
         let input = sample_input(true); // bypass_cache=true so we always hit network
 
         let cfg_clone = cfg.clone();
@@ -1101,7 +1111,7 @@ mod tests {
         assert!(
             resp.signature
                 .kid
-                .starts_with("did:web:soland.local#proxy-"),
+                .starts_with("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#proxy-"),
             "proxy signature must be marked: {}",
             resp.signature.kid
         );

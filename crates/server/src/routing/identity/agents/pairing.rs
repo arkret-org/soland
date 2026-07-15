@@ -49,7 +49,7 @@ pub(super) async fn resolve_agent_pairing(
             .public_base_url
             .trim_end_matches('/')
             .to_owned(),
-        service_id: Did::new(state.config.service_id.clone()).map_err(|error| {
+        service_id: Did::new(state.service_id.clone()).map_err(|error| {
             AppError::internal(format!("configured service_id invalid: {error}"))
         })?,
         agent_id: Did::new(agent_id)
@@ -100,11 +100,7 @@ pub(super) async fn submit_agent_runtime_key_request(
     ensure_pairing_request_open(&agent_record)?;
     ensure_pairing_request_id_matches(&agent_record, &body.pairing_request_id)?;
     let key_pair_body = agent_key_pair_body_from_runtime_approval(&body);
-    verify_runtime_key_pair_proof_of_possession(
-        &key_pair_body,
-        agent_id,
-        &state.config.service_id,
-    )?;
+    verify_runtime_key_pair_proof_of_possession(&key_pair_body, agent_id, &state.service_id)?;
     let agent_did = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
     let public_key_digest = arkret_sdk::agent_runtime_public_key_digest(&body.public_key)
@@ -160,7 +156,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         approval_notification_id: proposed_notification_id.clone(),
         approval_requested_at: proposed_requested_at,
         controller_account_id: account.id.clone(),
-        recipient_service_id: state.config.service_id.clone(),
+        recipient_service_id: state.service_id.clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: public_key_digest.as_str().to_owned(),
         runtime_attestation_digest: attestation_digest.as_str().to_owned(),
@@ -213,7 +209,7 @@ pub(super) async fn submit_agent_runtime_key_request(
             "notification_id": notification_id.clone(),
             "recipient_id": controller_id,
             "controller_account_id": account.id.clone(),
-            "recipient_service_id": state.config.service_id.clone(),
+            "recipient_service_id": state.service_id.clone(),
             "source_account_artifact_id": approval_request_id.clone(),
             "projection_action": projection_action,
             "projection_data": {
@@ -234,7 +230,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         .event_broadcast
         .send(crate::state::EventNotification::account(
             account.id,
-            state.config.service_id.clone(),
+            state.service_id.clone(),
         ));
     json_ok(AgentRuntimeApprovalOutcome {
         ok: true,
@@ -339,7 +335,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         &agent_id,
         &verification_method,
         &public_key_digest,
-        &state.config.service_id,
+        &state.service_id,
     )?;
     let events = state
         .persistence
@@ -378,7 +374,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
                 .is_some_and(|audience| {
                     audience
                         .iter()
-                        .any(|entry| entry.as_str() == Some(state.config.service_id.as_str()))
+                        .any(|entry| entry.as_str() == Some(state.service_id.as_str()))
                 })
             && evidence.get("kind").and_then(Value::as_str) == Some("pairing_request")
             && evidence.get("approved_by").and_then(Value::as_str) == Some(controller_id.as_str())
@@ -590,7 +586,7 @@ pub(super) async fn agent_key_pair(
     ensure_pairing_request_id_matches(&agent_record, &body.pairing_request_id)?;
     let runtime_public_key_digest =
         runtime_public_key_digest(&body.public_key, &body.verification_method)?;
-    verify_runtime_key_pair_proof_of_possession(&body, agent_id, &state.config.service_id)?;
+    verify_runtime_key_pair_proof_of_possession(&body, agent_id, &state.service_id)?;
     ensure_current_runtime_key_request_matches(&agent_record, &body)?;
     let pcr_recovery = crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(
         state,
@@ -824,7 +820,7 @@ pub(super) async fn submit_production_key_authorize_event(
         agent_id,
         verification_method,
         runtime_public_key_digest,
-        &state.config.service_id,
+        &state.service_id,
     )?;
     let delegated_session = delegated_agent_session(session, agent_id);
     let outcome = submit_event_value(state, &delegated_session, envelope.clone())

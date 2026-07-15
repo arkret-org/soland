@@ -299,7 +299,6 @@ mod tests {
     fn test_config() -> AppConfig {
         AppConfig {
             public_base_url: "http://test".to_owned(),
-            service_id: "did:web:test.local".to_owned(),
             object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
             development_mode: true,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],

@@ -674,7 +674,7 @@ pub(crate) async fn submit_federation_events(
             token_hash: format!("federation:{source_trust_domain}:{}", request_hash),
             actor,
             device_id,
-            audience: state.config.service_id.clone(),
+            audience: state.service_id.clone(),
             session_public_key: None,
             agent_session: None,
             expires_at: created_at + Duration::minutes(5),

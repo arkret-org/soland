@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
 use arkret_sdk::state::{CellRegistry, CellStore, MoveStore, SealStore};
-use arkret_sdk::{AccountRegistrationPolicy, AccountStatus, AppletPackage, Did, RealmId};
-use ed25519_dalek::SigningKey;
+use arkret_sdk::{
+    AccountRegistrationPolicy, AccountStatus, AppletPackage, CanonicalServiceUrl, Did,
+    LocalServiceIdentity, RealmId, ServiceIdentityKeyRef, ServiceIdentityState,
+    ServiceRegistrationKey, ServiceType,
+};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use soland_data::Db;
@@ -53,6 +56,12 @@ use hydration::*;
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
+    /// Runtime-authoritative service DID. It is resolved from durable identity
+    /// state before construction and is never loaded from configuration.
+    pub service_id: String,
+    /// Full service-identity lifecycle state used by readiness, doctor, and
+    /// identity-mutation gates.
+    pub service_identity: Arc<ArcSwap<ServiceIdentityState>>,
     /// Mutable operational overlay (admin allowlist, rate-limit ceilings,
     /// federation peers, feature toggles). Seeded from `config` at boot,
     /// overlaid by the `server_settings` DB row in [`AppState::hydrate`], and
@@ -206,6 +215,11 @@ pub struct AppState {
     /// Accepted Realm-level moderation-policy overrides keyed by Realm id.
     pub realm_moderation_policies: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
     pub did_resolver: Arc<did_resolver_chain::SolandDidResolver>,
+    /// Runtime-only verification keys learned from endpoint-discovered
+    /// federation peer DID documents. Configuration contains endpoints, not
+    /// copied service DIDs or public-key pins; discovery validates the
+    /// document's Principal Server endpoint binding before publishing a key.
+    pub federation_peer_verifying_keys: Arc<ArcSwap<BTreeMap<String, VerifyingKey>>>,
     /// Move/Seal/Lattice runtime stores. Pg-backed in database mode,
     /// SDK memory-backed in explicitly in-memory test mode.
     pub move_store: Arc<dyn MoveStore>,
@@ -223,21 +237,18 @@ pub struct AppState {
     /// re-opening the same subscribe scope after `dropped` /
     /// `resync_required`.
     pub subscribe_reconnect_gate: Arc<Mutex<SubscribeReconnectGate>>,
-    /// Persistent Ed25519 signing key for NotaryWorker +
-    /// admin endpoints (`admin_reconfigure_notary`, `admin_repair_bottom`).
-    /// Loaded from `AppConfig::notary_signing_key_seed` at boot when set;
-    /// otherwise minted from `sha256(service_id || nanos_since_epoch)` and
-    /// flagged as `NotarySigningKeyOrigin::Ephemeral` so a sticky-warn
-    /// fires on first use.
+    /// Persistent Ed25519 signing key for NotaryWorker + admin endpoints.
+    /// Production construction receives the exact seed resolved and
+    /// key-bound by service-identity bootstrap; AppState never re-resolves or
+    /// independently mints this signer.
     ///
     /// Shared across all signing paths so the NotaryWorker, the
     /// `service_admin_signer` admin shortcut, and the threshold partial-
     /// signature coordinator all bind to the **same** key/DID identity.
-    /// Swapped lock-free via [`ArcSwap`] so
-    /// the `POST /_soland/admin/realms/{realm_id}/notary/rotate-signing-key`
-    /// endpoint can publish a fresh ed25519 seed without tearing concurrent
-    /// signing passes. Readers acquire the current key via `load_full()`
-    /// (returns `Arc<SigningKey>`); writers `store(...)` a new `Arc`.
+    /// Readers acquire the current key via `ArcSwap::load_full()`. The
+    /// historical signing-key-only rotation path is fail-closed because it
+    /// cannot atomically update WebVH, the DID document, durable identity,
+    /// KeyStore, and recovery bundle.
     pub notary_signing_key: Arc<ArcSwap<SigningKey>>,
     /// The origin tag rotates with the key. Stored alongside it
     /// behind a [`Mutex`] (one-shot writes from the rotation path are not
@@ -274,6 +285,33 @@ pub struct AppState {
     pub member_identity: Arc<Mutex<MemberIdentityRegistry>>,
 }
 
+fn development_fixture_service_identity(config: &AppConfig) -> ServiceIdentityState {
+    let registration_key = ServiceRegistrationKey::new(
+        ServiceType::PrincipalServer,
+        CanonicalServiceUrl::canonicalize(&config.public_base_url)
+            .expect("test/development public base must be canonicalizable"),
+    )
+    .expect("principal-server registration key");
+    let signing_key_ref =
+        ServiceIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
+    ServiceIdentityState::Ready {
+        identity: LocalServiceIdentity {
+            service_id: Did::new(
+                "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+            )
+            .expect("fixture service DID"),
+            registration_key,
+            provider: None,
+            signing_key_refs: vec![signing_key_ref.clone()],
+            active_signing_key_ref: signing_key_ref,
+            control_key_ref: ServiceIdentityKeyRef::new("fixture:soland:webvh-control-key")
+                .expect("fixture control key ref"),
+            version_id: "fixture-v1".to_owned(),
+            last_verified_at: chrono::Utc::now(),
+        },
+    }
+}
+
 fn evict_oldest_entries<K, V, O>(
     map: &mut BTreeMap<K, V>,
     max_entries: usize,
@@ -299,6 +337,11 @@ fn evict_oldest_entries<K, V, O>(
 }
 
 impl AppState {
+    /// Snapshot the current service-identity lifecycle state.
+    pub fn service_identity_state(&self) -> Arc<ServiceIdentityState> {
+        self.service_identity.load_full()
+    }
+
     /// Snapshot the persistent Ed25519 signing key shared by
     /// the NotaryWorker and all admin signing paths. Returns a fresh
     /// `Arc<SigningKey>` (lock-free `ArcSwap::load_full`) so callers can
@@ -319,27 +362,18 @@ impl AppState {
         self.notary_signing_key.load().verifying_key()
     }
 
+    /// Snapshot a verification key learned from a federation peer's
+    /// endpoint-bound DID document.
+    pub fn federation_peer_verifying_key(&self, service_id: &str) -> Option<VerifyingKey> {
+        self.federation_peer_verifying_keys
+            .load()
+            .get(service_id)
+            .copied()
+    }
+
     /// Origin tag for diagnostics (`Configured` / `Ephemeral` / `Rotated`).
     pub fn notary_signing_key_origin(&self) -> NotarySigningKeyOrigin {
         *self.notary_signing_key_origin.lock()
-    }
-
-    /// Hot-rotate the NotaryWorker signing key. Writers swap
-    /// the `ArcSwap` and update the origin tag in lockstep. Returns the
-    /// newly-published `Arc<SigningKey>` for callers (the rotate-signing-key
-    /// endpoint uses it to compute the resulting did:key kid).
-    pub fn rotate_notary_signing_key(
-        &self,
-        seed: &[u8; 32],
-        origin: NotarySigningKeyOrigin,
-    ) -> Arc<SigningKey> {
-        let new_key = Arc::new(SigningKey::from_bytes(seed));
-        self.notary_signing_key.store(new_key.clone());
-        {
-            let mut guard = self.notary_signing_key_origin.lock();
-            *guard = origin;
-        }
-        new_key
     }
 
     pub fn new(config: AppConfig, db: Db) -> Self {
@@ -370,10 +404,39 @@ impl AppState {
         db: Db,
         persistence: Arc<dyn PersistenceStore>,
     ) -> Self {
+        let identity = development_fixture_service_identity(&config);
+        let signing_seed = config.notary_signing_key_seed.unwrap_or_else(|| {
+            let mut hasher = Sha256::new();
+            hasher.update(b"soland:test-fixture-notary:");
+            hasher.update(
+                identity
+                    .identity()
+                    .expect("fixture has a serving identity")
+                    .service_id
+                    .as_str()
+                    .as_bytes(),
+            );
+            hasher.finalize().into()
+        });
+        Self::new_with_service_identity(config, db, persistence, identity, signing_seed)
+    }
+
+    pub fn new_with_service_identity(
+        config: AppConfig,
+        db: Db,
+        persistence: Arc<dyn PersistenceStore>,
+        service_identity: ServiceIdentityState,
+        resolved_signing_seed: [u8; 32],
+    ) -> Self {
         let mut realms = RealmDirectoryIndex::new();
         let now = chrono::Utc::now();
 
-        let service_id = config.service_id.clone();
+        let service_id = service_identity
+            .identity()
+            .expect("AppState requires a serving service identity")
+            .service_id
+            .to_string();
+        let service_identity = Arc::new(ArcSwap::from_pointee(service_identity));
 
         let object_storage = build_object_storage(&config.object_storage)
             .expect("object storage backend initializes");
@@ -413,81 +476,19 @@ impl AppState {
             Some(persistence.clone()),
         ));
 
-        // Derive the NotaryWorker's Ed25519 signing key.
-        // Resolution order:
-        //   1. KeyStore (when `use_keystore=true` and the platform store has a previously-persisted
-        //      seed under our id) → Configured.
-        //   2. `config.notary_signing_key_seed` (env-loaded) → Configured. When `use_keystore=true`
-        //      we *also* persist this seed back to the KeyStore on first boot so subsequent
-        //      restarts skip the env path.
-        //   3. SHA-256(service_id || boot_nanos) → Ephemeral.
-        let (signing_seed, notary_signing_key_origin) =
-            (|| -> ([u8; 32], NotarySigningKeyOrigin) {
-                if config.use_keystore {
-                    let app_id = format!("soland.{service_id}");
-                    let key_id = format!("arkret:signer:soland-notary:{service_id}");
-                    let store = arkret_sdk::durable_platform_keystore(&app_id)
-                        .expect("use_keystore requires a durable platform key store");
-                    if let Ok(bytes) = store.load(&key_id) {
-                        if bytes.len() == 32 {
-                            let mut seed = [0u8; 32];
-                            seed.copy_from_slice(&bytes);
-                            tracing::info!(%key_id, "loaded notary signing seed from platform KeyStore");
-                            return (seed, NotarySigningKeyOrigin::Configured);
-                        }
-                        tracing::warn!(%key_id, len = bytes.len(),
-                        "platform KeyStore returned non-32-byte payload; falling back");
-                    }
-                    if let Some(seed) = config.notary_signing_key_seed {
-                        if let Err(error) = store.store(&key_id, &seed) {
-                            tracing::warn!(%error, %key_id,
-                            "failed to seed platform KeyStore from env-supplied seed");
-                        } else {
-                            tracing::info!(%key_id,
-                            "persisted env-supplied notary seed into platform KeyStore");
-                        }
-                        return (seed, NotarySigningKeyOrigin::Configured);
-                    }
-                    // Mint + persist a one-shot seed.
-                    let mut seed = [0u8; 32];
-                    getrandom_seed(&mut seed);
-                    if let Err(error) = store.store(&key_id, &seed) {
-                        tracing::warn!(%error, %key_id,
-                        "failed to persist freshly-minted notary seed to KeyStore");
-                    } else {
-                        tracing::info!(%key_id,
-                        "minted + persisted fresh notary seed via platform KeyStore");
-                    }
-                    return (seed, NotarySigningKeyOrigin::Configured);
-                }
-                if let Some(seed) = config.notary_signing_key_seed {
-                    return (seed, NotarySigningKeyOrigin::Configured);
-                }
-                // Ephemeral fallback. In production we mix in `boot_nanos`
-                // so a soland that boots without a configured seed never
-                // signs with the same key twice — this is a security
-                // posture choice (no implicit long-lived key on disk).
-                //
-                // In `development_mode=true` we drop `boot_nanos` and
-                // derive the seed deterministically from `service_id`
-                // alone. The trade-off: every dev restart kept invalidating
-                // every previously-issued sync cursor with
-                // `cursor_integrity_invalid` because the freshly-minted
-                // key couldn't reproduce yesterday's signature. Stable in
-                // dev = `cargo run` doesn't break a connected inkson.
-                let mut hasher = Sha256::new();
-                hasher.update(b"soland:notary-ephemeral:");
-                hasher.update(service_id.as_bytes());
-                if !config.development_mode {
-                    let boot_nanos = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_nanos() as u64)
-                        .unwrap_or(0);
-                    hasher.update(boot_nanos.to_le_bytes());
-                }
-                let seed: [u8; 32] = hasher.finalize().into();
-                (seed, NotarySigningKeyOrigin::Ephemeral)
-            })();
+        // Bootstrap has already validated that this exact seed is the key
+        // published by the resolved service DID document. Re-reading a
+        // differently-derived key here would split the runtime signer from
+        // its authoritative service identity.
+        let signing_seed = resolved_signing_seed;
+        let notary_signing_key_origin =
+            if config.notary_signing_key_seed.is_some() || config.use_keystore {
+                NotarySigningKeyOrigin::Configured
+            } else {
+                // Only fixture constructors can reach this branch. Production
+                // bootstrap requires durable key custody or an explicit secret.
+                NotarySigningKeyOrigin::Ephemeral
+            };
 
         let notary_signing_key =
             Arc::new(ArcSwap::from_pointee(SigningKey::from_bytes(&signing_seed)));
@@ -525,7 +526,7 @@ impl AppState {
         // pre-populate the platform keystore explicitly — admin DIDs
         // without a provisioned key fall back to
         // `service_admin_signer` at signing time with a sticky-warn.
-        let admin_app_id = format!("soland.{}", config.service_id);
+        let admin_app_id = format!("soland.{service_id}");
         let admin_keystore_inner: Box<dyn arkret_sdk::KeyStore> = if config.use_keystore {
             arkret_sdk::durable_platform_keystore(&admin_app_id)
                 .expect("use_keystore requires a durable platform key store")
@@ -580,6 +581,8 @@ impl AppState {
 
         Self {
             config,
+            service_id: service_id.clone(),
+            service_identity,
             settings: initial_settings,
             hlc: ServerHlc::new(&service_id),
             projection: Arc::new(Mutex::new(hydrated)),
@@ -620,6 +623,7 @@ impl AppState {
             organization_realms: Arc::new(Mutex::new(BTreeMap::new())),
             realm_moderation_policies: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,
+            federation_peer_verifying_keys: Arc::new(ArcSwap::from_pointee(BTreeMap::new())),
             move_store: state_resolution_stores.move_store,
             seal_store: state_resolution_stores.seal_store,
             cell_store: state_resolution_stores.cell_store,
@@ -762,7 +766,7 @@ impl AppState {
         hydrate_realms_from_canonical_events(
             self.persistence.as_ref(),
             &mut realm_updates,
-            &self.config.service_id,
+            &self.service_id,
         )
         .await;
         {
@@ -1379,9 +1383,8 @@ fn account_lifecycle_status_from_wire(value: &str) -> AccountStatus {
     }
 }
 
-/// Fill `out` with cryptographically secure random bytes via
-/// `rand::rng`. Used by both the boot path (one-shot KeyStore mint) and
-/// the rotate-signing-key endpoint.
+/// Fill `out` with cryptographically secure random bytes via `rand::rng`.
+/// Used by service-identity bootstrap and development admin-key provisioning.
 pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
     use rand::RngExt;
     rand::rng().fill(out);
@@ -1392,6 +1395,24 @@ mod membership_hydration_tests {
     use arkret_sdk::{Did, RealmId};
 
     use super::*;
+
+    #[test]
+    fn app_state_uses_the_bootstrap_resolved_signing_seed() {
+        let config = AppConfig::test_default();
+        let identity = development_fixture_service_identity(&config);
+        let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
+        let resolved_seed = [0xa5; 32];
+
+        let state = AppState::new_with_service_identity(
+            config,
+            Db { pool: None },
+            persistence,
+            identity,
+            resolved_seed,
+        );
+
+        assert_eq!(state.notary_signing_key().to_bytes(), resolved_seed);
+    }
 
     fn member_state_event(realm_id: &str, member: &str, membership: &str) -> CanonicalEventRecord {
         CanonicalEventRecord {

@@ -102,14 +102,6 @@ fn install_environment(values: Vec<(String, String)>) {
     }
 }
 
-/// Built-in placeholder `service_id` used only when `SOLAND_SERVICE_ID` is
-/// unset. It is deliberately a globally-shared, non-routable identity so a
-/// production deployment that boots without setting its own DID is rejected
-/// at startup (see [`AppConfig::from_env_and_args`]) rather than silently
-/// federating and signing under a fake shared identity.
-pub const PLACEHOLDER_SERVICE_ID: &str =
-    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
-
 /// STUN URL shipped as the [`IceServersConfig::default`] value. A production
 /// deployment still advertising this Google public STUN server leaks client
 /// candidate-gathering to a third party; surfaced as a hardening warning.
@@ -125,7 +117,10 @@ pub struct AppConfig {
     pub bind: SocketAddr,
     pub metrics_bind: SocketAddr,
     pub public_base_url: String,
-    pub service_id: String,
+    /// Explicit one-shot authorization for a new class-B deployment to mint
+    /// its first service identity. The resulting DID is persisted and never
+    /// copied back into configuration.
+    pub first_provisioning: bool,
     /// Optional TLS certificate PEM path. When both this and
     /// [`tls_key_path`] are configured, soland starts an HTTPS listener using
     /// Salvo's rustls integration instead of plain TCP.
@@ -182,6 +177,11 @@ pub struct AppConfig {
     /// any compatible provider. It records admin intent and is surfaced in
     /// `/identity/describe` even when the boot probe fails.
     pub external_webvh_provider_url: Option<String>,
+    /// Registration credential for using the configured external WebVH
+    /// service as this deployment's Service Identity Provider. When present,
+    /// service identity is class-A/provider-backed and first provisioning does
+    /// not require `SOLAND_FIRST_PROVISIONING`.
+    pub external_webvh_registration_bearer: Option<String>,
     /// Runtime liveness for the external provider. `true` only when the
     /// external provider's `/describe` probe succeeds at boot.
     pub external_webvh_provider_active: bool,
@@ -227,19 +227,17 @@ pub struct AppConfig {
     /// — the env var holds the raw seed, base64-standard-padded; bad shape
     /// fails fast at startup with a clear error.
     pub notary_signing_key_seed: Option<[u8; 32]>,
-    /// When true, the NotaryWorker loads its signing seed
-    /// from the SDK platform `KeyStore` (`durable_platform_keystore("soland.<service_id>")`)
-    /// at boot and stores rotated keys back into the same KeyStore. When
-    /// false (default), only `notary_signing_key_seed` (env-loaded) is
-    /// honored. The KeyStore key id is `arkret:signer:soland-notary:<service_id>`.
+    /// When true, service-identity bootstrap uses the durable SDK platform
+    /// KeyStore namespace `soland.service-identity`. Signing and WebVH
+    /// control secrets are addressed exclusively by the opaque KeyRefs in
+    /// the verified `LocalServiceIdentity`; AppState neither derives a key id
+    /// from the service DID nor independently mints a runtime signer.
     ///
-    /// Behavior when `use_keystore=true`:
-    /// - First boot: try `KeyStore::load(...)`; on `not_found` fall back to
-    ///   `notary_signing_key_seed`; if that's also absent, mint a fresh seed and persist it via
-    ///   `KeyStore::store(...)` (one-shot init).
-    /// - `rotate-signing-key` endpoint: mint, persist via KeyStore, hot-swap.
-    ///
-    /// Behavior when `use_keystore=false`: only the env-loaded seed is honored.
+    /// When false, an explicit `SOLAND_NOTARY_SIGNING_KEY` may supply the
+    /// signing secret, but WebVH control-key custody still requires a durable
+    /// KeyStore. Service signing-key rotation fails closed until the WebVH
+    /// history, DID document, stored identity, KeyStore, and recovery bundle
+    /// can be updated as one recoverable transition.
     pub use_keystore: bool,
     /// Federation fanout topology. The on-the-wire shape is `ak.peer.events.command.submit`
     /// under `/_arkret/peer/events`; the topology only changes which peer set
@@ -249,10 +247,11 @@ pub struct AppConfig {
     /// - [`FederationFanoutTopology::Hub`] — push only to a single configured upstream hub; rely
     ///   on the hub for outbound dissemination.
     pub federation_fanout_topology: FederationFanoutTopology,
-    /// Federation peers the outbound layer considers as broadcast targets
-    /// (mesh) or hub upstream (hub). Entries must be `base_url|service_id`
-    /// so peer requests can bind destination-service-id. Empty disables
-    /// federation outbound.
+    /// Federation peer endpoints the outbound layer considers as broadcast
+    /// targets (mesh) or hub upstream (hub). Endpoint-only entries are
+    /// resolved through `/_arkret/describe`; the discovered service DID is
+    /// kept in runtime state rather than copied into deployment config. Empty
+    /// disables federation outbound.
     pub federation_peers: Vec<String>,
     /// G3.S0 — when true (default), `main.rs` spawns the
     /// `FederationDispatcher` background worker that drains the
@@ -658,7 +657,7 @@ impl AppConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             metrics_bind: "127.0.0.1:0".parse().unwrap(),
             public_base_url: "http://server".to_owned(),
-            service_id: "did:web:soland.local".to_owned(),
+            first_provisioning: false,
             tls_cert_path: None,
             tls_key_path: None,
             database_url: None,
@@ -680,6 +679,7 @@ impl AppConfig {
             embedded_webvh_provider_enabled: false,
             embedded_webvh_registration_bearer: None,
             external_webvh_provider_url: None,
+            external_webvh_registration_bearer: None,
             external_webvh_provider_active: false,
             default_webvh_provider_id: None,
             jws_replay_window_seconds: 300,
@@ -729,8 +729,21 @@ impl AppConfig {
             .parse()?;
         let public_base_url =
             std::env::var("SOLAND_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
-        let service_id =
-            env_non_empty("SOLAND_SERVICE_ID").unwrap_or_else(|| PLACEHOLDER_SERVICE_ID.to_owned());
+        if env_non_empty("SOLAND_SERVICE_ID").is_some() {
+            anyhow::bail!(
+                "SOLAND_SERVICE_ID is no longer accepted: service identity is resolved from the \
+                 durable service_identity record, Provider registration mapping, or verified \
+                 identity bundle"
+            );
+        }
+        if env_non_empty("SOLAND_BOOTSTRAP_SERVICE_IDENTITY").is_some() {
+            anyhow::bail!(
+                "SOLAND_BOOTSTRAP_SERVICE_IDENTITY was removed; use the one-shot \
+                 --first-provisioning flag or SOLAND_FIRST_PROVISIONING=1"
+            );
+        }
+        let first_provisioning = std::env::args().any(|arg| arg == "--first-provisioning")
+            || env_bool("SOLAND_FIRST_PROVISIONING")?.unwrap_or(false);
         let tls_cert_path = env_non_empty("SOLAND_TLS_CERT_PATH").map(PathBuf::from);
         let tls_key_path = env_non_empty("SOLAND_TLS_KEY_PATH").map(PathBuf::from);
         if tls_cert_path.is_some() != tls_key_path.is_some() {
@@ -750,24 +763,10 @@ impl AppConfig {
         let development_mode = std::env::var("SOLAND_DEVELOPMENT_MODE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
-        // T1 — a production deployment MUST declare its own routable service
-        // DID. Booting under the shared placeholder means every such
-        // deployment signs and federates under the same fake identity.
-        //
-        // Exception: service-identity self-bootstrap (identity-did.md §3.7).
-        // When `SOLAND_BOOTSTRAP_SERVICE_IDENTITY=1` the placeholder is
-        // tolerated at config load; the async boot resolve step then mints a
-        // fresh `did:webvh` (or adopts a previously-persisted one) and overwrites
-        // `service_id` + `trust_domain` before anything signs under them.
-        let bootstrap_service_identity = std::env::var("SOLAND_BOOTSTRAP_SERVICE_IDENTITY")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
-            .unwrap_or(false);
-        if !development_mode && !bootstrap_service_identity && service_id == PLACEHOLDER_SERVICE_ID
-        {
-            anyhow::bail!(
-                "SOLAND_SERVICE_ID is required when SOLAND_DEVELOPMENT_MODE is false (or set SOLAND_BOOTSTRAP_SERVICE_IDENTITY=1 to self-bootstrap a did:webvh); the built-in placeholder DID is a shared, non-routable identity"
-            );
-        }
+        // Production first provisioning is authorized later, after the
+        // durable identity stores are open, by `first_provisioning`.
+        // Development mode may provision automatically. Config never carries
+        // or pins the resulting DID (identity-did.md §3.7 I-2/I-3).
         // CORS posture per api-conventions.md §10 — browser clients SHOULD be
         // able to reach us via preflight. Three shapes:
         //   - env unset, production mode → `None` (no CORS handler at all; operator must opt in
@@ -794,6 +793,14 @@ impl AppConfig {
         let embedded_webvh_registration_bearer =
             env_non_empty_or_file("SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER")?;
         let external_webvh_provider_url = env_non_empty("SOLAND_EXTERNAL_WEBVH_PROVIDER_URL");
+        let external_webvh_registration_bearer =
+            env_non_empty_or_file("SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER")?;
+        if external_webvh_registration_bearer.is_some() && external_webvh_provider_url.is_none() {
+            anyhow::bail!(
+                "SOLAND_EXTERNAL_WEBVH_PROVIDER_URL is required when \
+                 SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER is configured"
+            );
+        }
         let default_webvh_provider_id = env_non_empty("SOLAND_DEFAULT_WEBVH_PROVIDER_ID");
         // 0 disables replay-window enforcement; default 5 min per spec.
         let jws_replay_window_seconds = std::env::var("SOLAND_JWS_REPLAY_WINDOW_SECONDS")
@@ -934,7 +941,14 @@ impl AppConfig {
                 .unwrap_or_default();
         let candidate_join_policy_enabled =
             env_bool("SOLAND_CANDIDATE_JOIN_POLICY")?.unwrap_or(false);
-        let trust_domain = derive_trust_domain(&service_id)?;
+        // When the operator does not pin a trust domain, service bootstrap
+        // derives it from the resolved runtime DID before AppState is built.
+        let trust_domain = env_non_empty("SOLAND_TRUST_DOMAIN").unwrap_or_default();
+        if !trust_domain.is_empty() {
+            arkret_sdk::TypedTrustDomainId::new(trust_domain.clone()).map_err(|error| {
+                anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {error}")
+            })?;
+        }
         let receive_policy_constraints = load_receive_policy_constraints()?;
         let log_format = LogFormat::from_env(development_mode);
 
@@ -942,7 +956,7 @@ impl AppConfig {
             bind,
             metrics_bind,
             public_base_url,
-            service_id,
+            first_provisioning,
             tls_cert_path,
             tls_key_path,
             database_url,
@@ -959,6 +973,7 @@ impl AppConfig {
             embedded_webvh_provider_enabled,
             embedded_webvh_registration_bearer,
             external_webvh_provider_url,
+            external_webvh_registration_bearer,
             // `main.rs` flips this to true after a successful boot probe.
             external_webvh_provider_active: false,
             default_webvh_provider_id,
@@ -1353,7 +1368,7 @@ fn load_notary_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
 ///    [`arkret_sdk::TypedTrustDomainId`]).
 /// 2. Synthesised from the configured `service_id` — strip the DID method prefix and lowercase the
 ///    remainder, then prefix with `ak:trust_domain:`.
-pub(crate) fn derive_trust_domain(service_id: &str) -> anyhow::Result<String> {
+pub fn derive_trust_domain(service_id: &str) -> anyhow::Result<String> {
     if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
         // Validate via SDK typed id — rejects bad shape at boot.
         arkret_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {

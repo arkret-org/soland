@@ -134,7 +134,7 @@ fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> A
 /// to-device), mirroring the production principal-side effects without an Auth
 /// Server round-trip.
 async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOutcome, AppError> {
-    let token_hash = session_credential_hash(token, &state.config.service_id);
+    let token_hash = session_credential_hash(token, &state.service_id);
     let revoked_session = match state
         .persistence
         .sessions()
@@ -197,9 +197,9 @@ async fn introspect_session_grant_for_logout(
             "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
         ));
     };
-    let audience = arkret_sdk::Did::new(state.config.service_id.clone()).map_err(|error| {
+    let audience = arkret_sdk::Did::new(state.service_id.clone()).map_err(|error| {
         AppError::internal(format!(
-            "configured principal service_id is not a DID: {error}"
+            "runtime principal service_id is not a DID: {error}"
         ))
     })?;
     let request = SessionGrantIntrospectRequestBody {
@@ -512,7 +512,7 @@ async fn verify_cross_session_revoke_proof(
             "unsupported session revoke lifecycle proof kind",
         ));
     }
-    if proof.audience != state.config.service_id {
+    if proof.audience != state.service_id {
         return Err(session_revoke_proof_invalid(
             "session revoke lifecycle proof audience does not match this service",
         ));
@@ -535,7 +535,7 @@ async fn verify_cross_session_revoke_proof(
 
     let actor = arkret_sdk::Did::new(session.actor.clone())
         .map_err(|_| AppError::invalid_param("session actor is not a valid DID"))?;
-    let service_id = arkret_sdk::Did::new(state.config.service_id.clone()).map_err(|error| {
+    let service_id = arkret_sdk::Did::new(state.service_id.clone()).map_err(|error| {
         AppError::internal(format!("configured service_id is not a valid DID: {error}"))
     })?;
     let session_device = DeviceId::new(session.device_id.clone())

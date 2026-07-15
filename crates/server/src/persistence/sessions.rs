@@ -197,7 +197,7 @@ mod tests {
             token_hash: "grant".to_owned(),
             actor: "did:web:alice.example".to_owned(),
             device_id: "agent-session:grant".to_owned(),
-            audience: "did:web:soland.local".to_owned(),
+            audience: "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
             session_public_key: Some("{}".to_owned()),
             agent_session: Some(AgentSessionRecord {
                 granted_scope: vec![

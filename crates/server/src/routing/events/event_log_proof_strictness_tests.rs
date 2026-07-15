@@ -35,7 +35,9 @@ fn session() -> SessionRecord {
         token_hash: "hash".to_owned(),
         actor: "did:web:alice.example".to_owned(),
         device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
-        audience: "did:web:soland.local".to_owned(),
+        audience:
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+                .to_owned(),
         session_public_key: None,
         agent_session: None,
         expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
@@ -279,11 +281,10 @@ async fn policy_components_media_plaintext_reads_realm_meta() {
                 asset_privacy_policy_digest: None,
                 encryption_profile: Some("mls_rfc9420".to_owned()),
                 plaintext_visible_services: std::collections::BTreeSet::from([state
-                    .config
                     .service_id
                     .clone()]),
                 plaintext_visible_service_classes: std::collections::BTreeMap::from([(
-                    state.config.service_id.clone(),
+                    state.service_id.clone(),
                     std::collections::BTreeSet::from([
                         arkret_sdk::PlaintextDataClassKind::MediaPlaintext,
                     ]),

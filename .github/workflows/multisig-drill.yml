@@ -26,9 +26,11 @@ env:
   PGHOST: 127.0.0.1
   PGPORT: 5432
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/soland_drill
-  SOLAND_SERVICE_ID: did:web:soland.drill.local
+  SOLAND_PUBLIC_BASE_URL: http://127.0.0.1:8989/
+  SOLAND_FIRST_PROVISIONING: "true"
+  SOLAND_SERVICE_IDENTITY_BUNDLE_DIR: ${{ github.workspace }}/_drill/identity-bundle
   SOLAND_BACKUP_DIR: ${{ github.workspace }}/_drill/backups
-  SOLAND_USE_KEYSTORE: "false"
+  SOLAND_USE_KEYSTORE: "true"
   SOLAND_DEVELOPMENT_MODE: "true"
   SOLAND_BIND: 127.0.0.1:8989
   SOLAND_OBJECT_STORAGE_LOCAL_ROOT: ${{ github.workspace }}/_drill/blobs
@@ -74,11 +76,21 @@ jobs:
         with:
           workspaces: soland -> target
 
-      - name: Install postgres client + jq
+      - name: Install drill prerequisites and start Secret Service
         run: |
           set -euxo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y postgresql-client jq
+          sudo apt-get install -y postgresql-client jq dbus-x11 gnome-keyring
+          eval "$(dbus-launch --sh-syntax)"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_PID=$DBUS_SESSION_BUS_PID" >> "$GITHUB_ENV"
+          KEYRING_ENV="$(printf '\n' | gnome-keyring-daemon --unlock --components=secrets)"
+          while IFS= read -r assignment; do
+            assignment="${assignment%; export *}"
+            if [[ "$assignment" == *=* ]]; then
+              echo "$assignment" >> "$GITHUB_ENV"
+            fi
+          done <<< "$KEYRING_ENV"
 
       - name: Verify postgres reachable
         run: |
@@ -102,7 +114,11 @@ jobs:
       - name: Prepare drill workspace
         run: |
           set -euxo pipefail
-          mkdir -p "$SOLAND_BACKUP_DIR" "$SOLAND_OBJECT_STORAGE_LOCAL_ROOT" _drill/logs
+          mkdir -p \
+            "$SOLAND_BACKUP_DIR" \
+            "$SOLAND_SERVICE_IDENTITY_BUNDLE_DIR" \
+            "$SOLAND_OBJECT_STORAGE_LOCAL_ROOT" \
+            _drill/logs
 
       - name: Boot soland once to apply migrations
         working-directory: soland
@@ -110,16 +126,32 @@ jobs:
           set -euxo pipefail
           ./target/debug/soland > "$GITHUB_WORKSPACE/_drill/logs/soland-boot.log" 2>&1 &
           SOLAND_PID=$!
-          echo "soland_pid=$SOLAND_PID" >> "$GITHUB_OUTPUT"
+          READY=false
           for _ in $(seq 1 30); do
             if curl -fsS "http://${SOLAND_BIND}/health" >/dev/null 2>&1; then
+              READY=true
+              break
+            fi
+            if ! kill -0 "$SOLAND_PID" 2>/dev/null; then
               break
             fi
             sleep 1
           done
+          if [ "$READY" != "true" ]; then
+            cat "$GITHUB_WORKSPACE/_drill/logs/soland-boot.log" >&2
+            kill "$SOLAND_PID" 2>/dev/null || true
+            wait "$SOLAND_PID" 2>/dev/null || true
+            exit 1
+          fi
           psql "$DATABASE_URL" -c "\d multisig_pending"
           kill "$SOLAND_PID" || true
           wait "$SOLAND_PID" 2>/dev/null || true
+          mapfile -d '' BUNDLES < <(find "$SOLAND_SERVICE_IDENTITY_BUNDLE_DIR" -maxdepth 1 -type f -name '*.json' -print0)
+          if [ "${#BUNDLES[@]}" -ne 1 ]; then
+            echo "expected exactly one service identity bundle; found ${#BUNDLES[@]}" >&2
+            exit 1
+          fi
+          echo "SOLAND_SERVICE_IDENTITY_BUNDLE=${BUNDLES[0]}" >> "$GITHUB_ENV"
 
       - name: Seed multisig_pending fixture row
         run: |
@@ -169,7 +201,7 @@ jobs:
           TAR="${TARBALLS[0]}"
           echo "tarball=$TAR"
           tar -tzf "$TAR" | sort > _drill/tar-listing.txt
-          for expected in manifest.json soland-database.dump keystore.json multisig_pending.jsonl; do
+          for expected in manifest.json soland-database.dump service-identity-bundle.json keystore.json multisig_pending.jsonl; do
             grep -Fxq "$expected" _drill/tar-listing.txt \
               || { echo "tarball missing $expected" >&2; cat _drill/tar-listing.txt; exit 1; }
           done
@@ -204,34 +236,22 @@ jobs:
         working-directory: soland
         run: |
           set -euxo pipefail
-          export XDG_DATA_HOME="$GITHUB_WORKSPACE/_drill/keystore-xdg"
-          mkdir -p "$XDG_DATA_HOME"
-          KEY_ID="arkret:signer:soland-notary:${SOLAND_SERVICE_ID}"
-          SEED_B64="AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
           mkdir -p _drill
-          cat > _drill/seed-in.json <<EOF
-          {
-            "schema": "soland-rotate-drill.keystore-snapshot.v1",
-            "service_id": "${SOLAND_SERVICE_ID}",
-            "key_id": "${KEY_ID}",
-            "seed_b64": "${SEED_B64}"
-          }
-          EOF
+          ./target/debug/soland-rotate-drill \
+              --export-only \
+              --identity-bundle "$SOLAND_SERVICE_IDENTITY_BUNDLE" \
+              --output _drill/seed-in.json
           ./target/debug/soland-rotate-drill \
               --import-only \
-              --service-id "$SOLAND_SERVICE_ID" \
+              --identity-bundle "$SOLAND_SERVICE_IDENTITY_BUNDLE" \
               --input _drill/seed-in.json
           ./target/debug/soland-rotate-drill \
               --export-only \
-              --service-id "$SOLAND_SERVICE_ID" \
+              --identity-bundle "$SOLAND_SERVICE_IDENTITY_BUNDLE" \
               --output _drill/seed-out.json
-          ROUNDTRIP_B64="$(jq -r .seed_b64 _drill/seed-out.json)"
-          if [ "$ROUNDTRIP_B64" != "$SEED_B64" ]; then
-            echo "rotate-drill roundtrip mismatch:" >&2
-            echo "  expected=$SEED_B64" >&2
-            echo "  actual  =$ROUNDTRIP_B64" >&2
-            exit 1
-          fi
+          jq -S '{schema, service_id, key_id, seed_b64}' _drill/seed-in.json > _drill/seed-in.canonical.json
+          jq -S '{schema, service_id, key_id, seed_b64}' _drill/seed-out.json > _drill/seed-out.canonical.json
+          cmp _drill/seed-in.canonical.json _drill/seed-out.canonical.json
           echo "[rotate-drill] CI export/import roundtrip OK"
 
       - name: Capture postgres logs (always)

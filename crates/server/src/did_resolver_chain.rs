@@ -76,7 +76,15 @@ pub struct SolandDidResolver {
     persistence: Arc<dyn PersistenceStore>,
     fallback: CompositeDidResolver,
     allowed_methods: Vec<String>,
-    local_snapshot: RwLock<BTreeMap<Did, DidDocument>>,
+    local_snapshot: RwLock<BTreeMap<Did, CachedDidDocument>>,
+}
+
+const LOCAL_DID_SNAPSHOT_CAPACITY: usize = 4_096;
+
+#[derive(Clone)]
+struct CachedDidDocument {
+    seq: u64,
+    document: DidDocument,
 }
 
 impl SolandDidResolver {
@@ -101,7 +109,10 @@ impl SolandDidResolver {
         if !self.method_allowed(did.method()) {
             return None;
         }
-        self.local_snapshot.read().get(did).cloned()
+        self.local_snapshot
+            .read()
+            .get(did)
+            .map(|cached| cached.document.clone())
     }
 
     fn document_from_record(
@@ -109,15 +120,34 @@ impl SolandDidResolver {
         did: &Did,
         record: crate::state::WebvhDocumentRecord,
     ) -> Result<DidDocument, Error> {
+        let seq = record.seq;
         let document: DidDocument = serde_json::from_value(record.did_document)
             .map_err(|e| Error::Protocol(format!("local DID document decode failed: {e}")))?;
         if &document.id != did {
             return Err(Error::Protocol("local DID document id mismatch".to_owned()));
         }
         document.validate()?;
-        self.local_snapshot
-            .write()
-            .insert(document.id.clone(), document.clone());
+        let mut snapshot = self.local_snapshot.write();
+        if let Some(cached) = snapshot.get(did)
+            && cached.seq > seq
+        {
+            return Ok(cached.document.clone());
+        }
+        if !snapshot.contains_key(did) && snapshot.len() >= LOCAL_DID_SNAPSHOT_CAPACITY {
+            // This snapshot is only the synchronous no-I/O fast path. Durable
+            // persistence remains authoritative, so deterministic eviction is
+            // safe and prevents unbounded growth under attacker-chosen DIDs.
+            if let Some(evicted) = snapshot.keys().next().cloned() {
+                snapshot.remove(&evicted);
+            }
+        }
+        snapshot.insert(
+            document.id.clone(),
+            CachedDidDocument {
+                seq,
+                document: document.clone(),
+            },
+        );
         Ok(document)
     }
 
@@ -316,7 +346,6 @@ mod tests {
     fn base_config() -> AppConfig {
         AppConfig {
             public_base_url: "http://127.0.0.1:0".to_owned(),
-            service_id: "did:web:soland.test".to_owned(),
             object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-blobs")),
             did_resolver_allow_methods: vec![
                 "web".to_owned(),
@@ -487,6 +516,80 @@ mod tests {
         assert!(
             resolver.resolve_did(&did).is_ok(),
             "async resolve should populate the no-IO sync snapshot"
+        );
+    }
+
+    #[test]
+    fn resolver_snapshot_does_not_regress_to_an_older_did_sequence() {
+        let config = base_config();
+        let resolver = build_soland_did_resolver(&config, None);
+        let did = Did::new("did:web:cache.example".to_owned()).expect("valid DID");
+        let verification_method = format!("{did}#key-1");
+        let record = |seq: u64, key_byte: u8| {
+            let document = DidDocument {
+                id: did.clone(),
+                verification_methods: BTreeMap::from([(
+                    verification_method.clone(),
+                    arkret_sdk::ed25519_pubkey_to_did_key_multibase(&[key_byte; 32]),
+                )]),
+                also_known_as: Vec::new(),
+                updated_at: Some(chrono::Utc::now()),
+                raw_properties: BTreeMap::new(),
+            };
+            let now = chrono::Utc::now();
+            WebvhDocumentRecord {
+                did: did.as_str().to_owned(),
+                did_document: serde_json::to_value(document).expect("document JSON"),
+                key_log_head: None,
+                seq,
+                method_evidence: json!({"mode": "test"}),
+                fetched_at: now,
+                expires_at: now,
+                updated_at: now,
+            }
+        };
+
+        resolver
+            .cache_webvh_record(record(2, 2))
+            .expect("newer record caches");
+        resolver
+            .cache_webvh_record(record(1, 1))
+            .expect("stale cache fill returns the current projection");
+
+        let resolved = resolver.resolve_did(&did).expect("snapshot resolve");
+        assert_eq!(
+            resolved.verification_methods[&verification_method],
+            arkret_sdk::ed25519_pubkey_to_did_key_multibase(&[2u8; 32])
+        );
+    }
+
+    #[test]
+    fn resolver_snapshot_has_a_hard_capacity() {
+        let config = base_config();
+        let resolver = build_soland_did_resolver(&config, None);
+        let now = chrono::Utc::now();
+        let public_key = arkret_sdk::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]);
+        for index in 0..=LOCAL_DID_SNAPSHOT_CAPACITY {
+            let did = Did::new(format!("did:web:cache-{index}.example")).expect("valid DID");
+            let document =
+                DidDocument::new(did.clone(), format!("{did}#key-1"), public_key.clone());
+            resolver
+                .cache_webvh_record(WebvhDocumentRecord {
+                    did: did.to_string(),
+                    did_document: serde_json::to_value(document).expect("document JSON"),
+                    key_log_head: None,
+                    seq: 1,
+                    method_evidence: json!({"mode": "test"}),
+                    fetched_at: now,
+                    expires_at: now,
+                    updated_at: now,
+                })
+                .expect("record caches");
+        }
+
+        assert_eq!(
+            resolver.local_snapshot.read().len(),
+            LOCAL_DID_SNAPSHOT_CAPACITY
         );
     }
 

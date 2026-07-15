@@ -11,7 +11,7 @@ const CALL_ID: &str = "ak:call:01904100-0000-7000-8000-ca11ca11ca11";
 const FOCUS_ID: &str = "ak:focus:arkret-native:green";
 const ACTOR_ID: &str = "did:web:alice.example";
 const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-const ISSUER_KID: &str = "did:web:soland.local#media-2026-06";
+const ISSUER_KID: &str = "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#media-2026-06";
 const PARTICIPANT_IDENTITY: &str = "ak:rtc_participant:01904100-0000-7000-8000-aaaaaaaaaaaa";
 
 fn test_config() -> crate::config::AppConfig {
@@ -54,7 +54,11 @@ fn install_media_service_with_service_id(state: &AppState, service_id: &str, iss
 /// Install a current-epoch media_service cell anchoring `issuer_kid` under
 /// the soland self service_id (the arkret-native self-signed deployment).
 fn install_media_service(state: &AppState, issuer_kid: &str) {
-    install_media_service_with_service_id(state, "did:web:soland.local", issuer_kid);
+    install_media_service_with_service_id(
+        state,
+        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        issuer_kid,
+    );
 }
 
 /// Mint a self-signed binding through the shared issuer helper so the bytes
@@ -160,7 +164,9 @@ fn issuer_not_anchored_in_current_epoch_is_rejected_token_issuer_unauthorised() 
     let state = AppState::new(test_config(), Db { pool: None });
     // Epoch anchors a different service DID + issuer_kid than the binding
     // carries, so neither the focus issuer_kids set nor the service_id
-    // prefix admits `did:web:soland.local#media-2026-06`.
+    // prefix admits
+    // `did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#
+    // media-2026-06`.
     install_media_service_with_service_id(
         &state,
         "did:web:other.example",

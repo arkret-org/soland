@@ -126,7 +126,8 @@ mod tests {
 
     #[test]
     fn plaintext_visible_services_projection_is_data_class_aware() {
-        let service = "did:web:soland.local";
+        let service =
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let operation = op(
             arkret_sdk::events::kinds::REALM_CREATE,
             json!({

@@ -467,8 +467,8 @@ async fn deployment_info(
         .collect();
     json_ok(DeploymentInfoResponseBody {
         profile: deployment_profile(state, &guard),
-        server_id: state.config.service_id.clone(),
-        service_id: state.config.service_id.clone(),
+        server_id: state.service_id.clone(),
+        service_id: state.service_id.clone(),
         upstream_main: guard.upstream_main.clone(),
         trust_roots: guard.trust_roots.clone(),
         allow_external_via_enclave: guard.allow_external_via_enclave,

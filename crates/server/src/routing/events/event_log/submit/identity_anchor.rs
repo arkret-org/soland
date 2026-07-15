@@ -1228,7 +1228,7 @@ async fn build_reanchor_batch_receipt(
                 )
             },
         )?,
-        issuer: Did::new(state.config.service_id.clone()).map_err(|error| {
+        issuer: Did::new(state.service_id.clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -1367,7 +1367,7 @@ fn sign_event_batch_receipt(
             format!("Event Batch Receipt digest failed: {error}"),
         )
     })?;
-    let verification_method = format!("{}#notary-key", state.config.service_id);
+    let verification_method = format!("{}#notary-key", state.service_id);
     let binding = json!({
         "context": "ak.receipt-proof-v1",
         "payload_digest": receipt_digest.as_str(),

@@ -52,7 +52,7 @@ fn verify_federation_origin(origin: &str) -> bool {
 }
 
 fn federation_destination_matches(state: &AppState, destination: &str) -> bool {
-    destination == state.config.service_id
+    destination == state.service_id
 }
 
 // Router-facing endpoint handlers, re-exported at the original

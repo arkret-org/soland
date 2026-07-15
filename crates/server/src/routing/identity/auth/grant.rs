@@ -42,9 +42,9 @@ pub(crate) async fn validate_session_grant_binding(
                 "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
             )
         })?;
-    let audience = arkret_sdk::Did::new(state.config.service_id.clone()).map_err(|error| {
+    let audience = arkret_sdk::Did::new(state.service_id.clone()).map_err(|error| {
         AppError::internal(format!(
-            "configured principal service_id is not a DID: {error}"
+            "runtime principal service_id is not a DID: {error}"
         ))
     })?;
     let request = SessionGrantIntrospectRequestBody {
@@ -104,7 +104,7 @@ pub(crate) async fn validate_session_grant_binding(
     let grant = response.grant.ok_or_else(|| {
         AppError::capability_denied("session grant introspection omitted grant metadata")
     })?;
-    if grant.audience.as_str() != state.config.service_id {
+    if grant.audience.as_str() != state.service_id {
         return Err(AppError::capability_denied(
             "session grant audience does not match this principal server",
         ));

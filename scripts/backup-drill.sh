@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # soland production backup drill.
 #
-# Captures three artifacts into a single tarball with a manifest that
+# Captures four artifacts into a single tarball with a manifest that
 # pins per-artifact checksums:
 #   1. `pg_dump` of the soland database (custom `Fc` format).
-#   2. Snapshot of the keystore-persisted notary signing seed (when
+#   2. SDK service-identity bundle containing public recovery evidence and
+#      opaque KeyRefs (never secret material).
+#   3. Snapshot of the keystore-persisted notary signing seed (when
 #      `SOLAND_USE_KEYSTORE=true`). Implemented via `soland-rotate-drill
 #      --export-only` so we can use the same KeyStore trait the running
 #      server uses (no out-of-band keychain probing).
-#   3. The `multisig_pending` table's full state (rows + claim_seq +
+#   4. The `multisig_pending` table's full state (rows + claim_seq +
 #      partials), exported as JSONL, so the restore drill can walk
 #      every row and assert its aggregability post-restore.
 #
 # Honours the existing SOLAND_* env conventions:
 #   - `SOLAND_DATABASE_URL` or `DATABASE_URL`
-#   - `SOLAND_SERVICE_ID` — used to scope the keystore lookup
+#   - `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR` — SDK identity-bundle backend
 #   - `SOLAND_USE_KEYSTORE` — when "true", export the platform keystore seed
 #   - `SOLAND_BACKUP_DIR`  — where the output tarball is written
 #                             (defaults to ./backups/soland-<ts>.tar.gz)
@@ -29,7 +31,7 @@ WORKDIR="$(mktemp -d -t soland-backup-XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 DATABASE_URL="${SOLAND_DATABASE_URL:-${DATABASE_URL:-${PASION_DATABASE_URL:-}}}"
-SERVICE_ID="${SOLAND_SERVICE_ID:-did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service}"
+BUNDLE_DIR="${SOLAND_SERVICE_IDENTITY_BUNDLE_DIR:-}"
 USE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"
 BACKUP_DIR="${SOLAND_BACKUP_DIR:-./backups}"
 mkdir -p "$BACKUP_DIR"
@@ -37,6 +39,10 @@ OUTPUT="${BACKUP_DIR}/soland-${DRILL_TS}.tar.gz"
 
 if [ -z "$DATABASE_URL" ]; then
     echo "[backup-drill] FATAL: SOLAND_DATABASE_URL or DATABASE_URL is unset" >&2
+    exit 2
+fi
+if [ -z "$BUNDLE_DIR" ] || [ ! -d "$BUNDLE_DIR" ]; then
+    echo "[backup-drill] FATAL: SOLAND_SERVICE_IDENTITY_BUNDLE_DIR must name the initialized SDK bundle directory" >&2
     exit 2
 fi
 
@@ -47,35 +53,52 @@ for cmd in pg_dump psql sha256sum tar jq; do
     fi
 done
 
+mapfile -d '' BUNDLE_CANDIDATES < <(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.json' -print0)
+if [ "${#BUNDLE_CANDIDATES[@]}" -ne 1 ]; then
+    echo "[backup-drill] FATAL: expected exactly one SDK identity bundle in $BUNDLE_DIR; found ${#BUNDLE_CANDIDATES[@]}" >&2
+    exit 2
+fi
+BUNDLE_SOURCE="${BUNDLE_CANDIDATES[0]}"
+BUNDLE_BACKEND_FILE="$(basename "$BUNDLE_SOURCE")"
+BUNDLE_PATH="${WORKDIR}/service-identity-bundle.json"
+cp "$BUNDLE_SOURCE" "$BUNDLE_PATH"
+SERVICE_ID="$(jq -er '.identity.identity.service_id | select(startswith("did:webvh:"))' "$BUNDLE_PATH")" || {
+    echo "[backup-drill] FATAL: SDK identity bundle has no did:webvh service_id" >&2
+    exit 1
+}
+BUNDLE_SHA="$(sha256sum "$BUNDLE_PATH" | awk '{print $1}')"
+
 echo "[backup-drill] timestamp=$DRILL_TS service_id=$SERVICE_ID workdir=$WORKDIR"
+echo "[backup-drill] identity bundle=$BUNDLE_BACKEND_FILE sha256=$BUNDLE_SHA"
 
 # ── 1. pg_dump ───────────────────────────────────────────────────────────
 DUMP_PATH="${WORKDIR}/soland-database.dump"
-echo "[backup-drill] step 1/3: pg_dump custom-format"
+echo "[backup-drill] step 1/4: pg_dump custom-format"
 pg_dump --format=custom --no-owner --no-acl --file="$DUMP_PATH" "$DATABASE_URL"
 DUMP_SHA="$(sha256sum "$DUMP_PATH" | awk '{print $1}')"
 echo "[backup-drill]   sha256=$DUMP_SHA"
 
-# ── 2. keystore snapshot ─────────────────────────────────────────────────
+# ── 2. identity bundle ───────────────────────────────────────────────────
+echo "[backup-drill] step 2/4: SDK identity bundle captured"
+
+# ── 3. keystore snapshot ─────────────────────────────────────────────────
 KEYSTORE_PATH="${WORKDIR}/keystore.json"
 if [ "$USE_KEYSTORE" = "true" ]; then
-    echo "[backup-drill] step 2/3: keystore export via soland-rotate-drill --export-only"
+    echo "[backup-drill] step 3/4: keystore export via soland-rotate-drill --export-only"
     cargo run --quiet --bin soland-rotate-drill -- \
         --export-only \
-        --service-id "$SERVICE_ID" \
+        --identity-bundle "$BUNDLE_PATH" \
         --output "$KEYSTORE_PATH"
 else
-    echo "[backup-drill] step 2/3: keystore export skipped (SOLAND_USE_KEYSTORE != true)"
-    cat >"$KEYSTORE_PATH" <<EOF
-{ "skipped": true, "reason": "SOLAND_USE_KEYSTORE is not 'true'" }
-EOF
+    echo "[backup-drill] step 3/4: keystore export skipped (SOLAND_USE_KEYSTORE != true)"
+    printf '%s\n' '{ "skipped": true, "reason": "SOLAND_USE_KEYSTORE is not true" }' >"$KEYSTORE_PATH"
 fi
 KEYSTORE_SHA="$(sha256sum "$KEYSTORE_PATH" | awk '{print $1}')"
 echo "[backup-drill]   sha256=$KEYSTORE_SHA"
 
-# ── 3. multisig_pending state ────────────────────────────────────────────
+# ── 4. multisig_pending state ────────────────────────────────────────────
 MULTISIG_PATH="${WORKDIR}/multisig_pending.jsonl"
-echo "[backup-drill] step 3/3: multisig_pending JSONL export"
+echo "[backup-drill] step 4/4: multisig_pending JSONL export"
 psql --quiet --tuples-only --no-align "$DATABASE_URL" >"$MULTISIG_PATH" <<'SQL'
 SELECT json_build_object(
     'seal_id',            id,
@@ -109,8 +132,10 @@ MANIFEST_PATH="${WORKDIR}/manifest.json"
 jq -n \
     --arg ts "$DRILL_TS" \
     --arg did "$SERVICE_ID" \
+    --arg bundle_backend_file "$BUNDLE_BACKEND_FILE" \
     --arg use_ks "$USE_KEYSTORE" \
     --arg dump_sha "$DUMP_SHA" \
+    --arg bundle_sha "$BUNDLE_SHA" \
     --arg ks_sha "$KEYSTORE_SHA" \
     --arg mp_sha "$MULTISIG_SHA" \
     --argjson mp_rows "$MULTISIG_ROW_COUNT" \
@@ -119,9 +144,12 @@ jq -n \
         produced_by: "soland/scripts/backup-drill.sh",
         timestamp: $ts,
         service_id: $did,
+        identity_bundle_backend_file: $bundle_backend_file,
         use_keystore: $use_ks,
         artifacts: {
             "soland-database.dump":  { sha256: $dump_sha, kind: "pg_dump_custom" },
+            "service-identity-bundle.json": { sha256: $bundle_sha,
+                                               kind: "arkret_service_identity_bundle" },
             "keystore.json":         { sha256: $ks_sha, kind: "keystore_seed" },
             "multisig_pending.jsonl":{ sha256: $mp_sha, kind: "multisig_pending_jsonl",
                                        row_count: $mp_rows }
@@ -135,6 +163,7 @@ tar -czf "$OUTPUT" \
     -C "$WORKDIR" \
     manifest.json \
     soland-database.dump \
+    service-identity-bundle.json \
     keystore.json \
     multisig_pending.jsonl
 

@@ -29,12 +29,12 @@ pub(super) async fn federation_service_binding_current_for_destination(
     if state.settings().federation_replica_observer
         && !members
             .iter()
-            .any(|member| member.recipient_service_id == state.config.service_id)
+            .any(|member| member.recipient_service_id == state.service_id)
     {
         return FederationServiceBindingCheck::Current;
     }
     let result = federation_service_binding_check_from_members(
-        state.config.service_id.as_str(),
+        state.service_id.as_str(),
         now(),
         &binding.delivery_binding_frontier,
         members,

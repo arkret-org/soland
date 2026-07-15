@@ -54,7 +54,7 @@ pub(super) fn blob_upload_outcome(
     let content_digest = Hash::new(content_digest).map_err(|error| {
         AppError::internal(format!("content_digest construction failed: {error}"))
     })?;
-    let issuer_service_id = Did::new(state.config.service_id.clone())
+    let issuer_service_id = Did::new(state.service_id.clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let signing_payload = json!({
         "blob_ref": blob_ref.as_str(),
@@ -770,7 +770,7 @@ fn issue_presign_envelope(
 ) -> Result<IssuedBlobPresign, AppError> {
     let blob_ref = BlobRef::new(blob_ref.to_owned())
         .map_err(|error| AppError::internal(format!("blob_ref is invalid: {error}")))?;
-    let issuer_service_id = Did::new(state.config.service_id.clone())
+    let issuer_service_id = Did::new(state.service_id.clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let realm_id = realm_id
         .map(|value| {
@@ -848,7 +848,7 @@ fn validate_presign_query(
     if payload.scheme != BLOB_PRESIGN_SCHEME
         || payload.blob_ref.as_str() != blob_ref
         || payload.purpose != purpose
-        || payload.issuer_service_id.as_str() != state.config.service_id.as_str()
+        || payload.issuer_service_id.as_str() != state.service_id.as_str()
         || payload.nonce.len() < 16
     {
         return Err(());
@@ -890,7 +890,7 @@ fn validate_presign_query(
 }
 
 fn blob_presign_kid(state: &AppState) -> String {
-    format!("{}#{BLOB_PRESIGN_KID_FRAGMENT}", state.config.service_id)
+    format!("{}#{BLOB_PRESIGN_KID_FRAGMENT}", state.service_id)
 }
 
 fn presign_payload_matches_blob(blob: &BlobRecord, payload: &BlobPresignPayload) -> bool {

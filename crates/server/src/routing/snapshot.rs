@@ -68,15 +68,11 @@ pub(crate) async fn snapshot_manifest_for_realm(
     .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
     let created_at = now();
     let timeline_hlc = snapshot_timeline_hlc(state, &events, created_at)?;
-    let service_id = arkret_sdk::Did::new(state.config.service_id.clone())
+    let service_id = arkret_sdk::Did::new(state.service_id.clone())
         .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
-    let auth_state_digest = snapshot_auth_state_digest(
-        &state.config.service_id,
-        realm_id,
-        &frontier_event_ids,
-        created_at,
-    )?;
-    let verification_method = format!("{}#snapshot-key-1", state.config.service_id);
+    let auth_state_digest =
+        snapshot_auth_state_digest(&state.service_id, realm_id, &frontier_event_ids, created_at)?;
+    let verification_method = format!("{}#snapshot-key-1", state.service_id);
     let mut manifest = arkret_sdk::SnapshotManifest {
         id: snapshot_id,
         realm_id: realm_id_value,
@@ -160,7 +156,7 @@ async fn persist_snapshot_chunk_blobs(
             legal_hold: false,
             redacted: false,
             visibility: arkret_sdk::BlobVisibility::RealmBound,
-            uploaded_by: state.config.service_id.clone(),
+            uploaded_by: state.service_id.clone(),
             created_at: now(),
         };
         state
@@ -267,7 +263,7 @@ fn received_at_hlc(
     state: &AppState,
     at: chrono::DateTime<chrono::Utc>,
 ) -> Result<arkret_sdk::Hlc, crate::error::AppError> {
-    let node_hash = sha256_hex(state.config.service_id.as_bytes());
+    let node_hash = sha256_hex(state.service_id.as_bytes());
     let node = &node_hash[..8];
     arkret_sdk::Hlc::new(format!("{:012x}-0000-{node}", at.timestamp_millis()))
         .map_err(|error| crate::error::AppError::internal(error.to_string()))

@@ -152,7 +152,7 @@ pub(super) fn token_audience_matches(claim: &Value, session: Option<&SessionReco
 }
 
 pub(super) fn preview_token_signature_valid(state: &AppState, claim: &Value) -> bool {
-    if claim.get("iss").and_then(Value::as_str) != Some(state.config.service_id.as_str()) {
+    if claim.get("iss").and_then(Value::as_str) != Some(state.service_id.as_str()) {
         return false;
     }
     let Some(proof) = claim.get("proof").and_then(Value::as_object) else {
@@ -166,8 +166,8 @@ pub(super) fn preview_token_signature_valid(state: &AppState, claim: &Value) -> 
     let Some(verification_method) = proof.get("verification_method").and_then(Value::as_str) else {
         return false;
     };
-    if verification_method != state.config.service_id
-        && !verification_method.starts_with(&format!("{}#", state.config.service_id))
+    if verification_method != state.service_id
+        && !verification_method.starts_with(&format!("{}#", state.service_id))
     {
         return false;
     }

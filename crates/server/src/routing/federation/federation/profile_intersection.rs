@@ -306,7 +306,7 @@ impl SemanticAtoms {
 
 fn local_semantic_claims(state: &AppState) -> SemanticClaims {
     let mut description = wire::describe(
-        &state.config.service_id,
+        &state.service_id,
         &state.config.public_base_url,
         state.db.mode(),
         state.config.development_mode,

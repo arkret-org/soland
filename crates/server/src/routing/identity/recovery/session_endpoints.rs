@@ -695,7 +695,7 @@ pub(super) async fn verify_trusted_recovery_service_proof(
     }
     let service_id = required_proof_string(proof, "service_id")?;
     let audience = required_proof_string(proof, "audience")?;
-    if audience != state.config.service_id {
+    if audience != state.service_id {
         return Err(recovery_proof_authority_error(format!(
             "proof.audience `{audience}` does not match this service"
         )));

@@ -33,6 +33,7 @@ use super::webvh_validation::{
 };
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
 use crate::error::{AppError, ErrorCode};
+use crate::persistence::WebvhLogCommitOutcome;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
 use crate::wire::{IdentityLogListOutcome, IdentityReceiptListOutcome, IdentityResolveRequestBody};
@@ -48,14 +49,11 @@ mod webvh;
 pub(in crate::routing) use document::identity_document_record;
 #[cfg(test)]
 pub(in crate::routing) use document::validate_did_document_services;
-use document::{
-    did_document_from_operation, did_operation_from_body, ensure_did_document_id,
-    render_json_bytes, run_webvh_resolution_checks, string_field,
-};
+use document::{render_json_bytes, run_webvh_resolution_checks};
 // Endpoint handlers referenced by identity/mod.rs router().
 pub(super) use endpoints::{
     embedded_webvh_document, embedded_webvh_log, embedded_webvh_register, embedded_webvh_rotate,
     identity_describe, identity_did_document, identity_document, identity_log, identity_receipts,
     identity_resolve, identity_submit_did_operation,
 };
-use webvh::*;
+pub(in crate::routing::identity) use webvh::*;

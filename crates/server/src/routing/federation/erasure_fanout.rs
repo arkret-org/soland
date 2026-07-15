@@ -162,7 +162,7 @@ pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Oper
         // of the same receipt collapses onto the pre-existing
         // outbox row instead of double-pushing.
         let mut hasher = Sha256::new();
-        hasher.update(state.config.service_id.as_bytes());
+        hasher.update(state.service_id.as_bytes());
         hasher.update(b"|");
         hasher.update(peer.did.as_bytes());
         hasher.update(b"|");
@@ -245,7 +245,7 @@ fn erasure_push_payload(
     operation: &Operation,
     peer: &ErasurePeerTarget,
 ) -> Option<String> {
-    let origin = Did::new(state.config.service_id.clone()).ok()?;
+    let origin = Did::new(state.service_id.clone()).ok()?;
     let destination = Did::new(peer.did.clone()).ok()?;
     let realm_id = RealmId::new(operation.realm_id.to_string()).ok()?;
     let body = arkret_sdk::FederationPushOperationsRequestBody {
@@ -254,7 +254,7 @@ fn erasure_push_payload(
         realm_id,
         service_binding_ref: format!(
             "{}#federation-erasure-receipt:{}",
-            state.config.service_id,
+            state.service_id,
             operation.operation_id.as_str()
         ),
         operations: vec![operation.clone()],

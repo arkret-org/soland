@@ -285,7 +285,9 @@ async fn memory_session_store_expiry() {
         token_hash: "expired".to_owned(),
         actor: "did:web:test".to_owned(),
         device_id: "dev".to_owned(),
-        audience: "did:web:soland.local".to_owned(),
+        audience:
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+                .to_owned(),
         session_public_key: None,
         agent_session: None,
         expires_at: Utc::now() - chrono::Duration::hours(1),
@@ -296,7 +298,9 @@ async fn memory_session_store_expiry() {
         token_hash: "valid".to_owned(),
         actor: "did:web:test".to_owned(),
         device_id: "dev".to_owned(),
-        audience: "did:web:soland.local".to_owned(),
+        audience:
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+                .to_owned(),
         session_public_key: None,
         agent_session: None,
         expires_at: Utc::now() + chrono::Duration::hours(1),
@@ -400,7 +404,9 @@ async fn memory_federation_transaction_store_is_origin_scoped() {
     let record = FederationTransactionRecord {
         origin: "did:web:remote.example".to_owned(),
         txn_id: "txn1".to_owned(),
-        destination: "did:web:soland.local".to_owned(),
+        destination:
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+                .to_owned(),
         realm_id: Some("ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned()),
         content_digest: "sha256:first".to_owned(),
         origin_verification_method: Some("did:web:remote.example#federation-fanout-key".to_owned()),
@@ -483,7 +489,9 @@ fn sync_cursor_record(handle: &str, issued_at_ms: i64) -> SyncCursorRecord {
         handle: handle.to_owned(),
         principal_id: Some("did:web:alice.example".to_owned()),
         device_id: Some("ak:device:test-1".to_owned()),
-        service_id: "did:web:soland.local".to_owned(),
+        service_id:
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+                .to_owned(),
         filter_digest: Some("fd-test".to_owned()),
         purpose: "stream".to_owned(),
         positions: Some(serde_json::json!({
@@ -1297,7 +1305,7 @@ async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
         inviter: "did:web:alice.example".to_owned(),
         invitee: Some("did:web:bob.example".to_owned()),
         invite_delivery_target: Some(serde_json::json!({
-            "recipient_service_id": "did:web:soland.local",
+            "recipient_service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             "recipient_service_type": "principal_server"
         })),
         introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
@@ -1322,7 +1330,9 @@ async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
             .as_ref()
             .and_then(|target| target.get("recipient_service_id"))
             .and_then(Value::as_str),
-        Some("did:web:soland.local")
+        Some(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+        )
     );
     assert_eq!(
         fetched.introduction_evidence_digest.as_deref(),
@@ -1872,7 +1882,9 @@ fn idempotency_record(
     IdempotencyRecord {
         principal_id: principal.to_owned(),
         idempotency_key: key.to_owned(),
-        service_id: "did:web:soland.local".to_owned(),
+        service_id:
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+                .to_owned(),
         request_hash: request_hash.to_owned(),
         response_status: 200,
         response_body: serde_json::json!({"status": "accepted"}),
