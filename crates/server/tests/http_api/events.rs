@@ -460,33 +460,19 @@ async fn events_describe_and_single_event_submit_work() {
     )
     .await;
     let seeded_realm_id = seeded["realm_id"].as_str().unwrap();
-    let seal_view: Value = TestClient::get(format!(
+    let mut seal_view_response = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?realm_id={seeded_realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    .await;
     assert_eq!(
-        seal_view["frontier"]["realm_id"], seeded_realm_id,
-        "Realm frontier response: {seal_view}"
+        seal_view_response.status_code,
+        Some(StatusCode::NOT_FOUND),
+        "a projection-only Realm must not invent an accepted Seal"
     );
-    let seal_id = seal_view["frontier"]["seal_id"].as_str().unwrap();
-    assert!(seal_id.starts_with("ak:seal:sha256:"), "seal_id: {seal_id}");
-    assert!(
-        seal_view["frontier"]["control_event_set_root"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:")
-    );
-    assert!(
-        seal_view["frontier"]["state_root"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:")
-    );
+    let seal_view: Value = seal_view_response.take_json().await.unwrap();
+    assert_eq!(seal_view["error"]["code"], "not_found");
 
     // Inaccessible realm must read as not_found (no existence leak).
     let mut hidden = TestClient::get(
@@ -638,17 +624,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
 async fn canonical_control_event_materializes_verifiable_mls_governance_proof() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let seeded = seed_test_realm(
-        &state,
-        "did:web:alice.example",
-        "Canonical governance proof Realm",
-        None,
-        "listed",
-        &[],
-        &[],
-    )
-    .await;
-    let realm_id = seeded["realm_id"].as_str().unwrap().to_owned();
+    let realm_id = DEMO_REALM_ID.to_owned();
     let typed_realm = RealmId::new(realm_id.clone()).unwrap();
     let actor = Did::new("did:web:alice.example").unwrap();
     let mut event = arkret_sdk::Event::new(

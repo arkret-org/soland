@@ -224,11 +224,13 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         "https://soland.example/webvh/{local_id}/did.jsonl"
     );
 
+    let unauthorized_did_signing = SigningKey::from_bytes(&[39u8; 32]);
+    let unauthorized_update_signing = SigningKey::from_bytes(&[40u8; 32]);
     let unauthorized = TestClient::post("http://server/_soland/root/identity/webvh/register")
         .json(&serde_json::json!({
             "local_id": "mallory",
-            "did_public_key_multibase": "z6Mkmallory",
-            "update_public_key_multibase": "z6Mkmalloryupdate"
+            "did_public_key_multibase": test_ed25519_multibase_public(&unauthorized_did_signing),
+            "update_public_key_multibase": test_ed25519_multibase_public(&unauthorized_update_signing)
         }))
         .send(&app_from_state(state.clone()))
         .await;

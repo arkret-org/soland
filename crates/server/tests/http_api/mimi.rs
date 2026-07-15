@@ -100,6 +100,14 @@ fn mimi_opaque_payload(value: Value, digest_field: &str) -> Value {
     let bytes = arkret_sdk::canonical::canonical_json_bytes(&value).unwrap();
     let mut object = serde_json::Map::new();
     object.insert(
+        "content_type".to_owned(),
+        json!(if digest_field == "ciphertext_digest" {
+            "application/mimi-content"
+        } else {
+            "application/json"
+        }),
+    );
+    object.insert(
         digest_field.to_owned(),
         json!(arkret_sdk::canonical::sha256_digest(&bytes)),
     );
