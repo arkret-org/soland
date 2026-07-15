@@ -20,6 +20,9 @@ const ACTOR_SUBMIT_LOCK_SHARDS: usize = 1024;
 
 static ACTOR_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 
+mod identity_anchor;
+use identity_anchor::{batch_contains_identity_anchor, submit_identity_anchor_batch};
+
 fn actor_submit_lock(actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = ACTOR_SUBMIT_LOCKS.get_or_init(|| {
         (0..ACTOR_SUBMIT_LOCK_SHARDS)
@@ -92,6 +95,7 @@ pub(in crate::routing) struct SubmittedEventOutcome {
 pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) realm_id: String,
     pub(in crate::routing) actor_id: String,
+    pub(in crate::routing) identity_anchor_event_id: Option<String>,
 }
 
 const DELIVERY_BINDING_HANDOVER_GRACE_SECONDS: i64 = 86_400;
@@ -262,6 +266,9 @@ pub(super) async fn submit_event_batch_outcome(
             "events submit batch exceeds max batch size",
         ));
     }
+    if batch_contains_identity_anchor(&envelopes) {
+        return submit_identity_anchor_batch(state, session, envelopes).await;
+    }
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
@@ -286,8 +293,11 @@ pub(super) async fn submit_event_batch_outcome(
                     && kind.as_deref() == Some(arkret_sdk::events::kinds::REALM_CREATE)
                     && let (Some(realm_id), Some(actor_id)) = (realm_id, actor_id)
                 {
-                    realm_bootstrap_contexts
-                        .push(RealmBootstrapBatchContext { realm_id, actor_id });
+                    realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
+                        realm_id,
+                        actor_id,
+                        identity_anchor_event_id: None,
+                    });
                 }
             }
             Err(error) => {

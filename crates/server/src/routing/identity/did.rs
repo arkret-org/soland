@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 
 use super::webvh_validation::{
     WebvhLogEntry, derive_webvh_scid_from_skeleton, validate_log_chain,
-    validate_rotation_authorization_for_log, validate_witness_policy_for_log,
+    validate_rotation_authorization_for_log, validate_witness_policy_for_log, verify_log_subject,
     verify_scid_against_did, verify_webvh_log_proof, webvh_entry_hash_multibase,
 };
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};

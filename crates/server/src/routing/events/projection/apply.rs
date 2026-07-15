@@ -1042,6 +1042,20 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     // already-verified row, and treat a fresh authorize as verified.
     let verification_state = "verified".to_owned();
     let revoked_at = existing.as_ref().and_then(|device| device.revoked_at);
+    let operation_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
+    let authorize_event_id = ids::format_typed_uuid("event", &operation_uuid);
+    let authorized_generation_ref = match state.persistence.events().get(&authorize_event_id).await
+    {
+        Ok(Some(record)) => {
+            crate::routing::identity::device_generation::authorized_generation_for_event(
+                state, &record,
+            )
+            .await
+            .ok()
+            .flatten()
+        }
+        _ => None,
+    };
     let mut device_payload = existing
         .as_ref()
         .map(|device| device.payload.clone())
@@ -1076,15 +1090,21 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
             ),
         );
         map.insert("device_authorize_projected".to_owned(), Value::Bool(true));
-        let operation_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
         map.insert(
             "device_authorize_event_id".to_owned(),
-            Value::String(ids::format_typed_uuid("event", &operation_uuid)),
+            Value::String(authorize_event_id),
         );
+        if let Some(generation_ref) = authorized_generation_ref {
+            map.insert(
+                "authorized_generation_ref".to_owned(),
+                Value::String(generation_ref),
+            );
+        } else {
+            map.remove("authorized_generation_ref");
+        }
         // Tier-2 (device-lifecycle.md §5.2 / §8.2): persist the authoritative
         // `cross_signing_binding` verbatim so keys/query can echo it for
-        // client-side chain verification. Inception bootstrap devices carry a
-        // `bootstrap_binding` instead and no `cross_signing_binding`.
+        // client-side chain verification.
         match payload.get("cross_signing_binding") {
             Some(binding @ Value::Object(_)) => {
                 map.insert("cross_signing_binding".to_owned(), binding.clone());

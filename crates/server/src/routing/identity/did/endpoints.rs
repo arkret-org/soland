@@ -223,6 +223,7 @@ pub struct EmbeddedWebvhRegisterRequestBody {
     pub local_id: Option<String>,
     pub did_public_key_multibase: String,
     pub update_public_key_multibase: String,
+    pub next_update_public_key_multibase: String,
     #[serde(default)]
     pub did_key_id: Option<String>,
     #[serde(default)]
@@ -240,14 +241,6 @@ pub struct EmbeddedWebvhRegisterRequestBody {
     /// SCID + log proof verify; absent for callers that designate no authority.
     #[serde(default)]
     pub device_enrollment_authority_did: Option<String>,
-    /// Genesis-declared emergency recovery keys (multibase ed25519 public
-    /// keys). When present they are written into `parameters.recoveryKeys` so a
-    /// later emergency rotation (key-management.md §3.3) can be authorised by a
-    /// recovery key without a previous-controller signature. The registering
-    /// client MUST include the same values it signed over (they affect the SCID
-    /// and entry hash).
-    #[serde(default)]
-    pub recovery_keys: Vec<String>,
     /// Genesis-declared organization governance threshold (identity-did.md §8).
     /// `{ "threshold": { "required": N, "eligible_methods": [...] } }`. When
     /// present it is written into `parameters.governance` so every later
@@ -305,9 +298,31 @@ pub(crate) async fn embedded_webvh_register(
             "update_public_key_multibase must be a non-empty multibase value",
         ));
     }
-    if body.did_public_key_multibase == body.update_public_key_multibase {
+    if !valid_multibase_key(&body.next_update_public_key_multibase) {
         return Err(AppError::invalid_param(
-            "did_public_key_multibase and update_public_key_multibase must be separate keys",
+            "next_update_public_key_multibase must be a non-empty multibase value",
+        ));
+    }
+    for (role, key) in [
+        ("DID authentication", body.did_public_key_multibase.as_str()),
+        (
+            "active identity root",
+            body.update_public_key_multibase.as_str(),
+        ),
+        (
+            "next identity root",
+            body.next_update_public_key_multibase.as_str(),
+        ),
+    ] {
+        crate::routing::identity::webvh_validation::decode_ed25519_public_key(key)
+            .map_err(|error| AppError::invalid_param(format!("{role} key is invalid: {error}")))?;
+    }
+    if body.did_public_key_multibase == body.update_public_key_multibase
+        || body.did_public_key_multibase == body.next_update_public_key_multibase
+        || body.update_public_key_multibase == body.next_update_public_key_multibase
+    {
+        return Err(AppError::invalid_param(
+            "DID authentication key, active identity root, and next identity root must be distinct",
         ));
     }
     let version_time = match body.version_time.as_deref().map(str::trim) {
@@ -385,22 +400,15 @@ pub(crate) async fn embedded_webvh_register(
         "scid": WEBVH_SCID_PLACEHOLDER,
         "method": WEBVH_METHOD_VERSION,
         "updateKeys": [body.update_public_key_multibase.clone()],
+        "nextKeyHashes": [
+            crate::routing::identity::webvh_validation::sha256_multihash_base58btc(
+                body.next_update_public_key_multibase.as_bytes()
+            )
+        ],
     });
-    // Optional genesis-declared recovery keys + governance threshold. They are
-    // part of the signed entry, so the client MUST have signed over the same
-    // values — they flow through SCID derivation and the entry hash unchanged.
+    // Optional governance threshold is part of the signed entry and therefore
+    // flows through SCID derivation and the entry hash unchanged.
     if let Value::Object(map) = &mut parameters {
-        if !body.recovery_keys.is_empty() {
-            map.insert(
-                "recoveryKeys".to_owned(),
-                Value::Array(
-                    body.recovery_keys
-                        .iter()
-                        .map(|key| Value::String(key.clone()))
-                        .collect(),
-                ),
-            );
-        }
         if let Some(governance) = body.governance.clone() {
             map.insert("governance".to_owned(), governance);
         }

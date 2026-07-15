@@ -212,6 +212,7 @@ pub struct AppState {
     pub seal_store: Arc<dyn SealStore>,
     pub cell_store: Arc<dyn CellStore>,
     pub cell_registry: Arc<dyn CellRegistry>,
+    pub(crate) event_seal_committer: Arc<dyn super::state_resolution::EventSealCommitStore>,
     /// Live event notification bus for `ak.self.events.stream.subscribe`.
     /// Memory mode uses the local broadcast channel; PostgreSQL mode also
     /// publishes over LISTEN/NOTIFY so subscribers connected to another
@@ -623,6 +624,7 @@ impl AppState {
             seal_store: state_resolution_stores.seal_store,
             cell_store: state_resolution_stores.cell_store,
             cell_registry: state_resolution_stores.cell_registry,
+            event_seal_committer: state_resolution_stores.event_seal_committer,
             event_broadcast: EventBroadcast::new(
                 event_broadcast_pool,
                 event_broadcast_database_url,

@@ -68,11 +68,14 @@ pub use admission::{
 };
 
 mod endpoints;
-mod governance_proof;
+pub(crate) mod governance_proof;
 pub(in crate::routing::events) use endpoints::router;
 
 mod inception;
-use inception::{canonical_value_digest, event_ref_list, require_object_field};
+use inception::{
+    canonical_value_digest, event_ref_list, principal_control_genesis_shape, require_object_field,
+    resolve_event_root_anchor_method,
+};
 
 mod realm_index;
 pub(in crate::routing) use realm_index::realm_is_indexed;

@@ -164,11 +164,11 @@ pub(crate) async fn validate_event_envelope_with_context(
                 "actor_seq is required",
             )
         })?;
-    if actor_seq == 0 {
+    if actor_seq == 0 && !principal_control_genesis_shape(object, &actor_id) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "actor_seq must be greater than zero",
+            "actor_seq may be zero only for principal-control Realm genesis",
         ));
     }
     validate_event_time_fields(state, object)?;
@@ -250,6 +250,20 @@ pub(crate) async fn validate_event_envelope_with_context(
         && realm_bootstrap_contexts
             .iter()
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id);
+    let is_identity_anchor_authorize = kind == arkret_sdk::events::kinds::DEVICE_AUTHORIZE
+        && realm_bootstrap_contexts.iter().any(|context| {
+            context.realm_id == realm_id
+                && context.actor_id == actor_id
+                && context
+                    .identity_anchor_event_id
+                    .as_deref()
+                    .is_some_and(|anchor| {
+                        object
+                            .get("prev_refs")
+                            .and_then(Value::as_array)
+                            .is_some_and(|refs| refs.len() == 1 && refs[0].as_str() == Some(anchor))
+                    })
+        });
     // join-policy.md §7.1 — a not-yet-member applicant MUST be able to submit
     // their own `ak.member.state{membership=knock}` (and the profile-private
     // application sub-payload it carries). Gate / review enforcement happens at
@@ -263,6 +277,8 @@ pub(crate) async fn validate_event_envelope_with_context(
         && !is_applet_delegated
         && !managed_agent_delegation
         && !is_member_self_knock
+        && !is_realm_bootstrap_followup
+        && !is_identity_anchor_authorize
         && !realm_has_member(state, &realm_id, &session.actor).await
     {
         return Err(event_validation_error(
@@ -275,7 +291,10 @@ pub(crate) async fn validate_event_envelope_with_context(
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
     validate_data_event_capability_refs(state, &actor_id, &realm_id, &kind, object)?;
     validate_cba_effect_planes(object)?;
-    validate_control_move_seal_basis(object, is_realm_bootstrap_followup)?;
+    validate_control_move_seal_basis(
+        object,
+        is_realm_bootstrap_followup || is_identity_anchor_authorize,
+    )?;
     if kind == arkret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
             .await?;
@@ -394,6 +413,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     )
     .await?;
     validate_event_proofs(object, state, session, &actor_id, &canonical_digest).await?;
+    enforce_device_generation_fence(state, object, &actor_id, is_identity_anchor_authorize).await?;
     reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
     let device_id =
         event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
@@ -411,4 +431,104 @@ pub(crate) async fn validate_event_envelope_with_context(
         canonical_digest,
         canonical_bytes,
     })
+}
+
+async fn enforce_device_generation_fence(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    actor_id: &str,
+    is_identity_anchor_authorize: bool,
+) -> Result<(), EventValidationError> {
+    let root_anchor = object
+        .get("refs")
+        .and_then(Value::as_array)
+        .is_some_and(|refs| {
+            refs.iter().any(|reference| {
+                matches!(
+                    reference.get("role").and_then(Value::as_str),
+                    Some("did_inception" | "did_recovery_anchor")
+                )
+            })
+        });
+    if root_anchor || is_identity_anchor_authorize {
+        return Ok(());
+    }
+    let Some(generation) =
+        crate::routing::identity::device_generation::current_device_generation(state, actor_id)
+            .await
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("device generation state unavailable: {error}"),
+                )
+            })?
+    else {
+        return Ok(());
+    };
+    if generation.status
+        == crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "device_generation_fenced",
+            "ordinary Event admission is closed while the B-model generation slot is conflicted",
+        ));
+    }
+    if object.get("executed_by").is_some() {
+        return Ok(());
+    }
+    let verification_method = object
+        .get("proofs")
+        .and_then(Value::as_array)
+        .and_then(|proofs| proofs.first())
+        .and_then(|proof| proof.get("verification_method"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "device_generation_fenced",
+                "B-model Event proof does not identify an authorized device",
+            )
+        })?;
+    let device_id = actor_device_id_from_verification_method(verification_method, actor_id)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "device_generation_fenced",
+                "B-model Event proof is not rooted in an actor device",
+            )
+        })?;
+    let device = state
+        .persistence
+        .devices()
+        .get(actor_id, &device_id)
+        .await
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("device generation lookup failed: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "device_generation_fenced",
+                "B-model Event signer device is not authorized",
+            )
+        })?;
+    if device
+        .payload
+        .get("authorized_generation_ref")
+        .and_then(Value::as_str)
+        != Some(generation.current_ref.as_str())
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "device_generation_fenced",
+            "Event signer device belongs to an older B-model generation",
+        ));
+    }
+    Ok(())
 }

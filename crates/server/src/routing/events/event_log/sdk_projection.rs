@@ -453,13 +453,28 @@ pub(crate) async fn event_view_for_state(
     record: &CanonicalEventRecord,
     session: &SessionRecord,
 ) -> JsonResult<EventView> {
-    json_ok(EventView {
-        event: sdk_event_for_state(state, record)?,
-        visibility: Some(event_visibility_metadata(state, record)),
-        receipts: crate::routing::events::read_receipts::visible_read_receipts_for_event(
+    let mut receipts = state
+        .persistence
+        .events()
+        .batch_receipts_for_event(&record.event_id)
+        .await
+        .map_err(|error| AppError::internal(format!("Event Batch Receipt lookup failed: {error}")))?
+        .into_iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            AppError::internal(format!("Event Batch Receipt encode failed: {error}"))
+        })?;
+    receipts.extend(
+        crate::routing::events::read_receipts::visible_read_receipts_for_event(
             state, record, session,
         )
         .await,
+    );
+    json_ok(EventView {
+        event: sdk_event_for_state(state, record)?,
+        visibility: Some(event_visibility_metadata(state, record)),
+        receipts,
     })
 }
 

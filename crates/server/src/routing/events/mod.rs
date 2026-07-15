@@ -2,7 +2,7 @@ use salvo::prelude::*;
 
 use crate::state::SessionRecord;
 
-pub(super) mod event_log;
+pub(crate) mod event_log;
 pub(super) mod frontier;
 pub(super) mod peer;
 // Strand + projection helpers are `pub(crate)` so the MIMI interop

@@ -7,8 +7,8 @@ use arkret_sdk::state::compute_state_root;
 use arkret_sdk::{
     CellId, CellRef, Event, Hash, MlsGovernanceBindingPayload, MlsGovernanceControlStateLeaf,
     MlsGovernanceControlStateValue, MlsGovernanceProofBundle, MlsGovernanceProofRequest, MoveId,
-    derive_mls_capability_root, derive_mls_discussion_metadata_digest, derive_mls_policy_root,
-    is_mls_membership_frontier_component,
+    SealId, derive_mls_capability_root, derive_mls_discussion_metadata_digest,
+    derive_mls_policy_root, is_mls_membership_frontier_component,
 };
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -86,25 +86,182 @@ async fn materialize_governance_proof(
                 format!("canonical Event store unavailable: {error}"),
             )
         })?;
+    let realm_records = records
+        .into_iter()
+        .filter(|record| record.realm_id.as_deref() == Some(request.realm_id.as_str()))
+        .collect::<Vec<_>>();
+    let generation_fence = first_generation_event_seal_requirement(state, &realm_records).await?;
+    let principal_control_actor = realm_records
+        .iter()
+        .find(|record| {
+            record.kind == arkret_sdk::events::kinds::REALM_CREATE
+                && record
+                    .envelope
+                    .pointer("/payload/object/fields/purpose")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("principal_control")
+        })
+        .map(|record| record.actor_id.clone());
+    let active_device_generation = if let Some(principal_id) = &principal_control_actor {
+        crate::routing::identity::device_generation::current_device_generation(state, principal_id)
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("device generation state unavailable: {error}"),
+                )
+            })?
+    } else {
+        None
+    };
+    let device_generation_seal_required = active_device_generation.is_some();
+    let generation_devices = if let Some(principal_id) = &principal_control_actor
+        && active_device_generation.is_some()
+    {
+        state
+            .persistence
+            .devices()
+            .list_for_actor_including_revoked(principal_id)
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("device generation inventory unavailable: {error}"),
+                )
+            })?
+    } else {
+        Vec::new()
+    };
+    let preserved_generation_coverage = if let Some(requirement) = &generation_fence
+        && !requirement.accepted_frontier_refs.is_empty()
+    {
+        arkret_sdk::leaf_union_proof(
+            &requirement.accepted_frontier_refs,
+            state.seal_store.as_ref(),
+        )
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("accepted generation Seal coverage unavailable: {error}"),
+            )
+        })?
+        .into_iter()
+        .flat_map(|proof| proof.covered_event_digests)
+        .collect::<BTreeSet<_>>()
+    } else {
+        BTreeSet::new()
+    };
+    let mut quarantined_digests = BTreeSet::new();
+    for actor in realm_records
+        .iter()
+        .filter(|record| record.kind == "ak.device.reanchor")
+        .map(|record| record.actor_id.as_str())
+        .collect::<BTreeSet<_>>()
+    {
+        quarantined_digests.extend(
+            crate::routing::identity::device_generation::quarantined_generation_event_digests(
+                state, actor,
+            )
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("device generation quarantine state unavailable: {error}"),
+                )
+            })?,
+        );
+    }
     let mut events = Vec::new();
     let mut ops_by_cell: BTreeMap<CellRef, Vec<SealedOp>> = BTreeMap::new();
     let mut event_ops = Vec::new();
     let mut covered = BTreeSet::new();
-
-    for record in records
-        .into_iter()
-        .filter(|record| record.realm_id.as_deref() == Some(request.realm_id.as_str()))
-    {
-        let mut event = serde_json::from_value::<Event>(record.envelope).map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
-                format!(
-                    "stored Event {} is not a canonical envelope: {error}",
-                    record.event_id
-                ),
+    let mut identity_anchor_event_ids = realm_records
+        .iter()
+        .filter(|record| {
+            record.kind == "ak.device.reanchor"
+                && !quarantined_digests.contains(&record.canonical_digest)
+        })
+        .flat_map(|record| {
+            std::iter::once(record.event_id.clone()).chain(
+                record
+                    .envelope
+                    .pointer("/payload/replacement_authorize_event_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
             )
-        })?;
-        if event.effects.is_empty() || event.seal_ref.is_some() {
+        })
+        .collect::<BTreeSet<_>>();
+    for bootstrap in realm_records.iter().filter(|record| {
+        record.kind == arkret_sdk::events::kinds::REALM_CREATE
+            && record
+                .envelope
+                .pointer("/payload/object/fields/purpose")
+                .and_then(serde_json::Value::as_str)
+                == Some("principal_control")
+    }) {
+        identity_anchor_event_ids.insert(bootstrap.event_id.clone());
+        identity_anchor_event_ids.extend(
+            realm_records
+                .iter()
+                .filter(|record| {
+                    record.kind == arkret_sdk::events::kinds::DEVICE_AUTHORIZE
+                        && record
+                            .envelope
+                            .get("prev_refs")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|refs| {
+                                refs.len() == 1
+                                    && refs[0].as_str() == Some(bootstrap.event_id.as_str())
+                            })
+                })
+                .map(|record| record.event_id.clone()),
+        );
+    }
+
+    for record in &realm_records {
+        if quarantined_digests.contains(&record.canonical_digest) {
+            continue;
+        }
+        if let (Some(principal_id), Some(generation)) =
+            (&principal_control_actor, &active_device_generation)
+            && record.actor_id == principal_id.as_str()
+            && !identity_anchor_event_ids.contains(&record.event_id)
+            && record.envelope.get("executed_by").is_none()
+            && !preserved_generation_coverage
+                .iter()
+                .any(|digest| digest.as_str() == record.canonical_digest)
+        {
+            let signer_device_id = event_signer_device_id(record);
+            let current_generation_signer = signer_device_id.as_ref().is_some_and(|device_id| {
+                generation_devices.iter().any(|device| {
+                    device.device_id == device_id.as_str()
+                        && device.revoked_at.is_none()
+                        && device.verification_state == "verified"
+                        && device
+                            .payload
+                            .get("authorized_generation_ref")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(generation.current_ref.as_str())
+                })
+            });
+            if !current_generation_signer {
+                continue;
+            }
+        }
+        let mut event =
+            serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+                AppError::new(
+                    ErrorCode::StateMismatch,
+                    format!(
+                        "stored Event {} is not a canonical envelope: {error}",
+                        record.event_id
+                    ),
+                )
+            })?;
+        if (event.effects.is_empty()
+            && !identity_anchor_event_ids.contains(record.event_id.as_str()))
+            || event.seal_ref.is_some()
+        {
             continue;
         }
         if event.effective_scope.is_none() {
@@ -148,6 +305,11 @@ async fn materialize_governance_proof(
         }
         events.push(event);
     }
+    if let Some(requirement) = &generation_fence {
+        for digest in &requirement.required_delta {
+            covered.insert(digest.clone());
+        }
+    }
     if covered.is_empty() {
         return Err(AppError::new(
             ErrorCode::FrontierUnavailable,
@@ -189,6 +351,8 @@ async fn materialize_governance_proof(
         &covered_event_digests,
         &state_root,
         &event_ops,
+        device_generation_seal_required,
+        generation_fence.as_ref(),
     )
     .map_err(|error| {
         AppError::new(
@@ -292,6 +456,206 @@ async fn materialize_governance_proof(
     })
 }
 
+fn event_signer_device_id(record: &CanonicalEventRecord) -> Option<String> {
+    let verification_method = record
+        .envelope
+        .get("proofs")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|proofs| proofs.first())
+        .and_then(|proof| proof.get("verification_method"))
+        .and_then(serde_json::Value::as_str)?;
+    verification_method
+        .strip_prefix(record.actor_id.as_str())
+        .and_then(|suffix| suffix.strip_prefix('#'))
+        .map(str::trim)
+        .filter(|fragment| !fragment.is_empty())
+        .map(|fragment| {
+            if fragment.starts_with("ak:device:") {
+                fragment.to_owned()
+            } else {
+                format!("ak:device:{fragment}")
+            }
+        })
+}
+
+pub(crate) async fn first_generation_event_seal_requirement(
+    state: &AppState,
+    records: &[CanonicalEventRecord],
+) -> Result<Option<crate::notary::FirstGenerationEventSealRequirement>, AppError> {
+    let actors = records
+        .iter()
+        .filter(|record| record.kind == "ak.device.reanchor")
+        .map(|record| record.actor_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut requirement = None;
+    for actor in actors {
+        let generation =
+            crate::routing::identity::device_generation::current_device_generation(state, actor)
+                .await
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::FrontierUnavailable,
+                        format!("device generation state unavailable: {error}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::StateMismatch,
+                        "device re-anchor history has no B-model generation state",
+                    )
+                })?;
+        if generation.status
+            == crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted
+        {
+            return Err(AppError::new(
+                ErrorCode::StateMismatch,
+                "device_reanchor_conflict: generation Seal materialization is quarantined",
+            ));
+        }
+        let candidates = records
+            .iter()
+            .filter(|record| {
+                record.actor_id == actor
+                    && record.kind == "ak.device.reanchor"
+                    && record
+                        .envelope
+                        .pointer("/payload/new_device_generation")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(generation.current_ref.as_str())
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            continue;
+        }
+        if candidates.len() != 1 || requirement.is_some() {
+            return Err(AppError::new(
+                ErrorCode::StateMismatch,
+                "canonical Realm history has ambiguous active device re-anchor units",
+            ));
+        }
+        let reanchor = candidates[0];
+        let payload = serde_json::from_value::<arkret_sdk::DeviceReanchorPayload>(
+            reanchor
+                .envelope
+                .get("payload")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!("stored device re-anchor payload is invalid: {error}"),
+            )
+        })?;
+        let authorize = records
+            .iter()
+            .find(|record| {
+                record.event_id == payload.replacement_authorize_event_id.as_str()
+                    && record.kind == arkret_sdk::events::kinds::DEVICE_AUTHORIZE
+                    && record.canonical_digest == payload.replacement_authorize_digest.as_str()
+                    && record
+                        .envelope
+                        .get("prev_refs")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|refs| {
+                            refs.len() == 1 && refs[0].as_str() == Some(reanchor.event_id.as_str())
+                        })
+            })
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::StateMismatch,
+                    "active device re-anchor replacement authorization is missing",
+                )
+            })?;
+        let authorize_payload = serde_json::from_value::<arkret_sdk::DeviceAuthorizePayload>(
+            authorize
+                .envelope
+                .get("payload")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!("stored replacement device authorization payload is invalid: {error}"),
+            )
+        })?;
+        if authorize_payload.principal_id.as_str() != actor {
+            return Err(AppError::new(
+                ErrorCode::StateMismatch,
+                "replacement device authorization principal differs from the re-anchor actor",
+            ));
+        }
+        let predecessor_refs = payload
+            .pre_fence_basis
+            .clone()
+            .map(|basis| basis.leaves)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|leaf| SealId::new(leaf.to_string()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::StateMismatch,
+                    format!("stored pre-fence Seal leaf is invalid: {error}"),
+                )
+            })?;
+        let realm_id = RealmId::new(reanchor.realm_id.clone().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                "stored re-anchor is missing its principal-control Realm",
+            )
+        })?)
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!("stored re-anchor Realm id is invalid: {error}"),
+            )
+        })?;
+        let accepted_frontier_refs =
+            crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
+                state, actor, &realm_id,
+            )
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("accepted generation Seal frontier unavailable: {error}"),
+                )
+            })?;
+        let reanchor_digest = Hash::new(reanchor.canonical_digest.clone()).map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!("stored re-anchor digest is invalid: {error}"),
+            )
+        })?;
+        let required_delta = [
+            reanchor_digest.as_str(),
+            authorize.canonical_digest.as_str(),
+        ]
+        .into_iter()
+        .map(|digest| MoveId::new(digest.to_owned()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!("stored re-anchor unit digest is invalid: {error}"),
+            )
+        })?;
+        requirement = Some(crate::notary::FirstGenerationEventSealRequirement {
+            payload,
+            reanchor_digest,
+            predecessor_refs,
+            accepted_frontier_refs,
+            required_delta,
+            principal_id: actor.to_owned(),
+            replacement_device_id: authorize_payload.device_id.as_str().to_owned(),
+            replacement_device_public_key: authorize_payload.device_public_key.to_string(),
+        });
+    }
+    Ok(requirement)
+}
+
 /// Expand the reducer-defined Realm genesis writes into the control-state
 /// operations covered by the create Event digest.
 ///
@@ -301,7 +665,7 @@ async fn materialize_governance_proof(
 /// required to duplicate them in `effects[]`. The proof materializer must
 /// therefore reconstruct the same three cells instead of treating the literal
 /// producer effect list as the complete reducer output.
-fn canonical_event_ops(
+pub(crate) fn canonical_event_ops(
     event: &Event,
     move_id: &MoveId,
 ) -> Result<Vec<(CellRef, SealedOp)>, AppError> {

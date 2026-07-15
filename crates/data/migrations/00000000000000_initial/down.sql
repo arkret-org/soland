@@ -23,6 +23,7 @@ DROP TABLE IF EXISTS read_receipt_relay CASCADE;
 DROP TABLE IF EXISTS read_receipt_relay_position CASCADE;
 DROP TABLE IF EXISTS read_receipt_relay_watermark CASCADE;
 DROP TABLE IF EXISTS canonical_events CASCADE;
+DROP TABLE IF EXISTS event_batch_receipts CASCADE;
 DROP TABLE IF EXISTS state_moves CASCADE;
 DROP TABLE IF EXISTS state_seals CASCADE;
 DROP TABLE IF EXISTS state_cell_ops CASCADE;

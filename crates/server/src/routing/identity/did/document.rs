@@ -45,6 +45,7 @@ pub(super) async fn run_webvh_resolution_checks(
     validate_log_chain(&log)?;
     let genesis = &log[0];
     verify_scid_against_did(did, genesis)?;
+    verify_log_subject(did, &log)?;
     validate_witness_policy_for_log(&log, now().timestamp())?;
     // Rotation control authorisation (identity-did.md §7 controller proof,
     // §8.1–§8.2 governance quorum, key-management.md §3.3 recovery key). Kept

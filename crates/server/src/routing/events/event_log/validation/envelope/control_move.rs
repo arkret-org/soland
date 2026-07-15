@@ -21,6 +21,19 @@ pub(super) fn validate_control_move_seal_basis(
         }
         return Ok(());
     }
+    if object.get("kind").and_then(Value::as_str) == Some("ak.device.reanchor") {
+        if object.contains_key("seal_ref")
+            || object.contains_key("auth_context")
+            || object.contains_key("seal_basis")
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "schema_violation",
+                "ak.device.reanchor must use payload.pre_fence_basis and must not carry Event seal fields",
+            ));
+        }
+        return Ok(());
+    }
     if !has_effects {
         return Ok(());
     }

@@ -21,11 +21,13 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{
-    DeviceId, Did, PolicyId, ProofSummary, ReceiptId, RecoveryPolicy, RecoveryPolicyActiveOutcome,
-    RecoveryPolicyPublishOutcome, RecoveryPolicyRef, RecoveryPolicySummary, RecoveryReceiptOutcome,
-    RecoverySessionCompleteOutcome, RecoverySessionCompleteRequestBody,
-    RecoverySessionCreateRequestBody, RecoverySessionId, RecoverySessionProofSubmitOutcome,
-    RecoverySessionProofSubmitRequestBody, RecoverySessionState, SessionState, TypedTrustDomainId,
+    DeviceGenerationStatus, DeviceId, Did, EventBatchReceiptScope, Hash, NonEmptyString, PolicyId,
+    ProofSummary, RealmId, ReceiptId, RecoveryIdentityModel, RecoveryPolicy,
+    RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyRef,
+    RecoveryPolicySummary, RecoveryReceiptOutcome, RecoverySessionCompleteOutcome,
+    RecoverySessionCompleteRequestBody, RecoverySessionCreateRequestBody, RecoverySessionId,
+    RecoverySessionProofSubmitOutcome, RecoverySessionProofSubmitRequestBody, RecoverySessionState,
+    SessionState, TypedTrustDomainId,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};

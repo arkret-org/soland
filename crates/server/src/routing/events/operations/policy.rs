@@ -50,6 +50,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("disappearing_")
         || message.starts_with("direct_conversation_")
         || message.starts_with("cross_signing_reset_")
+        || message == "cross_signing_model_mismatch"
         || message == arkret_sdk::error::REASON_REACTION_SCOPE_MISMATCH
     {
         (

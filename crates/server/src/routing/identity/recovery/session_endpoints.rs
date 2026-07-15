@@ -50,14 +50,38 @@ pub(super) fn recovery_session_summary(record: &RecoverySessionRecord) -> Value 
         "trust_domain": record.trust_domain,
         "policy_id": record.policy_id,
         "policy_version": record.policy_version,
-        "identity_model": "cross_signing",
-        "ssk_generation": record.ssk_generation,
+        "identity_model": record.identity_model,
         "challenge": record.challenge,
         "state": record.state,
         "created_at": record.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "updated_at": record.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
     });
+    match record.identity_model {
+        RecoveryIdentityModel::CrossSigning => {
+            out["ssk_generation"] = record
+                .ssk_generation
+                .map_or(Value::Null, |value| json!(value));
+        }
+        RecoveryIdentityModel::EnrollmentAuthority => {
+            out["current_device_generation_ref"] = record
+                .current_device_generation_ref
+                .as_ref()
+                .map_or(Value::Null, |value| json!(value));
+            out["device_generation_status"] = record
+                .device_generation_status
+                .as_ref()
+                .map_or(Value::Null, |value| json!(value));
+            out["registry_head"] = record
+                .registry_head
+                .as_ref()
+                .map_or(Value::Null, |value| json!(value));
+            out["accepted_seal_frontier"] = record
+                .accepted_seal_frontier
+                .as_ref()
+                .map_or(Value::Null, |value| json!(value));
+        }
+    }
     // recovery-session.schema.json: verified/completed sessions MUST carry a
     // proof_summary; rejected sessions MUST carry a rejection_reason_code.
     if matches!(record.state.as_str(), "verified" | "completed")
@@ -139,6 +163,18 @@ pub(super) fn recovery_session_state_from_record(
 ) -> Result<SessionState, AppError> {
     serde_json::from_value(Value::String(record.state.clone()))
         .map_err(|error| stored_recovery_type_error("session state enum", error))
+}
+
+fn recovery_model_generation_ref(record: &RecoverySessionRecord) -> Value {
+    match record.identity_model {
+        RecoveryIdentityModel::CrossSigning => record
+            .ssk_generation
+            .map_or(Value::Null, |generation| json!(generation)),
+        RecoveryIdentityModel::EnrollmentAuthority => record
+            .current_device_generation_ref
+            .as_ref()
+            .map_or(Value::Null, |generation| json!(generation)),
+    }
 }
 
 /// Load a session and enforce principal isolation: only the authenticated
@@ -263,18 +299,98 @@ pub(super) async fn recovery_session_create(
         .with_wire_code("recovery_policy_mismatch"));
     }
 
-    // Snapshot the server-authoritative accepted generation only after the
-    // recovery policy has been validated. The client no longer supplies this
-    // value, which prevents choosing a stale or invented recovery basis.
-    let ssk_generation =
-        crate::routing::identity::cross_signing::resolve_current_cross_signing_publish(
+    let device_generation =
+        crate::routing::identity::device_generation::current_device_generation(state, &principal)
+            .await
+            .map_err(recovery_store_error)?;
+    let (
+        identity_model,
+        ssk_generation,
+        current_device_generation_ref,
+        device_generation_status,
+        registry_head,
+        accepted_seal_frontier,
+    ) = if let Some(generation) = device_generation {
+        let mut entries = state
+            .persistence
+            .webvh()
+            .list_log_events(&principal)
+            .await
+            .map_err(recovery_store_error)?;
+        entries.sort_by_key(|entry| entry.seq);
+        let registry_head = entries
+            .last()
+            .map(|entry| entry.event_digest.clone())
+            .ok_or_else(|| {
+                AppError::conflict("B-model recovery requires an accepted DID registry head")
+                    .with_wire_code("device_reanchor_entry_not_head")
+            })?;
+        let realm_id = RealmId::new(principal_control_realm_for_did(&principal))
+            .map_err(|error| AppError::internal(format!("principal-control Realm id: {error}")))?;
+        let leaves =
+            crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
+                state, &principal, &realm_id,
+            )
+            .await
+            .map_err(recovery_store_error)?;
+        let accepted_seal_frontier = if leaves.is_empty() {
+            None
+        } else {
+            let view = arkret_sdk::effective_seal_view(
+                &leaves,
+                &realm_id,
+                state.seal_store.as_ref(),
+                state.cell_store.as_ref(),
+                state.cell_registry.as_ref(),
+            )
+            .map_err(|error| {
+                AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
+                    .with_wire_code("device_reanchor_frontier_mismatch")
+            })?;
+            Some(arkret_sdk::SealBasis {
+                leaves,
+                control_event_set_root: view.control_event_set_root,
+                state_root: view.state_root,
+            })
+        };
+        (
+            RecoveryIdentityModel::EnrollmentAuthority,
+            None,
+            Some(
+                NonEmptyString::new(generation.current_ref).map_err(|error| {
+                    AppError::internal(format!("invalid accepted device generation ref: {error}"))
+                })?,
+            ),
+            Some(match generation.status {
+                crate::routing::identity::device_generation::DeviceGenerationStatus::Active => {
+                    DeviceGenerationStatus::Active
+                }
+                crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted => {
+                    DeviceGenerationStatus::Conflicted
+                }
+            }),
+            Some(Hash::new(registry_head).map_err(|error| {
+                AppError::internal(format!("invalid accepted DID registry head: {error}"))
+            })?),
+            accepted_seal_frontier,
+        )
+    } else {
+        let generation = crate::routing::identity::cross_signing::current_accepted_ssk_generation(
             state, &principal,
         )
-        .and_then(|publish| u32::try_from(publish.generation.get()).ok())
         .ok_or_else(|| {
-            AppError::conflict("no accepted cross-signing generation for recovery")
-                .with_wire_code("recovery_cross_signing_generation_missing")
+            AppError::conflict("A-model recovery requires an accepted cross-signing generation")
+                .with_wire_code("cross_signing_state_missing")
         })?;
+        (
+            RecoveryIdentityModel::CrossSigning,
+            Some(generation),
+            None,
+            None,
+            None,
+            None,
+        )
+    };
 
     let now = chrono::Utc::now();
     let record = RecoverySessionRecord {
@@ -284,7 +400,12 @@ pub(super) async fn recovery_session_create(
         trust_domain,
         policy_id: active.policy_id.clone(),
         policy_version: active.version,
+        identity_model,
         ssk_generation,
+        current_device_generation_ref,
+        device_generation_status,
+        registry_head,
+        accepted_seal_frontier,
         policy_payload: active.raw_payload.clone(),
         challenge: generate_recovery_challenge(),
         state: "pending".to_owned(),
@@ -943,7 +1064,8 @@ pub(super) fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &s
         "policy_id": record.policy_id,
         "policy_version": record.policy_version,
         "recovery_session_id": record.recovery_session_id,
-        "ssk_generation": record.ssk_generation,
+        "identity_model": record.identity_model,
+        "model_generation_ref": recovery_model_generation_ref(record),
         "challenge": record.challenge,
         // created_at is the SESSION creation/signing time (not proof time), per
         // recovery-session.schema.json $defs/principal_signing_transcript.
@@ -966,7 +1088,8 @@ pub(super) fn generic_recovery_proof_transcript(
         "policy_id": record.policy_id,
         "policy_version": record.policy_version,
         "recovery_session_id": record.recovery_session_id,
-        "ssk_generation": record.ssk_generation,
+        "identity_model": record.identity_model,
+        "model_generation_ref": recovery_model_generation_ref(record),
         "challenge": record.challenge,
         "created_at": record.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
@@ -994,20 +1117,16 @@ pub(super) async fn recovery_session_complete(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session_id = recovery_session_id.into_inner();
     let complete_request = body.into_inner();
-    let authorization_event_id_typed = complete_request.authorization_event_id.clone();
+    complete_request
+        .validate()
+        .map_err(|error| AppError::invalid_param(format!("invalid completion request: {error}")))?;
     let identity_model = complete_request
         .identity_model()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    if identity_model != arkret_sdk::RecoveryIdentityModel::CrossSigning {
-        return Err(AppError::unsupported_feature(
-            "enrollment-authority recovery completion is not implemented",
-        )
-        .with_wire_code("recovery_identity_model_unsupported"));
-    }
-    let device_list_update_event_id_typed = complete_request
-        .device_list_update_event_id
-        .clone()
-        .ok_or_else(|| AppError::invalid_param("device_list_update_event_id is required"))?;
+        .map_err(|error| AppError::invalid_param(format!("invalid completion model: {error}")))?;
+    let authorization_event_id_typed = complete_request.authorization_event_id.clone();
+    let device_list_update_event_id_typed = complete_request.device_list_update_event_id.clone();
+    let reanchor_event_id_typed = complete_request.reanchor_event_id.clone();
+    let reanchor_batch_receipt_id_typed = complete_request.reanchor_batch_receipt_id.clone();
     let record = load_owned_recovery_session(&aa, state, req, &session_id).await?;
     let record = expire_if_elapsed(state, record).await?;
 
@@ -1024,18 +1143,30 @@ pub(super) async fn recovery_session_complete(
         ))
         .with_wire_code("failed_precondition"));
     }
+    if identity_model != record.identity_model {
+        return Err(AppError::conflict(
+            "completion artifact set does not match the recovery session identity model",
+        )
+        .with_wire_code("failed_precondition"));
+    }
 
-    // C-P4 / Phase 3 (durable model) — the recovering client has already
-    // submitted, via POST /events on the principal control stream, both a
-    // `ak.device.authorize` (SSK-signed; its cross_signing_binding was verified
-    // at ingest, §3a) and a `ak.device.list_update`, each a signed Event
-    // Envelope carrying the next actor_seq. Completion REFERENCES those durable
-    // event ids and verifies they are the right events bound to this session —
-    // the server never authors/signs control events on the principal's behalf.
     let authorization_event_id = authorization_event_id_typed.as_str().to_owned();
-    let device_list_update_event_id = device_list_update_event_id_typed.as_str().to_owned();
-
-    // Resolve + verify the referenced ak.device.authorize.
+    let authorization_record = state
+        .persistence
+        .events()
+        .get(&authorization_event_id)
+        .await
+        .map_err(recovery_store_error)?
+        .ok_or_else(|| {
+            AppError::conflict("recovery authorization Event is not accepted")
+                .with_wire_code("recovery_control_event_not_found")
+        })?;
+    if authorization_record.kind != arkret_sdk::events::kinds::DEVICE_AUTHORIZE {
+        return Err(
+            AppError::conflict("recovery authorization Event has the wrong kind")
+                .with_wire_code("recovery_control_event_kind_mismatch"),
+        );
+    }
     let authorize_payload =
         resolve_control_event_payload(state, &authorization_event_id, "ak.device.authorize")
             .await?;
@@ -1063,10 +1194,6 @@ pub(super) async fn recovery_session_complete(
                 .with_wire_code("recovery_authorization_session_mismatch"),
         );
     }
-    // Parse the accepted authorize payload into the typed SDK wire shape so
-    // the §5.2 transcript fields (device_public_key / hpke_key / algorithms)
-    // are checked access, not stringly lookups. Projection-injected envelope
-    // fields are stripped first.
     let typed_authorize: arkret_sdk::DeviceAuthorizePayload = serde_json::from_value(
         crate::routing::identity::cross_signing::device_authorize_wire_payload(&authorize_payload),
     )
@@ -1075,54 +1202,235 @@ pub(super) async fn recovery_session_complete(
             "authorize event payload is not the typed device_authorize wire shape: {error}"
         ))
     })?;
-    let binding = authorize_payload
-        .get("cross_signing_binding")
-        .and_then(Value::as_object)
-        .ok_or_else(|| AppError::invalid_param("authorize event missing cross_signing_binding"))?;
-    // Defense-in-depth: re-verify the binding against the accepted SSK (ingest
-    // already verified it via §3a, but completion is the irreversible step).
-    let algorithms = typed_authorize
-        .algorithms
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    crate::routing::identity::cross_signing::verify_device_cross_signing_binding(
-        state,
-        &record.principal_id,
-        &record.requesting_device_id,
-        &typed_authorize.device_public_key,
-        &typed_authorize.hpke_key,
-        &algorithms,
-        binding,
-    )?;
 
-    // Resolve + verify the referenced ak.device.list_update.
-    let list_update_payload =
-        resolve_control_event_payload(state, &device_list_update_event_id, "ak.device.list_update")
-            .await?;
-    if list_update_payload
-        .get("principal_id")
-        .and_then(Value::as_str)
-        != Some(record.principal_id.as_str())
-    {
-        return Err(
-            AppError::conflict("list_update event principal_id mismatch")
-                .with_wire_code("recovery_list_update_principal_mismatch"),
-        );
-    }
-    let list_update_covers_device = list_update_payload
-        .get("changed")
-        .and_then(Value::as_array)
-        .is_some_and(|changed| {
-            changed
+    let current_generation =
+        crate::routing::identity::device_generation::current_device_generation(
+            state,
+            &record.principal_id,
+        )
+        .await
+        .map_err(recovery_store_error)?;
+    match identity_model {
+        RecoveryIdentityModel::CrossSigning => {
+            if current_generation.is_some() {
+                return Err(AppError::conflict(
+                    "recovery completion model differs from the server-derived identity model",
+                )
+                .with_wire_code("failed_precondition"));
+            }
+            let accepted_ssk_generation =
+                crate::routing::identity::cross_signing::current_accepted_ssk_generation(
+                    state,
+                    &record.principal_id,
+                );
+            if accepted_ssk_generation != record.ssk_generation {
+                return Err(AppError::conflict(
+                    "accepted cross-signing generation changed after session creation",
+                )
+                .with_wire_code("device_recovery_ssk_generation_mismatch"));
+            }
+            let binding = authorize_payload
+                .get("cross_signing_binding")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    AppError::invalid_param("authorize event missing cross_signing_binding")
+                })?;
+            let algorithms = typed_authorize
+                .algorithms
                 .iter()
-                .any(|d| d.as_str() == Some(record.requesting_device_id.as_str()))
-        });
-    if !list_update_covers_device {
-        return Err(
-            AppError::conflict("list_update event does not cover the recovered device")
-                .with_wire_code("recovery_list_update_device_mismatch"),
-        );
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            crate::routing::identity::cross_signing::verify_device_cross_signing_binding(
+                state,
+                &record.principal_id,
+                &record.requesting_device_id,
+                &typed_authorize.device_public_key,
+                &typed_authorize.hpke_key,
+                &algorithms,
+                binding,
+            )?;
+            let list_update_id = device_list_update_event_id_typed
+                .as_ref()
+                .expect("validated A-model completion has list_update")
+                .as_str();
+            let list_update_payload =
+                resolve_control_event_payload(state, list_update_id, "ak.device.list_update")
+                    .await?;
+            if list_update_payload
+                .get("principal_id")
+                .and_then(Value::as_str)
+                != Some(record.principal_id.as_str())
+            {
+                return Err(
+                    AppError::conflict("list_update event principal_id mismatch")
+                        .with_wire_code("recovery_list_update_principal_mismatch"),
+                );
+            }
+            let covers_device = list_update_payload
+                .get("changed")
+                .and_then(Value::as_array)
+                .is_some_and(|changed| {
+                    changed
+                        .iter()
+                        .any(|device| device.as_str() == Some(record.requesting_device_id.as_str()))
+                });
+            if !covers_device {
+                return Err(AppError::conflict(
+                    "list_update event does not cover the recovered device",
+                )
+                .with_wire_code("recovery_list_update_device_mismatch"));
+            }
+        }
+        RecoveryIdentityModel::EnrollmentAuthority => {
+            let generation = current_generation.ok_or_else(|| {
+                AppError::conflict(
+                    "recovery completion model differs from the server-derived identity model",
+                )
+                .with_wire_code("failed_precondition")
+            })?;
+            if generation.status
+                == crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted
+            {
+                return Err(AppError::conflict(
+                    "recovery re-anchor generation is quarantined by a same-height conflict",
+                )
+                .with_wire_code("device_reanchor_conflict"));
+            }
+            let reanchor_event_id = reanchor_event_id_typed
+                .as_ref()
+                .expect("validated B-model completion has reanchor_event_id")
+                .as_str();
+            let reanchor_record = state
+                .persistence
+                .events()
+                .get(reanchor_event_id)
+                .await
+                .map_err(recovery_store_error)?
+                .filter(|event| event.kind == "ak.device.reanchor")
+                .ok_or_else(|| {
+                    AppError::conflict("re-anchor Event is not atomically accepted")
+                        .with_wire_code("recovery_control_event_not_found")
+                })?;
+            let reanchor_payload: arkret_sdk::DeviceReanchorPayload = serde_json::from_value(
+                reanchor_record
+                    .envelope
+                    .get("payload")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            )
+            .map_err(|error| {
+                AppError::conflict(format!("accepted re-anchor payload is invalid: {error}"))
+                    .with_wire_code("device_reanchor_authorize_mismatch")
+            })?;
+            if reanchor_record.actor_id != record.principal_id
+                || reanchor_payload.principal_id.as_str() != record.principal_id
+                || reanchor_payload.new_device_generation.as_str() != generation.current_ref
+                || reanchor_payload.replacement_authorize_event_id.as_str()
+                    != authorization_event_id
+                || reanchor_payload.replacement_authorize_digest.as_str()
+                    != authorization_record.canonical_digest
+                || authorization_record
+                    .envelope
+                    .get("prev_refs")
+                    .and_then(Value::as_array)
+                    .is_none_or(|refs| {
+                        refs.len() != 1 || refs[0].as_str() != Some(reanchor_event_id)
+                    })
+                || typed_authorize.enrollment_authority_binding.is_none()
+                || typed_authorize.cross_signing_binding.is_some()
+                || record
+                    .current_device_generation_ref
+                    .as_ref()
+                    .map(|generation| generation.as_str())
+                    != Some(reanchor_payload.previous_device_generation.as_str())
+                || record.accepted_seal_frontier.as_ref()
+                    != reanchor_payload.pre_fence_basis.as_ref()
+            {
+                return Err(AppError::conflict(
+                    "accepted re-anchor and replacement authorization do not form the requested unit",
+                )
+                .with_wire_code("device_reanchor_authorize_mismatch"));
+            }
+            let receipt_id = reanchor_batch_receipt_id_typed
+                .as_ref()
+                .expect("validated B-model completion has receipt")
+                .as_str();
+            let receipt = state
+                .persistence
+                .events()
+                .batch_receipts_for_event(reanchor_event_id)
+                .await
+                .map_err(recovery_store_error)?
+                .into_iter()
+                .find(|receipt| receipt.receipt_id.as_str() == receipt_id)
+                .ok_or_else(|| {
+                    AppError::conflict("re-anchor Event Batch Receipt is not accepted")
+                        .with_wire_code("device_reanchor_authorize_mismatch")
+                })?;
+            receipt.validate().map_err(|error| {
+                AppError::conflict(format!("stored re-anchor receipt is invalid: {error}"))
+                    .with_wire_code("device_reanchor_authorize_mismatch")
+            })?;
+            let EventBatchReceiptScope::DeviceReanchor(scope) = &receipt.scope else {
+                return Err(
+                    AppError::conflict("receipt scope is not a device re-anchor unit")
+                        .with_wire_code("device_reanchor_authorize_mismatch"),
+                );
+            };
+            if scope.principal_id.as_str() != record.principal_id
+                || scope.realm_id.as_str()
+                    != reanchor_record.realm_id.as_deref().unwrap_or_default()
+                || scope.did_version_id != reanchor_payload.did_version_id
+                || scope.reanchor_digest.as_str() != reanchor_record.canonical_digest
+                || scope.replacement_authorize_digest.as_str()
+                    != authorization_record.canonical_digest
+            {
+                return Err(AppError::conflict(
+                    "receipt does not bind the accepted re-anchor unit",
+                )
+                .with_wire_code("device_reanchor_authorize_mismatch"));
+            }
+            let registry_digest = state
+                .persistence
+                .webvh()
+                .list_log_events(&record.principal_id)
+                .await
+                .map_err(recovery_store_error)?
+                .into_iter()
+                .find(|entry| {
+                    entry.operation.get("versionId").and_then(Value::as_str)
+                        == Some(reanchor_payload.did_version_id.as_str())
+                })
+                .map(|entry| entry.event_digest);
+            if registry_digest.as_deref() != Some(scope.registry_head.as_str()) {
+                return Err(AppError::conflict(
+                    "receipt registry head does not match the accepted DID entry",
+                )
+                .with_wire_code("device_reanchor_entry_not_head"));
+            }
+            let mut entries = state
+                .persistence
+                .webvh()
+                .list_log_events(&record.principal_id)
+                .await
+                .map_err(recovery_store_error)?;
+            entries.sort_by_key(|entry| entry.seq);
+            let previous_registry_head = entries
+                .iter()
+                .position(|entry| {
+                    entry.operation.get("versionId").and_then(Value::as_str)
+                        == Some(reanchor_payload.did_version_id.as_str())
+                })
+                .and_then(|position| position.checked_sub(1))
+                .and_then(|position| entries.get(position))
+                .map(|entry| entry.event_digest.as_str());
+            if record.registry_head.as_ref().map(|head| head.as_str()) != previous_registry_head {
+                return Err(AppError::conflict(
+                    "re-anchor DID entry does not follow the recovery session registry snapshot",
+                )
+                .with_wire_code("device_reanchor_entry_not_head"));
+            }
+        }
     }
 
     let now = chrono::Utc::now();
@@ -1141,29 +1449,58 @@ pub(super) async fn recovery_session_complete(
             })
         })
         .unwrap_or(Value::Null);
+    let existing_device = state
+        .persistence
+        .devices()
+        .get(&record.principal_id, &record.requesting_device_id)
+        .await
+        .map_err(recovery_store_error)?;
+    if identity_model == RecoveryIdentityModel::EnrollmentAuthority && existing_device.is_none() {
+        return Err(
+            AppError::conflict("atomic re-anchor device projection is unavailable")
+                .with_wire_code("device_reanchor_authorize_mismatch"),
+        );
+    }
+    let mut device_payload = existing_device
+        .as_ref()
+        .map(|device| device.payload.clone())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    let device_payload_object = device_payload
+        .as_object_mut()
+        .expect("device recovery payload is an object");
+    device_payload_object.insert(
+        "recovery".to_owned(),
+        json!({
+            "recovery_session_id": record.recovery_session_id,
+            "policy_id": record.policy_id,
+            "policy_version": record.policy_version,
+            "trust_domain": record.trust_domain,
+            "proof_summary": proof_summary,
+            "authorized_at": now.to_rfc3339_opts(SecondsFormat::Millis, true),
+        }),
+    );
+    device_payload_object.insert(
+        "device_public_key".to_owned(),
+        Value::String(typed_authorize.device_public_key.to_string()),
+    );
+    device_payload_object.insert(
+        "authorization_event_id".to_owned(),
+        Value::String(authorization_event_id.clone()),
+    );
     let device = DeviceInventoryRecord {
         actor: record.principal_id.clone(),
         device_id: record.requesting_device_id.clone(),
         display_name: None,
         verification_state: "verified".to_owned(),
-        payload: json!({
-            "recovery": {
-                "recovery_session_id": record.recovery_session_id,
-                "policy_id": record.policy_id,
-                "policy_version": record.policy_version,
-                "trust_domain": record.trust_domain,
-                "proof_summary": proof_summary,
-                "authorized_at": now.to_rfc3339_opts(SecondsFormat::Millis, true),
-            },
-            // The accepted device key (from the referenced ak.device.authorize),
-            // used to verify a later recovery_receipt is signed by THIS device
-            // (recovery-receipt.schema.json auth_data.verification_method, §15 step 7).
-            "device_public_key": typed_authorize.device_public_key,
-            "authorization_event_id": authorization_event_id,
-        }),
-        created_at: now,
+        payload: device_payload,
+        created_at: existing_device
+            .as_ref()
+            .map_or(now, |device| device.created_at),
         updated_at: now,
-        revoked_at: None,
+        revoked_at: existing_device
+            .as_ref()
+            .and_then(|device| device.revoked_at),
     };
     state
         .persistence
@@ -1192,8 +1529,11 @@ pub(super) async fn recovery_session_complete(
             "recovery_session_id": completed.recovery_session_id,
             "device_id": completed.requesting_device_id,
             "policy_id": completed.policy_id,
+            "identity_model": identity_model,
             "authorization_event_id": authorization_event_id,
-            "device_list_update_event_id": device_list_update_event_id,
+            "device_list_update_event_id": device_list_update_event_id_typed.clone(),
+            "reanchor_event_id": reanchor_event_id_typed.clone(),
+            "reanchor_batch_receipt_id": reanchor_batch_receipt_id_typed.clone(),
         }),
         "completed",
     )
@@ -1208,9 +1548,9 @@ pub(super) async fn recovery_session_complete(
             .map_err(|error| stored_recovery_type_error("requesting_device_id", error))?,
         identity_model,
         authorization_event_id: authorization_event_id_typed,
-        device_list_update_event_id: Some(device_list_update_event_id_typed),
-        reanchor_event_id: None,
-        reanchor_batch_receipt_id: None,
+        device_list_update_event_id: device_list_update_event_id_typed,
+        reanchor_event_id: reanchor_event_id_typed,
+        reanchor_batch_receipt_id: reanchor_batch_receipt_id_typed,
     })
 }
 

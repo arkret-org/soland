@@ -12,6 +12,7 @@ pub(crate) mod auth_grant_dpop;
 pub(crate) mod consent;
 pub(crate) mod contact_federation;
 pub(crate) mod cross_signing;
+pub(crate) mod device_generation;
 pub(super) mod device_messages;
 pub(super) mod did;
 pub(in crate::routing) mod key_backup;

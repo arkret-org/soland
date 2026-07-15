@@ -40,6 +40,13 @@ pub(in crate::routing) async fn submit_event_value(
     session: &SessionRecord,
     envelope: Value,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    if batch_contains_identity_anchor(std::slice::from_ref(&envelope)) {
+        return Err(SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
+        ));
+    }
     submit_event_value_with_context(state, session, envelope, &[]).await
 }
 

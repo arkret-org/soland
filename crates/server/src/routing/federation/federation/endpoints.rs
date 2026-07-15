@@ -921,21 +921,51 @@ pub(crate) async fn federation_seals_push(
                 continue;
             }
         }
-        for move_id in &seal.delta {
-            let Ok(Some(enclosed_move)) = state.move_store.get(move_id) else {
-                // A Move we cannot resolve locally has no attributable
-                // author; accepting the Seal would smuggle unattributed
-                // writes into the DAG, so fail closed.
+        let realm_events = match state
+            .persistence
+            .events()
+            .realm_events_newest_first(seal.realm_id.as_str())
+            .await
+        {
+            Ok(records) => records,
+            Err(error) => {
                 rejected.push(json!({
                     "id": id_str,
-                    "reason": "missing_move",
-                    "move_id": move_id.as_str(),
+                    "reason": "persistence_error",
+                    "message": error.to_string(),
                 }));
-                continue 'seals;
+                continue;
+            }
+        };
+        for move_id in &seal.delta {
+            let issuer = match state.move_store.get(move_id) {
+                Ok(Some(enclosed_move)) => enclosed_move.issuer.as_str().to_owned(),
+                Ok(None) => match realm_events
+                    .iter()
+                    .find(|record| record.canonical_digest == move_id.as_str())
+                {
+                    Some(event) => event.actor_id.clone(),
+                    None => {
+                        rejected.push(json!({
+                            "id": id_str,
+                            "reason": "missing_control_event",
+                            "move_id": move_id.as_str(),
+                        }));
+                        continue 'seals;
+                    }
+                },
+                Err(error) => {
+                    rejected.push(json!({
+                        "id": id_str,
+                        "reason": "persistence_error",
+                        "message": error.to_string(),
+                    }));
+                    continue 'seals;
+                }
             };
             if !super::inbound_policy::federation_actor_origin_acceptable(
                 state,
-                enclosed_move.issuer.as_str(),
+                &issuer,
                 &origin_trust_domain,
                 seal.realm_id.as_str(),
             )
@@ -949,9 +979,11 @@ pub(crate) async fn federation_seals_push(
                 continue 'seals;
             }
         }
-        if let Err(error) = state.seal_store.put(&seal) {
+        if let Err(error) =
+            crate::routing::federation::move_seal::apply_inbound_seal(state, &seal).await
+        {
             rejected.push(
-                json!({"id": id_str, "reason": "persistence_error", "message": error.to_string()}),
+                json!({"id": id_str, "reason": "seal_rejected", "message": error.to_string()}),
             );
             continue;
         }
