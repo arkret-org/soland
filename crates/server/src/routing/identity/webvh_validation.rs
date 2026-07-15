@@ -705,18 +705,13 @@ fn verify_entry_proof(
     entry: &WebvhLogEntry,
     proof: &serde_json::Map<String, Value>,
 ) -> Result<(), WebvhValidationError> {
-    if proof.get("type").and_then(Value::as_str) != Some("DataIntegrityProof") {
-        return Err(WebvhValidationError::RotationNotAuthorized {
-            at_index: 0,
-            reason: "proof type must be DataIntegrityProof".to_owned(),
-        });
-    }
-    if proof.get("cryptosuite").and_then(Value::as_str) != Some("eddsa-jcs-2022") {
-        return Err(WebvhValidationError::RotationNotAuthorized {
-            at_index: 0,
-            reason: "proof cryptosuite must be eddsa-jcs-2022".to_owned(),
-        });
-    }
+    let signing_input =
+        webvh_eddsa_jcs_2022_signing_input(&entry.payload, proof).map_err(|reason| {
+            WebvhValidationError::RotationNotAuthorized {
+                at_index: 0,
+                reason,
+            }
+        })?;
     let key = entry_proof_key(proof);
     let public_key = decode_ed25519_public_key(&key).map_err(|reason| {
         WebvhValidationError::RotationNotAuthorized {
@@ -734,23 +729,52 @@ fn verify_entry_proof(
         at_index: 0,
         reason,
     })?;
-    let mut canonical_entry = entry.payload.clone();
-    if let Value::Object(map) = &mut canonical_entry {
-        map.remove("proof");
-    }
-    let payload =
-        arkret_sdk::canonical::canonical_json_bytes(&canonical_entry).map_err(|error| {
-            WebvhValidationError::RotationNotAuthorized {
-                at_index: 0,
-                reason: error.to_string(),
-            }
-        })?;
-    public_key.verify(&payload, &signature).map_err(|_| {
-        WebvhValidationError::RotationNotAuthorized {
+    public_key
+        .verify_strict(&signing_input, &signature)
+        .map_err(|_| WebvhValidationError::RotationNotAuthorized {
             at_index: 0,
             reason: "rotation proof signature is invalid".to_owned(),
-        }
-    })
+        })
+}
+
+/// Build the `eddsa-jcs-2022` Data Integrity signing input shared by WebVH
+/// inception and rotation proof verification:
+/// `SHA-256(JCS(proofConfig)) || SHA-256(JCS(document))`.
+///
+/// `proofConfig` is the proof without `proofValue`; `document` is the log
+/// entry without its `proof` array. This mirrors the SDK's canonical WebVH
+/// verifier and keeps both Soland proof admission paths byte-identical.
+fn webvh_eddsa_jcs_2022_signing_input(
+    entry: &Value,
+    proof: &serde_json::Map<String, Value>,
+) -> Result<Vec<u8>, String> {
+    if proof.get("type").and_then(Value::as_str) != Some("DataIntegrityProof") {
+        return Err("proof type must be DataIntegrityProof".to_owned());
+    }
+    if proof.get("cryptosuite").and_then(Value::as_str) != Some("eddsa-jcs-2022") {
+        return Err("proof cryptosuite must be eddsa-jcs-2022".to_owned());
+    }
+    if proof.get("proofPurpose").and_then(Value::as_str) != Some("assertionMethod") {
+        return Err("proofPurpose must be assertionMethod".to_owned());
+    }
+
+    let mut proof_config = Value::Object(proof.clone());
+    if let Value::Object(properties) = &mut proof_config {
+        properties.remove("proofValue");
+    }
+    let mut document = entry.clone();
+    if let Value::Object(properties) = &mut document {
+        properties.remove("proof");
+    }
+    let proof_config = arkret_sdk::canonical::canonical_json_bytes(&proof_config)
+        .map_err(|error| format!("webvh proofConfig canonicalization failed: {error}"))?;
+    let document = arkret_sdk::canonical::canonical_json_bytes(&document)
+        .map_err(|error| format!("webvh proof document canonicalization failed: {error}"))?;
+
+    let mut signing_input = Vec::with_capacity(64);
+    signing_input.extend_from_slice(&arkret_sdk::canonical::sha256_bytes(&proof_config));
+    signing_input.extend_from_slice(&arkret_sdk::canonical::sha256_bytes(&document));
+    Ok(signing_input)
 }
 
 /// Extract the multibase key a `proof[]` object signs with — the fragment
@@ -944,20 +968,7 @@ pub(crate) fn verify_webvh_log_proof(entry: &Value) -> Result<(), String> {
         .and_then(|items| items.first())
         .and_then(Value::as_object)
         .ok_or_else(|| "entry must include proof[0]".to_owned())?;
-    let proof_type = proof
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if proof_type != "DataIntegrityProof" {
-        return Err("proof type must be DataIntegrityProof".to_owned());
-    }
-    let cryptosuite = proof
-        .get("cryptosuite")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if cryptosuite != "eddsa-jcs-2022" {
-        return Err("proof cryptosuite must be eddsa-jcs-2022".to_owned());
-    }
+    let signing_input = webvh_eddsa_jcs_2022_signing_input(entry, proof)?;
     let verification_method = proof
         .get("verificationMethod")
         .and_then(Value::as_str)
@@ -981,14 +992,8 @@ pub(crate) fn verify_webvh_log_proof(entry: &Value) -> Result<(), String> {
             .and_then(Value::as_str)
             .unwrap_or_default(),
     )?;
-    let mut canonical = entry.clone();
-    if let Value::Object(map) = &mut canonical {
-        map.remove("proof");
-    }
-    let payload = arkret_sdk::canonical::canonical_json_bytes(&canonical)
-        .map_err(|error| error.to_string())?;
     public_key
-        .verify(&payload, &signature)
+        .verify_strict(&signing_input, &signature)
         .map_err(|_| "webvh log proof signature is invalid".to_owned())
 }
 
@@ -1205,6 +1210,73 @@ mod tests {
 
     fn encode_sig_multibase(sig: &Signature) -> String {
         format!("z{}", bs58::encode(sig.to_bytes()).into_string())
+    }
+
+    fn sdk_canonical_principal_inception() -> (Value, SigningKey) {
+        let endpoint = url::Url::parse("https://principal.example/").unwrap();
+        let aliases = vec!["acct:alice@example.com".to_owned()];
+        let root_seed = [0x11; 32];
+        let root_signing = SigningKey::from_bytes(&root_seed);
+        let next_root = SigningKey::from_bytes(&[0x22; 32]);
+        let next_root_multibase = encode_pubkey_multibase(&next_root.verifying_key());
+        let input = arkret_sdk::webvh::PrincipalInceptionInput {
+            principal_endpoint: &endpoint,
+            local_id: "alice",
+            also_known_as: &aliases,
+            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00Z")
+                .unwrap()
+                .to_utc(),
+            root_seed: &root_seed,
+            next_root_public_key_multibase: &next_root_multibase,
+            enrollment: arkret_sdk::webvh::PrincipalEnrollmentDelegation::ExternalAuthority {
+                authority_did: "did:web:coauth.example",
+            },
+        };
+        let prepared = arkret_sdk::webvh::prepare_principal_inception(&input)
+            .expect("SDK canonical principal inception");
+        (prepared.log_entry, root_signing)
+    }
+
+    fn assert_controller_and_inception_verifiers_reject(entry: Value) {
+        assert!(
+            verify_webvh_log_proof(&entry).is_err(),
+            "inception proof verifier must reject"
+        );
+        assert!(
+            validate_active_controller_proof(&WebvhLogEntry::new(entry)).is_err(),
+            "active-controller proof verifier must reject"
+        );
+    }
+
+    #[test]
+    fn sdk_canonical_principal_inception_proof_is_accepted() {
+        let (entry, _) = sdk_canonical_principal_inception();
+        verify_webvh_log_proof(&entry).expect("SDK inception proof must verify");
+        validate_active_controller_proof(&WebvhLogEntry::new(entry))
+            .expect("SDK inception active-controller proof must verify");
+    }
+
+    #[test]
+    fn legacy_raw_jcs_webvh_signature_is_rejected() {
+        let (mut entry, root_signing) = sdk_canonical_principal_inception();
+        let mut document = entry.clone();
+        document
+            .as_object_mut()
+            .expect("entry object")
+            .remove("proof");
+        let canonical = arkret_sdk::canonical::canonical_json_bytes(&document).unwrap();
+        let legacy_signature = root_signing.sign(&canonical);
+        entry["proof"][0]["proofValue"] = json!(encode_sig_multibase(&legacy_signature));
+
+        assert_controller_and_inception_verifiers_reject(entry);
+    }
+
+    #[test]
+    fn canonical_webvh_proof_rejects_document_tampering() {
+        let (mut entry, _) = sdk_canonical_principal_inception();
+        entry["state"]["id"] = json!("did:webvh:QmTampered:principal.example:webvh:alice");
+
+        assert_controller_and_inception_verifiers_reject(entry);
     }
 
     fn witness_proof(entry: &Value, signer: &SigningKey) -> Value {
