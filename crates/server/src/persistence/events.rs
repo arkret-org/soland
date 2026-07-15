@@ -157,6 +157,7 @@ pub(crate) struct MemoryEventStore {
 }
 
 impl MemoryEventStore {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::with_devices(Arc::new(Mutex::new(BTreeMap::new())))
     }

@@ -22,7 +22,6 @@ arc-swap = "1.9.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 base64 = "0.22.1"
-blake3 = { version = "1.5.5", default-features = false }
 bs58 = "0.5.1"
 bytes = "1.11.1"
 chrono = "0.4.45"

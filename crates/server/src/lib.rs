@@ -57,6 +57,7 @@ pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String
 /// identity helpers live in `pub(crate)` modules; surface them here (hidden
 /// from the rendered API) so the device-identity directory tests can drive the
 /// `ak.device.authorize` projection without a full signed-envelope ingest.
+#[cfg(feature = "test-util")]
 #[doc(hidden)]
 pub mod test_support {
     pub use crate::routing::events::projection::project_accepted_operations;
