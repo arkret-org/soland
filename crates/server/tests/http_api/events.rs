@@ -446,9 +446,9 @@ async fn events_describe_and_single_event_submit_work() {
         "ak:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
-    // Realm selector → spec Realm Seal view: the registered sourcing for
-    // single-leaf seal_basis / seal_ref. Reading never materializes a
-    // synthetic genesis Seal for a Realm without accepted Seal history.
+    // Realm selector exposes only an accepted Seal. A projection-only fixture
+    // has no canonical Control Event history, so it must not receive a
+    // synthetic Seal.
     let seeded = seed_test_realm(
         &state,
         "did:web:alice.example",

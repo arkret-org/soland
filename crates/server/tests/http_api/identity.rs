@@ -232,7 +232,9 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
             "local_id": "mallory",
             "did_public_key_multibase": test_ed25519_multibase_public(&unauthorized_did_signing),
             "update_public_key_multibase": test_ed25519_multibase_public(&unauthorized_update_signing),
-            "next_update_public_key_multibase": test_ed25519_multibase_public(&unauthorized_next_update_signing)
+            "next_update_public_key_multibase": test_ed25519_multibase_public(
+                &unauthorized_next_update_signing
+            )
         }))
         .send(&app_from_state(state.clone()))
         .await;

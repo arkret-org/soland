@@ -170,11 +170,16 @@ fn mimi_submit_body(
         object.insert("governance_binding".to_owned(), governance_binding.clone());
         object.insert("covered_seals_cell".to_owned(), covered_seals_cell.clone());
     }
+    let associated_data = json!({
+        "governance_binding": governance_binding,
+        "covered_seals_cell": covered_seals_cell,
+    });
     json!({
         "sender_actor_id": sender,
         "device_id": MIMI_TEST_DEVICE_ID,
         "mls_group_id": group_id,
         "epoch": epoch,
+        "associated_data": mimi_opaque_payload(associated_data, "payload_digest"),
         "ciphertext": mimi_opaque_payload(message, "ciphertext_digest")
     })
 }
@@ -323,13 +328,11 @@ async fn mimi_provider_facade_contracts_work() {
             .unwrap();
     let encoded_group_info = group_info["group_info"]["group_info"]
         .as_str()
-        .expect("encoded group_info");
+        .expect("encoded group_info missing");
     let decoded_group_info: Value = serde_json::from_slice(
-        &URL_SAFE_NO_PAD
-            .decode(encoded_group_info)
-            .expect("base64url group_info"),
+        &arkret_sdk::base64url_decode(encoded_group_info).expect("group_info must be base64url"),
     )
-    .expect("JSON group_info");
+    .expect("group_info must contain JSON");
     assert_eq!(
         decoded_group_info["mimi_room_uri"], "mimi://soland.local/rooms/01JSMIMI",
         "group_info response: {group_info}"

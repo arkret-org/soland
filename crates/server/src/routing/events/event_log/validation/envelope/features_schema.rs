@@ -212,6 +212,7 @@ pub(crate) fn validate_event_schema_and_payload(
     _schema_id: &str,
     envelope: &Value,
     object: &serde_json::Map<String, Value>,
+    is_self_principal_pcr_bootstrap_create: bool,
 ) -> Result<(), EventValidationError> {
     if !state.config.development_mode {
         let registry = arkret_sdk::schema::schema_registry_from_default_spec_artifacts()
@@ -286,7 +287,11 @@ pub(crate) fn validate_event_schema_and_payload(
             )
         })?;
     }
-    validate_realm_create_policy_constraints(kind, payload)?;
+    validate_realm_create_policy_constraints(
+        kind,
+        payload,
+        is_self_principal_pcr_bootstrap_create,
+    )?;
     Ok(())
 }
 

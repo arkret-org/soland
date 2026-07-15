@@ -288,7 +288,21 @@ pub(crate) async fn validate_event_envelope_with_context(
         ));
     }
     require_object_field(object, "payload")?;
-    validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
+    let is_self_principal_pcr_bootstrap_create = kind == arkret_sdk::events::kinds::REALM_CREATE
+        && realm_bootstrap_contexts.iter().any(|context| {
+            context.self_principal_pcr_bootstrap
+                && context.realm_id == realm_id
+                && context.actor_id == actor_id
+                && context.identity_anchor_event_id.as_deref() == Some(event_id.as_str())
+        });
+    validate_event_schema_and_payload(
+        state,
+        &kind,
+        &schema_id,
+        envelope,
+        object,
+        is_self_principal_pcr_bootstrap_create,
+    )?;
     validate_data_event_capability_refs(state, &actor_id, &realm_id, &kind, object)?;
     validate_cba_effect_planes(object)?;
     validate_control_move_seal_basis(
