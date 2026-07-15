@@ -389,28 +389,6 @@ fn mls_event_group_ref(payload: &std::collections::BTreeMap<String, Value>) -> O
 
 // ── Handlers ────────────────────────────────────────────────────────────
 
-fn pending_mls_removals_for_circle(
-    state: &AppState,
-    circle: &CircleProjection,
-    expected_group_ref: Option<&str>,
-) -> Vec<Did> {
-    let projection = state.projection.lock();
-    projection
-        .pending_mls_removals
-        .iter()
-        .filter(|obligation| {
-            obligation.realm_id == circle.realm_id
-                && obligation.circle_id.as_deref() == Some(circle.circle_id.as_str())
-                && obligation.mls_group_ref.as_deref().is_none_or(|group_ref| {
-                    expected_group_ref
-                        .or(circle.mls_group_ref.as_deref())
-                        .is_none_or(|expected| expected == group_ref)
-                })
-        })
-        .filter_map(|obligation| Did::new(obligation.actor_id.clone()).ok())
-        .collect()
-}
-
 #[endpoint(
     operation_id = "ak.self.circle.query.list",
     tags("circles"),
@@ -697,9 +675,7 @@ async fn post_scope_rotate(
     let circle_id = circle_id.into_inner();
     let body = body.into_inner();
     let circle = circle_projection_snapshot(state, &circle_id)?;
-    let expected_group_ref = validate_scope_rotate_events(&circle, &body.events)?;
-    let pending_removals_before =
-        pending_mls_removals_for_circle(state, &circle, expected_group_ref.as_deref());
+    validate_scope_rotate_events(&circle, &body.events)?;
 
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();

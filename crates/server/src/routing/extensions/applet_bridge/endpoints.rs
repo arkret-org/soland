@@ -366,7 +366,7 @@ async fn revoke_auth_side_delegated_sessions_for_applet(
     req: &Request,
     record: &AppletRecord,
     revoke: &AppletRevokeRequestBody,
-    grant_refs: &[arkret_sdk::GrantId],
+    grant_refs: &[String],
 ) -> Result<Vec<String>, AppError> {
     let Some(revoke_url) = session_grant_revoke_url(state)? else {
         return Ok(Vec::new());

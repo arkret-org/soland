@@ -529,8 +529,6 @@ pub(crate) async fn federation_pull_operations(
     if arkret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
-    let realm_id_typed =
-        arkret_sdk::RealmId::new(realm_id.clone()).expect("realm_id was validated");
     let after_cursor: Option<String> = after_cursor.into_inner();
     let limit = limit.into_inner().unwrap_or(100).min(100);
     let _want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);

@@ -3,7 +3,6 @@ use arkret_sdk::{
     RejectedItem, namespace_pattern_matches,
 };
 use salvo::http::StatusCode;
-use serde_json::{Value, json};
 
 use super::signature::VerifiedInboundTransactionSignature;
 use super::types::AppletRecord;

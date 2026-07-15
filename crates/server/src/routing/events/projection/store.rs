@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{Operation, OperationId};
-use serde_json::{Value, json};
 
 use super::*;
 use crate::kinds;

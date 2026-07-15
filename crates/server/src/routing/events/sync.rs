@@ -42,12 +42,9 @@ pub(crate) use tokio::sync::broadcast::error::RecvError;
 use super::super::identity::device_messages::prune_device_messages_for_limits;
 pub(crate) use super::projection::{
     actor_erased_in_realm, apply_message_redaction_timeline_projection,
-    retention_tombstone_for_event, tombstone_timeline_event_for_retention,
     tombstone_timeline_event_value,
 };
-use super::read_receipts::{
-    has_pending_read_receipts_for_subscriber, read_receipt_ephemeral_for_realm,
-};
+use super::read_receipts::has_pending_read_receipts_for_subscriber;
 use super::{
     TO_DEVICE_PAGE_LIMIT, augment_timeline_message_json, authenticated_session,
     default_discussion_track, device_message_envelopes_after,
@@ -56,8 +53,7 @@ use super::{
     projected_event_replay_upper_bound, projection_event_json, prune_expired_typing, query_param,
     realm_discoverability, realm_event_visible_to_session, realm_has_member,
     realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
-    snapshot_manifest_for_realm, strand_id_from_realm_id, strand_projection_for_realm,
-    sync_timeline_message_json_with_projection, typing_ephemeral_for_realm, validate_did,
+    snapshot_manifest_for_realm, strand_id_from_realm_id, validate_did,
 };
 pub(crate) use crate::ids;
 pub(crate) use crate::persistence::SyncCursorRecord;

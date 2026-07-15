@@ -3,9 +3,7 @@
 //! to_device NDJSON delta machinery and its auth-material gate.
 
 use super::*;
-use crate::routing::spaces::space::{
-    presence_activity_detail_visible_to_session, presence_visible_to_session,
-};
+use crate::routing::spaces::space::presence_visible_to_session;
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
