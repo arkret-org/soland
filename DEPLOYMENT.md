@@ -13,6 +13,7 @@ before serving real users.
 | PostgreSQL | 16+ | `pq-src` builds libpq inline; the runtime image only needs the network reachability |
 | Reverse proxy | nginx, Caddy, or Traefik | TLS termination is **expected** to live in the reverse proxy, not soland itself |
 | Object storage | local volume or S3-compatible bucket | Local disk is fine for one node; production should prefer S3/MinIO/R2-style object storage |
+| Key custody | encrypted file + external 32-byte master key | Ciphertext and master key must have separate backup and access-control boundaries |
 | Container runtime | Docker / containerd / Podman | Build or load the image locally; this readiness workflow does not push registry images or tags |
 
 ## 1. Provision PostgreSQL
@@ -37,6 +38,10 @@ SOLAND_TLS_KEY_PATH=/etc/soland/tls/privkey.pem
 SOLAND_PQ_TLS_DEPLOYMENT_PROBE=verified
 # One-time only on the first production boot; remove after identity creation.
 SOLAND_FIRST_PROVISIONING=true
+SOLAND_KEYSTORE_BACKEND=encrypted_file
+SOLAND_KEYSTORE_PATH=/var/lib/soland/keystore/soland.v1
+SOLAND_KEYSTORE_MASTER_KEY_FILE=/run/secrets/soland-keystore-master-key
+SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=/var/lib/soland/identity-bundle
 SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED=true
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # Optional: use a standalone webvh provider instead of, or alongside, the embedded provider.
@@ -163,6 +168,10 @@ docker run --name soland --restart=always -d \
   -e SOLAND_BIND=0.0.0.0:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
   -e SOLAND_FIRST_PROVISIONING=true \
+  -e SOLAND_KEYSTORE_BACKEND=encrypted_file \
+  -e SOLAND_KEYSTORE_PATH=/var/lib/soland/keystore/soland.v1 \
+  -e SOLAND_KEYSTORE_MASTER_KEY_FILE=/run/secrets/soland-keystore-master-key \
+  -e SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=/var/lib/soland/identity-bundle \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
@@ -170,14 +179,16 @@ docker run --name soland --restart=always -d \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -e RUST_LOG=soland=info \
-  -v soland-objects:/var/lib/soland \
+  -v soland-data:/var/lib/soland \
+  -v /secure/soland-keystore-master-key:/run/secrets/soland-keystore-master-key:ro \
   ghcr.io/arkret/soland:<tag>
 ```
 
 The image runs as UID `10001`. Mounted volumes for
 `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` must be chowned to that UID (or use a named
-Docker volume so Docker handles it). S3-compatible backends do not need a media
-volume.
+Docker volume so Docker handles it). The mounted KeyStore master-key file must
+be readable by UID `10001`; generate and back it up separately from the named
+ciphertext volume. S3-compatible backends do not need a media volume.
 
 ### Helm
 
@@ -190,6 +201,9 @@ helm template soland ./deploy/helm/soland \
   --set image.tag=<tag> \
   --set env.SOLAND_PUBLIC_BASE_URL=https://soland.example \
   --set env.SOLAND_FIRST_PROVISIONING=true \
+  --set env.SOLAND_KEYSTORE_BACKEND=encrypted_file \
+  --set env.SOLAND_KEYSTORE_PATH=/var/lib/soland/keystore/soland.v1 \
+  --set secretEnv.SOLAND_KEYSTORE_MASTER_KEY='<base64-random-32-byte-key>' \
   --set env.SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   --set secretEnv.DATABASE_URL='postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full' \
   --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
@@ -284,8 +298,9 @@ external webvh provider has passed the startup `/describe` probe.
 | PostgreSQL | All tables | `pg_dump` daily, plus continuous WAL archiving for point-in-time recovery |
 | Object storage bucket/volume | Uploaded media | enable bucket versioning or snapshot the local volume on the same cadence as the database; align so blob references in the DB stay resolvable |
 | Service identity database rows + identity bundle | Stable DID, WebVH history, and public recovery evidence | Back up the database and `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR`; keep private keys in the configured secret store |
+| Encrypted KeyStore | Service signing and WebVH control seeds | Back up `SOLAND_KEYSTORE_PATH` and its master key through separate systems; neither artifact is recoverable from the other |
 
-Restore order: stop soland → restore DB and identity bundle → restore object storage bucket/volume → start soland.
+Restore order: stop soland → restore DB, identity bundle, and encrypted KeyStore → restore the master key through its secret-management path → restore object storage bucket/volume → start soland.
 The startup migrations are idempotent.
 
 ## 7. Observability
@@ -473,7 +488,7 @@ base64-standard-padded). Recommended cadence and ceremony:
   hot-swap completed without dropping concurrent signing passes.
 - **Production rotation**: stage the new seed in the secret manager,
   call the rotate-signing-key admin endpoint on each replica in turn,
-  then retire the old seed. With `SOLAND_USE_KEYSTORE=true` the same
+  then retire the old seed. With a durable `SOLAND_KEYSTORE_BACKEND` the same
   endpoint also persists the rotated key back into the SDK KeyStore so
   a future restart picks up the new seed automatically.
 - **Audit**: every rotation emits a sticky-info tracing event on the

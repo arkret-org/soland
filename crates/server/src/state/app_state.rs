@@ -259,7 +259,7 @@ pub struct AppState {
     /// `soland.<service_id>`. Each admin DID in
     /// `config.admin_principal_dids` gets its own ed25519 signing seed
     /// (provisioned at boot in `development_mode`; lazily loaded from the
-    /// platform keystore otherwise). The signer for an admin DID is
+    /// configured durable KeyStore otherwise). The signer for an admin DID is
     /// built via `admin_signer_for(state, admin_did)` — this replaces the
     /// service-wide `service_admin_signer` shortcut for endpoints that
     /// want operator attribution in the audit chain.
@@ -482,7 +482,7 @@ impl AppState {
         // its authoritative service identity.
         let signing_seed = resolved_signing_seed;
         let notary_signing_key_origin =
-            if config.notary_signing_key_seed.is_some() || config.use_keystore {
+            if config.notary_signing_key_seed.is_some() || config.key_store.is_durable() {
                 NotarySigningKeyOrigin::Configured
             } else {
                 // Only fixture constructors can reach this branch. Production
@@ -523,16 +523,15 @@ impl AppState {
         // for every DID listed in `admin_principal_dids` so smoke-tests
         // can call admin endpoints under the operator DID without any
         // out-of-band provisioning step. Production deployments must
-        // pre-populate the platform keystore explicitly — admin DIDs
+        // pre-populate the configured durable KeyStore explicitly — admin DIDs
         // without a provisioned key fall back to
         // `service_admin_signer` at signing time with a sticky-warn.
         let admin_app_id = format!("soland.{service_id}");
-        let admin_keystore_inner: Box<dyn arkret_sdk::KeyStore> = if config.use_keystore {
-            arkret_sdk::durable_platform_keystore(&admin_app_id)
-                .expect("use_keystore requires a durable platform key store")
-        } else {
-            Box::new(arkret_sdk::keystore::InMemoryKeyStore::new())
-        };
+        let admin_keystore_inner: Box<dyn arkret_sdk::KeyStore> = config
+            .key_store
+            .open(&admin_app_id)
+            .expect("configured KeyStore must open every namespace")
+            .unwrap_or_else(|| Box::new(arkret_sdk::keystore::InMemoryKeyStore::new()));
         let admin_keystore =
             arkret_sdk::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
         if config.development_mode {

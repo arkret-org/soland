@@ -53,6 +53,17 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.persistence.enabled }}
+          volumeMounts:
+            - name: soland-data
+              mountPath: /var/lib/soland
+          {{- end }}
+      {{- if .Values.persistence.enabled }}
+      volumes:
+        - name: soland-data
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-data" (include "soland.fullname" .)) .Values.persistence.existingClaim }}
+      {{- end }}
       nodeSelector:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       affinity:

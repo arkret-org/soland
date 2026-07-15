@@ -4,6 +4,7 @@ target*/
 # never be committed.
 .env
 .env.local
+.local/
 
 # Editor / OS detritus.
 .idea/

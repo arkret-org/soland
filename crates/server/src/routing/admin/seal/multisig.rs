@@ -232,12 +232,12 @@ pub struct RotateSigningKeyOutcome {
     pub did: String,
     pub rotated_at: chrono::DateTime<chrono::Utc>,
     /// Provenance tag of the **post-rotation** key — `Configured` when
-    /// persisted to the platform KeyStore (`use_keystore=true`), else
+    /// persisted to the configured durable KeyStore, else
     /// `Configured` when the rotation succeeded (we never roll forward to
     /// `Ephemeral`).
     pub origin: String,
-    /// Whether the new seed was persisted to the platform KeyStore. False
-    /// when `use_keystore=false`; true (or accompanied by a non-fatal
+    /// Whether the new seed was persisted to the configured durable KeyStore. False
+    /// when durable key custody is disabled; true (or accompanied by a non-fatal
     /// `keystore_warning`) when the platform store accepted the write.
     pub keystore_persisted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
