@@ -61,13 +61,13 @@ pub async fn resolve_and_build_persistence(
         .as_ref()
         .map(|pool| Arc::new(PgPersistenceStore::new(pool.clone())) as Arc<dyn PersistenceStore>)
         .unwrap_or_else(|| Arc::new(SolandMemoryPersistenceStore::new()));
-    let key_store: Option<Arc<dyn KeyStore>> = if config.use_keystore {
-        let key_store = arkret_sdk::durable_platform_keystore(SERVICE_IDENTITY_KEYSTORE_APP)
-            .map_err(|error| {
-                anyhow::anyhow!("opening durable service identity KeyStore failed: {error}")
-            })?;
+    let key_store: Option<Arc<dyn KeyStore>> = if let Some(key_store) = config
+        .key_store
+        .open(SERVICE_IDENTITY_KEYSTORE_APP)
+        .map_err(|error| anyhow::anyhow!("opening service identity KeyStore failed: {error}"))?
+    {
         Some(Arc::from(key_store))
-    } else if config.development_mode {
+    } else if config.development_mode && db.pool.is_none() {
         Some(Arc::new(arkret_sdk::InMemoryKeyStore::new()))
     } else {
         None
@@ -1263,7 +1263,7 @@ fn required_key_store(key_store: Option<&dyn KeyStore>) -> anyhow::Result<&dyn K
     key_store.ok_or_else(|| {
         anyhow::anyhow!(
             "service identity requires a durable Secrets/KeyStore backend for WebVH control keys; \
-             set SOLAND_USE_KEYSTORE=true on a host with a supported durable backend"
+             configure SOLAND_KEYSTORE_BACKEND with a durable backend"
         )
     })
 }
@@ -1413,7 +1413,7 @@ mod tests {
         let config = AppConfig {
             public_base_url: "https://soland.example/".to_owned(),
             notary_signing_key_seed: None,
-            use_keystore: true,
+            key_store: crate::config::KeyStoreConfig::Platform,
             ..AppConfig::test_default()
         };
         let persistence = SolandMemoryPersistenceStore::new();

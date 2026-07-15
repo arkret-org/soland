@@ -18,7 +18,7 @@
 //!    `--output`.
 //!
 //! 3. `--import-only` — used by `scripts/restore-drill.sh`. Reads the JSON snapshot from `--input`
-//!    and stores the seed back into the platform KeyStore under the same id.
+//!    and stores the seed back into the configured durable KeyStore under the same id.
 //!
 //! All three modes resolve the service DID and active signing `KeyRef` from a
 //! verified SDK identity bundle:
@@ -27,7 +27,7 @@
 //!   - `SOLAND_ADMIN_BEARER` (or `--bearer`)
 //!
 //! The drill is intentionally self-contained (no shared state with the
-//! soland server process beyond the platform KeyStore + the public HTTP
+//! soland server process beyond the configured KeyStore + the public HTTP
 //! API), so it works in production whether soland is running locally or
 //! in a Kubernetes pod.
 
@@ -221,6 +221,18 @@ enum DrillError {
 
 const SERVICE_IDENTITY_KEYSTORE_APP: &str = "soland.service-identity";
 
+fn open_service_identity_key_store() -> Result<Box<dyn arkret_sdk::KeyStore>, DrillError> {
+    soland::config::KeyStoreConfig::from_env()
+        .map_err(|error| DrillError::Io(format!("invalid KeyStore configuration: {error}")))?
+        .open(SERVICE_IDENTITY_KEYSTORE_APP)
+        .map_err(|error| DrillError::Io(format!("durable KeyStore unavailable: {error}")))?
+        .ok_or_else(|| {
+            DrillError::Io(
+                "SOLAND_KEYSTORE_BACKEND must select a durable backend for this drill".to_owned(),
+            )
+        })
+}
+
 #[derive(Debug)]
 struct ResolvedServiceIdentity {
     service_id: String,
@@ -293,8 +305,7 @@ fn run_export_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<()
         .as_deref()
         .ok_or_else(|| DrillError::Io("--export-only requires --output".to_owned()))?;
     let key_id = &identity.signing_key_ref;
-    let store = arkret_sdk::durable_platform_keystore(SERVICE_IDENTITY_KEYSTORE_APP)
-        .map_err(|e| DrillError::Io(format!("durable KeyStore unavailable: {e}")))?;
+    let store = open_service_identity_key_store()?;
     let bytes = store
         .load(&key_id)
         .map_err(|e| DrillError::Io(format!("KeyStore::load({key_id}): {e}")))?;
@@ -367,8 +378,7 @@ fn run_import_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<()
         .map_err(|e| DrillError::Io(format!("seed_b64 decode: {e}")))?;
     validate_seed_binding(identity, &seed_bytes)?;
     let key_id = &identity.signing_key_ref;
-    let store = arkret_sdk::durable_platform_keystore(SERVICE_IDENTITY_KEYSTORE_APP)
-        .map_err(|e| DrillError::Io(format!("durable KeyStore unavailable: {e}")))?;
+    let store = open_service_identity_key_store()?;
     store
         .store(&key_id, &seed_bytes)
         .map_err(|e| DrillError::Io(format!("KeyStore::store({key_id}): {e}")))?;
@@ -403,8 +413,7 @@ async fn run_rotate_drill(
     // ── 1. snapshot the OLD signing seed from the KeyStore ─────────────
     // This is later compared byte-for-byte after the rejected request.
     let key_id = &identity.signing_key_ref;
-    let store = arkret_sdk::durable_platform_keystore(SERVICE_IDENTITY_KEYSTORE_APP)
-        .map_err(|e| DrillError::Io(format!("durable KeyStore unavailable: {e}")))?;
+    let store = open_service_identity_key_store()?;
     let old_seed_bytes = store
         .load(&key_id)
         .map_err(|e| DrillError::Io(format!("snapshot old seed: {e}")))?;

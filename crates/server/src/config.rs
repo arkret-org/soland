@@ -1,5 +1,9 @@
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use zeroize::{Zeroize, Zeroizing};
 
 pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_TO_DEVICE_QUEUE_CAPACITY: usize = 10_000;
@@ -111,6 +115,179 @@ pub const PLACEHOLDER_STUN_URL: &str = "stun:stun.l.google.com:19302";
 /// non-existent host, so a production deployment still advertising it has no
 /// working relay; surfaced as a hardening warning.
 pub const PLACEHOLDER_TURN_HOST: &str = "turn.soland.local";
+
+/// Durable key-custody backend used by every Soland KeyStore namespace.
+#[derive(Clone, Default)]
+pub enum KeyStoreConfig {
+    /// No durable key custody. This is valid only for fully in-memory tests and
+    /// local development; a persistent database must never use it.
+    #[default]
+    Disabled,
+    /// Native operating-system credential storage for the current user.
+    Platform,
+    /// Authenticated encrypted file with a separately custodied master key.
+    EncryptedFile {
+        path: PathBuf,
+        master_key: Arc<Zeroizing<[u8; 32]>>,
+    },
+}
+
+impl fmt::Debug for KeyStoreConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Disabled => formatter.write_str("Disabled"),
+            Self::Platform => formatter.write_str("Platform"),
+            Self::EncryptedFile { path, .. } => formatter
+                .debug_struct("EncryptedFile")
+                .field("path", path)
+                .field("master_key", &"<redacted>")
+                .finish(),
+        }
+    }
+}
+
+impl KeyStoreConfig {
+    /// Load the backend selector and its backend-specific settings.
+    pub fn from_env() -> anyhow::Result<Self> {
+        if env_non_empty("SOLAND_USE_KEYSTORE").is_some() {
+            anyhow::bail!(
+                "SOLAND_USE_KEYSTORE was removed; set SOLAND_KEYSTORE_BACKEND=platform or encrypted_file"
+            );
+        }
+
+        let backend =
+            env_non_empty("SOLAND_KEYSTORE_BACKEND").map(|value| value.to_ascii_lowercase());
+        let path = env_non_empty("SOLAND_KEYSTORE_PATH").map(PathBuf::from);
+        let master_key_file = env_non_empty("SOLAND_KEYSTORE_MASTER_KEY_FILE");
+        let raw_master_key =
+            env_non_empty_or_file("SOLAND_KEYSTORE_MASTER_KEY")?.map(Zeroizing::new);
+
+        match backend.as_deref() {
+            None => {
+                if path.is_some() || raw_master_key.is_some() {
+                    anyhow::bail!(
+                        "SOLAND_KEYSTORE_BACKEND is required when encrypted-file KeyStore settings are configured"
+                    );
+                }
+                Ok(Self::Disabled)
+            }
+            Some("platform") => {
+                if path.is_some() || raw_master_key.is_some() {
+                    anyhow::bail!(
+                        "SOLAND_KEYSTORE_PATH and SOLAND_KEYSTORE_MASTER_KEY(_FILE) are only valid with SOLAND_KEYSTORE_BACKEND=encrypted_file"
+                    );
+                }
+                Ok(Self::Platform)
+            }
+            Some("encrypted_file") => {
+                let path = path.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "SOLAND_KEYSTORE_PATH is required with SOLAND_KEYSTORE_BACKEND=encrypted_file"
+                    )
+                })?;
+                if master_key_file
+                    .as_ref()
+                    .is_some_and(|key_path| paths_refer_to_same_file(Path::new(key_path), &path))
+                {
+                    anyhow::bail!(
+                        "SOLAND_KEYSTORE_MASTER_KEY_FILE must be separate from SOLAND_KEYSTORE_PATH"
+                    );
+                }
+                let raw_master_key = raw_master_key.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "SOLAND_KEYSTORE_MASTER_KEY or SOLAND_KEYSTORE_MASTER_KEY_FILE is required with SOLAND_KEYSTORE_BACKEND=encrypted_file"
+                    )
+                })?;
+                use base64::Engine as _;
+                let mut decoded = Zeroizing::new(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(raw_master_key.as_bytes())
+                        .or_else(|_| {
+                            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                                .decode(raw_master_key.as_bytes())
+                        })
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "SOLAND_KEYSTORE_MASTER_KEY must be base64 (standard or url-safe-no-pad): {error}"
+                            )
+                        })?,
+                );
+                if decoded.len() != 32 {
+                    anyhow::bail!(
+                        "SOLAND_KEYSTORE_MASTER_KEY must decode to exactly 32 bytes (got {})",
+                        decoded.len()
+                    );
+                }
+                let mut master_key = [0u8; 32];
+                master_key.copy_from_slice(&decoded);
+                decoded.zeroize();
+                Ok(Self::EncryptedFile {
+                    path,
+                    master_key: Arc::new(Zeroizing::new(master_key)),
+                })
+            }
+            Some(other) => anyhow::bail!(
+                "SOLAND_KEYSTORE_BACKEND must be platform or encrypted_file; got {other}"
+            ),
+        }
+    }
+
+    #[inline]
+    pub fn is_durable(&self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+
+    pub fn backend_name(&self) -> Option<&'static str> {
+        match self {
+            Self::Disabled => None,
+            Self::Platform => Some("platform"),
+            Self::EncryptedFile { .. } => Some("encrypted_file"),
+        }
+    }
+
+    /// Open one application namespace in the configured durable backend.
+    pub fn open(
+        &self,
+        application_id: &str,
+    ) -> anyhow::Result<Option<Box<dyn arkret_sdk::KeyStore>>> {
+        match self {
+            Self::Disabled => Ok(None),
+            Self::Platform => arkret_sdk::durable_platform_keystore(application_id)
+                .map(Some)
+                .map_err(|error| anyhow::anyhow!("opening platform KeyStore failed: {error}")),
+            Self::EncryptedFile { path, master_key } => {
+                let mut key = **master_key.as_ref();
+                let store = arkret_sdk::EncryptedFileKeyStore::new(path, application_id, key);
+                key.zeroize();
+                store
+                    .map(|store| Some(Box::new(store) as Box<dyn arkret_sdk::KeyStore>))
+                    .map_err(|error| {
+                        anyhow::anyhow!("opening encrypted-file KeyStore failed: {error}")
+                    })
+            }
+        }
+    }
+}
+
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
+    left == right
+        || std::fs::canonicalize(left)
+            .ok()
+            .zip(std::fs::canonicalize(right).ok())
+            .is_some_and(|(left, right)| left == right)
+}
+
+fn validate_persistence_key_store(
+    database_url: Option<&str>,
+    key_store: &KeyStoreConfig,
+) -> anyhow::Result<()> {
+    if database_url.is_some() && !key_store.is_durable() {
+        anyhow::bail!(
+            "DATABASE_URL requires a durable KeyStore; set SOLAND_KEYSTORE_BACKEND=platform or encrypted_file"
+        );
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -227,18 +404,18 @@ pub struct AppConfig {
     /// — the env var holds the raw seed, base64-standard-padded; bad shape
     /// fails fast at startup with a clear error.
     pub notary_signing_key_seed: Option<[u8; 32]>,
-    /// When true, service-identity bootstrap uses the durable SDK platform
-    /// KeyStore namespace `soland.service-identity`. Signing and WebVH
+    /// Durable key custody shared by service identity, notary, and admin
+    /// KeyStore namespaces. Signing and WebVH
     /// control secrets are addressed exclusively by the opaque KeyRefs in
     /// the verified `LocalServiceIdentity`; AppState neither derives a key id
     /// from the service DID nor independently mints a runtime signer.
     ///
-    /// When false, an explicit `SOLAND_NOTARY_SIGNING_KEY` may supply the
+    /// When disabled, an explicit `SOLAND_NOTARY_SIGNING_KEY` may supply the
     /// signing secret, but WebVH control-key custody still requires a durable
     /// KeyStore. Service signing-key rotation fails closed until the WebVH
     /// history, DID document, stored identity, KeyStore, and recovery bundle
     /// can be updated as one recoverable transition.
-    pub use_keystore: bool,
+    pub key_store: KeyStoreConfig,
     /// Federation fanout topology. The on-the-wire shape is `ak.peer.events.command.submit`
     /// under `/_arkret/peer/events`; the topology only changes which peer set
     /// receives accepted Event fanout.
@@ -685,7 +862,7 @@ impl AppConfig {
             jws_replay_window_seconds: 300,
             jws_replay_window_per_family: Self::default_replay_overrides(),
             notary_signing_key_seed: None,
-            use_keystore: false,
+            key_store: KeyStoreConfig::Disabled,
             federation_fanout_topology: FederationFanoutTopology::Mesh,
             federation_peers: Vec::new(),
             // Off so test binaries never spawn background federation HTTP
@@ -815,16 +992,15 @@ impl AppConfig {
             );
         }
         let notary_signing_key_seed = load_notary_signing_key_seed()?;
-        let use_keystore = std::env::var("SOLAND_USE_KEYSTORE")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
-            .unwrap_or(false);
+        let key_store = KeyStoreConfig::from_env()?;
+        validate_persistence_key_store(database_url.as_deref(), &key_store)?;
         // T2 — without a persistent notary seed (env or KeyStore) the worker
         // mints a fresh ephemeral ed25519 identity on every restart, which
         // breaks the Seal signature chain. Match the `agent_audit_binding`
         // fail-fast posture; the notary key is at least as critical.
-        if !development_mode && notary_signing_key_seed.is_none() && !use_keystore {
+        if !development_mode && notary_signing_key_seed.is_none() && !key_store.is_durable() {
             anyhow::bail!(
-                "SOLAND_NOTARY_SIGNING_KEY (or SOLAND_USE_KEYSTORE=true) is required when SOLAND_DEVELOPMENT_MODE is false; an ephemeral notary key breaks the Seal signature chain across restarts"
+                "SOLAND_NOTARY_SIGNING_KEY (or a durable SOLAND_KEYSTORE_BACKEND) is required when SOLAND_DEVELOPMENT_MODE is false; an ephemeral notary key breaks the Seal signature chain across restarts"
             );
         }
         let federation_fanout_topology = std::env::var("SOLAND_FEDERATION_FANOUT_TOPOLOGY")
@@ -980,7 +1156,7 @@ impl AppConfig {
             jws_replay_window_seconds,
             jws_replay_window_per_family: Self::default_replay_overrides(),
             notary_signing_key_seed,
-            use_keystore,
+            key_store,
             federation_fanout_topology,
             federation_peers,
             federation_outbound_enabled,
@@ -1128,11 +1304,10 @@ impl AppConfig {
             None => true,
             Some(value) => !value.trim().split(',').any(|origin| origin.trim() == "*"),
         };
-        // Soland does not yet integrate with a remote secret manager —
-        // signing seeds come from env vars. We treat "env-provided
-        // signing seed" as the minimum acceptable production posture
-        // and surface a warning when it is missing.
-        let secret_manager_in_use = self.notary_signing_key_seed.is_some() || self.use_keystore;
+        // A configured durable KeyStore or an explicit signing seed is the
+        // minimum acceptable production posture.
+        let secret_manager_in_use =
+            self.notary_signing_key_seed.is_some() || self.key_store.is_durable();
         // Log redaction is structurally enforced by the tracing layer
         // (no PII fields are logged at INFO); we report true unless dev
         // mode flips us into the chatty path.
@@ -1145,7 +1320,7 @@ impl AppConfig {
         // Provider credential rotation: soland's only signing identity
         // is the notary key; rotation is manual today. The KeyStore
         // path is the closest thing to "scheduled" we ship.
-        let provider_credential_rotation = if self.use_keystore {
+        let provider_credential_rotation = if self.key_store.is_durable() {
             "scheduled".to_owned()
         } else if self.notary_signing_key_seed.is_some() {
             "manual".to_owned()
@@ -1647,6 +1822,53 @@ fn arg_value(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_store_config_selects_backends_and_rejects_legacy_switch() {
+        use base64::Engine as _;
+
+        let backend = ScopedEnv::new("SOLAND_KEYSTORE_BACKEND");
+        let path = ScopedEnv::new("SOLAND_KEYSTORE_PATH");
+        let master_key = ScopedEnv::new("SOLAND_KEYSTORE_MASTER_KEY");
+        let legacy = ScopedEnv::new("SOLAND_USE_KEYSTORE");
+
+        assert!(matches!(
+            KeyStoreConfig::from_env().unwrap(),
+            KeyStoreConfig::Disabled
+        ));
+
+        backend.set_env("platform");
+        assert!(matches!(
+            KeyStoreConfig::from_env().unwrap(),
+            KeyStoreConfig::Platform
+        ));
+
+        backend.set_env("encrypted_file");
+        path.set_env("soland-test-keystore.v1");
+        let encoded = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
+        master_key.set_env(&encoded);
+        let encrypted = KeyStoreConfig::from_env().unwrap();
+        assert_eq!(encrypted.backend_name(), Some("encrypted_file"));
+        assert!(!format!("{encrypted:?}").contains(&encoded));
+
+        backend.clear();
+        path.clear();
+        master_key.clear();
+        legacy.set_env("true");
+        let error = KeyStoreConfig::from_env().expect_err("legacy switch must fail");
+        assert!(error.to_string().contains("was removed"));
+    }
+
+    #[test]
+    fn persistent_database_requires_durable_key_store() {
+        let error =
+            validate_persistence_key_store(Some("postgres://example"), &KeyStoreConfig::Disabled)
+                .expect_err("persistent database with ephemeral keys must fail");
+        assert!(error.to_string().contains("DATABASE_URL requires"));
+        validate_persistence_key_store(Some("postgres://example"), &KeyStoreConfig::Platform)
+            .unwrap();
+        validate_persistence_key_store(None, &KeyStoreConfig::Disabled).unwrap();
+    }
 
     #[test]
     fn default_did_resolver_allow_methods_webvh_only_no_bare_web() {

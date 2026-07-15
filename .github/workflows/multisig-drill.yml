@@ -30,7 +30,9 @@ env:
   SOLAND_FIRST_PROVISIONING: "true"
   SOLAND_SERVICE_IDENTITY_BUNDLE_DIR: ${{ github.workspace }}/_drill/identity-bundle
   SOLAND_BACKUP_DIR: ${{ github.workspace }}/_drill/backups
-  SOLAND_USE_KEYSTORE: "true"
+  SOLAND_KEYSTORE_BACKEND: encrypted_file
+  SOLAND_KEYSTORE_PATH: ${{ github.workspace }}/_drill/keystore/soland.v1
+  SOLAND_KEYSTORE_MASTER_KEY_FILE: ${{ github.workspace }}/_drill/secrets/keystore-master-key
   SOLAND_DEVELOPMENT_MODE: "true"
   SOLAND_BIND: 127.0.0.1:8989
   SOLAND_OBJECT_STORAGE_LOCAL_ROOT: ${{ github.workspace }}/_drill/blobs
@@ -76,21 +78,11 @@ jobs:
         with:
           workspaces: soland -> target
 
-      - name: Install drill prerequisites and start Secret Service
+      - name: Install drill prerequisites
         run: |
           set -euxo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y postgresql-client jq dbus-x11 gnome-keyring
-          eval "$(dbus-launch --sh-syntax)"
-          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
-          echo "DBUS_SESSION_BUS_PID=$DBUS_SESSION_BUS_PID" >> "$GITHUB_ENV"
-          KEYRING_ENV="$(printf '\n' | gnome-keyring-daemon --unlock --components=secrets)"
-          while IFS= read -r assignment; do
-            assignment="${assignment%; export *}"
-            if [[ "$assignment" == *=* ]]; then
-              echo "$assignment" >> "$GITHUB_ENV"
-            fi
-          done <<< "$KEYRING_ENV"
+          sudo apt-get install -y postgresql-client jq
 
       - name: Verify postgres reachable
         run: |
@@ -117,8 +109,12 @@ jobs:
           mkdir -p \
             "$SOLAND_BACKUP_DIR" \
             "$SOLAND_SERVICE_IDENTITY_BUNDLE_DIR" \
+            "$(dirname "$SOLAND_KEYSTORE_PATH")" \
+            "$(dirname "$SOLAND_KEYSTORE_MASTER_KEY_FILE")" \
             "$SOLAND_OBJECT_STORAGE_LOCAL_ROOT" \
             _drill/logs
+          head -c 32 /dev/urandom | base64 > "$SOLAND_KEYSTORE_MASTER_KEY_FILE"
+          chmod 600 "$SOLAND_KEYSTORE_MASTER_KEY_FILE"
 
       - name: Boot soland once to apply migrations
         working-directory: soland

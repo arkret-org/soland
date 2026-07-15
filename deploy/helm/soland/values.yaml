@@ -1,4 +1,4 @@
-replicaCount: 2
+replicaCount: 1
 
 image:
   repository: ghcr.io/arkret/soland
@@ -40,6 +40,9 @@ env:
   SOLAND_BIND: 0.0.0.0:8698
   SOLAND_PUBLIC_BASE_URL: https://soland.example
   SOLAND_FIRST_PROVISIONING: "false"
+  SOLAND_KEYSTORE_BACKEND: encrypted_file
+  SOLAND_KEYSTORE_PATH: /var/lib/soland/keystore/soland.v1
+  SOLAND_SERVICE_IDENTITY_BUNDLE_DIR: /var/lib/soland/identity-bundle
   SOLAND_ACCOUNT_AUTHORITY_URL: https://coauth.example
   SOLAND_OBJECT_STORAGE_BACKEND: s3-compatible
   SOLAND_OBJECT_STORAGE_S3_BUCKET: soland
@@ -51,6 +54,7 @@ env:
 
 secretEnv:
   DATABASE_URL: ""
+  SOLAND_KEYSTORE_MASTER_KEY: ""
   SOLAND_SESSION_GRANT_INTROSPECTION_URL: ""
   SOLAND_SESSION_GRANT_INTROSPECTION_BEARER: ""
   SOLAND_OBJECT_STORAGE_S3_ENDPOINT: ""
@@ -58,6 +62,14 @@ secretEnv:
   SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY: ""
 
 existingSecret: ""
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
 
 resources:
   requests:

@@ -20,7 +20,7 @@ fi
 
 DATABASE_URL="${SOLAND_DATABASE_URL:-${DATABASE_URL:-${PASION_DATABASE_URL:-}}}"
 BUNDLE_DIR="${SOLAND_SERVICE_IDENTITY_BUNDLE_DIR:-}"
-USE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"
+KEYSTORE_BACKEND="${SOLAND_KEYSTORE_BACKEND:-}"
 WORKDIR="$(mktemp -d -t soland-restore-XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
@@ -32,6 +32,13 @@ if [ -z "$BUNDLE_DIR" ]; then
     echo "[restore-drill] FATAL: SOLAND_SERVICE_IDENTITY_BUNDLE_DIR is unset" >&2
     exit 2
 fi
+case "$KEYSTORE_BACKEND" in
+    platform|encrypted_file) ;;
+    *)
+        echo "[restore-drill] FATAL: SOLAND_KEYSTORE_BACKEND must be platform or encrypted_file" >&2
+        exit 2
+        ;;
+esac
 
 for cmd in pg_restore psql sha256sum tar jq; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -88,12 +95,15 @@ case "$BUNDLE_BACKEND_FILE" in
         exit 1
         ;;
 esac
-MANIFEST_USE_KEYSTORE="$(jq -er '.use_keystore | tostring' "$MANIFEST")"
-if [ "$USE_KEYSTORE" != "$MANIFEST_USE_KEYSTORE" ]; then
-    echo "[restore-drill] FATAL: SOLAND_USE_KEYSTORE=$USE_KEYSTORE does not match backup manifest $MANIFEST_USE_KEYSTORE" >&2
-    exit 1
-fi
-echo "[restore-drill] service_id=$SERVICE_ID identity_bundle_backend_file=$BUNDLE_BACKEND_FILE"
+MANIFEST_KEYSTORE_BACKEND="$(jq -er '.keystore_backend' "$MANIFEST")"
+case "$MANIFEST_KEYSTORE_BACKEND" in
+    platform|encrypted_file) ;;
+    *)
+        echo "[restore-drill] FATAL: backup manifest has unsupported keystore_backend=$MANIFEST_KEYSTORE_BACKEND" >&2
+        exit 1
+        ;;
+esac
+echo "[restore-drill] service_id=$SERVICE_ID identity_bundle_backend_file=$BUNDLE_BACKEND_FILE keystore_backend=$MANIFEST_KEYSTORE_BACKEND->$KEYSTORE_BACKEND"
 
 echo "[restore-drill] step 1/4: pg_restore (clean+if-exists)"
 pg_restore --clean --if-exists --no-owner --no-acl \
@@ -103,16 +113,11 @@ echo "[restore-drill] step 2/4: restore SDK identity bundle"
 mkdir -p "$BUNDLE_DIR"
 cp "$BUNDLE_PATH" "$BUNDLE_DIR/$BUNDLE_BACKEND_FILE"
 
-if [ "$USE_KEYSTORE" = "true" ] && \
-   [ "$(jq -r '.skipped // false' "$WORKDIR/keystore.json")" != "true" ]; then
-    echo "[restore-drill] step 3/4: keystore restore via soland-rotate-drill --import-only"
-    cargo run --quiet --bin soland-rotate-drill -- \
-        --import-only \
-        --identity-bundle "$BUNDLE_PATH" \
-        --input "$WORKDIR/keystore.json"
-else
-    echo "[restore-drill] step 3/4: keystore restore skipped"
-fi
+echo "[restore-drill] step 3/4: keystore restore via soland-rotate-drill --import-only"
+cargo run --quiet --bin soland-rotate-drill -- \
+    --import-only \
+    --identity-bundle "$BUNDLE_PATH" \
+    --input "$WORKDIR/keystore.json"
 
 echo "[restore-drill] step 4/4: walk multisig_pending - per-row aggregability check"
 

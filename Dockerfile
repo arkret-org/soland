@@ -31,6 +31,8 @@ RUN apt-get update \
 
 COPY --from=builder /usr/local/bin/soland /usr/local/bin/soland
 
+RUN install -d -o 10001 -g 10001 /var/lib/soland
+
 USER 10001:10001
 WORKDIR /var/lib/soland
 

@@ -63,3 +63,4 @@ tracing-appender = "0.2.5"
 tracing-opentelemetry = { version = "0.33.0", default-features = false }
 tracing-subscriber = "0.3.23"
 uuid = "1.23.3"
+zeroize = "1.8.2"

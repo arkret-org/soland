@@ -6,8 +6,7 @@
 #   1. `pg_dump` of the soland database (custom `Fc` format).
 #   2. SDK service-identity bundle containing public recovery evidence and
 #      opaque KeyRefs (never secret material).
-#   3. Snapshot of the keystore-persisted notary signing seed (when
-#      `SOLAND_USE_KEYSTORE=true`). Implemented via `soland-rotate-drill
+#   3. Snapshot of the keystore-persisted notary signing seed. Implemented via `soland-rotate-drill
 #      --export-only` so we can use the same KeyStore trait the running
 #      server uses (no out-of-band keychain probing).
 #   4. The `multisig_pending` table's full state (rows + claim_seq +
@@ -17,7 +16,7 @@
 # Honours the existing SOLAND_* env conventions:
 #   - `SOLAND_DATABASE_URL` or `DATABASE_URL`
 #   - `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR` — SDK identity-bundle backend
-#   - `SOLAND_USE_KEYSTORE` — when "true", export the platform keystore seed
+#   - `SOLAND_KEYSTORE_BACKEND` — durable backend used by the running server
 #   - `SOLAND_BACKUP_DIR`  — where the output tarball is written
 #                             (defaults to ./backups/soland-<ts>.tar.gz)
 #
@@ -32,7 +31,7 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 DATABASE_URL="${SOLAND_DATABASE_URL:-${DATABASE_URL:-${PASION_DATABASE_URL:-}}}"
 BUNDLE_DIR="${SOLAND_SERVICE_IDENTITY_BUNDLE_DIR:-}"
-USE_KEYSTORE="${SOLAND_USE_KEYSTORE:-false}"
+KEYSTORE_BACKEND="${SOLAND_KEYSTORE_BACKEND:-}"
 BACKUP_DIR="${SOLAND_BACKUP_DIR:-./backups}"
 mkdir -p "$BACKUP_DIR"
 OUTPUT="${BACKUP_DIR}/soland-${DRILL_TS}.tar.gz"
@@ -45,6 +44,13 @@ if [ -z "$BUNDLE_DIR" ] || [ ! -d "$BUNDLE_DIR" ]; then
     echo "[backup-drill] FATAL: SOLAND_SERVICE_IDENTITY_BUNDLE_DIR must name the initialized SDK bundle directory" >&2
     exit 2
 fi
+case "$KEYSTORE_BACKEND" in
+    platform|encrypted_file) ;;
+    *)
+        echo "[backup-drill] FATAL: SOLAND_KEYSTORE_BACKEND must be platform or encrypted_file" >&2
+        exit 2
+        ;;
+esac
 
 for cmd in pg_dump psql sha256sum tar jq; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -83,16 +89,11 @@ echo "[backup-drill] step 2/4: SDK identity bundle captured"
 
 # ── 3. keystore snapshot ─────────────────────────────────────────────────
 KEYSTORE_PATH="${WORKDIR}/keystore.json"
-if [ "$USE_KEYSTORE" = "true" ]; then
-    echo "[backup-drill] step 3/4: keystore export via soland-rotate-drill --export-only"
-    cargo run --quiet --bin soland-rotate-drill -- \
-        --export-only \
-        --identity-bundle "$BUNDLE_PATH" \
-        --output "$KEYSTORE_PATH"
-else
-    echo "[backup-drill] step 3/4: keystore export skipped (SOLAND_USE_KEYSTORE != true)"
-    printf '%s\n' '{ "skipped": true, "reason": "SOLAND_USE_KEYSTORE is not true" }' >"$KEYSTORE_PATH"
-fi
+echo "[backup-drill] step 3/4: keystore export via soland-rotate-drill --export-only"
+cargo run --quiet --bin soland-rotate-drill -- \
+    --export-only \
+    --identity-bundle "$BUNDLE_PATH" \
+    --output "$KEYSTORE_PATH"
 KEYSTORE_SHA="$(sha256sum "$KEYSTORE_PATH" | awk '{print $1}')"
 echo "[backup-drill]   sha256=$KEYSTORE_SHA"
 
@@ -133,7 +134,7 @@ jq -n \
     --arg ts "$DRILL_TS" \
     --arg did "$SERVICE_ID" \
     --arg bundle_backend_file "$BUNDLE_BACKEND_FILE" \
-    --arg use_ks "$USE_KEYSTORE" \
+    --arg keystore_backend "$KEYSTORE_BACKEND" \
     --arg dump_sha "$DUMP_SHA" \
     --arg bundle_sha "$BUNDLE_SHA" \
     --arg ks_sha "$KEYSTORE_SHA" \
@@ -145,7 +146,7 @@ jq -n \
         timestamp: $ts,
         service_id: $did,
         identity_bundle_backend_file: $bundle_backend_file,
-        use_keystore: $use_ks,
+        keystore_backend: $keystore_backend,
         artifacts: {
             "soland-database.dump":  { sha256: $dump_sha, kind: "pg_dump_custom" },
             "service-identity-bundle.json": { sha256: $bundle_sha,

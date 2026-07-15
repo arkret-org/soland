@@ -142,8 +142,8 @@ idempotently. To stop the local database container:
 just db-down
 ```
 
-If you prefer a persistent `.env`, copy the example and uncomment or replace
-the `DATABASE_URL` line:
+If you prefer a persistent `.env`, copy the example, configure one of the
+documented durable KeyStore backends, and uncomment or replace `DATABASE_URL`:
 
 ```bash
 just init-env
@@ -155,6 +155,7 @@ Manual equivalent:
 
 ```bash
 DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
+  SOLAND_KEYSTORE_BACKEND=platform \
   SOLAND_DEVELOPMENT_MODE=true \
   cargo run -- --bind 127.0.0.1:8698
 ```
@@ -165,7 +166,9 @@ DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
 docker run --rm -p 8698:8698 \
   -e SOLAND_PUBLIC_BASE_URL=https://soland.example \
   -e SOLAND_FIRST_PROVISIONING=1 \
-  -e SOLAND_USE_KEYSTORE=true \
+  -e SOLAND_KEYSTORE_BACKEND=encrypted_file \
+  -e SOLAND_KEYSTORE_PATH=/var/lib/soland/keystore/soland.v1 \
+  -e SOLAND_KEYSTORE_MASTER_KEY_FILE=/run/secrets/soland-keystore-master-key \
   -e SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=/var/lib/soland/identity-bundle \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
@@ -173,14 +176,16 @@ docker run --rm -p 8698:8698 \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
-  -v soland-objects:/var/lib/soland \
+  -v soland-data:/var/lib/soland \
+  -v /secure/soland-keystore-master-key:/run/secrets/soland-keystore-master-key:ro \
   ghcr.io/arkret/soland:latest
 ```
 
-The container must have access to a supported durable SDK KeyStore or an
-equivalent configured Secrets backend. The identity bundle contains only
-public recovery evidence and KeyRefs; it is not a substitute for control-key
-custody. Soland fails closed instead of writing control seeds to PostgreSQL.
+Generate the mounted master key once with a cryptographically secure source
+(for example, `openssl rand -base64 32`) and back it up separately from the
+ciphertext volume. The identity bundle contains only public recovery evidence
+and KeyRefs; it is not a substitute for control-key custody. Soland fails
+closed instead of writing control seeds to PostgreSQL.
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for a full Docker / PostgreSQL / TLS guide.
 
@@ -198,7 +203,9 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_PQ_TLS_DEPLOYMENT_PROBE` | unset | Set to `verified` only after an external TLS 1.3 probe proves `X25519MLKEM768` negotiation and fail-closed classical fallback |
 | `SOLAND_FIRST_PROVISIONING` | unset | One-time class-B production authorization to create a new service identity when no stored identity, local registration, or bundle exists |
 | `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR` | unset | SDK identity-bundle backend used to recover the same service DID after database loss; contains public evidence and KeyRefs, never private keys |
-| `SOLAND_USE_KEYSTORE` | `false` | Use a durable SDK platform KeyStore for the service signing key and current/precommitted WebVH control keys; self-provisioning fails closed without a durable secret backend |
+| `SOLAND_KEYSTORE_BACKEND` | unset | Durable key custody: `platform` for the current user's native credential store, or `encrypted_file`; required whenever `DATABASE_URL` is set |
+| `SOLAND_KEYSTORE_PATH` | unset | Ciphertext file used by the `encrypted_file` backend; it may hold multiple isolated Soland namespaces |
+| `SOLAND_KEYSTORE_MASTER_KEY` / `_FILE` | unset | Base64-encoded, random 32-byte master key for `encrypted_file`; custody and backup must be separate from `SOLAND_KEYSTORE_PATH` |
 | `SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED` | `true` | Enable soland's built-in `did:webvh` provider for coauth registration |
 | `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER` | unset | Shared bearer token coauth must present to write embedded `did:webvh` registrations |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider, such as a standalone StarID service |
@@ -207,7 +214,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_arkret/describe.auth_metadata.account_authority` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ak.session.grant + DPoP` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the session-grant introspection endpoint |
-| `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations |
+| `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations; a durable `SOLAND_KEYSTORE_BACKEND` is mandatory |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `filesystem` | Blob object backend: `filesystem`/`local` or `s3-compatible` |
 | `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `filesystem`/`local` |
 | `SOLAND_OBJECT_STORAGE_PREFIX` | unset | Optional object key prefix shared by local and S3-compatible backends |
@@ -264,7 +271,9 @@ and the `local.host.pem` / `local.host-key.pem` file names.
    ```dotenv
     SOLAND_BIND=127.0.0.1:443
     SOLAND_PUBLIC_BASE_URL=https://local.host:443
-    SOLAND_USE_KEYSTORE=true
+   SOLAND_KEYSTORE_BACKEND=encrypted_file
+   SOLAND_KEYSTORE_PATH=./.local/keystore/soland.v1
+   SOLAND_KEYSTORE_MASTER_KEY_FILE=../.secrets/soland-keystore-master-key
     SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=./identity-bundle
    SOLAND_TLS_CERT_PATH=./local.host.pem
    SOLAND_TLS_KEY_PATH=./local.host-key.pem
@@ -298,7 +307,9 @@ Start soland on `127.0.0.1:8698`, start coauth on `127.0.0.1:7080`, then run:
 ```dotenv
 SOLAND_BIND=127.0.0.1:8698
 SOLAND_PUBLIC_BASE_URL=https://local.host
-SOLAND_USE_KEYSTORE=true
+SOLAND_KEYSTORE_BACKEND=encrypted_file
+SOLAND_KEYSTORE_PATH=./.local/keystore/soland.v1
+SOLAND_KEYSTORE_MASTER_KEY_FILE=../.secrets/soland-keystore-master-key
 SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=./identity-bundle
 SOLAND_DEVELOPMENT_MODE=true
 SOLAND_ACCOUNT_AUTHORITY_URL=https://auth.local.host
