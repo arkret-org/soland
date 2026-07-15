@@ -144,7 +144,9 @@ pub(super) async fn provision_agent(
     principal.agent_slug = Some(agent_slug.clone());
     principal.avatar_blob_ref = avatar_blob_ref.clone();
     principal.requested_scope = Some(requested_scope);
-    principal.accountability = body.accountability;
+    principal.accountability = body
+        .accountability
+        .map(|value| Value::Object(value.into_iter().collect()));
     principal.provision_event_refs = Some(provision_event_refs);
     principal.pairing_request_id = Some(pairing_request_id.clone());
     principal.pairing_code = Some(pairing_code.clone());

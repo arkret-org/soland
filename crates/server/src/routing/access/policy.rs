@@ -672,9 +672,12 @@ fn policy_check_has_service_delegation(
     let Some(proof) = request
         .auth_context
         .as_ref()
-        .get("service_delegation")
-        .or_else(|| request.auth_context.get("delegation_proof"))
-        .or_else(|| request.auth_context.get("delegation"))
+        .and_then(|context| {
+            context
+                .get("service_delegation")
+                .or_else(|| context.get("delegation_proof"))
+                .or_else(|| context.get("delegation"))
+        })
         .and_then(Value::as_object)
     else {
         return false;

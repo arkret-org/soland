@@ -240,7 +240,7 @@ pub(super) async fn hydrate_projections_from_persistence(
             let projection = AppletProjection {
                 service_id: package.service_id.to_string(),
                 namespace,
-                manifest: Some(package.manifest_snapshot()),
+                manifest: Some(json!(package.manifest_snapshot())),
                 capabilities: row
                     .get("capabilities")
                     .and_then(|value| serde_json::to_value(value).ok()),

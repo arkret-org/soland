@@ -4,9 +4,11 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{
-    AppletApprovalRequest, AppletInstallOutcome, AppletInstallPlan, AppletInstallRequestBody,
-    AppletPackage, AppletWireNamespaces, CapabilityConstraint, DeniedScope, E2eeEffect, E2eePolicy,
-    EffectiveScope, EventSubmission, NamespaceConflict, RealmId, ScopeGrant, WidgetEffect,
+    AppletApprovalRequest, AppletGhostActorMode, AppletId, AppletInstallAppletId,
+    AppletInstallEffectiveStatus, AppletInstallOutcome, AppletInstallPlan,
+    AppletInstallRequestBody, AppletPackage, AppletRejectedItem, AppletWireNamespaces,
+    CapabilityConstraint, DeniedScope, Did, E2eeEffect, E2eePolicy, EffectiveScope, EventId,
+    EventSubmission, GrantId, NamespaceConflict, RealmId, ScopeGrant, WidgetEffect,
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -44,7 +46,7 @@ pub(super) async fn register_package_install(
     let realm_id = effective_scope_realm_id(&commit.effective_scope);
     let approved_actions = actions_from_approved_scopes(&commit.approved_scopes);
     let allow_ghost_actors =
-        allow_ghost_actors_for_install(&package, &approved_actions, &commit.actor_policy);
+        allow_ghost_actors_for_install(&package, &approved_actions, commit.actor_policy.as_ref());
 
     if let Some(existing) = applet_record(state, &applet_id).await? {
         if existing.idempotency_key.as_deref() == Some(idempotency_key.as_str()) {
@@ -86,19 +88,29 @@ pub(super) async fn register_package_install(
     }
 
     let now = chrono::Utc::now();
-    let registration_event_ref = ids::generate_event_id();
+    let registration_event_ref = EventId::new(ids::generate_event_id())
+        .map_err(|error| AppError::internal(format!("generated event id is invalid: {error}")))?;
     let capability_grant_refs = approved_actions
         .iter()
-        .map(|_| ids::generate_grant_id())
-        .collect::<Vec<_>>();
+        .map(|_| {
+            GrantId::new(ids::generate_grant_id()).map_err(|error| {
+                AppError::internal(format!("generated capability grant id is invalid: {error}"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let e2ee_authorization_refs =
-        e2ee_authorization_refs_for_install(&package, &commit.e2ee_policy)?;
+        e2ee_authorization_refs_for_install(&package, commit.e2ee_policy.as_ref())?;
     let effective_status = if approved_actions.is_empty() {
-        "rejected"
+        AppletInstallEffectiveStatus::Rejected
     } else if approved_actions.len() < package.requested_scopes.len() {
-        "partially_installed"
+        AppletInstallEffectiveStatus::PartiallyInstalled
     } else {
-        "installed"
+        AppletInstallEffectiveStatus::Installed
+    };
+    let effective_status_wire = match effective_status {
+        AppletInstallEffectiveStatus::Installed => "installed",
+        AppletInstallEffectiveStatus::PartiallyInstalled => "partially_installed",
+        AppletInstallEffectiveStatus::Rejected => "rejected",
     };
     // G3.S9 — bot actor DID recorded against the applet MUST be a
     // well-formed bare DID scalar (no DID URL fragment).
@@ -107,24 +119,24 @@ pub(super) async fn register_package_install(
     )?;
     let install_id = ids::generate_install_id();
     let response = AppletInstallOutcome {
-        ok: effective_status != "rejected",
+        ok: effective_status != AppletInstallEffectiveStatus::Rejected,
         install_id,
         applet_id: applet_id.clone(),
-        registration_event_ref: registration_event_ref.clone(),
+        registration_event_ref: Some(registration_event_ref.clone()),
         registration_epoch: package.registration_epoch.clone(),
         bot_actor_id: package.bot_actor_id.clone(),
         capability_grant_refs,
         membership_event_refs: Vec::new(),
         e2ee_authorization_refs,
         widget_policy_ref: None,
-        effective_status: effective_status.to_owned(),
+        effective_status,
         rejected: denied_scope_values(&package, &approved_actions)
             .into_iter()
-            .map(|scope| {
-                serde_json::to_value(scope)
-                    .map_err(|error| AppError::internal(format!("denied scope serialize: {error}")))
+            .map(|scope| AppletRejectedItem {
+                requested_scope: Some(scope.requested_scope),
+                reason_code: scope.reason_code,
             })
-            .collect::<Result<Vec<_>, _>>()?,
+            .collect(),
     };
     let mut record = AppletRecord {
         applet_id: package.applet_id.clone(),
@@ -139,7 +151,7 @@ pub(super) async fn register_package_install(
         registration_epoch_evidence: package.registration_epoch_evidence.clone(),
         namespaces: Some(package.namespaces.clone()),
         allow_ghost_actors,
-        status: effective_status.to_owned(),
+        status: effective_status_wire.to_owned(),
         registered_at: now,
         revoked_at: None,
         idempotency_key: Some(idempotency_key),
@@ -186,7 +198,9 @@ async fn recover_applet_install_fanout(
     response: &AppletInstallOutcome,
 ) -> Result<(), AppError> {
     update_applet_projection(state, record);
-    ensure_applet_registration_projection(state, record, &response.registration_event_ref).await?;
+    if let Some(event_id) = response.registration_event_ref.as_ref() {
+        ensure_applet_registration_projection(state, record, event_id.as_str()).await?;
+    }
     project_applet_install_grants(state, record, &response.capability_grant_refs);
     ensure_applet_e2ee_authorization_projections(state, record, &response.e2ee_authorization_refs)
         .await?;
@@ -222,7 +236,7 @@ async fn recover_applet_install_fanout(
 async fn ensure_applet_e2ee_authorization_projections(
     state: &AppState,
     record: &AppletRecord,
-    event_ids: &[String],
+    event_ids: &[EventId],
 ) -> Result<(), AppError> {
     if event_ids.is_empty() {
         return Ok(());
@@ -240,8 +254,8 @@ async fn ensure_applet_e2ee_authorization_projections(
         .map(|event| event.event_id)
         .collect::<BTreeSet<_>>();
     for event_id in event_ids {
-        if !existing.contains(event_id) {
-            append_applet_e2ee_authorization_projection(state, record, event_id).await?;
+        if !existing.contains(event_id.as_str()) {
+            append_applet_e2ee_authorization_projection(state, record, event_id.as_str()).await?;
         }
     }
     Ok(())
@@ -269,7 +283,7 @@ async fn ensure_applet_registration_projection(
     append_applet_registration_projection(state, record, event_id).await
 }
 
-fn project_applet_install_grants(state: &AppState, record: &AppletRecord, grant_ids: &[String]) {
+fn project_applet_install_grants(state: &AppState, record: &AppletRecord, grant_ids: &[GrantId]) {
     if record.revoked_at.is_some()
         || !matches!(record.status.as_str(), "installed" | "partially_installed")
     {
@@ -279,9 +293,12 @@ fn project_applet_install_grants(state: &AppState, record: &AppletRecord, grant_
         return;
     };
     for (grant_id, action) in grant_ids.iter().zip(record.capabilities.iter()) {
-        state
-            .authz
-            .upsert_projected_grant(applet_install_grant(record, package, grant_id, action));
+        state.authz.upsert_projected_grant(applet_install_grant(
+            record,
+            package,
+            grant_id.as_str(),
+            action,
+        ));
     }
 }
 
@@ -353,12 +370,32 @@ fn install_produced_event_refs(response: &AppletInstallOutcome) -> Vec<String> {
             + response.e2ee_authorization_refs.len()
             + usize::from(response.widget_policy_ref.is_some()),
     );
-    refs.push(response.registration_event_ref.clone());
-    refs.extend(response.capability_grant_refs.iter().cloned());
-    refs.extend(response.membership_event_refs.iter().cloned());
-    refs.extend(response.e2ee_authorization_refs.iter().cloned());
+    refs.extend(
+        response
+            .registration_event_ref
+            .iter()
+            .map(ToString::to_string),
+    );
+    refs.extend(
+        response
+            .capability_grant_refs
+            .iter()
+            .map(ToString::to_string),
+    );
+    refs.extend(
+        response
+            .membership_event_refs
+            .iter()
+            .map(ToString::to_string),
+    );
+    refs.extend(
+        response
+            .e2ee_authorization_refs
+            .iter()
+            .map(ToString::to_string),
+    );
     if let Some(widget_policy_ref) = &response.widget_policy_ref {
-        refs.push(widget_policy_ref.clone());
+        refs.push(widget_policy_ref.to_string());
     }
     refs
 }
@@ -378,21 +415,23 @@ fn install_execution_steps(
         "event_kind": arkret_sdk::events::kinds::APPLET_REGISTRATION,
         "payload": registration_payload_from_package(package)?,
     });
-    steps.push(install_execution_step(
-        0,
-        arkret_sdk::events::kinds::APPLET_REGISTRATION,
-        &response.registration_event_ref,
-        canonical_digest(&registration_body)?,
-        accepted,
-        None,
-    ));
+    if let Some(event_ref) = response.registration_event_ref.as_ref() {
+        steps.push(install_execution_step(
+            0,
+            arkret_sdk::events::kinds::APPLET_REGISTRATION,
+            event_ref.as_str(),
+            canonical_digest(&registration_body)?,
+            accepted,
+            None,
+        ));
+    }
     for (offset, (grant_id, action)) in response
         .capability_grant_refs
         .iter()
         .zip(record.capabilities.iter())
         .enumerate()
     {
-        let grant = applet_install_grant(record, package, grant_id, action);
+        let grant = applet_install_grant(record, package, grant_id.as_str(), action);
         let grant_body = json!({
             "event_kind": arkret_sdk::events::kinds::CAPABILITY_GRANT,
             "payload": {
@@ -403,7 +442,7 @@ fn install_execution_steps(
         steps.push(install_execution_step(
             offset + 1,
             arkret_sdk::events::kinds::CAPABILITY_GRANT,
-            grant_id,
+            grant_id.as_str(),
             canonical_digest(&grant_body)?,
             accepted,
             Some(json!({
@@ -422,7 +461,7 @@ fn install_execution_steps(
         steps.push(install_execution_step(
             e2ee_start + offset,
             "ak.member.state",
-            event_ref,
+            event_ref.as_str(),
             canonical_digest(&body)?,
             accepted,
             Some(json!({
@@ -507,7 +546,7 @@ pub(super) fn update_applet_projection(state: &AppState, record: &AppletRecord) 
     let projection = AppletProjection {
         service_id: package.service_id.to_string(),
         namespace: record.namespace.clone(),
-        manifest: Some(package.manifest_snapshot()),
+        manifest: Some(json!(package.manifest_snapshot())),
         capabilities: Some(json!(record.capabilities)),
         registered_at: now,
         updated_at: now,
@@ -935,11 +974,16 @@ pub(super) fn approved_scopes_from_approval_request(
         return Ok(Vec::new());
     }
     let (realm_id, circle_ids) = match scope {
-        EffectiveScope::Realm { realm_id } => (realm_id.clone(), Vec::new()),
+        EffectiveScope::Realm { realm_id } => (realm_id.clone(), None),
         EffectiveScope::Circle {
             realm_id,
             circle_id,
-        } => (realm_id.clone(), vec![circle_id.clone()]),
+        } => (realm_id.clone(), Some(vec![circle_id.clone()])),
+        _ => {
+            return Err(AppError::invalid_param(
+                "unsupported applet effective scope",
+            ));
+        }
     };
     Ok(vec![ScopeGrant {
         actions: approved.into_iter().collect(),
@@ -997,11 +1041,16 @@ pub(super) async fn build_install_plan(
         "warnings": [],
     });
     let plan_id = deterministic_plan_id(&seed)?;
+    let event_payload = serde_json::from_value(registration_payload).map_err(|error| {
+        AppError::internal(format!(
+            "applet registration payload is not an object: {error}"
+        ))
+    })?;
     let mut plan = AppletInstallPlan {
         schema: "ak.schema.applet_install_plan.v1".to_owned(),
         plan_id,
-        applet_id: package.applet_id.clone(),
-        package_digest,
+        applet_id: applet_install_plan_applet_id(&package.applet_id)?,
+        package_digest: package_digest.clone(),
         registration_epoch: package.registration_epoch.clone(),
         effective_scope: scope.clone(),
         requested_scopes: package.requested_scopes.clone(),
@@ -1009,21 +1058,28 @@ pub(super) async fn build_install_plan(
         denied_scopes,
         events_to_submit: vec![EventSubmission {
             event_kind: arkret_sdk::events::kinds::APPLET_REGISTRATION.to_owned(),
-            payload: registration_payload,
-            refs: Vec::new(),
+            payload: event_payload,
+            refs: None,
         }],
         capability_constraints: capability_constraints_for_scope(scope),
         namespace_conflicts: Vec::<NamespaceConflict>::new(),
         e2ee_effect: e2ee_effect_for_package(package),
         widget_effect: widget_effect_for_package(package),
         warnings: Vec::new(),
-        plan_digest: None,
+        plan_digest: package_digest.clone(),
     };
-    let plan_digest = plan
-        .compute_plan_digest()
+    plan.seal()
         .map_err(|error| AppError::internal(format!("install plan digest failed: {error}")))?;
-    plan.plan_digest = Some(plan_digest);
     Ok(plan)
+}
+
+fn applet_install_plan_applet_id(value: &str) -> Result<AppletInstallAppletId, AppError> {
+    if let Ok(did) = Did::new(value.to_owned()) {
+        return Ok(AppletInstallAppletId::Did(did));
+    }
+    AppletId::new(value.to_owned())
+        .map(AppletInstallAppletId::AppletId)
+        .map_err(|error| AppError::invalid_param(format!("invalid applet_id: {error}")))
 }
 
 pub(super) fn registration_payload_from_package(
@@ -1052,12 +1108,11 @@ pub(super) fn registration_payload_from_package(
 pub(super) fn capability_constraints_for_scope(
     scope: &EffectiveScope,
 ) -> Vec<CapabilityConstraint> {
-    let mut params = json!({
-        "realm_id": effective_scope_realm_id(scope),
-    });
-    if let EffectiveScope::Circle { circle_id, .. } = scope
-        && let Some(params) = params.as_object_mut()
-    {
+    let mut params = std::collections::BTreeMap::from([(
+        "realm_id".to_owned(),
+        Value::String(effective_scope_realm_id(scope)),
+    )]);
+    if let EffectiveScope::Circle { circle_id, .. } = scope {
         params.insert("circle_id".to_owned(), Value::String(circle_id.to_string()));
     }
     vec![CapabilityConstraint {
@@ -1070,7 +1125,7 @@ pub(super) fn e2ee_effect_for_package(package: &AppletPackage) -> E2eeEffect {
     E2eeEffect {
         requires_mls_join: package.e2ee_policy.mls_join_requested.unwrap_or(false),
         plaintext_access: "policy_declared".to_owned(),
-        authorization_refs: Vec::new(),
+        authorization_refs: None,
     }
 }
 
@@ -1080,18 +1135,20 @@ fn package_requests_mls_join(package: &AppletPackage) -> bool {
 
 fn e2ee_authorization_refs_for_install(
     package: &AppletPackage,
-    e2ee_policy: &E2eePolicy,
-) -> Result<Vec<String>, AppError> {
+    e2ee_policy: Option<&E2eePolicy>,
+) -> Result<Vec<EventId>, AppError> {
     if !package_requests_mls_join(package) {
         return Ok(Vec::new());
     }
-    if !e2ee_policy.allow_mls_join {
+    if !e2ee_policy.is_some_and(|policy| policy.allow_mls_join.unwrap_or(false)) {
         return Err(AppError::capability_denied(
             "applet E2EE MLS join requires independent authorization",
         )
         .with_wire_code("applet_e2ee_join_unauthorized"));
     }
-    Ok(vec![ids::generate_event_id()])
+    Ok(vec![EventId::new(ids::generate_event_id()).map_err(
+        |error| AppError::internal(format!("generated event id is invalid: {error}")),
+    )?])
 }
 
 fn applet_e2ee_authorization_payload(record: &AppletRecord, package: &AppletPackage) -> Value {
@@ -1217,6 +1274,7 @@ pub(super) fn effective_scope_realm_id(scope: &EffectiveScope) -> String {
         EffectiveScope::Realm { realm_id } | EffectiveScope::Circle { realm_id, .. } => {
             realm_id.to_string()
         }
+        _ => unreachable!("unsupported canonical applet effective scope"),
     }
 }
 
@@ -1324,13 +1382,19 @@ pub(super) fn package_namespace(package: &AppletPackage) -> String {
 pub(super) fn allow_ghost_actors_for_install(
     package: &AppletPackage,
     approved_actions: &[String],
-    actor_policy: &arkret_sdk::AppletActorPolicy,
+    actor_policy: Option<&arkret_sdk::AppletActorPolicy>,
 ) -> bool {
     let package_allows = package.ghost_policy.enabled;
     let scope_approved = approved_actions
         .iter()
         .any(|action| action == GHOST_PROVISION_ACTION);
-    package_allows && scope_approved && actor_policy.ghost_actor_mode != "disallowed"
+    let actor_policy_allows = actor_policy.is_some_and(|policy| {
+        matches!(
+            policy.ghost_actor_mode,
+            Some(AppletGhostActorMode::ControllerApproved | AppletGhostActorMode::PolicyDeclared)
+        )
+    });
+    package_allows && scope_approved && actor_policy_allows
 }
 
 pub(super) fn capability_allows_message_create(capability: &str) -> bool {

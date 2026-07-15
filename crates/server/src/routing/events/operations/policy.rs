@@ -330,16 +330,23 @@ async fn validate_managed_agent_grant_ceiling(
     let Some(resources) = grant.get("resources").and_then(Value::as_array) else {
         return Err("agent_grant_exceeds_requested_scope");
     };
+    let resources = serde_json::from_value::<Vec<arkret_sdk::WireResourceSelector>>(Value::Array(
+        resources.clone(),
+    ))
+    .map_err(|_| "agent_grant_exceeds_requested_scope")?;
     let constraints = grant
         .get("constraints")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
+        .cloned()
         .unwrap_or_default();
+    let constraints =
+        serde_json::from_value::<Vec<arkret_sdk::GrantConstraint>>(Value::Array(constraints))
+            .map_err(|_| "agent_grant_exceeds_requested_scope")?;
     if crate::routing::identity::agents::agent_grant_within_requested_scope(
         &record,
         &actions,
-        resources,
-        constraints,
+        &resources,
+        &constraints,
     ) {
         Ok(())
     } else {

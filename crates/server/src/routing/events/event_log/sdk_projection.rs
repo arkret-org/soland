@@ -458,7 +458,7 @@ pub(crate) async fn event_view_for_state(
 ) -> JsonResult<EventView> {
     json_ok(EventView {
         event: sdk_event_for_state(state, record)?,
-        visibility: event_visibility_metadata(state, record),
+        visibility: Some(event_visibility_metadata(state, record)),
         receipts: crate::routing::events::read_receipts::visible_read_receipts_for_event(
             state, record, session,
         )
@@ -605,7 +605,10 @@ fn sdk_event_from_record(
     })
 }
 
-fn event_visibility_metadata(state: &AppState, record: &CanonicalEventRecord) -> Value {
+fn event_visibility_metadata(
+    state: &AppState,
+    record: &CanonicalEventRecord,
+) -> std::collections::BTreeMap<String, Value> {
     let mut metadata = json!({
         "event_id": record.event_id.clone(),
         "actor_id": record.actor_id.clone(),
@@ -631,6 +634,11 @@ fn event_visibility_metadata(state: &AppState, record: &CanonicalEventRecord) ->
         metadata["retention_risk_reason"] = json!(retention_risk_reason(&tombstone));
     }
     metadata
+        .as_object()
+        .expect("event visibility metadata is an object")
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 fn event_id_list(value: Option<&Value>) -> Result<Vec<EventId>, AppError> {

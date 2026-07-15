@@ -227,11 +227,7 @@ async fn install_endpoint(
         commit.approved_scopes.clone(),
     )
     .await?;
-    let recomputed_digest = recomputed_plan
-        .plan_digest
-        .as_ref()
-        .ok_or_else(|| AppError::internal("install plan missing digest"))?;
-    if recomputed_digest != &commit.plan_digest {
+    if recomputed_plan.plan_digest != commit.plan_digest {
         return Err(
             AppError::conflict("install plan digest does not match recomputed plan")
                 .with_wire_code("applet_install_plan_mismatch"),
@@ -370,7 +366,7 @@ async fn revoke_auth_side_delegated_sessions_for_applet(
     req: &Request,
     record: &AppletRecord,
     revoke: &AppletRevokeRequestBody,
-    grant_refs: &[String],
+    grant_refs: &[arkret_sdk::GrantId],
 ) -> Result<Vec<String>, AppError> {
     let Some(revoke_url) = session_grant_revoke_url(state)? else {
         return Ok(Vec::new());
@@ -481,10 +477,15 @@ fn session_revoke_body_for_applet(
                 realm_id: realm_id.clone(),
                 circle_id: circle_id.clone(),
             },
+            _ => {
+                return Err(AppError::invalid_param(
+                    "unsupported applet effective scope",
+                ));
+            }
         }),
         registration_epoch: Some(package.registration_epoch.clone()),
         service_id: Some(package.service_id.clone()),
-        capability_grant_refs: grant_refs.to_vec(),
+        capability_grant_refs: grant_refs.iter().map(ToString::to_string).collect(),
         proof: Some(proof),
     })
 }

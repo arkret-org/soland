@@ -378,7 +378,7 @@ fn validate_scope_rotate_events(
     Ok(group_ref)
 }
 
-fn mls_event_group_ref(payload: &Value) -> Option<String> {
+fn mls_event_group_ref(payload: &std::collections::BTreeMap<String, Value>) -> Option<String> {
     payload
         .get("mls_group_id")
         .or_else(|| payload.get("group_id"))
