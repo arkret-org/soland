@@ -209,7 +209,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescriptio
             "did:key".to_owned(),
         ],
         takedown_contact: None,
-        rate_limits: Some(json!({})),
+        rate_limits: Some(BTreeMap::new()),
         supported_reducer_profiles: Vec::new(),
         supported_schema_profiles: Vec::new(),
         frontier: Vec::new(),

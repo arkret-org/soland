@@ -448,7 +448,11 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
         constraints: grant
             .constraints
             .iter()
-            .filter_map(|constraint| serde_json::to_value(constraint).ok())
+            .filter_map(|constraint| {
+                serde_json::to_value(constraint)
+                    .ok()
+                    .and_then(|value| serde_json::from_value(value).ok())
+            })
             .collect(),
         revoked: grant.revoked,
         created_at: Some(grant.created_at),

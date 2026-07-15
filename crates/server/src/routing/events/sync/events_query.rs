@@ -426,7 +426,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
 /// NDJSON line. Each line ends with `\n` per the NDJSON / JSON-Lines
 /// convention so streaming clients can split-on-newline incrementally
 /// without parsing the whole buffer.
-pub(crate) fn ndjson_line(value: &serde_json::Value) -> Bytes {
+pub(crate) fn ndjson_line(value: &impl serde::Serialize) -> Bytes {
     let mut s = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_owned());
     s.push('\n');
     Bytes::from(s)
@@ -762,7 +762,9 @@ pub(crate) async fn events_query_post(
             .map(|limit| limit as usize)
             .unwrap_or(100)
             .clamp(1, 100),
-        filters: body.filters,
+        filters: body
+            .filters
+            .map(|filters| Value::Object(filters.into_iter().collect())),
     };
     events_query_impl(state, req, parts).await
 }

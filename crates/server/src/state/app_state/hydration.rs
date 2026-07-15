@@ -241,7 +241,9 @@ pub(super) async fn hydrate_projections_from_persistence(
                 service_id: package.service_id.to_string(),
                 namespace,
                 manifest: Some(package.manifest_snapshot()),
-                capabilities: row.get("capabilities").cloned(),
+                capabilities: row
+                    .get("capabilities")
+                    .and_then(|value| serde_json::to_value(value).ok()),
                 registered_at,
                 updated_at: registered_at,
             };

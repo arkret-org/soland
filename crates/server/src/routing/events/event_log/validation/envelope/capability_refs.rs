@@ -211,7 +211,7 @@ pub(super) fn validate_data_event_joined_capability_view(
         )
     })?;
     if !leaves.is_empty() {
-        let joined_state = arkret_sdk::state_res::effective_state_at(
+        let joined_state = arkret_sdk::state::effective_state_at(
             &leaves,
             &realm,
             state.seal_store.as_ref(),
@@ -288,15 +288,14 @@ pub(super) fn data_event_state_at_seal_ref(
     std::collections::BTreeMap<arkret_sdk::CellRef, arkret_sdk::lattice::CellState>,
     EventValidationError,
 > {
-    let seal = arkret_sdk::state_res::SealStore::get(state.seal_store.as_ref(), seal_id).map_err(
-        |error| {
+    let seal =
+        arkret_sdk::state::SealStore::get(state.seal_store.as_ref(), seal_id).map_err(|error| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
                 format!("DataEvent seal_ref lookup failed: {error}"),
             )
-        },
-    )?;
+        })?;
     let Some(seal) = seal else {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -312,7 +311,7 @@ pub(super) fn data_event_state_at_seal_ref(
         ));
     }
 
-    let state_at_ref = arkret_sdk::state_res::effective_state_at(
+    let state_at_ref = arkret_sdk::state::effective_state_at(
         std::slice::from_ref(seal_id),
         realm,
         state.seal_store.as_ref(),

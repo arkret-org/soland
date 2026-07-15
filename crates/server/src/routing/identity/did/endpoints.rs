@@ -1,5 +1,7 @@
 //! Identity / DID endpoint handlers.
 
+use std::collections::BTreeMap;
+
 use super::*;
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
@@ -825,11 +827,15 @@ pub(crate) async fn identity_document(
     let typed_did = Did::new(did.clone()).map_err(|_| AppError::invalid_param("invalid did"))?;
     let record = identity_document_record(state, &did).await;
     let head_event_digest = key_log_head_hash(record.key_log_head.clone())?;
+    let mut did_document = serde_json::from_value::<BTreeMap<String, Value>>(record.did_document)
+        .map_err(|error| {
+        AppError::internal(format!("stored DID document is invalid: {error}"))
+    })?;
+    did_document
+        .entry("id".to_owned())
+        .or_insert_with(|| Value::String(typed_did.as_str().to_owned()));
     json_ok(IdentityDocumentViewOutcome(IdentityDocumentView {
-        did_document: DidDocumentRef {
-            did: typed_did,
-            document: record.did_document,
-        },
+        did_document,
         head_event_digest,
         seq: Some(record.seq),
         receipts: Vec::new(),
@@ -853,14 +859,18 @@ fn identity_resolve_outcome(
     document: Value,
     key_log_head: Option<Hash>,
     seq: Option<u64>,
-    method_evidence: Value,
+    _method_evidence: Value,
 ) -> IdentityResolveOutcome {
+    let mut did_document =
+        serde_json::from_value::<BTreeMap<String, Value>>(document).unwrap_or_default();
+    did_document
+        .entry("id".to_owned())
+        .or_insert_with(|| Value::String(did.as_str().to_owned()));
     IdentityResolveOutcome {
-        did_document: DidDocumentRef { did, document },
+        did_document,
         key_log_head,
         seq,
         receipts: Vec::new(),
-        method_evidence,
     }
 }
 
@@ -909,23 +919,50 @@ pub(crate) async fn identity_log(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let events = state
+    let records = state
         .persistence
         .webvh()
         .list_log_events(&did)
         .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|event| {
-            json!({
-                "event_digest": event.event_digest,
-                "did": event.did,
-                "seq": event.seq,
-                "operation": event.operation,
-                "created_at": event.created_at,
-            })
-        })
-        .collect();
+        .unwrap_or_default();
+    let mut previous_digest = None;
+    let mut events = Vec::with_capacity(records.len());
+    for record in records {
+        let operation_name = record
+            .operation
+            .get("operation")
+            .or_else(|| record.operation.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let operation = if record.seq == 0 {
+            arkret_sdk::DidKeyLogOperation::Inception
+        } else if operation_name.contains("deactivate") {
+            arkret_sdk::DidKeyLogOperation::Deactivate
+        } else if operation_name.contains("recover") {
+            arkret_sdk::DidKeyLogOperation::Recover
+        } else if operation_name.contains("rotate") {
+            arkret_sdk::DidKeyLogOperation::Rotate
+        } else {
+            arkret_sdk::DidKeyLogOperation::ServiceUpdate
+        };
+        let Some(operation_body) = record.operation.as_object().cloned() else {
+            continue;
+        };
+        let Ok(mut entry) = arkret_sdk::DidKeyLogEntry::build(
+            Did::new(record.did).map_err(|error| AppError::internal(error.to_string()))?,
+            record.seq,
+            operation,
+            previous_digest.clone(),
+            operation_body,
+            record.created_at,
+        ) else {
+            continue;
+        };
+        entry.head_event_digest = Hash::new(record.event_digest)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        previous_digest = Some(entry.head_event_digest.clone());
+        events.push(entry);
+    }
     json_ok(IdentityLogListOutcome {
         events,
         next_cursor: None,

@@ -200,7 +200,7 @@ async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild() {
     let (status, resumed) = account_subscribe_first_frame_with_status(
         restarted_state,
         Some(&token),
-        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+        &format!("catchup=true&after={cursor}"),
     )
     .await;
 
@@ -237,7 +237,7 @@ async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebui
     let (status, rejected) = account_subscribe_first_frame_with_status(
         restarted_state,
         Some(&restarted_token),
-        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+        &format!("catchup=true&after={cursor}"),
     )
     .await;
 
@@ -939,7 +939,7 @@ async fn incremental_sync_omits_quiet_realm_from_delta() {
     let quiet = account_subscribe_frame(
         state.clone(),
         Some(&alice),
-        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+        &format!("catchup=true&after={cursor}"),
     )
     .await;
     assert!(
@@ -995,7 +995,7 @@ async fn incremental_sync_meta_only_delta_advances_cursor_once() {
     let meta_delta = account_subscribe_frame(
         state.clone(),
         Some(&alice),
-        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+        &format!("catchup=true&after={cursor}"),
     )
     .await;
     assert!(
@@ -1013,7 +1013,7 @@ async fn incremental_sync_meta_only_delta_advances_cursor_once() {
     let quiet = account_subscribe_frame(
         state.clone(),
         Some(&alice),
-        &format!("catchup=true&max_wait_ms=0&after={next_cursor}"),
+        &format!("catchup=true&after={next_cursor}"),
     )
     .await;
     assert!(
@@ -1047,7 +1047,7 @@ async fn incremental_sync_emits_realm_with_new_timeline_event() {
     let delta = account_subscribe_frame(
         state.clone(),
         Some(&alice),
-        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+        &format!("catchup=true&after={cursor}"),
     )
     .await;
     let timeline = delta["realms"][DEMO_REALM_ID]["timeline"]["events"]
@@ -1058,43 +1058,6 @@ async fn incremental_sync_emits_realm_with_new_timeline_event() {
             .iter()
             .any(|event| event["event_id"] == message.event_id),
         "delta MUST include the freshly persisted message: {delta}"
-    );
-}
-
-#[tokio::test]
-async fn account_subscribe_long_poll_returns_empty_on_timeout() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let alice = dev_token(state.clone()).await;
-
-    let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
-    let cursor = baseline["cursor"].as_str().unwrap().to_owned();
-
-    let start = tokio::time::Instant::now();
-    let timed_out = account_subscribe_frame(
-        state.clone(),
-        Some(&alice),
-        &format!("catchup=true&max_wait_ms=400&after={cursor}"),
-    )
-    .await;
-    let elapsed = start.elapsed();
-
-    assert!(
-        timed_out["realms"]
-            .as_object()
-            .is_some_and(|map| map.is_empty()),
-        "timed-out long-poll MUST return an empty realms delta: {timed_out}"
-    );
-    assert!(
-        timed_out["cursor"].as_str().is_some_and(|c| c != cursor),
-        "timed-out long-poll MUST mint a fresh cursor: {timed_out}"
-    );
-    assert!(
-        elapsed >= Duration::from_millis(300),
-        "long-poll should hold at least to ~max_wait_ms: {elapsed:?}"
-    );
-    assert!(
-        elapsed < Duration::from_secs(5),
-        "long-poll should not exceed its window by much: {elapsed:?}"
     );
 }
 
@@ -1133,7 +1096,7 @@ async fn account_subscribe_long_poll_wakes_on_broadcast() {
     let woken = account_subscribe_frame(
         state.clone(),
         Some(&alice),
-        &format!("catchup=true&max_wait_ms=5000&after={cursor}"),
+        &format!("catchup=true&after={cursor}"),
     )
     .await;
     let elapsed = start.elapsed();

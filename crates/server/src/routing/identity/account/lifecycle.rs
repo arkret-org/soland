@@ -1065,10 +1065,11 @@ fn build_erasure_receipt_value(
 ) -> Result<Value, AppError> {
     let issuer = Did::new(state.config.service_id.clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
-    let retained_stub =
-        erasure_retained_stub(&issuer, &receipt_id, &subject, &scope, completed_at)?;
+    let retained_stub = erasure_retained_stub(&receipt_id, &subject, &scope, completed_at)?;
+    let retained_stub_value = serde_json::to_value(&retained_stub)
+        .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?;
     let retained_stub_digest = arkret_sdk::Hash::new(
-        arkret_sdk::canonical::canonical_sha256(&retained_stub)
+        arkret_sdk::canonical::canonical_sha256(&retained_stub_value)
             .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("erasure retained stub digest: {error}")))?;
@@ -1137,22 +1138,21 @@ fn erasure_receipt_operation(receipt: Value) -> Option<arkret_sdk::Operation> {
 }
 
 fn erasure_retained_stub(
-    issuer: &Did,
     receipt_id: &str,
     subject: &ErasureSubject,
     scope: &ErasureScope,
     completed_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Value, AppError> {
-    Ok(json!({
-        "schema": "ak.schema.erasure_verification_stub.v1",
+) -> Result<arkret_sdk::VerificationStub, AppError> {
+    serde_json::from_value(json!({
+        "stub_schema": "ak.schema.erasure_verification_stub.v1",
         "receipt_id": receipt_id,
-        "issuer": issuer.as_str(),
         "subject": serde_json::to_value(subject)
             .map_err(|error| AppError::internal(format!("erasure stub subject: {error}")))?,
         "scope": serde_json::to_value(scope)
             .map_err(|error| AppError::internal(format!("erasure stub scope: {error}")))?,
         "completed_at": completed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
     }))
+    .map_err(|error| AppError::internal(format!("erasure retained stub encode: {error}")))
 }
 
 async fn persist_account_lifecycle_record(

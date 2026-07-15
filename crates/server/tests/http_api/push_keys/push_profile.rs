@@ -760,7 +760,7 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
     let delta = account_subscribe_frame(
         state.clone(),
         Some(&bob_token),
-        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+        &format!("catchup=true&after={cursor}"),
     )
     .await;
     let ephemeral = delta["realms"][DEMO_REALM_ID]["ephemeral"]

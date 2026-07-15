@@ -982,8 +982,7 @@ fn encrypted_projection_field_matches_operation(value: &Value, operation: &Opera
     let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) else {
         return false;
     };
-    let Ok(envelope) = arkret_sdk::mls::EncryptedEnvelopeV1::parse_and_validate(value.clone())
-    else {
+    let Ok(envelope) = arkret_sdk::mls::parse_and_validate_encrypted_envelope(value.clone()) else {
         return false;
     };
     envelope.aad.realm_id == operation.realm_id && envelope.aad.event_kind == kind

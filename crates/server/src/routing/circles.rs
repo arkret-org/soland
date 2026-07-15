@@ -742,17 +742,11 @@ async fn post_scope_rotate(
     }
 
     if !rejected.is_empty() || !quarantine.is_empty() {
-        return json_ok(CircleScopeRotateOutcome {
-            circle_id: CircleId::new(circle_id)
-                .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
-            mls_group_ref: expected_group_ref,
-            note: Some("mls scope rotation submitted with per-event failures".to_owned()),
-            accepted,
-            duplicate,
-            rejected,
-            quarantine,
-            cleared_pending_removals: Vec::new(),
-        });
+        return Err(AppError::invalid_param(format!(
+            "mls scope rotation rejected {} event(s) and quarantined {} event(s)",
+            rejected.len(),
+            quarantine.len()
+        )));
     }
 
     let mls_group_ref = {
@@ -769,11 +763,6 @@ async fn post_scope_rotate(
             .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
         mls_group_ref,
         note: Some("mls scope rotation accepted via canonical ak.mls events".to_owned()),
-        accepted,
-        duplicate,
-        rejected,
-        quarantine,
-        cleared_pending_removals: pending_removals_before,
     })
 }
 

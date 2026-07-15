@@ -244,15 +244,23 @@ pub(crate) fn agent_actions_within_requested_scope(
 pub(crate) fn agent_grant_within_requested_scope(
     record: &AgentPrincipalRecord,
     actions: &[String],
-    resources: &[Value],
-    constraints: &[Value],
+    resources: &[arkret_sdk::WireResourceSelector],
+    constraints: &[arkret_sdk::GrantConstraint],
 ) -> bool {
     if !agent_actions_within_requested_scope(record, actions) {
         return false;
     }
+    let resources = resources
+        .iter()
+        .filter_map(|resource| serde_json::to_value(resource).ok())
+        .collect::<Vec<_>>();
+    let constraints = constraints
+        .iter()
+        .filter_map(|constraint| serde_json::to_value(constraint).ok())
+        .collect::<Vec<_>>();
     record.requested_scope.as_ref().is_some_and(|scope| {
-        scope_resources_within_requested_scope(scope, resources)
-            && constraints_preserve_requested_scope(scope, constraints)
+        scope_resources_within_requested_scope(scope, &resources)
+            && constraints_preserve_requested_scope(scope, &constraints)
     })
 }
 
@@ -679,12 +687,12 @@ pub(super) fn agent_key_state_from_record(
         approval_request_id: record
             .runtime_key_request
             .as_ref()
-            .filter(|value| value.is_object())
+            .and_then(Value::as_object)
             .and(record.approval_request_id.clone()),
         pending_runtime_key_request: record
             .runtime_key_request
             .clone()
-            .filter(|value| value.is_object()),
+            .and_then(|value| serde_json::from_value(value).ok()),
         approval_requested_at: record
             .runtime_key_request
             .as_ref()

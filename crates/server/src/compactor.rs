@@ -36,7 +36,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_sdk::state_res::SealStore;
+use arkret_sdk::state::SealStore;
 use arkret_sdk::{PruneCandidate, PruneEligibility, RealmId, Seal, SealId};
 
 use crate::state::AppState;

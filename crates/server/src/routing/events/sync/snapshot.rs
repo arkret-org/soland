@@ -8,7 +8,7 @@ pub(crate) async fn build_sync_snapshot(
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
     include_presence_delta: bool,
-) -> arkret_sdk::models::SyncOutcome {
+) -> arkret_sdk::AccountSubscribeFrame {
     let filter_value = sync_filter_value(body.filter.as_ref());
     // SYNC-MEM-1 + ROST-SOL-1..3 (arkret-spec @ b56cab1) — `members[]` is
     // the per-Realm roster v2 projection from
@@ -44,25 +44,6 @@ pub(crate) async fn build_sync_snapshot(
             ));
         }
     }
-    // Compute "left after last cursor" so incremental syncs can prune
-    // client-side caches without forcing a full account baseline.
-    // On full sync (no `after` cursor -> empty `after_cursor.positions`)
-    // there is nothing to compare against; the client already treats
-    // omission from `realms` as authoritative there.
-    let visible_realm_ids: BTreeSet<&str> =
-        visible_realms.iter().map(|(id, ..)| id.as_str()).collect();
-    let left_realms: Vec<String> = if body.after.is_some() {
-        after_cursor
-            .positions
-            .keys()
-            .filter(|id| !visible_realm_ids.contains(id.as_str()))
-            .cloned()
-            .collect()
-    } else {
-        Vec::new()
-    };
-    drop(visible_realm_ids);
-
     let mut visible_actors = BTreeSet::new();
     for (_, _, _, _, _, members) in &visible_realms {
         for member in members {
@@ -98,12 +79,7 @@ pub(crate) async fn build_sync_snapshot(
     let is_incremental = body.after.is_some();
     let (account_notifications, notification_position) =
         account_notification_delta(state, session, after_cursor, is_incremental).await;
-    for (realm_id, title, summary, tags, category, members) in visible_realms {
-        let strand =
-            strand_projection_for_realm(state, &realm_id, &title, summary.as_deref()).await;
-        let strand_state_after = strand.clone();
-        let strand_list_item = strand.clone();
-        let summary_members = members.clone();
+    for (realm_id, _title, _summary, _tags, _category, members) in visible_realms {
         let meta = state
             .persistence
             .realm_meta()
@@ -111,21 +87,6 @@ pub(crate) async fn build_sync_snapshot(
             .await
             .ok()
             .flatten();
-        let history_visibility = meta
-            .as_ref()
-            .map(|record| record.history_visibility.clone())
-            .unwrap_or_else(|| "shared".to_owned());
-        let encryption_profile = meta
-            .as_ref()
-            .and_then(|record| record.encryption_profile.clone())
-            .unwrap_or_else(|| "none".to_owned());
-        // §2.10 content scheme (capability axis) — projected from the
-        // `ak.component.realm.policy_components.v1` cell. Surfaced top-level so
-        // the client encrypt path can read the realm's declared scheme and
-        // author content as `mls-exporter-aead-v1` (history-shareable) vs the
-        // forward-secret `mls-rfc9420`. `None` ⇒ field is null ⇒ client treats
-        // it as the `mls-rfc9420` default (legacy realms predate the field).
-        let content_scheme = projection.realm_content_scheme(&realm_id);
         let known_timeline_to_cursor = after_cursor.positions.contains_key(&realm_id);
         let known_account_to_cursor = after_cursor.account_positions.contains_key(&realm_id);
         let after_timeline_position = after_cursor
@@ -188,48 +149,42 @@ pub(crate) async fn build_sync_snapshot(
         {
             continue;
         }
-        let bottom_cells = bottom_cells_for_realm(&projection, &realm_id);
-        let seal_view = seal_view_for_realm(&bottom_cells);
-        let mut ephemeral =
-            typing_ephemeral_for_realm(state, &realm_id, session, !is_incremental).await;
-        ephemeral.extend(
-            read_receipt_ephemeral_for_realm(state, &realm_id, session, !is_incremental).await,
-        );
+        let roster = members
+            .into_iter()
+            .filter_map(|member| serde_json::from_value(member).ok())
+            .collect::<Vec<arkret_sdk::MemberRosterEntry>>();
+        let heroes = roster
+            .iter()
+            .take(5)
+            .map(|member| member.actor_id.clone())
+            .collect::<Vec<_>>();
         sync_realms.insert(
             realm_id.clone(),
-            json!({
-                "summary": {
-                    "strand": strand,
-                    "title": title,
-                    "summary": summary,
-                    "tags": tags,
-                    "category": category,
-                    "members": summary_members,
-                    // SYNC-MEM-2/4 — mirror `members_limited` so the two
-                    // `members` views stay byte-equal.
-                    "members_limited": false,
-                    "history_visibility": history_visibility.clone(),
-                    "encryption_profile": encryption_profile.clone(),
-                    "content_scheme": content_scheme.clone(),
-                },
-                "history_visibility": history_visibility,
-                "encryption_profile": encryption_profile,
-                "content_scheme": content_scheme,
-                "members": members,
-                // SYNC-MEM-2 (arkret-spec @ 7157ee8) — `members_limited`
-                // is always `false` until lazy-load truncation lands; the
-                // spec requires the flag to be present so clients can tell
-                // a small roster from a truncated one.
-                "members_limited": false,
-                "strands": [strand_list_item],
-                "timeline": {"events": timeline_events, "limited": false},
-                "state": {"events": state_events, "limited": false},
-                "state_after": {"events": [strand_state_after]},
-                "bottom_cells": bottom_cells,
-                "seal_view": seal_view,
-                "ephemeral": ephemeral,
-                "unread": {"notification_count": 0, "highlight_count": 0}
-            }),
+            arkret_sdk::RealmSyncEntry {
+                timeline: Some(arkret_sdk::Timeline {
+                    events: timeline_events,
+                    limited: false,
+                    prev_cursor: None,
+                    preview_only: None,
+                    extra: BTreeMap::new(),
+                }),
+                state: Some(arkret_sdk::EventContainer {
+                    events: state_events,
+                    extra: BTreeMap::new(),
+                }),
+                summary: Some(arkret_sdk::AccountSubscribeRealmSummary {
+                    joined_member_count: Some(roster.len() as u64),
+                    invited_member_count: None,
+                    heroes: (!heroes.is_empty()).then_some(heroes),
+                }),
+                members: Some(roster),
+                members_limited: Some(false),
+                unread_notifications: Some(arkret_sdk::AccountSubscribeUnreadCounts {
+                    notification_count: Some(0),
+                    highlight_count: Some(0),
+                }),
+                ..Default::default()
+            },
         );
     }
     drop(projection);
@@ -268,10 +223,7 @@ pub(crate) async fn build_sync_snapshot(
             .into_iter()
             .take(TO_DEVICE_PAGE_LIMIT)
             .collect::<Vec<_>>();
-        let events = device_message_envelopes_after(&page)
-            .into_iter()
-            .filter_map(|message| serde_json::to_value(message).ok())
-            .collect::<Vec<_>>();
+        let events = device_message_envelopes_after(&page);
         if let Some(max_position) = page.iter().map(|message| message.position).max() {
             to_device_position = to_device_position.max(max_position);
             to_device_ack_token = state
@@ -307,50 +259,46 @@ pub(crate) async fn build_sync_snapshot(
     // `ak.contacts.realm.<realm_id>` Realm remarks against the public
     // Realm title during render. Spec: discovery/client-preferences.md
     // §2 (storage model) / §3.7 (Realm remarks).
-    let account_data = if let Some(session) = session {
-        state
-            .persistence
-            .account_data()
-            .list_for_actor(&session.actor)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|record| {
-                json!({
-                    "data_type": record.data_type,
-                    "content": record.payload,
-                    "updated_at": record.updated_at,
-                })
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let account_data = account_data_events(state, session).await;
 
-    arkret_sdk::models::SyncOutcome {
-        cursor: sync_token_for_client_sync_with_notification_position(
-            state,
-            session,
-            filter_value.as_ref(),
-            timeline_positions,
-            account_positions,
-            device_list_positions,
-            to_device_position,
-            notification_position,
-        )
-        .await,
-        realms: sync_realms,
-        left_realms,
-        to_device,
-        to_device_ack_token,
-        to_device_limited,
-        to_device_next_cursor,
-        to_device_lost,
-        device_lists,
-        account_data,
-        presence,
-        notifications: account_notifications,
-        partial: false,
+    let cursor = sync_token_for_client_sync_with_notification_position(
+        state,
+        session,
+        filter_value.as_ref(),
+        timeline_positions,
+        account_positions,
+        device_list_positions,
+        to_device_position,
+        notification_position,
+    )
+    .await;
+    arkret_sdk::AccountSubscribeFrame {
+        kind: arkret_sdk::AccountSubscribeFrameKind::Delta,
+        cursor: Some(cursor),
+        realms: Some(arkret_sdk::AccountSubscribeRealms {
+            entries: sync_realms,
+        }),
+        to_device: Some(arkret_sdk::DeviceMessageContainer {
+            messages: to_device,
+            ack_token: to_device_ack_token,
+            lost: to_device_lost,
+            limited: to_device_limited.then_some(true),
+            next_cursor: to_device_next_cursor,
+            extra: BTreeMap::new(),
+        }),
+        device_lists: Some(device_lists),
+        account_data: Some(arkret_sdk::EventContainer {
+            events: account_data,
+            extra: BTreeMap::new(),
+        }),
+        presence: Some(arkret_sdk::EventContainer {
+            events: presence,
+            extra: BTreeMap::new(),
+        }),
+        notifications: Some(account_notifications),
+        partial: None,
+        priority: None,
+        reconnect_after_ms: None,
     }
 }
 
@@ -710,7 +658,7 @@ async fn timeline_events_for_realm(
     realm_id: &str,
     after_position: i64,
     session: Option<&SessionRecord>,
-) -> (Vec<serde_json::Value>, i64) {
+) -> (Vec<arkret_sdk::Event>, i64) {
     let mut seen = BTreeSet::new();
     let mut seen_message_ids = BTreeSet::new();
     let mut newest_position = after_position;
@@ -748,11 +696,9 @@ async fn timeline_events_for_realm(
         ) {
             continue;
         }
-        let mut event = sync_timeline_message_json_with_projection(message, projection);
-        if let Some(tombstone) = retention_tombstone_for_event(state, &message.event_id) {
-            tombstone_timeline_event_for_retention(&mut event, &tombstone);
+        if let Some(event) = accepted_event(state, &message.event_id).await {
+            timeline_entries.push((position, event));
         }
-        timeline_entries.push((position, event));
     }
 
     for message in state
@@ -793,11 +739,9 @@ async fn timeline_events_for_realm(
         ) {
             continue;
         }
-        let mut event = sync_timeline_message_record_json_with_projection(&message, projection);
-        if let Some(tombstone) = retention_tombstone_for_event(state, &message.event_id) {
-            tombstone_timeline_event_for_retention(&mut event, &tombstone);
+        if let Some(event) = accepted_event(state, &message.event_id).await {
+            timeline_entries.push((position, event));
         }
-        timeline_entries.push((position, event));
     }
 
     timeline_entries.sort_by_key(|left| left.0);
@@ -815,7 +759,7 @@ async fn state_events_for_realm(
     realm_id: &str,
     after_position: i64,
     session: Option<&SessionRecord>,
-) -> (Vec<serde_json::Value>, i64) {
+) -> (Vec<arkret_sdk::Event>, i64) {
     let mut events = state
         .persistence
         .projection_events()
@@ -846,7 +790,9 @@ async fn state_events_for_realm(
         if !projection_record_visible_to_session(state, &event, session).await {
             continue;
         }
-        state_entries.push((position, projection_event_json(&event)));
+        if let Some(event) = accepted_event(state, &event.event_id).await {
+            state_entries.push((position, event));
+        }
     }
     state_entries.sort_by_key(|left| left.0);
     (
@@ -870,9 +816,18 @@ async fn device_lists_for_actors(
     visible_actors: &BTreeSet<String>,
     after_cursor: &SyncCursor,
     is_incremental: bool,
-) -> (Value, BTreeMap<String, i64>) {
+) -> (
+    arkret_sdk::AccountSubscribeDeviceListChanges,
+    BTreeMap<String, i64>,
+) {
     if session.is_none() {
-        return (json!({"changed": [], "left": []}), BTreeMap::new());
+        return (
+            arkret_sdk::AccountSubscribeDeviceListChanges {
+                changed: Vec::new(),
+                left: Vec::new(),
+            },
+            BTreeMap::new(),
+        );
     }
 
     let mut positions = BTreeMap::new();
@@ -917,11 +872,16 @@ async fn device_lists_for_actors(
         }
     }
 
+    let changed = changed
+        .into_iter()
+        .filter_map(|actor| arkret_sdk::Did::new(actor).ok())
+        .collect();
+    let left = left
+        .into_iter()
+        .filter_map(|actor| arkret_sdk::Did::new(actor).ok())
+        .collect();
     (
-        json!({
-            "changed": changed.into_iter().collect::<Vec<_>>(),
-            "left": left.into_iter().collect::<Vec<_>>(),
-        }),
+        arkret_sdk::AccountSubscribeDeviceListChanges { changed, left },
         positions,
     )
 }
@@ -938,6 +898,59 @@ fn device_inventory_position(record: &DeviceInventoryRecord) -> i64 {
 fn stable_position_tie_breaker(key: &str) -> i64 {
     let digest = sha256_hex(key.as_bytes());
     i64::from_str_radix(&digest[..3], 16).unwrap_or_default() & 0x03ff
+}
+
+async fn accepted_event(state: &AppState, event_id: &str) -> Option<arkret_sdk::Event> {
+    let record = state
+        .persistence
+        .events()
+        .get(event_id)
+        .await
+        .ok()
+        .flatten()?;
+    match serde_json::from_value(record.envelope) {
+        Ok(event) => Some(event),
+        Err(error) => {
+            tracing::warn!(%error, event_id, "canonical event envelope failed SDK decoding");
+            None
+        }
+    }
+}
+
+async fn account_data_events(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+) -> Vec<arkret_sdk::Event> {
+    let Some(session) = session else {
+        return Vec::new();
+    };
+    let mut latest = BTreeMap::<String, (DateTime<Utc>, arkret_sdk::Event)>::new();
+    for record in state
+        .persistence
+        .events()
+        .snapshot_all()
+        .await
+        .unwrap_or_default()
+    {
+        if record.actor_id != session.actor
+            || record.kind != arkret_sdk::events::kinds::ACCOUNT_DATA_SET
+        {
+            continue;
+        }
+        let Ok(event) = serde_json::from_value::<arkret_sdk::Event>(record.envelope) else {
+            continue;
+        };
+        let Some(key) = event.payload.get("key").and_then(Value::as_str) else {
+            continue;
+        };
+        let replace = latest
+            .get(key)
+            .is_none_or(|(received_at, _)| record.received_at > *received_at);
+        if replace {
+            latest.insert(key.to_owned(), (record.received_at, event));
+        }
+    }
+    latest.into_values().map(|(_, event)| event).collect()
 }
 
 async fn timeline_event_received_at(

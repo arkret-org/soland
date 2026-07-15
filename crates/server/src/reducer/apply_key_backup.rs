@@ -135,27 +135,18 @@ fn active_series_subject(actor_id: &str, backup_class: &str) -> String {
 }
 
 fn validate_active_series_frontier_ref(
-    frontier_ref: &Value,
+    frontier_ref: &arkret_sdk::KeyBackupActiveSeriesFrontierRef,
     auth_ssk_generation: u64,
 ) -> Result<(), &'static str> {
-    let Some(frontier) = frontier_ref.as_object() else {
-        return Err("key_backup_active_series_frontier_ref_not_object");
-    };
-    let Some(frontier_digest) = frontier.get("frontier_digest").and_then(Value::as_str) else {
-        return Err("key_backup_active_series_frontier_digest_required");
-    };
-    if !is_active_series_hash(frontier_digest) {
+    if !is_active_series_hash(frontier_ref.frontier_digest.as_str()) {
         return Err("key_backup_active_series_frontier_digest_invalid");
     }
-    if let Some(seal_ref) = frontier.get("seal_ref").and_then(Value::as_str)
+    if let Some(seal_ref) = frontier_ref.seal_ref.as_deref()
         && !is_seal_ref(seal_ref)
     {
         return Err("key_backup_active_series_seal_ref_invalid");
     }
-    let Some(frontier_ssk_generation) = frontier.get("ssk_generation").and_then(Value::as_u64)
-    else {
-        return Err("key_backup_active_series_frontier_ssk_generation_required");
-    };
+    let frontier_ssk_generation = frontier_ref.ssk_generation;
     if frontier_ssk_generation == 0 || frontier_ssk_generation != auth_ssk_generation {
         return Err("key_backup_active_series_ssk_generation_mismatch");
     }

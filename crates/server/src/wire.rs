@@ -2,7 +2,7 @@ pub use arkret_sdk::models::product::{
     AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
     DeviceSigningKeyDirectoryQueryRequestBody,
 };
-pub use arkret_sdk::ops_api::HardeningStatus;
+pub use arkret_sdk::ops::HardeningStatus;
 use arkret_sdk::{
     AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
     ClaimedProfileEntry, MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH,
@@ -173,7 +173,7 @@ pub struct OutboundPushBridgeExamples {
 // Shared `/_floria/integration/describe` manifest shape: re-exported from
 // the SDK contracts crate (the authoritative definition shared by floria,
 // soland, and coauth) instead of a local copy.
-pub use arkret_sdk::integration_api::{
+pub use arkret_sdk::integration::{
     IntegrationDependencyDescriptor, IntegrationDescribeOutcome, IntegrationSurfaceDescriptor,
 };
 
@@ -351,7 +351,6 @@ pub struct OutboundPushBridgeCacheInvalidateOutcome {
 // matters — the SDK root re-exports a different, client-side typed
 // `sync::SyncRequestBody` under the same name.
 pub use arkret_sdk::SyncRequestBody;
-pub use arkret_sdk::models::SyncDescription;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexDescribeOutcome {

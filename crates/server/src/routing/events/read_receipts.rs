@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use arkret_sdk::{ReadReceipt, ReadScopeKind};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Value, json};
@@ -88,9 +90,7 @@ fn normalize_read_receipt_payload(
 ) -> Result<NormalizedReadReceipt, AppError> {
     let payload = envelope.payload.clone();
     let event_id = {
-        let object = payload
-            .as_object()
-            .ok_or_else(|| AppError::invalid_param("ak.receipt.read payload must be an object"))?;
+        let object = &payload;
 
         require_string_field(object, "receipt_type", arkret_sdk::READ_RECEIPT_TYPE)?;
         require_string_field(object, "schema", arkret_sdk::READ_RECEIPT_SCHEMA)?;
@@ -104,7 +104,10 @@ fn normalize_read_receipt_payload(
             .to_owned()
     };
 
-    let receipt: ReadReceipt = serde_json::from_value(payload.clone()).map_err(|error| {
+    let receipt: ReadReceipt = serde_json::from_value(Value::Object(
+        payload.clone().into_iter().collect(),
+    ))
+    .map_err(|error| {
         AppError::invalid_param(format!("ak.receipt.read payload is malformed: {error}"))
     })?;
     if !receipt.read_scope.kind.valid_for_read_receipt() {
@@ -121,13 +124,13 @@ fn normalize_read_receipt_payload(
         read_scope: serde_json::to_value(&receipt.read_scope).map_err(|error| {
             AppError::internal(format!("read_scope serialization failed: {error}"))
         })?,
-        receipt: payload,
+        receipt: Value::Object(payload.into_iter().collect()),
         created_at: receipt.created_at,
     })
 }
 
 fn require_string_field(
-    object: &serde_json::Map<String, Value>,
+    object: &BTreeMap<String, Value>,
     field: &str,
     expected: &str,
 ) -> Result<(), AppError> {

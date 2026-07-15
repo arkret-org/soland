@@ -723,12 +723,8 @@ async fn joined_history_incremental_sync_includes_post_join_messages_after_curso
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     send_message(state.clone(), &alice, &realm_id, "after bob baseline").await;
 
-    let delta = account_subscribe_frame(
-        state.clone(),
-        &bob,
-        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
-    )
-    .await;
+    let delta =
+        account_subscribe_frame(state.clone(), &bob, &format!("catchup=true&after={cursor}")).await;
     let delta_bodies = sync_bodies(&delta, &realm_id);
     assert!(
         delta_bodies.contains(&"after bob baseline".to_owned()),

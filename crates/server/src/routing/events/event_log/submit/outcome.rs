@@ -23,8 +23,8 @@ pub(in crate::routing::events::event_log) fn events_submit_outcome(
             .into_iter()
             .filter_map(|event_id| EventId::new(event_id).ok())
             .collect(),
-        actor_frontier: Value::Null,
-        realm_frontier: Value::Null,
+        actor_frontier: None,
+        realm_frontier: None,
         cursor,
         original_outcome: None,
     }

@@ -17,8 +17,8 @@
 
 use arkret_sdk::http::IdentityDocumentViewOutcome;
 use arkret_sdk::{
-    Did, DidDocumentRef, DidOperationSubmitOutcome, DidOperationSubmitRequestBody, Hash,
-    IdentityDocumentView, IdentityResolveOutcome,
+    Did, DidOperationSubmitOutcome, DidOperationSubmitRequestBody, Hash, IdentityDocumentView,
+    IdentityResolveOutcome,
 };
 use salvo::http::{StatusCode, header};
 use salvo::oapi::extract::JsonBody;

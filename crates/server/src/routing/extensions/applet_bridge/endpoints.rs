@@ -1,12 +1,12 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
 use arkret_sdk::{
-    AppletActorView, AppletId, AppletPingOutcome, AppletProtocolMetadata, AppletRealmView,
-    AppletRevokeMode, AppletRevokeOutcome, AppletTransactionOutcome, AppletTransactionRequestBody,
-    Did, ExternalRef, FieldType, GhostActorProvisionOutcome, GhostActorProvisionRequestBody,
-    InstallCommitOutcome, InstallCommitRequestBody, InstallPlan, InstallPreviewRequestBody,
-    InstallRevokeRequestBody, ProtocolInstance, RealmId, SessionRevokeOutcome,
-    SessionRevokeRequestBody,
+    AppletActorView, AppletId, AppletInstallOutcome, AppletInstallPlan,
+    AppletInstallPreviewRequestBody, AppletInstallRequestBody, AppletPingOutcome,
+    AppletProtocolMetadata, AppletRealmView, AppletRevokeMode, AppletRevokeOutcome,
+    AppletRevokeRequestBody, AppletTransactionOutcome, AppletTransactionRequestBody, Did,
+    ExternalRef, FieldType, GhostActorProvisionOutcome, GhostActorProvisionRequestBody,
+    ProtocolInstance, RealmId, SessionRevokeOutcome, SessionRevokeRequestBody,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -169,10 +169,10 @@ async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcom
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.install.command.preview"))]
 async fn install_preview_endpoint(
     aa: AuthArgs,
-    body: JsonBody<InstallPreviewRequestBody>,
+    body: JsonBody<AppletInstallPreviewRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<InstallPlan> {
+) -> JsonResult<AppletInstallPlan> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let preview = body.into_inner();
@@ -201,11 +201,11 @@ async fn install_preview_endpoint(
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.command.install"))]
 async fn install_endpoint(
     aa: AuthArgs,
-    body: JsonBody<InstallCommitRequestBody>,
+    body: JsonBody<AppletInstallRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-) -> JsonResult<InstallCommitOutcome> {
+) -> JsonResult<AppletInstallOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let idempotency_key = idempotency_key(req)
@@ -240,7 +240,7 @@ async fn install_endpoint(
 
     // Governance gate: the canonical install write projects a
     // `ak.realm.admin`-scoped registration onto the effective_scope realm.
-    // Authentication alone is insufficient — the actor MUST hold realm admin
+    // Authentication alone is insufficient â€” the actor MUST hold realm admin
     // over that realm. P1 projected capability grants into the authz index, so
     // `state.authz.check` is authoritative here. fail-closed.
     require_realm_admin(state, &session.actor, &commit.effective_scope).await?;
@@ -266,7 +266,7 @@ async fn install_endpoint(
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.command.revoke"))]
 async fn revoke_install_endpoint(
     aa: AuthArgs,
-    body: JsonBody<InstallRevokeRequestBody>,
+    body: JsonBody<AppletRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AppletRevokeOutcome> {
@@ -295,7 +295,13 @@ async fn revoke_install_endpoint(
     let grant_refs = record
         .install_response
         .as_ref()
-        .map(|response| response.capability_grant_refs.clone())
+        .map(|response| {
+            response
+                .capability_grant_refs
+                .iter()
+                .map(|grant_id| grant_id.as_str().to_owned())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let mut revoked_refs = Vec::new();
     if matches!(
@@ -363,7 +369,7 @@ async fn revoke_auth_side_delegated_sessions_for_applet(
     state: &AppState,
     req: &Request,
     record: &AppletRecord,
-    revoke: &InstallRevokeRequestBody,
+    revoke: &AppletRevokeRequestBody,
     grant_refs: &[String],
 ) -> Result<Vec<String>, AppError> {
     let Some(revoke_url) = session_grant_revoke_url(state)? else {
@@ -443,7 +449,7 @@ fn session_grant_revoke_url(state: &AppState) -> Result<Option<String>, AppError
 
 fn session_revoke_body_for_applet(
     record: &AppletRecord,
-    revoke: &InstallRevokeRequestBody,
+    revoke: &AppletRevokeRequestBody,
     grant_refs: &[String],
 ) -> Result<SessionRevokeRequestBody, AppError> {
     let package = record.package.as_ref().ok_or_else(|| {
@@ -463,12 +469,12 @@ fn session_revoke_body_for_applet(
             AppError::internal(format!("stored applet_id is invalid: {error}"))
         })?),
         effective_scope: Some(match &revoke.effective_scope {
-            arkret_sdk::applet::EffectiveScope::Realm { realm_id } => {
+            arkret_sdk::EffectiveScope::Realm { realm_id } => {
                 arkret_sdk::models::EffectiveScope::Realm {
                     realm_id: realm_id.clone(),
                 }
             }
-            arkret_sdk::applet::EffectiveScope::Circle {
+            arkret_sdk::EffectiveScope::Circle {
                 realm_id,
                 circle_id,
             } => arkret_sdk::models::EffectiveScope::Circle {
@@ -507,7 +513,7 @@ async fn provision_ghost_actor_endpoint(
     let applet_id = provision.applet_id.clone();
     let service_id = provision.service_id.clone();
     let ghost_actor_id = provision.ghost_actor_id.clone();
-    // G3.S9 — ghost actor DID recorded against the applet MUST be a
+    // G3.S9 â€” ghost actor DID recorded against the applet MUST be a
     // well-formed bare DID scalar (no DID URL fragment).
     crate::routing::extensions::bot_actor::validate_extension_actor_did(ghost_actor_id.as_str())?;
     let realm_id = provision.realm_id.clone();
@@ -633,13 +639,13 @@ async fn transaction_endpoint(
             "events must contain at least one event",
         ));
     }
-    // COT-03-001 / applet-integration.md §7.3.1: the app/bridge → arkret edge
+    // COT-03-001 / applet-integration.md Â§7.3.1: the app/bridge â†’ arkret edge
     // inbound direction MUST carry a per-delivery RFC 9421 source signature and
     // the receiver MUST verify it before processing any event / side effect.
     // Plain `Authorization: Bearer` (no `Signature`) MUST be rejected. The
     // signing key anchor is the Applet registration `source_service_id`'s
     // current active verification method, and that service DID MUST hit an
-    // active effective install (§4b.1).
+    // active effective install (Â§4b.1).
     let verified =
         verify_inbound_transaction_signature(state, req, &transaction, &idempotency_key).await?;
     let outcome =

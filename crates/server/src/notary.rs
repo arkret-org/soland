@@ -37,7 +37,7 @@ use std::sync::OnceLock;
 
 use anyhow::Result;
 use arkret_sdk::lattice::{CellState, SealedOp};
-use arkret_sdk::state_res::{
+use arkret_sdk::state::{
     StoreError, apply_seal, compute_state_root, control_event_set_root, effective_seal_view,
     effective_state_at, leaf_union_proof, verify_move,
 };
@@ -161,7 +161,7 @@ impl NotaryWorker {
         let verifier = select_jws_verifier(state);
         let replay_default = state.config.jws_replay_window_seconds;
         let replay_overrides = &state.config.jws_replay_window_per_family;
-        let ordered = arkret_sdk::state_res::deterministic_order(pending);
+        let ordered = arkret_sdk::state::deterministic_order(pending);
         let mut accepted: Vec<Move> = Vec::with_capacity(ordered.len());
         let mut rejected: Vec<(MoveId, String)> = Vec::new();
         for m in ordered {
@@ -1013,7 +1013,7 @@ mod tests {
     /// SDK-SEC-02 / decision-3 cross-implementation golden check for the Seal
     /// `state_root` Merkle (spec event-auth-state-resolution.md §6.2.1 / §6.2.2,
     /// RFC 6962 domain separation). soland computes governance roots by reusing
-    /// the SDK's `arkret_sdk::state_res::compute_state_root`, so the only drift
+    /// the SDK's `arkret_sdk::state::compute_state_root`, so the only drift
     /// risk is a future SDK change silently altering the byte rule. This test
     /// re-derives the expected root with an INDEPENDENT second implementation
     /// (raw `sha2` + canonical JSON, mirroring the spec text directly) so that

@@ -144,8 +144,8 @@ impl PolicyCheckRequestInput {
                 source_ip_digest: Some(self.source_ip_digest),
                 signed_transport: self.signed_transport,
             },
-            event_preview: self.event_preview,
-            auth_context: self.auth_context,
+            event_preview: serde_json::from_value(self.event_preview).ok(),
+            auth_context: serde_json::from_value(self.auth_context).ok(),
         }
     }
 }

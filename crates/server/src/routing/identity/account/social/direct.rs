@@ -786,12 +786,6 @@ pub(super) fn direct_realm_create_payload(
     realm.encryption_profile = arkret_sdk::EncryptionProfile::MlsRfc9420;
     realm.federation_policy = Some(arkret_sdk::FederationPolicy::Restricted);
     realm.created_at = created_at;
-    realm.extra.insert(
-        "fields".to_owned(),
-        json!({
-            "conversation_kind": "direct_message",
-        }),
-    );
     serde_json::to_value(arkret_sdk::models::RealmCreatePayload {
         object: realm,
         initial_relations: None,

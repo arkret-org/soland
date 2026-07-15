@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use arkret_sdk::lattice::{CellState, SealedOp};
-use arkret_sdk::state_res::{
+use arkret_sdk::state::{
     CellRegistry, CellStore, MoveStore, SealStore, SealedMoveRecord, StoreError, StoreResult,
 };
 use arkret_sdk::{Bottom, CellRef, Hash, LatticeOp, Move, MoveId, RealmId, Seal, SealId};
@@ -33,9 +33,9 @@ pub(crate) fn build_state_resolution_stores(pool: Option<PgPool>) -> StateResolu
     }
 
     StateResolutionStores {
-        move_store: Arc::new(arkret_sdk::state_res::MemoryMoveStore::default()),
-        seal_store: Arc::new(arkret_sdk::state_res::MemorySealStore::default()),
-        cell_store: Arc::new(arkret_sdk::state_res::MemoryCellStore::default()),
+        move_store: Arc::new(arkret_sdk::state::MemoryMoveStore::default()),
+        seal_store: Arc::new(arkret_sdk::state::MemorySealStore::default()),
+        cell_store: Arc::new(arkret_sdk::state::MemoryCellStore::default()),
         cell_registry,
     }
 }

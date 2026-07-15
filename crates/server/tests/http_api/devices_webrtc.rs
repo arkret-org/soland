@@ -1432,8 +1432,7 @@ async fn incremental_call_signals(
     token: &str,
     after: &str,
 ) -> (Vec<Value>, String) {
-    let frame =
-        account_subscribe_frame(state, Some(token), &format!("max_wait_ms=0&after={after}")).await;
+    let frame = account_subscribe_frame(state, Some(token), &format!("after={after}")).await;
     let signals = call_signals_in_subscribe(&frame, DEMO_REALM_ID);
     let next = frame["cursor"].as_str().unwrap().to_owned();
     (signals, next)

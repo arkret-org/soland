@@ -332,8 +332,8 @@ pub(super) fn validate_disappearing_message_policy(
 
 pub(in crate::routing::events::operations) fn minimal_metadata_aad_visibility(
     envelope: &Value,
-) -> Option<arkret_sdk::mls::AadVisibility> {
-    use arkret_sdk::mls::AadVisibility;
+) -> Option<arkret_sdk::EncryptedEnvelopeAadVisibility> {
+    use arkret_sdk::EncryptedEnvelopeAadVisibility;
     // The discriminator lives at the envelope root; tolerate a nested
     // `envelope` wrapper as shown in the spec wire example.
     let raw = envelope
@@ -341,9 +341,9 @@ pub(in crate::routing::events::operations) fn minimal_metadata_aad_visibility(
         .or_else(|| envelope.pointer("/envelope/aad_visibility_event_id"))
         .and_then(Value::as_str)?;
     match raw {
-        "hidden" => Some(AadVisibility::Hidden),
-        "routing_digest" => Some(AadVisibility::RoutingDigest),
-        "opaque_id" => Some(AadVisibility::OpaqueId),
+        "hidden" => Some(EncryptedEnvelopeAadVisibility::Hidden),
+        "routing_digest" => Some(EncryptedEnvelopeAadVisibility::RoutingDigest),
+        "opaque_id" => Some(EncryptedEnvelopeAadVisibility::OpaqueId),
         _ => None,
     }
 }

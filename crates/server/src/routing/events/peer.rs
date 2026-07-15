@@ -243,7 +243,7 @@ async fn peer_events_resolve(
         found_digests.insert(record.canonical_digest.clone());
         let mut event = super::event_log::sdk_event_for_state(state, &record)?;
         if !include_payload {
-            event.payload = Value::Null;
+            event.payload.clear();
         }
         events.push(event);
     }
@@ -469,7 +469,11 @@ impl PeerEventsQueryParts {
     }
 
     fn from_body(body: EventsQueryPostRequestBody) -> Result<Self, AppError> {
-        let kind_filter = parse_kind_filter(body.filters.as_ref())?;
+        let filters = body
+            .filters
+            .as_ref()
+            .and_then(|filters| serde_json::to_value(filters).ok());
+        let kind_filter = parse_kind_filter(filters.as_ref())?;
         let parts = Self {
             realms: body
                 .realms

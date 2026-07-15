@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
-use arkret_sdk::state_res::{CellRegistry, CellStore, MoveStore, SealStore};
+use arkret_sdk::state::{CellRegistry, CellStore, MoveStore, SealStore};
 use arkret_sdk::{AccountRegistrationPolicy, AccountStatus, AppletPackage, Did, RealmId};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;

@@ -137,7 +137,7 @@ pub(super) fn pick_admin_seal_basis(
     })?;
     if leaves.is_empty() {
         let empty = std::collections::BTreeSet::new();
-        let control_event_set_root = arkret_sdk::state_res::control_event_set_root(&empty)
+        let control_event_set_root = arkret_sdk::state::control_event_set_root(&empty)
             .map_err(|e| app_error!(InternalError, "empty control_event_set_root failed: {e}"))?;
         return Ok(arkret_sdk::SealBasis {
             leaves: vec![

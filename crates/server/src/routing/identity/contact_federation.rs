@@ -285,7 +285,10 @@ async fn peer_contacts_submit(
                 "introduction_evidence is required for ak.contact.requested",
             ));
         };
-        validate_contact_introduction_evidence_digest(&payload, evidence)?;
+        let payload_value = serde_json::to_value(&payload).map_err(|error| {
+            AppError::internal(format!("contact payload encode failed: {error}"))
+        })?;
+        validate_contact_introduction_evidence_digest(&payload_value, evidence)?;
         let policy = crate::routing::invites::resolve_invite_receive_policy(state, &subject_id);
         let decision = crate::routing::invites::evaluate_contact_receive(
             state,
@@ -327,7 +330,9 @@ async fn peer_contacts_submit(
         fact_kind,
         &issuer,
         &subject_id,
-        &payload,
+        &serde_json::to_value(&payload).map_err(|error| {
+            AppError::internal(format!("contact payload encode failed: {error}"))
+        })?,
         delivery.contact_event.event_id.as_str(),
         source_service_id.as_deref(),
     )

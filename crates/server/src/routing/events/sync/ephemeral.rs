@@ -1,7 +1,9 @@
 //! Ephemeral signal admission (`ak.self.ephemeral.command.send`): typing /
 //! presence / read-receipt validation + persistence. Split out of `sync.rs`
-//! (SOL-07-002) as a self-contained unit — no cross-module callers other than
+//! (SOL-07-002) as a self-contained unit â€” no cross-module callers other than
 //! the parent router, which references `ephemeral::submit_ephemeral`.
+
+use std::collections::BTreeMap;
 
 use arkret_sdk::EphemeralSubmitOutcome;
 use salvo::http::StatusCode;
@@ -60,29 +62,14 @@ pub(super) async fn submit_ephemeral(
             admit_ephemeral_read_receipt(state, &session, realm_id_str, &envelope).await?;
             false
         }
-        "ak.realm_key.request" => {
-            // realm-and-space.md history-sharing — a late-joining member device
-            // asks a provider device to seal retained history keys. The request
-            // is relayed to the provider's to-device queue (no realm broadcast),
-            // so this does NOT wake account sync.
-            crate::routing::events::realm_key_request::relay_ephemeral_realm_key_request(
-                state,
-                &session,
-                realm_id_str,
-                &envelope,
-            )
-            .await?;
-            dispatched_to = Some(1);
-            false
-        }
         "ak.call.signal" => {
-            // `service-http-binding.md` §162 — sending a `ak.call.signal`
+            // `service-http-binding.md` Â§162 â€” sending a `ak.call.signal`
             // envelope on `/_arkret/self/ephemeral` requires the realm-scoped
             // `ak.call.signal.send` capability (registered in
             // `capability-action-registry.json`). Realm membership stays a
             // precondition (checked above); signal-send authority is an
             // explicit capability so a member without it cannot relay call
-            // signals. §162 defines no dedicated error code, so we surface the
+            // signals. Â§162 defines no dedicated error code, so we surface the
             // generic `capability_denied` (403).
             if !crate::routing::interop::webrtc::actor_has_call_capability(
                 state,
@@ -126,7 +113,7 @@ pub(super) async fn submit_ephemeral(
     })
 }
 
-/// `webrtc-signaling.md` §5 — persist the verbatim signed `ak.call.signal`
+/// `webrtc-signaling.md` Â§5 â€” persist the verbatim signed `ak.call.signal`
 /// envelope into the realm-broadcast relay so subscribers in the Realm pick it
 /// up off `ephemeral.call_signals` and verify the carried `proof`. The
 /// envelope is stored unmodified (proof intact) and pruned at its TTL.
@@ -270,7 +257,7 @@ async fn persist_ephemeral_presence(
     envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
     let actor = session.actor.as_str();
-    // Fail-closed field admission (profiles-presence.md §3.2/§3.3):
+    // Fail-closed field admission (profiles-presence.md Â§3.2/Â§3.3):
     // validate the payload before consulting the visibility policy so a
     // malformed broadcast is rejected identically for every sender.
     let status = presence_state_from_payload(&envelope.payload)?;
@@ -301,7 +288,7 @@ async fn persist_ephemeral_presence(
                     format!("ak.presence last_active_at rejected: {error}"),
                 )
             })?;
-            // §3.3: without a policy explicitly allowing precise
+            // Â§3.3: without a policy explicitly allowing precise
             // disclosure only the bucketed form is admitted; a valid
             // second-precision timestamp is a policy violation, not a
             // schema one.
@@ -353,11 +340,11 @@ async fn persist_ephemeral_presence(
     Ok(())
 }
 
-/// Strict closed-set `state` admission (profiles-presence.md §3.2):
+/// Strict closed-set `state` admission (profiles-presence.md Â§3.2):
 /// unknown or missing values are a `schema_violation`, never guessed
 /// into a nearby state (`unavailable` / `busy` are not v1 wire values).
 fn presence_state_from_payload(
-    payload: &Value,
+    payload: &BTreeMap<String, Value>,
 ) -> Result<arkret_sdk::PresenceStatus, crate::error::AppError> {
     let state = payload
         .get("state")
@@ -447,7 +434,7 @@ async fn admit_ephemeral_read_receipt(
     Ok(())
 }
 
-/// `webrtc-signaling.md` §5 — structural admission for `ak.call.signal`
+/// `webrtc-signaling.md` Â§5 â€” structural admission for `ak.call.signal`
 /// envelopes arriving on the canonical `/ephemeral` channel (the path the
 /// canonical client takes). We reuse the SDK
 /// [`arkret_sdk::validate_call_signal_envelope`] as the single truth source
@@ -457,7 +444,7 @@ async fn admit_ephemeral_read_receipt(
 /// set (which includes `moderation`).
 ///
 /// Boundary (FIN-F task 5 decision, unchanged): the relay does NOT perform
-/// cryptographic `proof` verification — §5 assigns signature verification to
+/// cryptographic `proof` verification â€” Â§5 assigns signature verification to
 /// the *receiver* over the canonical envelope bytes excluding `proof`. The
 /// relay only enforces the structural contract (existence + type + seq shape)
 /// so malformed call signals never enter the ephemeral fan-out.
@@ -478,7 +465,7 @@ fn admit_ephemeral_call_signal(
 /// `event_digest` covering the canonical envelope bytes without `proof`.
 ///
 /// Boundary (unchanged from the call.signal-only era): the relay does NOT
-/// perform cryptographic `proof` verification — the spec assigns signature
+/// perform cryptographic `proof` verification â€” the spec assigns signature
 /// verification to the *receiver*. The relay enforces the structural contract
 /// so malformed signals never enter the ephemeral fan-out.
 fn validate_ephemeral_broadcast_proof_shape(
@@ -490,13 +477,7 @@ fn validate_ephemeral_broadcast_proof_shape(
             "{kind} device_id is required for broadcast ephemeral signals"
         ))
     })?;
-    let proof_value = envelope.proof.as_ref().ok_or_else(|| {
-        crate::error::AppError::invalid_param(format!("{kind} proof is required"))
-    })?;
-    let proof: arkret_sdk::Proof =
-        serde_json::from_value(proof_value.clone()).map_err(|error| {
-            crate::error::AppError::invalid_param(format!("{kind} proof is malformed: {error}"))
-        })?;
+    let proof = &envelope.proof;
     proof.validate_production().map_err(|error| {
         crate::error::AppError::invalid_param(format!(
             "{kind} proof is not production-grade: {error}"
@@ -516,15 +497,15 @@ fn validate_ephemeral_broadcast_proof_shape(
     }
     // The digest covers the canonical envelope without `proof`; the typed
     // clone with `proof = None` serializes to exactly those bytes.
-    let without_proof = arkret_sdk::EphemeralEnvelope {
-        proof: None,
-        ..envelope.clone()
-    };
-    let without_proof = serde_json::to_value(&without_proof).map_err(|error| {
+    let mut without_proof = serde_json::to_value(envelope).map_err(|error| {
         crate::error::AppError::invalid_param(format!(
             "{kind} envelope is not serialisable: {error}"
         ))
     })?;
+    without_proof
+        .as_object_mut()
+        .expect("EphemeralEnvelope serializes as an object")
+        .remove("proof");
     let canonical =
         arkret_sdk::canonical::canonical_json_bytes(&without_proof).map_err(|error| {
             crate::error::AppError::invalid_param(format!(

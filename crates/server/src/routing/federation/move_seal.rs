@@ -19,7 +19,7 @@
 //! Ed25519 verification runs against the public key resolved from the
 //! `verification_method` DID URL.
 
-use arkret_sdk::state_res::{SealReject, apply_seal, verify_move};
+use arkret_sdk::state::{SealReject, apply_seal, verify_move};
 use arkret_sdk::{Move, RealmId, Seal};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;

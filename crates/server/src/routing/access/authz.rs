@@ -60,7 +60,8 @@ async fn authz_check(
             "authorization checks may only target the authenticated actor",
         ));
     }
-    let resource = body.resource.clone().unwrap_or(Value::Null);
+    let resource = serde_json::to_value(&body.resource)
+        .map_err(|error| AppError::internal(format!("resource encode failed: {error}")))?;
     let ParsedAuthzResource {
         resource: resource_str,
         realm_id,
@@ -356,7 +357,7 @@ fn capability_grant_from_authz_grant(
     let subject = Did::new(grant.subject.clone())
         .map(CapabilitySubject::Did)
         .unwrap_or_else(|_| CapabilitySubject::Selector(json!(grant.subject)));
-    let resource_selector = capability_resource_selector(&grant.realm_id, &grant.resource);
+    let resource_selector = capability_resource_selector(&grant.realm_id, &grant.resource)?;
     let constraints = grant
         .constraints
         .into_iter()
@@ -555,8 +556,11 @@ async fn session_owns_realm(state: &AppState, actor: &str, realm_id: &str) -> bo
         .is_some_and(|meta| meta.owner.as_str() == actor)
 }
 
-fn capability_resource_selector(realm_id: &str, resource: &str) -> Value {
-    if resource == "*" {
+fn capability_resource_selector(
+    realm_id: &str,
+    resource: &str,
+) -> Result<arkret_sdk::WireResourceSelector, AppError> {
+    let value = if resource == "*" {
         json!({
             "kind": "realm",
             "realm_id": realm_id,
@@ -585,7 +589,9 @@ fn capability_resource_selector(realm_id: &str, resource: &str) -> Value {
             "realm_id": realm_id,
             "id": resource,
         })
-    }
+    };
+    serde_json::from_value(value)
+        .map_err(|error| AppError::internal(format!("resource selector encode failed: {error}")))
 }
 
 #[endpoint(
@@ -674,7 +680,9 @@ fn invite_record_to_sdk(invite: crate::state::RealmInviteRecord) -> Result<Invit
             .map_err(|error| AppError::internal(error.to_string()))?,
         invite_delivery_target,
         introduction_evidence_digest,
-        third_party_id: invite.third_party_id,
+        third_party_id: invite
+            .third_party_id
+            .and_then(|value| serde_json::from_value(value).ok()),
         join_rule_snapshot: invite
             .join_rule_snapshot
             .and_then(|value| {

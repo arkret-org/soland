@@ -269,7 +269,7 @@ fn unsupported_profiles_from_limits(
         .collect()
 }
 
-fn build_server_description(state: &AppState) -> ServerDescription {
+pub(crate) fn build_server_description(state: &AppState) -> ServerDescription {
     let mut description = describe(
         &state.config.service_id,
         &state.config.public_base_url,

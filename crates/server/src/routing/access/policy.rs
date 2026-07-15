@@ -671,6 +671,7 @@ fn policy_check_has_service_delegation(
 ) -> bool {
     let Some(proof) = request
         .auth_context
+        .as_ref()
         .get("service_delegation")
         .or_else(|| request.auth_context.get("delegation_proof"))
         .or_else(|| request.auth_context.get("delegation"))

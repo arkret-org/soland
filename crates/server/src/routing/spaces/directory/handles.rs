@@ -202,7 +202,6 @@ pub(super) fn resolve_handle_audience(
 }
 
 pub(super) fn local_handle_resolution_outcome(
-    actor: Value,
     did: String,
     canonical_handle: String,
     audience: String,
@@ -217,10 +216,7 @@ pub(super) fn local_handle_resolution_outcome(
             .map_err(|err| AppError::invalid_param(format!("invalid resolved actor DID: {err}")))?,
         handle: canonical_handle,
         verified: true,
-        claims: json!({
-            "actor": actor,
-            "subject": did,
-        }),
+        claims: Some(vec![handle_claim.clone()]),
         audience: Some(audience),
         handle_claim: Some(handle_claim),
         member_delivery_binding,
@@ -571,7 +567,6 @@ pub(super) async fn resolve_handle(
                 .map(|handle| handle.canonical().to_owned())
                 .ok_or_else(|| AppError::internal("signed handle claim is missing handle"))?;
             json_ok(local_handle_resolution_outcome(
-                actor,
                 did,
                 canonical_handle,
                 audience,

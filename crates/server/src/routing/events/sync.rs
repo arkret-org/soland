@@ -66,7 +66,7 @@ pub(crate) use crate::state::{
     AppState, DeviceInventoryRecord, HandleClaimDigestInput, HandleClaimEvidenceRecord,
     PresenceRecord, ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord, SessionRecord,
 };
-pub(crate) use crate::wire::{EventsQueryPostRequestBody, SyncDescription, SyncRequestBody};
+pub(crate) use crate::wire::{EventsQueryPostRequestBody, SyncRequestBody};
 
 pub(crate) const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
 pub(crate) const PRESENCE_ONLINE_TTL_SECONDS: i64 = 3;

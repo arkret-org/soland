@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_sdk::lattice::{CellState, SealedOp};
 use arkret_sdk::models::EffectiveScope as GovernanceScope;
 use arkret_sdk::move_event::{LatticeOp, LatticeOpType};
-use arkret_sdk::state_res::compute_state_root;
+use arkret_sdk::state::compute_state_root;
 use arkret_sdk::{
     CellId, CellRef, Event, Hash, MlsGovernanceBindingPayload, MlsGovernanceControlStateLeaf,
     MlsGovernanceControlStateValue, MlsGovernanceProofBundle, MlsGovernanceProofRequest, MoveId,

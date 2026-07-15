@@ -144,7 +144,7 @@ pub(super) async fn provision_agent(
     principal.agent_slug = Some(agent_slug.clone());
     principal.avatar_blob_ref = avatar_blob_ref.clone();
     principal.requested_scope = Some(requested_scope);
-    principal.accountability = (!body.accountability.is_null()).then_some(body.accountability);
+    principal.accountability = body.accountability;
     principal.provision_event_refs = Some(provision_event_refs);
     principal.pairing_request_id = Some(pairing_request_id.clone());
     principal.pairing_code = Some(pairing_code.clone());
@@ -792,20 +792,11 @@ pub(super) async fn attach_agent_grant(
     )
     .await?;
     let body = body.into_inner();
-    let grant_constraints = body
-        .grant
-        .constraints
-        .iter()
-        .map(serde_json::to_value)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
-            AppError::internal(format!("grant constraint encoding failed: {error}"))
-        })?;
     if !agent_grant_within_requested_scope(
         &record,
         &body.grant.actions,
         &body.grant.resources,
-        &grant_constraints,
+        &body.grant.constraints,
     ) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,

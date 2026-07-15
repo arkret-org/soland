@@ -10,7 +10,7 @@
 //!     and the cargo-runnable bin.
 //!   - `bin/soland-gc-scan.rs` — `cargo run --bin soland-gc-scan -- --realm-id <id> --dry-run`.
 
-use arkret_sdk::state_res::union_predecessor_covered_events;
+use arkret_sdk::state::union_predecessor_covered_events;
 use arkret_sdk::{Move, MoveId, RealmId};
 
 use crate::state::AppState;

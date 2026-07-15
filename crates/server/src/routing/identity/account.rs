@@ -1085,7 +1085,9 @@ async fn account_viewer(
     let principal_id = Did::new(account.did.clone())
         .map_err(|error| AppError::internal(format!("stored account DID is invalid: {error}")))?;
 
-    let primary_handle_claim = account_primary_handle_claim(state, &account).await;
+    let primary_handle_claim = account_primary_handle_claim(state, &account)
+        .await
+        .and_then(|value| serde_json::from_value(value).ok());
     let profile = Some(actor_profile_from_account(&account, None)?);
     let is_server_admin = state.is_admin_principal(&session.actor);
     json_ok(AccountView {
@@ -1162,7 +1164,9 @@ async fn gate_account_register(
         )
         .await;
         let devices = account_device_summaries(state, &did).await?;
-        let primary_handle_claim = account_primary_handle_claim(state, &existing_account).await;
+        let primary_handle_claim = account_primary_handle_claim(state, &existing_account)
+            .await
+            .and_then(|value| serde_json::from_value(value).ok());
         return json_ok(AccountRegisterOutcome {
             principal_id: body.principal_id,
             state: AccountStatus::Active,
@@ -1243,7 +1247,9 @@ async fn gate_account_register(
     append_account_registration_audit(state, &did, audit_handle.as_deref(), &registration_audit)
         .await;
     let devices = account_device_summaries(state, &did).await?;
-    let primary_handle_claim = account_primary_handle_claim(state, &account).await;
+    let primary_handle_claim = account_primary_handle_claim(state, &account)
+        .await
+        .and_then(|value| serde_json::from_value(value).ok());
     json_ok(AccountRegisterOutcome {
         principal_id: body.principal_id,
         state: AccountStatus::Active,

@@ -11,44 +11,16 @@ use crate::routing::spaces::space::{
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
 pub(super) async fn account_describe(
     depot: &mut Depot,
-) -> crate::result::JsonResult<SyncDescription> {
+) -> crate::result::JsonResult<arkret_sdk::ServerDescription> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let supported_sync_profiles = vec![
-        "initial".to_owned(),
-        "incremental".to_owned(),
-        "board".to_owned(),
-        "chat".to_owned(),
-        "topic".to_owned(),
-        "offline_queue_flush".to_owned(),
-        "bottom_cell_repair".to_owned(),
-    ];
-    let service_id = validate_did(&state.config.service_id).map_err(|_| {
-        crate::error::AppError::internal("configured service_id is not a valid DID")
-    })?;
-    crate::result::json_ok(SyncDescription {
-        service_id,
-        supported_sync_profiles,
-        limits: json!({
-            "max_realms": 50,
-            "max_timeline_events": 100,
-            "offline_flush_endpoint": "/_arkret/self/events",
-            "bottom_repair_endpoint": "/_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair"
-        }),
-        // SDK `SyncDescription.frontier` is an opaque cursor string; hand out
-        // the current sync token so callers can seed `after` from describe.
-        frontier: Some(serde_json::Value::String(sync_token_for_state(state).await)),
-    })
+    crate::result::json_ok(crate::routing::system::describe::build_server_description(
+        state,
+    ))
 }
 
-/// Default long-poll window for incremental `account/subscribe` requests
-/// that find the delta empty after building the initial snapshot. Clients
-/// can override with `max_wait_ms=<N>`; `max_wait_ms=0` opts out and
-/// preserves the immediate-return behavior expected by older tests.
+/// Long-poll window for incremental `account/subscribe` requests that find
+/// the delta empty after building the initial snapshot.
 const ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 25_000;
-/// Hard ceiling on the long-poll window. Matches `events_subscribe`'s
-/// `max_duration_ms` cap so an idle stream cannot live forever and tie up
-/// connection slots.
-const ACCOUNT_SUBSCRIBE_MAX_WAIT_MS: u64 = 60_000;
 /// SOL-02-005 — debounce window for `account_subscribe` long-poll wakeups.
 /// When a broadcast notification passes the visibility filter, further
 /// notifications arriving within this window are drained and coalesced so a
@@ -137,7 +109,6 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
         .expect("state injected")
         .clone();
     let body = account_subscribe_query(req);
-    let max_wait_ms = parse_max_wait_ms(req);
     let session = match account_subscribe_session_or_render(&state, req, res).await {
         Some(session) => session,
         None => return,
@@ -224,15 +195,14 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     let mut rx = state.event_broadcast.subscribe();
     let mut response =
         build_sync_snapshot(&state, Some(&session), &body, &after_cursor, false).await;
-    let mut control_frame: Option<Value> = None;
+    let mut control_frame: Option<arkret_sdk::AccountSubscribeFrame> = None;
 
     // Long-poll only when the client supplied an `after` cursor (true
     // incremental sync) AND the snapshot is delta-empty. Full sync always
-    // returns immediately because the client needs the baseline. A
-    // `max_wait_ms=0` opt-out preserves the immediate-return
-    // behavior for tests / clients that handle their own polling cadence.
-    if body.after.is_some() && max_wait_ms > 0 && delta_is_empty(&response) {
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(max_wait_ms);
+    // returns immediately because the client needs the baseline.
+    if body.after.is_some() && delta_is_empty(&response) {
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_millis(ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS);
         loop {
             tokio::select! {
                 biased;
@@ -339,25 +309,25 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
         }
     }
 
-    if account_subscribe_prefers_json(req) {
-        if let Some(control_frame) = control_frame {
-            res.render(Json(control_frame));
-        } else {
-            res.render(Json(response));
-        }
-        return;
-    }
-
     let frames = if let Some(control_frame) = control_frame {
         vec![ndjson_line(&control_frame)]
     } else {
         let cursor = response.cursor.clone();
-        let mut frames = vec![ndjson_line(&account_delta_frame(response))];
+        let mut frames = vec![ndjson_line(&response)];
         if body.catchup.unwrap_or(false) {
-            frames.push(ndjson_line(&json!({
-                "kind": "catchup_complete",
-                "cursor": cursor,
-            })));
+            frames.push(ndjson_line(&arkret_sdk::AccountSubscribeFrame {
+                kind: arkret_sdk::AccountSubscribeFrameKind::CatchupComplete,
+                cursor,
+                realms: None,
+                to_device: None,
+                device_lists: None,
+                account_data: None,
+                presence: None,
+                notifications: None,
+                partial: None,
+                priority: None,
+                reconnect_after_ms: None,
+            }));
         }
         frames
     };
@@ -371,41 +341,28 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     res.stream(body_stream.boxed());
 }
 
-fn account_subscribe_prefers_json(req: &Request) -> bool {
-    req.headers()
-        .get(header::ACCEPT)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|accept| accept_contains_media_type(accept, "application/json"))
-}
-
-fn accept_contains_media_type(accept: &str, media_type: &str) -> bool {
-    accept.split(',').any(|part| {
-        part.split(';')
-            .next()
-            .map(str::trim)
-            .is_some_and(|value| value.eq_ignore_ascii_case(media_type))
-    })
-}
-
-fn parse_max_wait_ms(req: &mut Request) -> u64 {
-    query_param(req, "max_wait_ms")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS)
-        .min(ACCOUNT_SUBSCRIBE_MAX_WAIT_MS)
-}
-
 /// A snapshot is "delta-empty" when an incremental sync would carry no
 /// new realm state, no membership departure, no queued device messages,
 /// and no presence ticks. `account_data` is intentionally excluded — it
 /// is always emitted in full for authenticated sessions today, so it
 /// would defeat long-poll entirely.
-fn delta_is_empty(response: &arkret_sdk::models::SyncOutcome) -> bool {
-    response.realms.is_empty()
-        && response.left_realms.is_empty()
-        && response.to_device.is_empty()
-        && response.to_device_lost != Some(true)
-        && response.presence.is_empty()
-        && response.notifications.items.is_empty()
+fn delta_is_empty(response: &arkret_sdk::AccountSubscribeFrame) -> bool {
+    response
+        .realms
+        .as_ref()
+        .is_none_or(|realms| realms.entries.is_empty())
+        && response
+            .to_device
+            .as_ref()
+            .is_none_or(|to_device| to_device.messages.is_empty() && to_device.lost != Some(true))
+        && response
+            .presence
+            .as_ref()
+            .is_none_or(|presence| presence.events.is_empty())
+        && response
+            .notifications
+            .as_ref()
+            .is_none_or(|notifications| notifications.items.is_empty())
 }
 
 fn account_subscribe_notification_is_presence(
@@ -464,53 +421,30 @@ pub(crate) fn sync_filter_value(filter: Option<&arkret_sdk::SyncFilter>) -> Opti
     filter.and_then(|filter| serde_json::to_value(filter).ok())
 }
 
-fn account_delta_frame(response: arkret_sdk::models::SyncOutcome) -> Value {
-    let mut to_device = json!({"messages": response.to_device});
-    if let Some(object) = to_device.as_object_mut() {
-        if let Some(ack_token) = response.to_device_ack_token {
-            object.insert("ack_token".to_owned(), json!(ack_token));
-        }
-        if response.to_device_limited {
-            object.insert("limited".to_owned(), json!(true));
-        }
-        if let Some(next_cursor) = response.to_device_next_cursor {
-            object.insert("next_cursor".to_owned(), json!(next_cursor));
-        }
-        if let Some(lost) = response.to_device_lost {
-            object.insert("lost".to_owned(), json!(lost));
-        }
-    }
-    json!({
-        "kind": "delta",
-        "cursor": response.cursor,
-        "realms": response.realms,
-        "to_device": to_device,
-        "device_lists": response.device_lists,
-        "account_data": {"events": response.account_data},
-        "presence": {"events": response.presence},
-        "notifications": response.notifications,
-        "partial": response.partial,
-    })
-}
-
 fn account_reconnect_control_frame(
     after: Option<&str>,
-    reason: impl Into<String>,
+    _reason: impl Into<String>,
     reconnect_after_ms: u64,
-) -> Value {
-    let reason = reason.into();
-    match after {
-        Some(cursor) if !cursor.is_empty() => json!({
-            "kind": "dropped",
-            "cursor": cursor,
-            "reason": reason,
-            "reconnect_after_ms": reconnect_after_ms,
-        }),
-        _ => json!({
-            "kind": "resync_required",
-            "reason": reason,
-            "reconnect_after_ms": reconnect_after_ms,
-        }),
+) -> arkret_sdk::AccountSubscribeFrame {
+    let (kind, cursor) = match after {
+        Some(cursor) if !cursor.is_empty() => (
+            arkret_sdk::AccountSubscribeFrameKind::Dropped,
+            Some(cursor.to_owned()),
+        ),
+        _ => (arkret_sdk::AccountSubscribeFrameKind::ResyncRequired, None),
+    };
+    arkret_sdk::AccountSubscribeFrame {
+        kind,
+        cursor,
+        realms: None,
+        to_device: None,
+        device_lists: None,
+        account_data: None,
+        presence: None,
+        notifications: None,
+        partial: None,
+        priority: None,
+        reconnect_after_ms: Some(reconnect_after_ms),
     }
 }
 
@@ -542,29 +476,32 @@ pub(crate) async fn presence_events_for_actors(
     state: &AppState,
     actors: BTreeSet<String>,
     session: Option<&SessionRecord>,
-) -> Vec<Value> {
-    let mut events = Vec::new();
-    for actor in actors {
-        if !presence_visible_to_session(state, &actor, session).await {
+) -> Vec<arkret_sdk::Event> {
+    let mut latest = BTreeMap::<String, (DateTime<Utc>, arkret_sdk::Event)>::new();
+    for record in state
+        .persistence
+        .events()
+        .snapshot_all()
+        .await
+        .unwrap_or_default()
+    {
+        if record.kind != arkret_sdk::events::kinds::PRESENCE
+            || !actors.contains(&record.actor_id)
+            || !presence_visible_to_session(state, &record.actor_id, session).await
+        {
             continue;
         }
-        let records = state
-            .persistence
-            .presence()
-            .list_for_actor(&actor)
-            .await
-            .unwrap_or_default();
-        if let Some(aggregated) = aggregate_presence_records(&records, now()) {
-            let reveal_activity_detail =
-                presence_activity_detail_visible_to_session(state, &actor, session).await;
-            events.push(presence_sync_event_json(
-                &actor,
-                &aggregated,
-                reveal_activity_detail,
-            ));
+        let Ok(event) = serde_json::from_value::<arkret_sdk::Event>(record.envelope) else {
+            continue;
+        };
+        let replace = latest
+            .get(&record.actor_id)
+            .is_none_or(|(received_at, _)| record.received_at > *received_at);
+        if replace {
+            latest.insert(record.actor_id, (record.received_at, event));
         }
     }
-    events
+    latest.into_values().map(|(_, event)| event).collect()
 }
 
 /// One actor's presence after merging their per-device broadcasts

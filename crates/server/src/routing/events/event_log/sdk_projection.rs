@@ -576,7 +576,9 @@ fn sdk_event_from_record(
             .get("redacts")
             .and_then(Value::as_str)
             .and_then(|value| EventId::new(value.to_owned()).ok()),
-        payload,
+        payload: serde_json::from_value(payload).map_err(|error| {
+            AppError::internal(format!("stored event payload must be an object: {error}"))
+        })?,
         executed_by: object
             .get("executed_by")
             .and_then(Value::as_str)
@@ -592,7 +594,8 @@ fn sdk_event_from_record(
         external_ref: object
             .get("external_ref")
             .filter(|value| !value.is_null())
-            .cloned(),
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok()),
         actor_kind: object
             .get("actor_kind")
             .cloned()

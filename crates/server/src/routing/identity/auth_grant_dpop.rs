@@ -510,37 +510,13 @@ fn session_binding_from_introspection(
 fn validate_agent_session_scope_details(
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<(), AuthError> {
-    let Some(details) = grant.scope_details.as_object() else {
+    let Some(details) = grant.scope_details.as_ref() else {
         return Err(agent_scope_metadata_error());
     };
     if Did::new(grant.subject.clone()).is_err() {
         return Err(agent_scope_metadata_error());
     }
-    let Some(controller_id) = details
-        .get("controller_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Err(agent_scope_metadata_error());
-    };
-    if Did::new(controller_id.to_owned()).is_err() {
-        return Err(agent_scope_metadata_error());
-    }
-    let Some(resources) = details.get("resources").and_then(Value::as_object) else {
-        return Err(agent_scope_metadata_error());
-    };
-    if !matches!(resources.get("realm_refs"), Some(Value::Array(_)))
-        || !matches!(resources.get("strand_refs"), Some(Value::Array(_)))
-    {
-        return Err(agent_scope_metadata_error());
-    }
-    if !details.get("constraints").is_some_and(Value::is_object)
-        || !details
-            .get("capability_grant_refs")
-            .is_some_and(Value::is_array)
-        || !details.get("policy_refs").is_some_and(Value::is_array)
-    {
+    if details.realm_ids.is_empty() && details.strand_ids.is_empty() {
         return Err(agent_scope_metadata_error());
     }
     Ok(())
@@ -551,7 +527,7 @@ fn agent_scope_metadata_error() -> AuthError {
 }
 
 fn agent_session_scope_details(grant: &SessionGrantIntrospectGrant) -> Value {
-    let mut scope_details = grant.scope_details.clone();
+    let mut scope_details = serde_json::to_value(&grant.scope_details).unwrap_or(Value::Null);
     if let Some(object) = scope_details.as_object_mut() {
         object
             .entry("session_grant_id".to_owned())

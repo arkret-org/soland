@@ -244,7 +244,10 @@ pub(super) async fn build_ghost_profile_create_event(
     )
     .with_realm_id(realm_id.clone())
     .with_accountable_principal_ids(accountable_principal_ids)
-    .with_external_ref(external_ref);
+    .with_external_ref(
+        serde_json::from_value(external_ref)
+            .map_err(|error| AppError::internal(format!("external_ref encode failed: {error}")))?,
+    );
     let authorization = AppletDelegatedEventAuthorization::new(
         service_id.clone(),
         authorization_ref.to_owned(),

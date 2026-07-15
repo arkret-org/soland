@@ -24,8 +24,8 @@ pub(crate) use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) use arkret_sdk::lattice::CellState;
 pub(crate) use arkret_sdk::signatures::sign_eddsa_detached_jws;
-pub(crate) use arkret_sdk::state_res::state_root::EMPTY_STATE_ROOT;
-pub(crate) use arkret_sdk::state_res::{compute_state_root, control_event_set_root};
+pub(crate) use arkret_sdk::state::state_root::EMPTY_STATE_ROOT;
+pub(crate) use arkret_sdk::state::{compute_state_root, control_event_set_root};
 pub(crate) use arkret_sdk::{
     CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId, canonical,
 };

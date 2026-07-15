@@ -678,27 +678,17 @@ fn push_rejection(
     push_target_id: &str,
     device: Value,
     reason: &str,
-    detail: Option<String>,
+    _detail: Option<String>,
 ) -> arkret_sdk::PushNotifyRejection {
     let device_id = device
         .get("device_id")
         .and_then(Value::as_str)
         .and_then(|value| arkret_sdk::DeviceId::new(value.to_owned()).ok());
-    let extra = detail
-        .map(|detail| {
-            let key = match reason {
-                "contract_drift" => "drift_result",
-                _ => "rule_id",
-            };
-            BTreeMap::from([(key.to_owned(), Value::String(detail))])
-        })
-        .unwrap_or_default();
     arkret_sdk::PushNotifyRejection {
         push_target_id: push_target_id.to_owned(),
         device_id,
         reason_code: reason.to_owned(),
         retry_after_ms: None,
-        extra,
     }
 }
 

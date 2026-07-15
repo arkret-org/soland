@@ -263,7 +263,7 @@ fn member_state_at_history_basis(
         return None;
     }
     let cell = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor}")).ok()?;
-    let state_at_basis = arkret_sdk::state_res::effective_state_at(
+    let state_at_basis = arkret_sdk::state::effective_state_at(
         &seals,
         &realm,
         state.seal_store.as_ref(),

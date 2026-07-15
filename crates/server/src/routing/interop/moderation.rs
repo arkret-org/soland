@@ -615,14 +615,28 @@ async fn moderation_report(
     let reporter = body.reporter.as_str().to_owned();
     let source_service = moderation_request_source_service(req);
     let source_ip_hash = moderation_request_source_ip_hash(req);
+    let evidence_package = body
+        .evidence_package
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("evidence package encode failed: {error}")))?
+        .unwrap_or(Value::Null);
+    let franking_proof = body
+        .franking_proof
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("franking proof encode failed: {error}")))?
+        .unwrap_or(Value::Null);
     let safety = validate_moderation_report_safety(
         state,
         &realm_id,
         &reporter,
         &target_ref,
         body.effective_scope.as_ref(),
-        &body.evidence_package,
-        &body.franking_proof,
+        &evidence_package,
+        &franking_proof,
         source_service.as_deref(),
         &source_ip_hash,
     )

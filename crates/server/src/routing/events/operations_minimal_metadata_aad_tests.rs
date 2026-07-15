@@ -1,4 +1,4 @@
-use arkret_sdk::mls::AadVisibility;
+use arkret_sdk::EncryptedEnvelopeAadVisibility;
 use serde_json::json;
 
 use super::*;
@@ -8,22 +8,22 @@ fn aad_visibility_maps_known_wire_values() {
     // SEC-08 — wire discriminator → SDK enum, root and nested forms.
     assert!(matches!(
         minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "hidden"})),
-        Some(AadVisibility::Hidden)
+        Some(EncryptedEnvelopeAadVisibility::Hidden)
     ));
     assert!(matches!(
         minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "routing_digest"})),
-        Some(AadVisibility::RoutingDigest)
+        Some(EncryptedEnvelopeAadVisibility::RoutingDigest)
     ));
     assert!(matches!(
         minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "opaque_id"})),
-        Some(AadVisibility::OpaqueId)
+        Some(EncryptedEnvelopeAadVisibility::OpaqueId)
     ));
     // Spec wire example nests the envelope under `envelope`.
     assert!(matches!(
         minimal_metadata_aad_visibility(
             &json!({"envelope": {"aad_visibility_event_id": "hidden"}})
         ),
-        Some(AadVisibility::Hidden)
+        Some(EncryptedEnvelopeAadVisibility::Hidden)
     ));
 }
 

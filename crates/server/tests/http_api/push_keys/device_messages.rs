@@ -81,10 +81,7 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
     let cursor_replay = account_subscribe_frame(
         state.clone(),
         Some(&token),
-        &format!(
-            "catchup=true&max_wait_ms=0&after={}",
-            first["cursor"].as_str().unwrap()
-        ),
+        &format!("catchup=true&after={}", first["cursor"].as_str().unwrap()),
     )
     .await;
     assert!(
@@ -122,8 +119,7 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
     assert_eq!(ack_replay["ok"], true);
     assert_eq!(ack_replay["pruned_count"], 0);
 
-    let after_ack =
-        account_subscribe_frame(state, Some(&token), "catchup=true&max_wait_ms=0").await;
+    let after_ack = account_subscribe_frame(state, Some(&token), "catchup=true").await;
     assert!(
         after_ack["to_device"]["messages"]
             .as_array()
@@ -213,10 +209,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
     let after_lost = account_subscribe_frame(
         state,
         Some(&token),
-        &format!(
-            "catchup=true&max_wait_ms=0&after={}",
-            sync["cursor"].as_str().unwrap()
-        ),
+        &format!("catchup=true&after={}", sync["cursor"].as_str().unwrap()),
     )
     .await;
     assert_ne!(after_lost["to_device"]["lost"], true);

@@ -4,10 +4,9 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{
-    AppletPackage, AppletWireNamespaces, ApprovalRequest, ApprovedScope, EffectiveScope,
-    InstallCapabilityConstraint, InstallCommitOutcome, InstallCommitRequestBody,
-    InstallDeniedScope, InstallE2eeEffect, InstallE2eePolicy, InstallEventSubmission,
-    InstallNamespaceConflict, InstallPlan, InstallWidgetEffect, RealmId,
+    AppletApprovalRequest, AppletInstallOutcome, AppletInstallPlan, AppletInstallRequestBody,
+    AppletPackage, AppletWireNamespaces, CapabilityConstraint, DeniedScope, E2eeEffect, E2eePolicy,
+    EffectiveScope, EventSubmission, NamespaceConflict, RealmId, ScopeGrant, WidgetEffect,
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -33,11 +32,11 @@ pub(super) const GHOST_PROVISION_ACTION: &str = "ak.applet.ghost.provision";
 pub(super) async fn register_package_install(
     state: &AppState,
     owner_actor_id: &str,
-    commit: InstallCommitRequestBody,
+    commit: AppletInstallRequestBody,
     idempotency_key: String,
     body_digest: String,
     res: &mut Response,
-) -> Result<InstallCommitOutcome, AppError> {
+) -> Result<AppletInstallOutcome, AppError> {
     let submitted_plan_digest = commit.plan_digest.to_string();
     let package = commit.applet_package;
     let applet_id = package.applet_id.clone();
@@ -107,7 +106,7 @@ pub(super) async fn register_package_install(
         package.bot_actor_id.as_str(),
     )?;
     let install_id = ids::generate_install_id();
-    let response = InstallCommitOutcome {
+    let response = AppletInstallOutcome {
         ok: effective_status != "rejected",
         install_id,
         applet_id: applet_id.clone(),
@@ -184,7 +183,7 @@ pub(super) async fn register_package_install(
 async fn recover_applet_install_fanout(
     state: &AppState,
     record: &mut AppletRecord,
-    response: &InstallCommitOutcome,
+    response: &AppletInstallOutcome,
 ) -> Result<(), AppError> {
     update_applet_projection(state, record);
     ensure_applet_registration_projection(state, record, &response.registration_event_ref).await?;
@@ -325,7 +324,7 @@ fn build_install_execution_record(
     body_digest: &str,
     submitted_plan_digest: &str,
     record: &AppletRecord,
-    response: &InstallCommitOutcome,
+    response: &AppletInstallOutcome,
     accepted: bool,
 ) -> Result<Value, AppError> {
     let status = if accepted { "completed" } else { "pending" };
@@ -347,7 +346,7 @@ fn build_install_execution_record(
     }))
 }
 
-fn install_produced_event_refs(response: &InstallCommitOutcome) -> Vec<String> {
+fn install_produced_event_refs(response: &AppletInstallOutcome) -> Vec<String> {
     let mut refs = Vec::with_capacity(
         1 + response.capability_grant_refs.len()
             + response.membership_event_refs.len()
@@ -366,7 +365,7 @@ fn install_produced_event_refs(response: &InstallCommitOutcome) -> Vec<String> {
 
 fn install_execution_steps(
     record: &AppletRecord,
-    response: &InstallCommitOutcome,
+    response: &AppletInstallOutcome,
     accepted: bool,
 ) -> Result<Vec<Value>, AppError> {
     let Some(package) = record.package.as_ref() else {
@@ -919,8 +918,8 @@ fn validate_registration_epoch_evidence(
 pub(super) fn approved_scopes_from_approval_request(
     package: &AppletPackage,
     scope: &EffectiveScope,
-    approval: &ApprovalRequest,
-) -> Result<Vec<ApprovedScope>, AppError> {
+    approval: &AppletApprovalRequest,
+) -> Result<Vec<ScopeGrant>, AppError> {
     let approve_actions = approval_actions_for_install(approval);
     let requested = package
         .requested_scopes
@@ -942,7 +941,7 @@ pub(super) fn approved_scopes_from_approval_request(
             circle_id,
         } => (realm_id.clone(), vec![circle_id.clone()]),
     };
-    Ok(vec![ApprovedScope {
+    Ok(vec![ScopeGrant {
         actions: approved.into_iter().collect(),
         realm_ids: vec![realm_id],
         circle_ids,
@@ -950,7 +949,7 @@ pub(super) fn approved_scopes_from_approval_request(
     }])
 }
 
-pub(super) fn approval_actions_for_install(approval: &ApprovalRequest) -> Vec<String> {
+pub(super) fn approval_actions_for_install(approval: &AppletApprovalRequest) -> Vec<String> {
     approval
         .approve_actions
         .iter()
@@ -963,8 +962,8 @@ pub(super) async fn build_install_plan(
     state: &AppState,
     package: &AppletPackage,
     scope: &EffectiveScope,
-    approved_scopes: Vec<ApprovedScope>,
-) -> Result<InstallPlan, AppError> {
+    approved_scopes: Vec<ScopeGrant>,
+) -> Result<AppletInstallPlan, AppError> {
     let namespace_conflicts =
         namespace_conflicts_for(state, &package.applet_id, &package.namespaces).await?;
     if !namespace_conflicts.is_empty() {
@@ -998,7 +997,7 @@ pub(super) async fn build_install_plan(
         "warnings": [],
     });
     let plan_id = deterministic_plan_id(&seed)?;
-    let mut plan = InstallPlan {
+    let mut plan = AppletInstallPlan {
         schema: "ak.schema.applet_install_plan.v1".to_owned(),
         plan_id,
         applet_id: package.applet_id.clone(),
@@ -1008,13 +1007,13 @@ pub(super) async fn build_install_plan(
         requested_scopes: package.requested_scopes.clone(),
         approved_scopes,
         denied_scopes,
-        events_to_submit: vec![InstallEventSubmission {
+        events_to_submit: vec![EventSubmission {
             event_kind: arkret_sdk::events::kinds::APPLET_REGISTRATION.to_owned(),
             payload: registration_payload,
             refs: Vec::new(),
         }],
         capability_constraints: capability_constraints_for_scope(scope),
-        namespace_conflicts: Vec::<InstallNamespaceConflict>::new(),
+        namespace_conflicts: Vec::<NamespaceConflict>::new(),
         e2ee_effect: e2ee_effect_for_package(package),
         widget_effect: widget_effect_for_package(package),
         warnings: Vec::new(),
@@ -1052,7 +1051,7 @@ pub(super) fn registration_payload_from_package(
 
 pub(super) fn capability_constraints_for_scope(
     scope: &EffectiveScope,
-) -> Vec<InstallCapabilityConstraint> {
+) -> Vec<CapabilityConstraint> {
     let mut params = json!({
         "realm_id": effective_scope_realm_id(scope),
     });
@@ -1061,14 +1060,14 @@ pub(super) fn capability_constraints_for_scope(
     {
         params.insert("circle_id".to_owned(), Value::String(circle_id.to_string()));
     }
-    vec![InstallCapabilityConstraint {
+    vec![CapabilityConstraint {
         constraint_type: "effective_scope".to_owned(),
         params: Some(params),
     }]
 }
 
-pub(super) fn e2ee_effect_for_package(package: &AppletPackage) -> InstallE2eeEffect {
-    InstallE2eeEffect {
+pub(super) fn e2ee_effect_for_package(package: &AppletPackage) -> E2eeEffect {
+    E2eeEffect {
         requires_mls_join: package.e2ee_policy.mls_join_requested.unwrap_or(false),
         plaintext_access: "policy_declared".to_owned(),
         authorization_refs: Vec::new(),
@@ -1081,7 +1080,7 @@ fn package_requests_mls_join(package: &AppletPackage) -> bool {
 
 fn e2ee_authorization_refs_for_install(
     package: &AppletPackage,
-    e2ee_policy: &InstallE2eePolicy,
+    e2ee_policy: &E2eePolicy,
 ) -> Result<Vec<String>, AppError> {
     if !package_requests_mls_join(package) {
         return Ok(Vec::new());
@@ -1146,8 +1145,8 @@ async fn append_applet_e2ee_authorization_projection(
         })
 }
 
-pub(super) fn widget_effect_for_package(package: &AppletPackage) -> InstallWidgetEffect {
-    InstallWidgetEffect {
+pub(super) fn widget_effect_for_package(package: &AppletPackage) -> WidgetEffect {
+    WidgetEffect {
         allow_widget: package.widget.is_some(),
         policy_event_ref: None,
     }
@@ -1163,7 +1162,7 @@ pub(super) fn canonical_digest(value: &Value) -> Result<String, AppError> {
         .map_err(|error| AppError::internal(format!("canonical digest failed: {error}")))
 }
 
-pub(super) fn actions_from_approved_scopes(scopes: &[ApprovedScope]) -> Vec<String> {
+pub(super) fn actions_from_approved_scopes(scopes: &[ScopeGrant]) -> Vec<String> {
     scopes
         .iter()
         .flat_map(|scope| scope.actions.iter().cloned())
@@ -1175,13 +1174,13 @@ pub(super) fn actions_from_approved_scopes(scopes: &[ApprovedScope]) -> Vec<Stri
 pub(super) fn denied_scope_values(
     package: &AppletPackage,
     approved_actions: &[String],
-) -> Vec<InstallDeniedScope> {
+) -> Vec<DeniedScope> {
     let approved = approved_actions.iter().collect::<BTreeSet<_>>();
     package
         .requested_scopes
         .iter()
         .filter(|scope| !approved.contains(scope))
-        .map(|scope| InstallDeniedScope {
+        .map(|scope| DeniedScope {
             requested_scope: scope.clone(),
             reason_code: "not_approved".to_owned(),
         })
@@ -1325,7 +1324,7 @@ pub(super) fn package_namespace(package: &AppletPackage) -> String {
 pub(super) fn allow_ghost_actors_for_install(
     package: &AppletPackage,
     approved_actions: &[String],
-    actor_policy: &arkret_sdk::ActorPolicy,
+    actor_policy: &arkret_sdk::AppletActorPolicy,
 ) -> bool {
     let package_allows = package.ghost_policy.enabled;
     let scope_approved = approved_actions
@@ -1490,8 +1489,8 @@ mod tests {
         )
     }
 
-    fn sample_response(package: &AppletPackage) -> InstallCommitOutcome {
-        InstallCommitOutcome {
+    fn sample_response(package: &AppletPackage) -> AppletInstallOutcome {
+        AppletInstallOutcome {
             ok: true,
             install_id: "ak:install:01974100-0000-7000-8000-000000000001".to_owned(),
             applet_id: package.applet_id.clone(),
@@ -1518,7 +1517,7 @@ mod tests {
             accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
             ..Default::default()
         };
-        let actor_policy = arkret_sdk::ActorPolicy {
+        let actor_policy = arkret_sdk::AppletActorPolicy {
             bot_membership: "join".to_owned(),
             ghost_actor_mode: "policy_declared".to_owned(),
         };
@@ -1540,7 +1539,7 @@ mod tests {
         ));
     }
 
-    fn sample_record(package: &AppletPackage, response: &InstallCommitOutcome) -> AppletRecord {
+    fn sample_record(package: &AppletPackage, response: &AppletInstallOutcome) -> AppletRecord {
         AppletRecord {
             applet_id: package.applet_id.clone(),
             namespace: "bridge.test".to_owned(),

@@ -478,11 +478,41 @@ pub(super) fn actor_preview_from_value(actor: &Value) -> Result<ActorPreview, Ap
         actor_id: Did::new(actor_id.to_owned()).map_err(|error| {
             AppError::internal(format!("directory actor DID is invalid: {error}"))
         })?,
+        handle: actor
+            .get("handle")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         display_name: actor
             .get("display_name")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        preview: actor.clone(),
+        organization_did: actor
+            .get("organization_did")
+            .and_then(Value::as_str)
+            .map(|value| Did::new(value.to_owned()))
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("directory organization DID is invalid: {error}"))
+            })?,
+        avatar_blob_ref: actor
+            .get("avatar_blob_ref")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "directory avatar blob reference is invalid: {error}"
+                ))
+            })?,
+        as_of: now(),
+        source_refs: Vec::new(),
+        policy_revision: actor
+            .get("policy_revision")
+            .and_then(Value::as_str)
+            .unwrap_or("development-directory")
+            .to_owned(),
+        stale: None,
+        divergent: None,
     })
 }
 

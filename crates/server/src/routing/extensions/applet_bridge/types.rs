@@ -1,7 +1,7 @@
 //! Wire and storage types for the applet bridge surface.
 
 use arkret_sdk::{
-    AppletPackage, AppletRegistrationEpochEvidence, AppletWireNamespaces, InstallCommitOutcome,
+    AppletInstallOutcome, AppletPackage, AppletRegistrationEpochEvidence, AppletWireNamespaces,
 };
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ pub struct AppletRecord {
     #[serde(default)]
     pub install_id: Option<String>,
     #[serde(default)]
-    pub install_response: Option<InstallCommitOutcome>,
+    pub install_response: Option<AppletInstallOutcome>,
     #[serde(default)]
     pub install_execution: Option<Value>,
     #[serde(default)]

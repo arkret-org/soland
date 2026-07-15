@@ -177,8 +177,8 @@ async fn admin_get_cell(
         })?;
     let lattice_kind = binding.lattice.kind().as_wire_str();
     let bottom_policy = match binding.bottom_mode {
-        arkret_sdk::state_res::BottomMode::Reject => "reject",
-        arkret_sdk::state_res::BottomMode::Expose => "expose",
+        arkret_sdk::state::BottomMode::Reject => "reject",
+        arkret_sdk::state::BottomMode::Expose => "expose",
     };
 
     let cell_state_opt = {
@@ -294,8 +294,8 @@ async fn admin_list_cells(
         };
         let lattice_kind = binding.lattice.kind().as_wire_str();
         let bottom_policy = match binding.bottom_mode {
-            arkret_sdk::state_res::BottomMode::Reject => "reject",
-            arkret_sdk::state_res::BottomMode::Expose => "expose",
+            arkret_sdk::state::BottomMode::Reject => "reject",
+            arkret_sdk::state::BottomMode::Expose => "expose",
         };
         cells_out.push(state_response_from(
             &cell,

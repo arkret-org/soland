@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_sdk::lattice::CellState;
-use arkret_sdk::state_res::{CellRegistry, CellStore, StoreError};
+use arkret_sdk::state::{CellRegistry, CellStore, StoreError};
 use arkret_sdk::{AgentLifecycleState, CellRef, Operation, RealmId};
 use serde_json::Value;
 

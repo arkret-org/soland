@@ -1498,7 +1498,7 @@ fn insert_data_event_seal(state: &AppState, covered: Vec<arkret_sdk::MoveId>) ->
         hlc: arkret_sdk::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
         kind: arkret_sdk::SealKind::Normal,
     };
-    arkret_sdk::state_res::SealStore::put(state.seal_store.as_ref(), &seal).unwrap();
+    arkret_sdk::state::SealStore::put(state.seal_store.as_ref(), &seal).unwrap();
     seal_id.as_str().to_owned()
 }
 
@@ -1576,7 +1576,7 @@ fn insert_historical_data_event_grant(
         reason: None,
         issuer_seq: None,
     };
-    arkret_sdk::state_res::CellStore::append_sealed_effects(
+    arkret_sdk::state::CellStore::append_sealed_effects(
         state.cell_store.as_ref(),
         &realm,
         &seal_id,
@@ -1641,7 +1641,7 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
         reason: None,
         issuer_seq: None,
     };
-    arkret_sdk::state_res::CellStore::append_sealed_effects(
+    arkret_sdk::state::CellStore::append_sealed_effects(
         state.cell_store.as_ref(),
         &realm,
         &seal_id,
@@ -1745,7 +1745,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
         ));
     }
 
-    arkret_sdk::state_res::CellStore::append_sealed_effects(
+    arkret_sdk::state::CellStore::append_sealed_effects(
         state.cell_store.as_ref(),
         &realm,
         &seal_id,

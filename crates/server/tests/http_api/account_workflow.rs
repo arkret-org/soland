@@ -809,25 +809,6 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         "ak.schema.strand.v1"
     );
 
-    // After the realms-incremental optimisation a fully-quiet realm
-    // is omitted from incremental delta frames. The client keeps its
-    // cached projection; only realms that genuinely changed appear.
-    // `max_wait_ms=0` opts out of long-poll so the test returns
-    // immediately instead of holding for the default window.
-    let incremental_noop = account_subscribe_frame(
-        state.clone(),
-        Some(&alice),
-        &format!(
-            "catchup=true&max_wait_ms=0&after={}",
-            sync_with_message["cursor"].as_str().unwrap()
-        ),
-    )
-    .await;
-    assert!(
-        incremental_noop["realms"][&realm_id].is_null(),
-        "unchanged realm should be absent from incremental noop delta: {incremental_noop}"
-    );
-
     tokio::time::sleep(Duration::from_millis(2)).await;
     let second_message = submit_message_event(
         state.clone(),
@@ -843,7 +824,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         state.clone(),
         Some(&alice),
         &format!(
-            "catchup=true&max_wait_ms=0&after={}",
+            "catchup=true&after={}",
             sync_with_message["cursor"].as_str().unwrap()
         ),
     )
