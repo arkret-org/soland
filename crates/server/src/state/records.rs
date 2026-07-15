@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::{BlobRef, BlobVisibility, FreshnessState, PlaintextDataClassKind};
+use arkret_sdk::{
+    BlobRef, BlobVisibility, DeviceGenerationStatus, FreshnessState, Hash, NonEmptyString,
+    PlaintextDataClassKind, RecoveryIdentityModel, SealBasis,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -152,11 +155,12 @@ pub struct RecoverySessionRecord {
     pub trust_domain: String,
     pub policy_id: String,
     pub policy_version: u32,
-    /// Accepted cross-signing generation snapshotted at session creation. The
-    /// recovery proof transcript binds it, and completion (C-P4) MUST reject if
-    /// the current accepted generation no longer equals this value
-    /// (`device_recovery_ssk_generation_mismatch`). Spec: device-lifecycle.md §15.
-    pub ssk_generation: u32,
+    pub identity_model: RecoveryIdentityModel,
+    pub ssk_generation: Option<u64>,
+    pub current_device_generation_ref: Option<NonEmptyString>,
+    pub device_generation_status: Option<DeviceGenerationStatus>,
+    pub registry_head: Option<Hash>,
+    pub accepted_seal_frontier: Option<SealBasis>,
     /// Snapshot of the active policy at session-creation time (so a later policy
     /// rotation cannot retroactively change what this session was bound to).
     pub policy_payload: Value,

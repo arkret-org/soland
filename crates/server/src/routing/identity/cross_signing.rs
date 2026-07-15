@@ -58,6 +58,16 @@ pub async fn validate_cross_signing_publish(
     content
         .validate_structure()
         .map_err(|_| "cross_signing_publish_invalid_structure")?;
+    if crate::routing::identity::device_generation::current_device_generation(
+        state,
+        content.principal_id.as_str(),
+    )
+    .await
+    .map_err(|_| "cross_signing_state_unavailable")?
+    .is_some()
+    {
+        return Err("cross_signing_model_mismatch");
+    }
 
     // PSK authenticity + control-set: the published principal_signing_key MUST
     // resolve to a verification method in the principal's DID document, and the
@@ -134,6 +144,16 @@ pub async fn validate_cross_signing_reset(
     content
         .validate_structure()
         .map_err(|_| "cross_signing_reset_invalid_structure")?;
+    if crate::routing::identity::device_generation::current_device_generation(
+        state,
+        content.principal_id().as_str(),
+    )
+    .await
+    .map_err(|_| "cross_signing_state_unavailable")?
+    .is_some()
+    {
+        return Err("cross_signing_model_mismatch");
+    }
 
     let principal = Did::new(content.principal_id().as_str().to_owned())
         .map_err(|_| "cross_signing_bad_did")?;
@@ -572,6 +592,15 @@ pub fn verify_device_cross_signing_binding(
     .map_err(device_binding_reason_to_app_error)
 }
 
+pub(crate) fn current_accepted_ssk_generation(state: &AppState, principal_id: &str) -> Option<u64> {
+    let principal = Did::new(principal_id.to_owned()).ok()?;
+    state
+        .cross_signing
+        .lock()
+        .current_cross_signing(&principal)
+        .map(|publish| publish.generation.get())
+}
+
 /// Map a `check_device_cross_signing_binding` wire reason to a typed HTTP error,
 /// preserving the recovery `/complete` status semantics.
 fn device_binding_reason_to_app_error(reason: &'static str) -> AppError {
@@ -654,9 +683,9 @@ pub(crate) fn check_device_cross_signing_binding(
 
 /// 3a — validate a `ak.device.authorize` operation payload's cross_signing_binding
 /// at event ingest, so ANY submission path (recovery, or a future client-submitted
-/// control event) is verified, not just recovery `/complete`. Bootstrap-first-device
-/// authorizations carry a `bootstrap_binding` instead and are validated elsewhere;
-/// here we only verify when a `cross_signing_binding` is present.
+/// control event) is verified, not just recovery `/complete`. B-model inception
+/// authorizations carry an `enrollment_authority_binding` and are validated by
+/// the closed identity-anchor path; here we only verify `cross_signing_binding`.
 pub fn validate_device_authorize_binding(
     state: &AppState,
     payload: &Value,
@@ -1019,6 +1048,32 @@ pub(crate) async fn resolve_device_signing_directory_facet(
     // failing the whole query.
     let payload: ProjectedDevicePayload =
         serde_json::from_value(record.payload.clone()).unwrap_or_default();
+    let generation =
+        crate::routing::identity::device_generation::current_device_generation(state, principal_id)
+            .await
+            .ok()
+            .flatten();
+    let generation_usable = match generation {
+        Some(generation) => {
+            generation.status
+                == crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+                && payload.authorized_generation_ref.as_deref()
+                    == Some(generation.current_ref.as_str())
+        }
+        None => payload.authorized_generation_ref.is_none(),
+    };
+    if !generation_usable {
+        return DeviceSigningDirectoryFacet {
+            signing_key_did: None,
+            hpke_key: None,
+            trust_algorithms: None,
+            status: DeviceStatus::Revoked,
+            cross_signing_binding: None,
+            enrollment_authority_binding: None,
+            device_authorize_event_id: None,
+            authorized_generation_ref: payload.authorized_generation_ref,
+        };
+    }
     let signing_key_did = payload
         .device_public_key
         .as_deref()

@@ -70,6 +70,8 @@ impl SolandMemoryPersistenceStore {
     pub fn new() -> Self {
         let account_localparts = MemoryAccountLocalpartStore::new();
         let accounts = MemoryAccountStore::new(account_localparts.shared_data());
+        let devices = MemoryDeviceInventoryStore::new();
+        let events = MemoryEventStore::with_devices(devices.shared_data());
         Self {
             accounts,
             account_localparts,
@@ -83,7 +85,7 @@ impl SolandMemoryPersistenceStore {
             realm_meta: MemoryRealmMetaStore::new(),
             messages: MemoryMessageStore::new(),
             blobs: MemoryBlobStore::new(),
-            devices: MemoryDeviceInventoryStore::new(),
+            devices,
             federation_transactions: MemoryFederationTransactionStore::new(),
             federation_outbox: MemoryFederationOutboxStore::new(),
             federation_frontier_exchange: MemoryFederationFrontierExchangeStore::new(),
@@ -111,7 +113,7 @@ impl SolandMemoryPersistenceStore {
             webvh: MemoryWebvhStore::new(),
             service_identity: MemoryServiceIdentityStore::new(),
             realm_invites: MemoryRealmInviteStore::new(),
-            events: MemoryEventStore::new(),
+            events,
             projection_events: MemoryProjectionEventStore::new(),
             applets: MemoryAppletStore::new(),
             device_messages: MemoryDeviceMessageStore::new(),

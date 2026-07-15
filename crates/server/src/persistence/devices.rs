@@ -103,6 +103,12 @@ impl MemoryDeviceInventoryStore {
             data: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
+
+    pub(crate) fn shared_data(
+        &self,
+    ) -> Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>> {
+        self.data.clone()
+    }
 }
 
 #[async_trait]

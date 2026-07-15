@@ -622,8 +622,18 @@ struct RecoverySessionRow {
     policy_id: Uuid,
     #[diesel(sql_type = Integer)]
     policy_version: i32,
-    #[diesel(sql_type = Integer)]
-    ssk_generation: i32,
+    #[diesel(sql_type = Text)]
+    identity_model: String,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    ssk_generation: Option<i64>,
+    #[diesel(sql_type = Nullable<Text>)]
+    current_device_generation_ref: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    device_generation_status: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    registry_head: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    accepted_seal_frontier: Option<Value>,
     #[diesel(sql_type = Jsonb)]
     policy_payload: Value,
     #[diesel(sql_type = Text)]
@@ -650,12 +660,65 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                 row.recovery_session_id, row.policy_version
             ))
         })?;
-        let ssk_generation = u32::try_from(row.ssk_generation).map_err(|_| {
-            PersistenceError::Internal(format!(
-                "recovery session `{}` has invalid ssk_generation {}",
-                row.recovery_session_id, row.ssk_generation
-            ))
-        })?;
+        let identity_model =
+            serde_json::from_value(Value::String(row.identity_model)).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recovery session `{}` has invalid identity_model: {error}",
+                    row.recovery_session_id
+                ))
+            })?;
+        let ssk_generation = row
+            .ssk_generation
+            .map(|generation| {
+                u64::try_from(generation).map_err(|_| {
+                    PersistenceError::Internal(format!(
+                        "recovery session `{}` has invalid ssk_generation {generation}",
+                        row.recovery_session_id
+                    ))
+                })
+            })
+            .transpose()?;
+        let current_device_generation_ref = row
+            .current_device_generation_ref
+            .map(arkret_sdk::NonEmptyString::new)
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recovery session `{}` has invalid current_device_generation_ref: {error}",
+                    row.recovery_session_id
+                ))
+            })?;
+        let device_generation_status = row
+            .device_generation_status
+            .map(|status| serde_json::from_value(Value::String(status)))
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recovery session `{}` has invalid device_generation_status: {error}",
+                    row.recovery_session_id
+                ))
+            })?;
+        let registry_head = row
+            .registry_head
+            .map(arkret_sdk::Hash::new)
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recovery session `{}` has invalid registry_head: {error}",
+                    row.recovery_session_id
+                ))
+            })?;
+        let accepted_seal_frontier = row
+            .accepted_seal_frontier
+            .map(|value| {
+                serde_json::from_value(value).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "recovery session `{}` has invalid accepted_seal_frontier: {error}",
+                        row.recovery_session_id
+                    ))
+                })
+            })
+            .transpose()?;
         Ok(Self {
             recovery_session_id: ids::format_typed_uuid(
                 "recovery_session",
@@ -666,7 +729,12 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             trust_domain: row.trust_domain,
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
             policy_version,
+            identity_model,
             ssk_generation,
+            current_device_generation_ref,
+            device_generation_status,
+            registry_head,
+            accepted_seal_frontier,
             policy_payload: row.policy_payload,
             challenge: row.challenge,
             state: row.state,
@@ -679,8 +747,9 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
 }
 
 const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, principal_id, requesting_device_id, \
-     trust_domain, policy_id, policy_version, ssk_generation, policy_payload, challenge, state, \
-     proof_payload, created_at, updated_at, expires_at";
+     trust_domain, policy_id, policy_version, identity_model, ssk_generation, \
+     current_device_generation_ref, device_generation_status, registry_head, accepted_seal_frontier, \
+     policy_payload, challenge, state, proof_payload, created_at, updated_at, expires_at";
 
 #[async_trait]
 impl RecoverySessionStore for PgRecoverySessionStore {
@@ -703,12 +772,26 @@ impl RecoverySessionStore for PgRecoverySessionStore {
 
     async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
+        let ssk_generation = record
+            .ssk_generation
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| {
+                PersistenceError::Internal(
+                    "recovery session ssk_generation exceeds PostgreSQL bigint".to_owned(),
+                )
+            })?;
+        let device_generation_status = record.device_generation_status.map(|status| match status {
+            arkret_sdk::DeviceGenerationStatus::Active => "active",
+            arkret_sdk::DeviceGenerationStatus::Conflicted => "conflicted",
+        });
         sql_query(
             "INSERT INTO recovery_sessions \
              (id, principal_id, requesting_device_id, trust_domain, policy_id, \
-              policy_version, ssk_generation, policy_payload, challenge, state, proof_payload, \
-              created_at, updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+              policy_version, identity_model, ssk_generation, current_device_generation_ref, \
+              device_generation_status, registry_head, accepted_seal_frontier, policy_payload, \
+              challenge, state, proof_payload, created_at, updated_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
@@ -718,7 +801,31 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<Text, _>(&record.trust_domain)
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Integer, _>(record.policy_version as i32)
-        .bind::<Integer, _>(record.ssk_generation as i32)
+        .bind::<Text, _>(match record.identity_model {
+            arkret_sdk::RecoveryIdentityModel::CrossSigning => "cross_signing",
+            arkret_sdk::RecoveryIdentityModel::EnrollmentAuthority => "enrollment_authority",
+        })
+        .bind::<Nullable<BigInt>, _>(ssk_generation)
+        .bind::<Nullable<Text>, _>(
+            record
+                .current_device_generation_ref
+                .as_ref()
+                .map(|value| value.as_str()),
+        )
+        .bind::<Nullable<Text>, _>(device_generation_status)
+        .bind::<Nullable<Text>, _>(record.registry_head.as_ref().map(|value| value.as_str()))
+        .bind::<Nullable<Jsonb>, _>(
+            record
+                .accepted_seal_frontier
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "recovery session accepted_seal_frontier encode failed: {error}"
+                    ))
+                })?,
+        )
         .bind::<Jsonb, _>(&record.policy_payload)
         .bind::<Text, _>(&record.challenge)
         .bind::<Text, _>(&record.state)

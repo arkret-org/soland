@@ -47,8 +47,9 @@ pub(crate) async fn validate_event_proofs(
     // schema already requires `authorization_ref` whenever `executed_by` is
     // present, and the actor/executed_by DID validity + vm-DID==executed_by
     // checks ran earlier in this function.
-    let proof_root =
+    let ordinary_proof_root =
         event_string_field(object, &["executed_by"]).unwrap_or_else(|| actor_id.to_owned());
+    let root_anchor_method = resolve_event_root_anchor_method(state, object, actor_id).await?;
     // §2.10.3 — minimal-metadata content Events authenticate authorship
     // against the active MLS LeafNode at the envelope's `(group_id, epoch,
     // group_state_ref)` instead of the DID-document / directory path. The
@@ -159,15 +160,30 @@ pub(crate) async fn validate_event_proofs(
                     "proof verification_method is required",
                 )
             })?;
-        if verification_method != proof_root
-            && !verification_method.starts_with(&format!("{proof_root}#"))
-        {
-            return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                "proof verification method must be rooted in the proof signer (executed_by when present, else actor_id)",
-            ));
-        }
+        let signer_controller = if let Some(expected_root_method) = root_anchor_method.as_deref() {
+            if verification_method != expected_root_method {
+                return Err(event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "invalid_proof",
+                    "root-anchored Event proof must use the active update authority from the referenced DID entry",
+                ));
+            }
+            verification_method
+                .split_once('#')
+                .map_or(verification_method.as_str(), |(did, _)| did)
+                .to_owned()
+        } else {
+            if verification_method != ordinary_proof_root
+                && !verification_method.starts_with(&format!("{ordinary_proof_root}#"))
+            {
+                return Err(event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "invalid_proof",
+                    "proof verification method must be rooted in the proof signer (executed_by when present, else actor_id)",
+                ));
+            }
+            ordinary_proof_root.clone()
+        };
         if is_production {
             let jws = event_string_field(proof_object, &["jws"]).ok_or_else(|| {
                 event_validation_error(
@@ -221,7 +237,7 @@ pub(crate) async fn validate_event_proofs(
             // resolved purely cryptographically by the SDK verifier below, so
             // the freshness gate (which only covers cached webvh documents)
             // only applies to webvh signers.
-            let signer_did = arkret_sdk::Did::new(proof_root.clone()).map_err(|error| {
+            let signer_did = arkret_sdk::Did::new(signer_controller).map_err(|error| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_proof",

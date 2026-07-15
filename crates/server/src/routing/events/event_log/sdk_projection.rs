@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn event_semantic_refs(
+pub(in crate::routing) fn event_semantic_refs(
     object: &serde_json::Map<String, Value>,
     max_len: usize,
 ) -> Result<Vec<String>, EventValidationError> {
@@ -87,7 +87,9 @@ fn event_canonical_source(envelope: &Value) -> Value {
     value
 }
 
-pub(crate) fn event_canonical_bytes(envelope: &Value) -> Result<Vec<u8>, EventValidationError> {
+pub(in crate::routing) fn event_canonical_bytes(
+    envelope: &Value,
+) -> Result<Vec<u8>, EventValidationError> {
     canonical::canonical_json_bytes(&event_canonical_source(envelope)).map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -108,7 +110,7 @@ pub(crate) fn is_valid_event_id(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
 }
 
-pub(crate) async fn event_submit_response(
+pub(in crate::routing) async fn event_submit_response(
     state: &AppState,
     status: EventsSubmitStatus,
     event_id: String,
@@ -132,7 +134,7 @@ pub(crate) async fn event_submit_response(
     }
 }
 
-pub(crate) fn projection_operation_from_event(
+pub(in crate::routing) fn projection_operation_from_event(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) -> Option<Operation> {
@@ -453,13 +455,28 @@ pub(crate) async fn event_view_for_state(
     record: &CanonicalEventRecord,
     session: &SessionRecord,
 ) -> JsonResult<EventView> {
-    json_ok(EventView {
-        event: sdk_event_for_state(state, record)?,
-        visibility: Some(event_visibility_metadata(state, record)),
-        receipts: crate::routing::events::read_receipts::visible_read_receipts_for_event(
+    let mut receipts = state
+        .persistence
+        .events()
+        .batch_receipts_for_event(&record.event_id)
+        .await
+        .map_err(|error| AppError::internal(format!("Event Batch Receipt lookup failed: {error}")))?
+        .into_iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            AppError::internal(format!("Event Batch Receipt encode failed: {error}"))
+        })?;
+    receipts.extend(
+        crate::routing::events::read_receipts::visible_read_receipts_for_event(
             state, record, session,
         )
         .await,
+    );
+    json_ok(EventView {
+        event: sdk_event_for_state(state, record)?,
+        visibility: Some(event_visibility_metadata(state, record)),
+        receipts,
     })
 }
 
@@ -781,7 +798,7 @@ fn sdk_audience(value: &Value) -> Option<Audience> {
 /// realm binding itself is enforced by
 /// `validate_principal_control_realm_binding`; payload field presence by
 /// the registry payload schema.
-pub(crate) fn validate_device_revoke_submission(
+pub(in crate::routing) fn validate_device_revoke_submission(
     session: &SessionRecord,
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,

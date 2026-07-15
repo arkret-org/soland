@@ -2164,8 +2164,8 @@ async fn service_attested_device_authorize_rejects_authorization_ref_mismatch() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn non_enrollment_device_authorize_passes_through_gate() {
-    // A device.authorize that carries no enrollment_authority_binding (e.g. a
-    // cross_signing / bootstrap device) is not this gate's concern and must pass
+    // A device.authorize that carries no enrollment_authority_binding (for
+    // example, an A-model cross-signing authorization) is not this gate's concern and must pass
     // through untouched (validated elsewhere).
     let state = make_state(true);
     let principal_did = "did:webvh:scid:users.soland.local:alice";
@@ -2176,10 +2176,7 @@ async fn non_enrollment_device_authorize_passes_through_gate() {
             "principal_id": principal_did,
             "device_id": "ak:device:01904100-0000-8000-8000-000000000001",
             "device_public_key": "z6Mk...",
-            "bootstrap_binding": {
-                "kind": "inception_self_authorized",
-                "did_method_evidence_ref": "did:webvh:.../entry-0"
-            }
+            "cross_signing_binding": {"ssk_generation": 1}
         }
     });
     let object = object.as_object().unwrap().clone();

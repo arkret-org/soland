@@ -6,9 +6,9 @@ use super::super::*;
 /// client-held SSK (§5.2) or DID inception key (§5.3).
 ///
 /// Only the `enrollment_authority_binding` branch is validated here; payloads
-/// carrying `cross_signing_binding` or `bootstrap_binding` instead are validated
-/// by `cross_signing::validate_device_authorize_binding` (operation policy) and
-/// the bootstrap path, and pass through this gate untouched.
+/// carrying `cross_signing_binding` are validated by
+/// `cross_signing::validate_device_authorize_binding` and pass through this
+/// gate untouched.
 ///
 /// MUST check (device-lifecycle.md §5.4 receiver rules):
 /// `executed_by` (== `binding.authority_did`) is the DID that the principal (`actor_id`) DID
@@ -79,11 +79,10 @@ pub(crate) async fn validate_device_enrollment_authority_binding(
         ));
     }
 
-    // Resolve the principal (actor_id) DID document and read the anchored
-    // ArkretDeviceEnrollmentAuthority service entry. If the binding carries a
-    // versionTime provenance anchor, replay the DID log at that time instead
-    // of accepting a current-policy-only designation.
-    let designated = resolve_enrollment_authority_designation(state, actor_id, binding)
+    // Resolve the principal DID document and read its one narrow enrollment
+    // delegation: an external ArkretDeviceEnrollmentAuthority service (B
+    // model), or a principal-owned capabilityDelegation method (A model).
+    let designated = resolve_enrollment_authority_designation(state, actor_id)
         .await
         .ok_or_else(|| {
             invalid(
@@ -127,13 +126,7 @@ struct EnrollmentAuthorityDesignation {
 async fn resolve_enrollment_authority_designation(
     state: &AppState,
     principal_did: &str,
-    binding: &serde_json::Map<String, Value>,
 ) -> Option<EnrollmentAuthorityDesignation> {
-    if let Some(version_time) = enrollment_authority_version_time(binding) {
-        let document =
-            historical_enrollment_authority_document(state, principal_did, version_time).await?;
-        return enrollment_authority_designation_from_document(&document);
-    }
     let record = state
         .persistence
         .webvh()
@@ -141,77 +134,45 @@ async fn resolve_enrollment_authority_designation(
         .await
         .ok()
         .flatten()?;
-    enrollment_authority_designation_from_document(&record.did_document)
-}
-
-fn enrollment_authority_version_time(
-    binding: &serde_json::Map<String, Value>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    for field in ["authority_version_time", "version_time", "versionTime"] {
-        let Some(raw) = binding.get(field).and_then(Value::as_str).map(str::trim) else {
-            continue;
-        };
-        if raw.is_empty() {
-            continue;
-        }
-        let parsed = chrono::DateTime::parse_from_rfc3339(raw).ok()?;
-        return Some(parsed.with_timezone(&chrono::Utc));
-    }
-    None
-}
-
-async fn historical_enrollment_authority_document(
-    state: &AppState,
-    principal_did: &str,
-    version_time: chrono::DateTime<chrono::Utc>,
-) -> Option<Value> {
-    let mut events = state
-        .persistence
-        .webvh()
-        .list_log_events(principal_did)
-        .await
-        .ok()?;
-    events.sort_by_key(|event| event.seq);
-    events
-        .into_iter()
-        .rfind(|event| {
-            let entry_time = event
-                .operation
-                .get("versionTime")
-                .and_then(Value::as_str)
-                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                .map(|value| value.with_timezone(&chrono::Utc))
-                .unwrap_or(event.created_at);
-            entry_time <= version_time
-        })
-        .and_then(|event| {
-            event
-                .operation
-                .get("state")
-                .cloned()
-                .or_else(|| event.operation.get("did_document").cloned())
-        })
+    enrollment_authority_designation_from_document(&record.did_document, principal_did)
 }
 
 fn enrollment_authority_designation_from_document(
     did_document: &Value,
+    principal_did: &str,
 ) -> Option<EnrollmentAuthorityDesignation> {
-    let services = did_document.get("service")?.as_array()?;
-    for service in services {
-        let service_type = service.get("type").and_then(Value::as_str);
-        if service_type != Some(arkret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY) {
-            continue;
+    if let Some(services) = did_document.get("service").and_then(Value::as_array) {
+        for service in services {
+            let service_type = service.get("type").and_then(Value::as_str);
+            if service_type != Some(arkret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY) {
+                continue;
+            }
+            let service_id = service.get("id").and_then(Value::as_str)?;
+            let service_endpoint = service
+                .get("serviceEndpoint")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            return Some(EnrollmentAuthorityDesignation {
+                service_id: service_id.to_owned(),
+                service_endpoint: service_endpoint.to_owned(),
+            });
         }
-        let service_id = service.get("id").and_then(Value::as_str)?;
-        let service_endpoint = service
-            .get("serviceEndpoint")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())?;
-        return Some(EnrollmentAuthorityDesignation {
-            service_id: service_id.to_owned(),
-            service_endpoint: service_endpoint.to_owned(),
-        });
     }
-    None
+    let delegated_method = did_document
+        .get("capabilityDelegation")
+        .and_then(Value::as_array)?
+        .iter()
+        .find_map(|entry| {
+            entry
+                .as_str()
+                .or_else(|| entry.get("id").and_then(Value::as_str))
+        })?;
+    let controller = delegated_method
+        .split_once('#')
+        .map_or(delegated_method, |(did, _)| did);
+    (controller == principal_did).then(|| EnrollmentAuthorityDesignation {
+        service_id: delegated_method.to_owned(),
+        service_endpoint: principal_did.to_owned(),
+    })
 }

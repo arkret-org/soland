@@ -77,6 +77,19 @@ async fn keys_upload(
         .get(&session.actor, &device_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    let current_facet =
+        crate::routing::identity::cross_signing::resolve_device_signing_directory_facet(
+            state,
+            &session.actor,
+            &device_id,
+        )
+        .await;
+    if !matches!(current_facet.status, DeviceStatus::Active) {
+        return Err(AppError::capability_denied(
+            "device is revoked, unverified, or fenced by the current generation",
+        )
+        .with_wire_code("device_generation_fenced"));
+    }
     verify_keys_upload_device_signature(
         &session.actor,
         &device_id,
@@ -219,6 +232,7 @@ async fn keys_query(
     let store = state.persistence.device_keys();
     let mut result = BTreeMap::new();
     let mut cross_signing = BTreeMap::new();
+    let mut device_generations = BTreeMap::new();
     for (actor, devices) in body.device_keys {
         if !keys_query_actor_visible_to_requester(state, &session.actor, actor.as_str()) {
             continue;
@@ -234,6 +248,34 @@ async fn keys_query(
             )
         {
             cross_signing.insert(actor.clone(), publish);
+        }
+        if let Some(generation) =
+            crate::routing::identity::device_generation::current_device_generation(
+                state,
+                actor.as_str(),
+            )
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+        {
+            device_generations.insert(
+                actor.clone(),
+                arkret_sdk::DeviceGenerationState {
+                    current_device_generation_ref: arkret_sdk::NonEmptyString::new(
+                        generation.current_ref,
+                    )
+                    .map_err(|error| {
+                        AppError::internal(format!("stored device generation is invalid: {error}"))
+                    })?,
+                    device_generation_status: match generation.status {
+                        crate::routing::identity::device_generation::DeviceGenerationStatus::Active => {
+                            arkret_sdk::DeviceGenerationStatus::Active
+                        }
+                        crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted => {
+                            arkret_sdk::DeviceGenerationStatus::Conflicted
+                        }
+                    },
+                },
+            );
         }
         let mut actor_keys = BTreeMap::new();
         for device_id in devices {
@@ -323,7 +365,7 @@ async fn keys_query(
         device_keys: result,
         failures: Vec::new(),
         cross_signing,
-        device_generations: BTreeMap::new(),
+        device_generations,
     })
 }
 
@@ -463,6 +505,16 @@ async fn keys_claim(
     for (actor, devices) in body.one_time_keys {
         let mut device_map = BTreeMap::new();
         for (device_id, algorithm) in devices {
+            let facet =
+                crate::routing::identity::cross_signing::resolve_device_signing_directory_facet(
+                    state,
+                    actor.as_str(),
+                    device_id.as_str(),
+                )
+                .await;
+            if !matches!(facet.status, DeviceStatus::Active) {
+                continue;
+            }
             if let Ok(Some(key)) = store.claim(actor.as_str(), device_id.as_str()).await {
                 let key = serde_json::from_value(key).map_err(|error| {
                     AppError::internal(format!("stored one-time key is invalid: {error}"))

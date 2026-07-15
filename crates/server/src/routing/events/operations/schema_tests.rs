@@ -1035,9 +1035,10 @@ mod derived_relation_and_morph_immutability_tests {
                     "ssk_generation": 1,
                     "signature": "c2ln"
                 },
-                "bootstrap_binding": {
-                    "kind": "inception_key",
-                    "did_method_evidence_ref": "did:web:alice.example#inception"
+                "enrollment_authority_binding": {
+                    "kind": "service_attested",
+                    "authority_did": "did:web:enrollment.example",
+                    "authorization_ref": "did:web:alice.example#enrollment-authority"
                 }
             }),
         );

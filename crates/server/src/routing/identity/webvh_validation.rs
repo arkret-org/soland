@@ -21,6 +21,8 @@
 //! same helper the embedded provider uses to derive the SCID and entry
 //! hashes, so validation and production stay in lockstep.
 
+use std::collections::BTreeSet;
+
 use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
@@ -429,6 +431,18 @@ pub fn verify_scid_against_did(
     Ok(())
 }
 
+pub fn verify_log_subject(did: &str, log: &[WebvhLogEntry]) -> Result<(), WebvhValidationError> {
+    for (index, entry) in log.iter().enumerate() {
+        if entry.payload.pointer("/state/id").and_then(Value::as_str) != Some(did) {
+            return Err(WebvhValidationError::MalformedEntry {
+                at_index: index,
+                reason: "state.id must equal the resolved did:webvh subject".to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Verify at least one witness signature on a log entry, when one is
 /// present. Kept for existing call sites; quorum-aware resolution uses
 /// [`validate_witness_policy_for_log`].
@@ -509,15 +523,15 @@ pub fn validate_witness_policy_for_log_with_window(
 
 /// Validate that every rotation entry in a `did:webvh` log was authorised by
 /// an accepted control path. A rotation entry (one that changes `updateKeys`
-/// or the document's control keys) MUST be authorised by at least one of:
+/// or the document's control keys) MUST activate the one precommitted update
+/// authority and be signed by that authority. Organization governance, when
+/// configured, is an additional quorum requirement rather than an alternative
+/// control path:
 ///
-/// 1. **normal controller rotation** — a `proof[]` signed by a key listed in the *previous* entry's
-///    `updateKeys` (the current controller signs over the new key set). Spec: identity-did.md §7.
-/// 2. **emergency recovery** — a `proof[]` signed by a genesis-declared recovery key
-///    (`parameters.recoveryKeys` / `recovery_keys`), so a compromised controller key can be rotated
-///    out without a prev-key signature. Spec: key-management.md §3.3, identity-did.md §8.2
-///    emergency recovery.
-/// 3. **organization governance quorum** — when the genesis declares an `application-level
+/// 1. **pre-rotated controller** — the entry activates exactly one update key, its multikey hash is
+///    committed by the previous entry's `nextKeyHashes`, and that newly active authority signs the
+///    entry.
+/// 2. **organization governance quorum** — when the genesis declares an `application-level
 ///    multi-proof` governance threshold (`parameters.governance.threshold` + eligible methods), at
 ///    least `threshold` distinct valid `proof[]` from the eligible governance methods MUST sign the
 ///    rotation. A single-sig submission on an N-of-M org DID fails closed. Spec: identity-did.md
@@ -534,16 +548,35 @@ pub fn validate_rotation_authorization_for_log(
     if log.is_empty() {
         return Err(WebvhValidationError::EmptyLog);
     }
+    for (index, entry) in log.iter().enumerate() {
+        if entry
+            .payload
+            .pointer("/parameters/method")
+            .and_then(Value::as_str)
+            != Some("did:webvh:1.0")
+        {
+            return Err(WebvhValidationError::MalformedEntry {
+                at_index: index,
+                reason: "parameters.method must be did:webvh:1.0".to_owned(),
+            });
+        }
+    }
     let governance = GovernancePolicy::from_genesis(&log[0]);
-    let recovery_keys = recovery_keys_from_genesis(&log[0]);
+    let genesis_keys = update_keys_of(&log[0]);
+    if genesis_keys.len() != 1 {
+        return Err(WebvhValidationError::RotationNotAuthorized {
+            at_index: 0,
+            reason: "genesis entry must activate exactly one update key".to_owned(),
+        });
+    }
+    validate_active_controller_proof(&log[0])?;
+    let mut activated_update_keys = genesis_keys.into_iter().collect::<BTreeSet<_>>();
+    validate_next_root_commitment(&log[0], 0, &activated_update_keys)?;
     for index in 1..log.len() {
         let previous = &log[index - 1];
         let current = &log[index];
-        if !is_rotation_entry(previous, current) {
-            continue;
-        }
-        // Organization governance threshold takes precedence: when the DID
-        // declares an N-of-M governance policy, every rotation MUST clear it.
+        // An organization governance policy adds a quorum gate. It never
+        // substitutes for the precommitted active update authority.
         if let Some(policy) = &governance {
             let valid = count_distinct_valid_entry_proofs(current, &policy.eligible_methods)?;
             if valid < policy.threshold {
@@ -553,23 +586,61 @@ pub fn validate_rotation_authorization_for_log(
                     valid,
                 });
             }
-            continue;
         }
-        // Otherwise accept either a normal controller proof (prev updateKeys)
-        // or an emergency recovery-key proof.
-        let prev_update_keys = update_keys_of(previous);
-        let controller_valid = count_distinct_valid_entry_proofs(current, &prev_update_keys)? > 0;
-        if controller_valid {
-            continue;
+        let current_keys = update_keys_of(current);
+        if current_keys.len() != 1 {
+            return Err(WebvhValidationError::RotationNotAuthorized {
+                at_index: index,
+                reason: "rotation entry must activate exactly one update key".to_owned(),
+            });
         }
-        let recovery_valid = !recovery_keys.is_empty()
-            && count_distinct_valid_entry_proofs(current, &recovery_keys)? > 0;
-        if recovery_valid {
-            continue;
+        if activated_update_keys.contains(&current_keys[0]) {
+            return Err(WebvhValidationError::RotationNotAuthorized {
+                at_index: index,
+                reason: "rotation reuses a previously activated update key".to_owned(),
+            });
         }
+        let expected = sha256_multihash_base58btc(current_keys[0].as_bytes());
+        let previous_commitments = next_key_hashes_of(previous);
+        let committed = previous_commitments.len() == 1 && previous_commitments[0] == expected;
+        if !committed {
+            return Err(WebvhValidationError::RotationNotAuthorized {
+                at_index: index,
+                reason: "new active update key is not committed by previous nextKeyHashes"
+                    .to_owned(),
+            });
+        }
+        validate_active_controller_proof(current).map_err(|error| {
+            WebvhValidationError::RotationNotAuthorized {
+                at_index: index,
+                reason: error.to_string(),
+            }
+        })?;
+        activated_update_keys.insert(current_keys[0].clone());
+        validate_next_root_commitment(current, index, &activated_update_keys)?;
+    }
+    Ok(())
+}
+
+fn validate_next_root_commitment(
+    entry: &WebvhLogEntry,
+    at_index: usize,
+    activated_update_keys: &BTreeSet<String>,
+) -> Result<(), WebvhValidationError> {
+    let next_hashes = next_key_hashes_of(entry);
+    if next_hashes.len() != 1 {
         return Err(WebvhValidationError::RotationNotAuthorized {
-            at_index: index,
-            reason: "rotation proof is signed by neither the previous controller updateKeys nor a declared recovery key".to_owned(),
+            at_index,
+            reason: "entry must commit exactly one next update key".to_owned(),
+        });
+    }
+    if activated_update_keys
+        .iter()
+        .any(|key| sha256_multihash_base58btc(key.as_bytes()) == next_hashes[0])
+    {
+        return Err(WebvhValidationError::RotationNotAuthorized {
+            at_index,
+            reason: "entry nextKeyHashes reuses an already activated update key".to_owned(),
         });
     }
     Ok(())
@@ -597,6 +668,33 @@ fn count_distinct_valid_entry_proofs(
         seen.insert(key);
     }
     Ok(seen.len())
+}
+
+/// Verify that a log entry is signed by the update authority activated by
+/// that same entry. Arkret's pre-rotation profile never treats a previous root
+/// as the active authority for the new entry.
+pub fn validate_active_controller_proof(entry: &WebvhLogEntry) -> Result<(), WebvhValidationError> {
+    let update_keys = update_keys_of(entry);
+    if update_keys.len() != 1 {
+        return Err(WebvhValidationError::RotationNotAuthorized {
+            at_index: 0,
+            reason: "entry must activate exactly one update key".to_owned(),
+        });
+    }
+    if count_distinct_valid_entry_proofs(entry, &update_keys)? != 1 {
+        return Err(WebvhValidationError::RotationNotAuthorized {
+            at_index: 0,
+            reason: "entry is not signed by its active update authority".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+pub fn active_update_verification_methods(entry: &WebvhLogEntry) -> Vec<String> {
+    update_keys_of(entry)
+        .into_iter()
+        .map(|multikey| format!("did:key:{multikey}#{multikey}"))
+        .collect()
 }
 
 /// Verify a single `proof[]` object signs the proof-stripped canonical entry
@@ -685,11 +783,10 @@ fn update_keys_of(entry: &WebvhLogEntry) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn recovery_keys_from_genesis(genesis: &WebvhLogEntry) -> Vec<String> {
-    let parameters = genesis.payload.get("parameters").unwrap_or(&Value::Null);
-    parameters
-        .get("recoveryKeys")
-        .or_else(|| parameters.get("recovery_keys"))
+fn next_key_hashes_of(entry: &WebvhLogEntry) -> Vec<String> {
+    entry
+        .payload
+        .pointer("/parameters/nextKeyHashes")
         .and_then(Value::as_array)
         .map(|items| {
             items

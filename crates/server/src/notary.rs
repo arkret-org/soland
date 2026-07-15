@@ -757,10 +757,9 @@ fn materialize_genesis_if_empty(
 /// Control Move `seal_basis` (`leaves=[seal_id]`) and DataEvent `seal_ref`
 /// from this view.
 ///
-/// An initialized Realm always has at least its Genesis Seal; when none
-/// exists yet and this deployment is the Realm's notary, the Genesis Seal is
-/// materialized on demand. Returns `Ok(None)` only when this deployment is
-/// not authorized to notarize the Realm and holds no Seal for it.
+/// Reading the frontier never creates an empty Seal. A Realm with no accepted
+/// Seal returns `Ok(None)`; this is required by B-model recovery because a
+/// null pre-fence basis makes the first new-generation Seal itself a root.
 ///
 /// With multiple DAG leaves (not expected under v1 single-DID notary), the
 /// leaf with the highest `notary_seq` (id as tie-break) is served — a light
@@ -769,13 +768,9 @@ pub fn ensure_realm_seal_head(
     state: &AppState,
     realm_id: &RealmId,
 ) -> Result<Option<Seal>, NotaryError> {
-    let mut leaves = state.seal_store.list_leaves(realm_id)?;
+    let leaves = state.seal_store.list_leaves(realm_id)?;
     if leaves.is_empty() {
-        let worker = NotaryWorker::for_service(state.config.service_id.clone());
-        if !worker.is_authorized_for(state, realm_id)? {
-            return Ok(None);
-        }
-        leaves = materialize_genesis_if_empty(&worker, state, realm_id)?;
+        return Ok(None);
     }
     let mut head: Option<Seal> = None;
     for leaf in &leaves {
@@ -802,34 +797,62 @@ pub fn ensure_realm_seal_head(
 /// SealedOps to CellStore. Existing coverage must be a subset of the supplied
 /// complete set; otherwise mixing an unrelated legacy Move rail would make the
 /// claimed proof incomplete and the operation fails closed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FirstGenerationEventSealRequirement {
+    pub payload: arkret_sdk::DeviceReanchorPayload,
+    pub reanchor_digest: Hash,
+    pub predecessor_refs: Vec<SealId>,
+    pub accepted_frontier_refs: Vec<SealId>,
+    pub required_delta: Vec<MoveId>,
+    pub principal_id: String,
+    pub replacement_device_id: String,
+    pub replacement_device_public_key: String,
+}
+
 pub fn ensure_materialized_event_seal(
     state: &AppState,
     realm_id: &RealmId,
     covered_event_digests: &[MoveId],
     state_root: &Hash,
     event_ops: &[(CellRef, SealedOp)],
+    device_generation_seal_required: bool,
+    generation_fence: Option<&FirstGenerationEventSealRequirement>,
 ) -> Result<MaterializedEventSealView, NotaryError> {
-    ensure_realm_seal_head(state, realm_id)?
-        .ok_or_else(|| NotaryError::NotAuthorized(realm_id.to_string()))?;
-
     let _guard = EVENT_SEAL_MATERIALIZE_LOCK.lock();
-    let leaves = state.seal_store.list_leaves(realm_id)?;
-    if leaves.len() != 1 {
-        return Err(NotaryError::Construction(format!(
-            "event Seal materialization requires one Realm leaf, found {}",
-            leaves.len()
-        )));
+    let worker = NotaryWorker::for_service(state.config.service_id.clone());
+    if !device_generation_seal_required && !worker.is_authorized_for(state, realm_id)? {
+        return Err(NotaryError::NotAuthorized(realm_id.to_string()));
     }
-    let head_id = leaves[0].clone();
-    let head = state
-        .seal_store
-        .get(&head_id)?
-        .ok_or_else(|| NotaryError::Store(format!("Seal head {head_id} is missing")))?;
-    let current = leaf_union_proof(std::slice::from_ref(&head_id), state.seal_store.as_ref())
-        .map_err(|error| NotaryError::Store(format!("read Seal coverage: {error}")))?
-        .into_iter()
-        .flat_map(|proof| proof.covered_event_digests)
-        .collect::<BTreeSet<_>>();
+    let mut leaves = state.seal_store.list_leaves(realm_id)?;
+    if let Some(requirement) = generation_fence {
+        leaves = requirement.accepted_frontier_refs.clone();
+    }
+    if !device_generation_seal_required
+        && leaves.is_empty()
+        && generation_fence.is_none_or(|requirement| !requirement.predecessor_refs.is_empty())
+    {
+        leaves = materialize_genesis_if_empty(&worker, state, realm_id)?;
+    }
+    leaves.sort();
+
+    let mut predecessor_seals = Vec::with_capacity(leaves.len());
+    for leaf in &leaves {
+        predecessor_seals.push(
+            state
+                .seal_store
+                .get(leaf)?
+                .ok_or_else(|| NotaryError::Store(format!("Seal leaf {leaf} is missing")))?,
+        );
+    }
+    let current = if leaves.is_empty() {
+        BTreeSet::new()
+    } else {
+        leaf_union_proof(&leaves, state.seal_store.as_ref())
+            .map_err(|error| NotaryError::Store(format!("read Seal coverage: {error}")))?
+            .into_iter()
+            .flat_map(|proof| proof.covered_event_digests)
+            .collect::<BTreeSet<_>>()
+    };
     let target = covered_event_digests
         .iter()
         .cloned()
@@ -844,16 +867,48 @@ pub fn ensure_materialized_event_seal(
             "existing Seal coverage is not a subset of canonical Event coverage".to_owned(),
         ));
     }
-    if current == target {
+    let first_generation_delta_required = generation_fence
+        .map(|requirement| {
+            validate_first_generation_event_seal(&leaves, &current, &target, requirement)
+        })
+        .transpose()?
+        .unwrap_or(false);
+    if current == target && leaves.len() == 1 {
+        let Some(head) = predecessor_seals.iter().max_by(|left, right| {
+            (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
+        }) else {
+            return Err(NotaryError::Construction(
+                "empty Event Seal frontier cannot already cover the target".to_owned(),
+            ));
+        };
         if &head.state_root != state_root {
             return Err(NotaryError::Construction(
                 "existing Seal state_root differs for the same Event coverage".to_owned(),
             ));
         }
-        return materialized_event_seal_view(state, head);
+        return materialized_event_seal_view(state, head.clone());
+    }
+
+    if device_generation_seal_required {
+        return Err(NotaryError::Construction(
+            "device-generation Event Seal must be signed and submitted by a current-generation device"
+                .to_owned(),
+        ));
     }
 
     let delta = target.difference(&current).cloned().collect::<Vec<_>>();
+    if first_generation_delta_required && let Some(requirement) = generation_fence {
+        let required = requirement
+            .required_delta
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !required.is_subset(&delta.iter().cloned().collect::<BTreeSet<_>>()) {
+            return Err(NotaryError::Construction(
+                "first new-generation Seal delta omits the re-anchor unit".to_owned(),
+            ));
+        }
+    }
     let control_root = control_event_set_root(&target)
         .map_err(|error| NotaryError::Construction(format!("Event coverage root: {error}")))?;
     let zero_id = SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
@@ -861,12 +916,16 @@ pub fn ensure_materialized_event_seal(
     let mut seal = Seal {
         id: zero_id,
         realm_id: realm_id.clone(),
-        predecessor_refs: vec![head_id],
+        predecessor_refs: leaves,
         delta,
         control_event_set_root: control_root.clone(),
         state_root: state_root.clone(),
         completeness_root: control_root,
-        notary_seq: head.notary_seq.saturating_add(1),
+        notary_seq: predecessor_seals
+            .iter()
+            .map(|seal| seal.notary_seq)
+            .max()
+            .map_or(0, |sequence| sequence.saturating_add(1)),
         data_view_root: None,
         data_event_set_root: None,
         availability_root: None,
@@ -880,6 +939,20 @@ pub fn ensure_materialized_event_seal(
             .map_err(|error| NotaryError::Construction(format!("invalid HLC: {error}")))?,
         kind: arkret_sdk::SealKind::Compaction,
     };
+    if first_generation_delta_required
+        && let Some(requirement) = generation_fence
+        && requirement.payload.pre_fence_basis.is_none()
+    {
+        arkret_sdk::validate_device_reanchor_recovery_first_seal(
+            &requirement.payload,
+            &seal.predecessor_refs,
+            &seal.delta,
+            &requirement.reanchor_digest,
+        )
+        .map_err(|error| {
+            NotaryError::Construction(format!("recovery-first Event Seal: {error}"))
+        })?;
+    }
     seal.validate_structural()
         .map_err(|error| NotaryError::Construction(format!("Event Seal structure: {error}")))?;
     let canonical_bytes = seal
@@ -887,8 +960,8 @@ pub fn ensure_materialized_event_seal(
         .map_err(|error| NotaryError::Construction(format!("Event Seal bytes: {error}")))?;
     seal.id = Seal::id_from_canonical_bytes(&canonical_bytes)
         .map_err(|error| NotaryError::Construction(format!("Event Seal id: {error}")))?;
-    let worker = NotaryWorker::for_service(state.config.service_id.clone());
     seal.notary_signature = NotarySig::Single(worker.signature_for(state, &canonical_bytes)?);
+    let view = materialized_event_seal_view(state, seal.clone())?;
 
     let delta_set = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
     let new_ops = event_ops
@@ -896,46 +969,100 @@ pub fn ensure_materialized_event_seal(
         .filter(|(_, op)| delta_set.contains(&op.move_id))
         .cloned()
         .collect::<Vec<_>>();
-    state
-        .cell_store
-        .append_sealed_effects(realm_id, &seal.id, &new_ops)?;
-    if let Err(error) = state.seal_store.put(&seal) {
-        let _ = state.cell_store.rollback_seal(realm_id, &seal.id);
-        return Err(error.into());
+    match state.event_seal_committer.commit_if_frontier(
+        &seal,
+        &seal.predecessor_refs,
+        &new_ops,
+        &target,
+    ) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(NotaryError::Construction(
+                "Event Seal frontier changed during materialization".to_owned(),
+            ));
+        }
+        Err(error) => {
+            return Err(error.into());
+        }
     }
-    materialized_event_seal_view(state, seal)
+    Ok(view)
+}
+
+pub(crate) fn validate_first_generation_event_seal(
+    leaves: &[SealId],
+    current: &BTreeSet<MoveId>,
+    target: &BTreeSet<MoveId>,
+    requirement: &FirstGenerationEventSealRequirement,
+) -> Result<bool, NotaryError> {
+    let required = requirement
+        .required_delta
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if required.len() != requirement.required_delta.len() {
+        return Err(NotaryError::Construction(
+            "first-generation Seal required delta contains duplicates".to_owned(),
+        ));
+    }
+    let covered_required = current.intersection(&required).count();
+    if covered_required != 0 && covered_required != required.len() {
+        return Err(NotaryError::Construction(
+            "accepted Seal coverage contains a partial device re-anchor unit".to_owned(),
+        ));
+    }
+    if covered_required == required.len() {
+        return Ok(false);
+    }
+    let mut actual = leaves.to_vec();
+    actual.sort();
+    let mut expected = requirement.predecessor_refs.clone();
+    expected.sort();
+    if actual != expected {
+        return Err(NotaryError::Construction(
+            "first new-generation Seal predecessors differ from pre_fence_basis leaves".to_owned(),
+        ));
+    }
+    if !required.is_subset(target) {
+        return Err(NotaryError::Construction(
+            "first new-generation Seal target omits the re-anchor unit".to_owned(),
+        ));
+    }
+    Ok(true)
 }
 
 fn materialized_event_seal_view(
     state: &AppState,
     accepted_seal: Seal,
 ) -> Result<MaterializedEventSealView, NotaryError> {
-    let mut path = Vec::new();
-    let mut cursor = accepted_seal.clone();
-    loop {
-        let predecessors = cursor.predecessor_refs.clone();
-        path.push(cursor);
-        match predecessors.as_slice() {
-            [] => break,
-            [predecessor] => {
-                cursor = state.seal_store.get(predecessor)?.ok_or_else(|| {
-                    NotaryError::Store(format!("Seal predecessor {predecessor} is missing"))
-                })?;
-            }
-            _ => {
-                return Err(NotaryError::Construction(
-                    "event proof bootstrap does not support a multi-parent Seal path".to_owned(),
-                ));
-            }
+    let mut path_by_id = BTreeMap::new();
+    let mut pending = vec![accepted_seal.clone()];
+    while let Some(seal) = pending.pop() {
+        if path_by_id.contains_key(&seal.id) {
+            continue;
         }
+        for predecessor in &seal.predecessor_refs {
+            pending.push(state.seal_store.get(predecessor)?.ok_or_else(|| {
+                NotaryError::Store(format!("Seal predecessor {predecessor} is missing"))
+            })?);
+        }
+        path_by_id.insert(seal.id.clone(), seal);
     }
-    path.reverse();
-    let trust_anchor_seal_id = path
-        .first()
+    let roots = path_by_id
+        .values()
+        .filter(|seal| seal.predecessor_refs.is_empty())
         .map(|seal| seal.id.clone())
-        .ok_or_else(|| NotaryError::Store("empty Seal path".to_owned()))?;
+        .collect::<Vec<_>>();
+    let [trust_anchor_seal_id] = roots.as_slice() else {
+        return Err(NotaryError::Construction(
+            "event proof Seal ancestry must have exactly one trust anchor".to_owned(),
+        ));
+    };
+    let mut path = path_by_id.into_values().collect::<Vec<_>>();
+    path.sort_by(|left, right| {
+        (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
+    });
     Ok(MaterializedEventSealView {
-        trust_anchor_seal_id,
+        trust_anchor_seal_id: trust_anchor_seal_id.clone(),
         accepted_seal,
         seal_path: path,
     })
@@ -1008,6 +1135,106 @@ mod tests {
     fn is_round_leader_returns_false_for_empty_member_set() {
         let worker = NotaryWorker::for_service("did:ak:a");
         assert!(!worker.is_round_leader::<String>(&[]));
+    }
+
+    fn recovery_first_seal_requirement(
+        predecessor_refs: Vec<SealId>,
+    ) -> FirstGenerationEventSealRequirement {
+        let replacement = Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let reanchor = Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+        let pre_fence_basis = (!predecessor_refs.is_empty()).then(|| {
+            json!({
+                "leaves": predecessor_refs.clone(),
+                "control_event_set_root": format!("sha256:{}", "c".repeat(64)),
+                "state_root": format!("sha256:{}", "d".repeat(64))
+            })
+        });
+        let payload = serde_json::from_value(json!({
+            "principal_id": "did:webvh:z6mkfixture:alice.example",
+            "did_version_id": "2-QmCurrent",
+            "previous_device_generation": "1-QmPrevious",
+            "new_device_generation": "2-QmCurrent",
+            "pre_fence_basis": pre_fence_basis,
+            "replacement_authorize_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
+            "replacement_authorize_digest": replacement
+        }))
+        .unwrap();
+        FirstGenerationEventSealRequirement {
+            payload,
+            reanchor_digest: reanchor.clone(),
+            accepted_frontier_refs: predecessor_refs.clone(),
+            predecessor_refs,
+            required_delta: vec![
+                MoveId::new(reanchor.as_str().to_owned()).unwrap(),
+                MoveId::new(replacement.as_str().to_owned()).unwrap(),
+            ],
+            principal_id: "did:webvh:z6mkfixture:alice.example".to_owned(),
+            replacement_device_id: "ak:device:recovery".to_owned(),
+            replacement_device_public_key: "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG"
+                .to_owned(),
+        }
+    }
+
+    #[test]
+    fn recovery_first_seal_accepts_null_and_full_basis_frontiers() {
+        let null_basis = recovery_first_seal_requirement(Vec::new());
+        let target = null_basis.required_delta.iter().cloned().collect();
+        assert!(
+            validate_first_generation_event_seal(&[], &BTreeSet::new(), &target, &null_basis,)
+                .unwrap()
+        );
+
+        let leaf = SealId::new(format!("ak:seal:sha256:{}", "e".repeat(64))).unwrap();
+        let full_basis = recovery_first_seal_requirement(vec![leaf.clone()]);
+        let target = full_basis.required_delta.iter().cloned().collect();
+        assert!(
+            validate_first_generation_event_seal(&[leaf], &BTreeSet::new(), &target, &full_basis,)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn recovery_first_seal_rejects_wrong_predecessor_missing_delta_and_partial_coverage() {
+        let expected = SealId::new(format!("ak:seal:sha256:{}", "e".repeat(64))).unwrap();
+        let wrong = SealId::new(format!("ak:seal:sha256:{}", "f".repeat(64))).unwrap();
+        let requirement = recovery_first_seal_requirement(vec![expected]);
+        let target = requirement
+            .required_delta
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert!(
+            validate_first_generation_event_seal(
+                &[wrong],
+                &BTreeSet::new(),
+                &target,
+                &requirement,
+            )
+            .is_err()
+        );
+
+        let missing = requirement.required_delta[..1]
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert!(
+            validate_first_generation_event_seal(
+                &requirement.predecessor_refs,
+                &BTreeSet::new(),
+                &missing,
+                &requirement,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_first_generation_event_seal(
+                &requirement.predecessor_refs,
+                &missing,
+                &target,
+                &requirement,
+            )
+            .is_err()
+        );
     }
 
     /// SDK-SEC-02 / decision-3 cross-implementation golden check for the Seal

@@ -342,7 +342,18 @@ pub(super) fn parse_signed_fields(
             )));
         }
     }
-    for optional_signed in ["expires_at", "supersedes", "outcome_reason_code"] {
+    for optional_signed in [
+        "threshold",
+        "device_quorum",
+        "trusted_recovery_services",
+        "recovery_keys",
+        "recovery_key_agreements",
+        "approval_requirement",
+        "audit",
+        "not_before",
+        "expires_at",
+        "outcome_reason_code",
+    ] {
         if payload.get(optional_signed).is_some()
             && allowed.contains(optional_signed)
             && !seen.contains(optional_signed)

@@ -7,7 +7,7 @@
 pub(crate) use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub(crate) use std::sync::Arc;
 
-pub(crate) use arkret_sdk::{BlobRef, Operation};
+pub(crate) use arkret_sdk::{BlobRef, EventBatchReceipt, Operation};
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
 pub(crate) use diesel::sql_types::{
@@ -15,7 +15,7 @@ pub(crate) use diesel::sql_types::{
 };
 pub(crate) use diesel::{OptionalExtension, QueryableByName, sql_query};
 pub(crate) use diesel_async::pooled_connection::deadpool::Object;
-pub(crate) use diesel_async::{AsyncPgConnection, RunQueryDsl};
+pub(crate) use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 pub(crate) use parking_lot::Mutex;
 pub(crate) use serde_json::Value;
 pub(crate) use soland_data::query_rows::{

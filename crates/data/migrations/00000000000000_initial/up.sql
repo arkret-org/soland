@@ -304,6 +304,21 @@ CREATE TABLE public.canonical_events (
     received_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE public.event_batch_receipts (
+    schema text NOT NULL,
+    id uuid NOT NULL PRIMARY KEY,
+    issuer text NOT NULL,
+    scope jsonb NOT NULL,
+    frontier jsonb NOT NULL,
+    events jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    proofs jsonb NOT NULL,
+    event_ids uuid[] NOT NULL
+);
+
+CREATE INDEX event_batch_receipts_event_ids_idx
+    ON public.event_batch_receipts USING gin (event_ids);
+
 CREATE TABLE public.state_moves (
     id text NOT NULL,
     realm_id text NOT NULL,
@@ -1096,7 +1111,12 @@ CREATE TABLE public.recovery_sessions (
     trust_domain text NOT NULL,
     policy_id uuid NOT NULL,
     policy_version integer NOT NULL,
-    ssk_generation integer NOT NULL,
+    identity_model text NOT NULL,
+    ssk_generation bigint,
+    current_device_generation_ref text,
+    device_generation_status text,
+    registry_head text,
+    accepted_seal_frontier jsonb,
     policy_payload jsonb NOT NULL,
     challenge text NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
@@ -1105,7 +1125,8 @@ CREATE TABLE public.recovery_sessions (
     updated_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     CONSTRAINT recovery_sessions_policy_version_check CHECK ((policy_version >= 1)),
-    CONSTRAINT recovery_sessions_ssk_generation_check CHECK ((ssk_generation >= 1)),
+    CONSTRAINT recovery_sessions_identity_model_check CHECK ((identity_model = ANY (ARRAY['cross_signing'::text, 'enrollment_authority'::text]))),
+    CONSTRAINT recovery_sessions_generation_shape_check CHECK ((((identity_model = 'cross_signing'::text) AND (ssk_generation >= 1) AND (current_device_generation_ref IS NULL) AND (device_generation_status IS NULL) AND (registry_head IS NULL) AND (accepted_seal_frontier IS NULL)) OR ((identity_model = 'enrollment_authority'::text) AND (ssk_generation IS NULL) AND (current_device_generation_ref IS NOT NULL) AND (device_generation_status = ANY (ARRAY['active'::text, 'conflicted'::text])) AND (registry_head IS NOT NULL)))),
     CONSTRAINT recovery_sessions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'completed'::text, 'rejected'::text, 'expired'::text])))
 );
 

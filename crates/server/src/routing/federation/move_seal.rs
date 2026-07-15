@@ -19,8 +19,15 @@
 //! Ed25519 verification runs against the public key resolved from the
 //! `verification_method` DID URL.
 
-use arkret_sdk::state::{SealReject, apply_seal, verify_move};
-use arkret_sdk::{Move, RealmId, Seal};
+use std::collections::{BTreeMap, BTreeSet};
+
+use arkret_sdk::lattice::SealedOp;
+use arkret_sdk::signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
+use arkret_sdk::state::{
+    SealEffect, SealReject, StoreError, apply_seal, control_event_set_root,
+    union_predecessor_covered_events, verify_move,
+};
+use arkret_sdk::{Event, Move, MoveId, NotarySig, RealmId, Seal, SealId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -30,6 +37,18 @@ use super::AuthArgs;
 use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
+
+struct DeviceGenerationEventSealContext {
+    principal_id: String,
+    current_generation_ref: String,
+    records: Vec<crate::state::CanonicalEventRecord>,
+    accepted_frontier_refs: Vec<SealId>,
+    cas_frontier_refs: Vec<SealId>,
+    generation_fence: Option<crate::notary::FirstGenerationEventSealRequirement>,
+    bootstrap_required_delta: Vec<MoveId>,
+    bootstrap_device_id: String,
+    bootstrap_device_public_key: String,
+}
 
 /// Map an SDK [`SealReject`] onto an [`AppError`].
 ///
@@ -95,6 +114,719 @@ pub fn select_jws_verifier(
             crate::jws_verify::verify_jws_ed25519(canonical_bytes, jws, vm, issuer, state)
         }
     }
+}
+
+fn seal_admission_error(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::SchemaViolation, message.into()).with_status(StatusCode::CONFLICT)
+}
+
+fn device_generation_fenced(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::PolicyViolation, message.into())
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code("device_generation_fenced")
+}
+
+async fn device_generation_event_seal_context(
+    state: &AppState,
+    realm_id: &RealmId,
+) -> Result<Option<DeviceGenerationEventSealContext>, AppError> {
+    let records = state
+        .persistence
+        .events()
+        .realm_events_newest_first(realm_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("canonical Event store unavailable: {error}"),
+            )
+        })?;
+    let bootstrap = records
+        .iter()
+        .filter(|record| {
+            record.kind == arkret_sdk::events::kinds::REALM_CREATE
+                && record
+                    .envelope
+                    .pointer("/payload/object/fields/purpose")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("principal_control")
+        })
+        .collect::<Vec<_>>();
+    if bootstrap.is_empty() {
+        return Ok(None);
+    }
+    if bootstrap.len() != 1 {
+        return Err(seal_admission_error(
+            "principal-control Realm has an ambiguous bootstrap anchor",
+        ));
+    }
+    let bootstrap = bootstrap[0];
+    let principal_id = bootstrap.actor_id.clone();
+    let expected_realm =
+        crate::routing::identity::recovery::principal_control_realm_for_did(&principal_id);
+    if expected_realm != realm_id.as_str() {
+        return Err(seal_admission_error(
+            "principal-control bootstrap is stored under a non-deterministic Realm",
+        ));
+    }
+    let Some(generation) = crate::routing::identity::device_generation::current_device_generation(
+        state,
+        &principal_id,
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::FrontierUnavailable,
+            format!("device generation state unavailable: {error}"),
+        )
+    })?
+    else {
+        return Ok(None);
+    };
+    if generation.status
+        == crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted
+    {
+        return Err(device_generation_fenced(
+            "Seal admission is closed while the B-model generation slot is conflicted",
+        ));
+    }
+
+    let bootstrap_authorizes = records
+        .iter()
+        .filter(|record| {
+            record.actor_id == principal_id
+                && record.kind == arkret_sdk::events::kinds::DEVICE_AUTHORIZE
+                && record
+                    .envelope
+                    .get("prev_refs")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|refs| {
+                        refs.len() == 1 && refs[0].as_str() == Some(bootstrap.event_id.as_str())
+                    })
+        })
+        .collect::<Vec<_>>();
+    if bootstrap_authorizes.len() != 1 {
+        return Err(seal_admission_error(
+            "principal-control Realm has an incomplete or ambiguous bootstrap unit",
+        ));
+    }
+    let bootstrap_authorize = bootstrap_authorizes[0];
+    let bootstrap_payload = serde_json::from_value::<arkret_sdk::DeviceAuthorizePayload>(
+        bootstrap_authorize
+            .envelope
+            .get("payload")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|error| {
+        seal_admission_error(format!(
+            "stored bootstrap device authorization payload is invalid: {error}"
+        ))
+    })?;
+    if bootstrap_payload.principal_id.as_str() != principal_id {
+        return Err(seal_admission_error(
+            "bootstrap device authorization principal differs from the Realm principal",
+        ));
+    }
+    let bootstrap_required_delta = [
+        bootstrap.canonical_digest.as_str(),
+        bootstrap_authorize.canonical_digest.as_str(),
+    ]
+    .into_iter()
+    .map(|digest| MoveId::new(digest.to_owned()))
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| seal_admission_error(format!("invalid bootstrap Event digest: {error}")))?;
+
+    let generation_fence =
+        crate::routing::events::event_log::governance_proof::first_generation_event_seal_requirement(
+            state, &records,
+        )
+        .await?;
+    if generation_fence
+        .as_ref()
+        .is_some_and(|requirement| requirement.principal_id != principal_id)
+    {
+        return Err(seal_admission_error(
+            "active re-anchor belongs to a different principal",
+        ));
+    }
+    let cas_frontier_refs = state.seal_store.list_leaves(realm_id).map_err(|error| {
+        AppError::new(
+            ErrorCode::FrontierUnavailable,
+            format!("Seal frontier unavailable: {error}"),
+        )
+    })?;
+    let accepted_frontier_refs = if let Some(requirement) = &generation_fence {
+        requirement.accepted_frontier_refs.clone()
+    } else {
+        cas_frontier_refs.clone()
+    };
+
+    Ok(Some(DeviceGenerationEventSealContext {
+        principal_id,
+        current_generation_ref: generation.current_ref,
+        records,
+        accepted_frontier_refs,
+        cas_frontier_refs,
+        generation_fence,
+        bootstrap_required_delta,
+        bootstrap_device_id: bootstrap_payload.device_id.as_str().to_owned(),
+        bootstrap_device_public_key: bootstrap_payload.device_public_key.to_string(),
+    }))
+}
+
+fn validate_bootstrap_first_seal(
+    current: &BTreeSet<MoveId>,
+    target: &BTreeSet<MoveId>,
+    required_delta: &[MoveId],
+) -> Result<bool, AppError> {
+    let required = required_delta.iter().cloned().collect::<BTreeSet<_>>();
+    if required.len() != required_delta.len() {
+        return Err(seal_admission_error(
+            "bootstrap Seal required delta contains duplicates",
+        ));
+    }
+    let covered_required = current.intersection(&required).count();
+    if covered_required != 0 && covered_required != required.len() {
+        return Err(seal_admission_error(
+            "accepted Seal coverage contains a partial principal bootstrap unit",
+        ));
+    }
+    if covered_required == required.len() {
+        return Ok(false);
+    }
+    if !required.is_subset(target) {
+        return Err(seal_admission_error(
+            "first principal-control Seal target omits the bootstrap unit",
+        ));
+    }
+    Ok(true)
+}
+
+fn device_verification_method_matches(
+    principal_id: &str,
+    device_id: &str,
+    device_public_key: &str,
+    verification_method: &str,
+) -> bool {
+    verification_method == format!("{principal_id}#{device_id}")
+        || verification_method == format!("did:key:{device_public_key}#{device_public_key}")
+        || verification_method == format!("did:key:{device_public_key}")
+}
+
+fn first_seal_signer_matches(
+    signer_device_id: &str,
+    signer_public_key: &str,
+    required_device_id: &str,
+    required_public_key: &str,
+) -> bool {
+    signer_device_id == required_device_id && signer_public_key == required_public_key
+}
+
+fn verify_device_seal_signature(seal: &Seal, device_public_key: &str) -> Result<(), AppError> {
+    let NotarySig::Single(signature) = &seal.notary_signature else {
+        return Err(device_generation_fenced(
+            "B-model Seal requires one identifiable current-generation device signature",
+        ));
+    };
+    if signature.alg != "EdDSA" {
+        return Err(device_generation_fenced(
+            "B-model device Seal signature must use EdDSA",
+        ));
+    }
+    let canonical_bytes = seal
+        .canonical_bytes_for_id()
+        .map_err(|error| seal_admission_error(format!("Seal canonical bytes: {error}")))?;
+    let expected_digest = arkret_sdk::canonical::sha256_digest(&canonical_bytes);
+    if signature.payload_digest.as_str() != expected_digest {
+        return Err(device_generation_fenced(
+            "B-model device Seal signature payload_digest mismatch",
+        ));
+    }
+    let key = arkret_sdk::decode_ed25519_multibase(device_public_key).map_err(|error| {
+        device_generation_fenced(format!("B-model device Seal key is invalid: {error}"))
+    })?;
+    Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(
+            &signature.jws,
+            &canonical_bytes,
+            &PublicKeyMaterial::Ed25519Raw {
+                bytes: key.to_vec(),
+            },
+        )
+        .map_err(|error| {
+            device_generation_fenced(format!("B-model device Seal signature is invalid: {error}"))
+        })
+}
+
+fn ordinary_event_device_id(record: &crate::state::CanonicalEventRecord) -> Option<String> {
+    let verification_method = record
+        .envelope
+        .get("proofs")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|proofs| proofs.first())
+        .and_then(|proof| proof.get("verification_method"))
+        .and_then(serde_json::Value::as_str)?;
+    verification_method
+        .strip_prefix(record.actor_id.as_str())
+        .and_then(|suffix| suffix.strip_prefix('#'))
+        .map(str::trim)
+        .filter(|fragment| !fragment.is_empty())
+        .map(|fragment| {
+            if fragment.starts_with("ak:device:") {
+                fragment.to_owned()
+            } else {
+                format!("ak:device:{fragment}")
+            }
+        })
+}
+
+async fn try_apply_device_generation_event_seal(
+    state: &AppState,
+    seal: &Seal,
+) -> Result<Option<SealEffect>, AppError> {
+    let _guard = crate::routing::identity::device_generation::DEVICE_GENERATION_ADMISSION_LOCK
+        .lock()
+        .await;
+    seal.validate_id()
+        .map_err(|error| seal_admission_error(format!("Seal id: {error}")))?;
+    seal.validate_structural()
+        .map_err(|error| seal_admission_error(format!("Seal structure: {error}")))?;
+    if let Some(existing) = state.seal_store.get(&seal.id).map_err(|error| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("Seal lookup failed: {error}"),
+        )
+    })? {
+        if existing != *seal {
+            return Err(seal_admission_error(
+                "Seal id already exists with different signature material",
+            ));
+        }
+        return Ok(Some(SealEffect {
+            seal: seal.id.clone(),
+            accepted_move_ids: seal.delta.clone(),
+            rejected_moves: Vec::new(),
+            post_state_root: seal.state_root.clone(),
+        }));
+    }
+    let Some(mut context) = device_generation_event_seal_context(state, &seal.realm_id).await?
+    else {
+        return Ok(None);
+    };
+    if !state
+        .seal_store
+        .predecessors_known(&seal.predecessor_refs)
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("Seal predecessor lookup failed: {error}"),
+            )
+        })?
+    {
+        return Err(seal_admission_error(
+            "B-model Event Seal has an unknown predecessor",
+        ));
+    }
+    let mut expected_frontier = context.accepted_frontier_refs.clone();
+    expected_frontier.sort();
+    if seal.predecessor_refs != expected_frontier {
+        return Err(device_generation_fenced(
+            "B-model Event Seal predecessors differ from the complete accepted generation frontier",
+        ));
+    }
+    let predecessor_coverage =
+        union_predecessor_covered_events(&seal.predecessor_refs, state.seal_store.as_ref())
+            .map_err(AppError::from)?;
+    if seal
+        .delta
+        .iter()
+        .any(|digest| predecessor_coverage.contains(digest))
+    {
+        return Err(seal_admission_error(
+            "B-model Event Seal delta repeats predecessor coverage",
+        ));
+    }
+    let mut target = predecessor_coverage.clone();
+    target.extend(seal.delta.iter().cloned());
+    let declared = seal
+        .covered_event_digests
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if declared.len() != seal.covered_event_digests.len() || declared != target {
+        return Err(seal_admission_error(
+            "B-model Event Seal covered_event_digests must equal predecessor coverage plus delta",
+        ));
+    }
+    let expected_control_root = control_event_set_root(&target).map_err(AppError::from)?;
+    if seal.control_event_set_root != expected_control_root
+        || seal.completeness_root != expected_control_root
+    {
+        return Err(seal_admission_error(
+            "B-model Event Seal control/completeness root mismatch",
+        ));
+    }
+    let expected_notary_seq = if seal.predecessor_refs.is_empty() {
+        0
+    } else {
+        let mut maximum = None;
+        for predecessor in &seal.predecessor_refs {
+            let value = state
+                .seal_store
+                .get(predecessor)
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::InternalError,
+                        format!("Seal predecessor lookup failed: {error}"),
+                    )
+                })?
+                .ok_or_else(|| seal_admission_error("B-model Event Seal predecessor is missing"))?;
+            maximum = Some(maximum.map_or(value.notary_seq, |current: u64| {
+                current.max(value.notary_seq)
+            }));
+        }
+        maximum
+            .and_then(|sequence| sequence.checked_add(1))
+            .ok_or_else(|| seal_admission_error("B-model Event Seal notary_seq overflow"))?
+    };
+    if seal.notary_seq != expected_notary_seq {
+        return Err(seal_admission_error(
+            "B-model Event Seal notary_seq does not follow its predecessors",
+        ));
+    }
+
+    let recovery_first = context
+        .generation_fence
+        .as_ref()
+        .map(|requirement| {
+            crate::notary::validate_first_generation_event_seal(
+                &seal.predecessor_refs,
+                &predecessor_coverage,
+                &target,
+                requirement,
+            )
+        })
+        .transpose()
+        .map_err(|error| seal_admission_error(error.to_string()))?
+        .unwrap_or(false);
+    if recovery_first
+        && let Some(requirement) = &context.generation_fence
+        && requirement.payload.pre_fence_basis.is_none()
+    {
+        arkret_sdk::validate_device_reanchor_recovery_first_seal(
+            &requirement.payload,
+            &seal.predecessor_refs,
+            &seal.delta,
+            &requirement.reanchor_digest,
+        )
+        .map_err(|error| seal_admission_error(format!("recovery-first Event Seal: {error}")))?;
+    }
+    let bootstrap_first = if context.generation_fence.is_none() {
+        validate_bootstrap_first_seal(
+            &predecessor_coverage,
+            &target,
+            &context.bootstrap_required_delta,
+        )?
+    } else {
+        false
+    };
+
+    let devices = state
+        .persistence
+        .devices()
+        .list_for_actor_including_revoked(&context.principal_id)
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("device inventory unavailable: {error}"),
+            )
+        })?;
+    let NotarySig::Single(signature) = &seal.notary_signature else {
+        return Err(device_generation_fenced(
+            "B-model Event Seal requires one identifiable device signature",
+        ));
+    };
+    let signer = devices
+        .iter()
+        .find(|device| {
+            let Some(public_key) = device
+                .payload
+                .get("device_public_key")
+                .and_then(serde_json::Value::as_str)
+            else {
+                return false;
+            };
+            device_verification_method_matches(
+                &context.principal_id,
+                &device.device_id,
+                public_key,
+                &signature.verification_method,
+            )
+        })
+        .ok_or_else(|| {
+            device_generation_fenced("B-model Event Seal signer is not an authorized device")
+        })?;
+    let signer_public_key = signer
+        .payload
+        .get("device_public_key")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| device_generation_fenced("B-model Event Seal signer key is missing"))?;
+    if signer.revoked_at.is_some()
+        || signer.verification_state != "verified"
+        || signer
+            .payload
+            .get("authorized_generation_ref")
+            .and_then(serde_json::Value::as_str)
+            != Some(context.current_generation_ref.as_str())
+    {
+        return Err(device_generation_fenced(
+            "B-model Event Seal signer does not belong to the active device generation",
+        ));
+    }
+    if recovery_first {
+        let requirement = context
+            .generation_fence
+            .as_ref()
+            .expect("recovery-first Seal has a generation fence");
+        if !first_seal_signer_matches(
+            &signer.device_id,
+            signer_public_key,
+            &requirement.replacement_device_id,
+            &requirement.replacement_device_public_key,
+        ) {
+            return Err(device_generation_fenced(
+                "first new-generation Seal must be signed by the replacement recovery device",
+            ));
+        }
+    }
+    if bootstrap_first
+        && !first_seal_signer_matches(
+            &signer.device_id,
+            signer_public_key,
+            &context.bootstrap_device_id,
+            &context.bootstrap_device_public_key,
+        )
+    {
+        return Err(device_generation_fenced(
+            "first principal-control Seal must be signed by the bootstrap device",
+        ));
+    }
+    verify_device_seal_signature(seal, signer_public_key)?;
+
+    let quarantined =
+        crate::routing::identity::device_generation::quarantined_generation_event_digests(
+            state,
+            &context.principal_id,
+        )
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("device generation quarantine state unavailable: {error}"),
+            )
+        })?;
+    let admitted_generation_ref = context.current_generation_ref.clone();
+    let mut admitted_frontier = context.accepted_frontier_refs.clone();
+    admitted_frontier.sort();
+    let mut admitted_cas_frontier = context.cas_frontier_refs.clone();
+    admitted_cas_frontier.sort();
+    let admitted_reanchor_digest = context
+        .generation_fence
+        .as_ref()
+        .map(|requirement| requirement.reanchor_digest.clone());
+    let mut records_by_digest = BTreeMap::new();
+    for record in context.records.drain(..) {
+        if records_by_digest
+            .insert(record.canonical_digest.clone(), record)
+            .is_some()
+        {
+            return Err(seal_admission_error(
+                "canonical Event history contains duplicate digests",
+            ));
+        }
+    }
+    let mut anchor_event_ids = context
+        .bootstrap_required_delta
+        .iter()
+        .filter_map(|digest| records_by_digest.get(digest.as_str()))
+        .map(|record| record.event_id.clone())
+        .collect::<BTreeSet<_>>();
+    for record in records_by_digest.values().filter(|record| {
+        record.kind == "ak.device.reanchor" && !quarantined.contains(&record.canonical_digest)
+    }) {
+        anchor_event_ids.insert(record.event_id.clone());
+        if let Some(authorize_id) = record
+            .envelope
+            .pointer("/payload/replacement_authorize_event_id")
+            .and_then(serde_json::Value::as_str)
+        {
+            anchor_event_ids.insert(authorize_id.to_owned());
+        }
+    }
+    let mut new_ops: Vec<(arkret_sdk::CellRef, SealedOp)> = Vec::new();
+    for digest in &seal.delta {
+        if quarantined.contains(digest.as_str()) {
+            return Err(device_generation_fenced(
+                "B-model Event Seal delta contains quarantined generation history",
+            ));
+        }
+        let record = records_by_digest.get(digest.as_str()).ok_or_else(|| {
+            seal_admission_error(format!(
+                "B-model Event Seal delta digest {} is not a canonical Event",
+                digest.as_str()
+            ))
+        })?;
+        let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+            seal_admission_error(format!(
+                "stored Event {} is invalid: {error}",
+                record.event_id
+            ))
+        })?;
+        let recomputed = event.event_digest().map_err(|error| {
+            seal_admission_error(format!(
+                "stored Event {} digest failed: {error}",
+                record.event_id
+            ))
+        })?;
+        if recomputed != record.canonical_digest || recomputed != digest.as_str() {
+            return Err(seal_admission_error(format!(
+                "stored Event {} canonical digest mismatch",
+                record.event_id
+            )));
+        }
+        if event.realm_id.as_str() != seal.realm_id.as_str() || event.seal_ref.is_some() {
+            return Err(seal_admission_error(
+                "B-model Event Seal delta must contain control Events from the same Realm",
+            ));
+        }
+        if event.effects.is_empty() && !anchor_event_ids.contains(&record.event_id) {
+            return Err(seal_admission_error(
+                "B-model Event Seal delta contains a non-control Event",
+            ));
+        }
+        if record.actor_id == context.principal_id
+            && !anchor_event_ids.contains(&record.event_id)
+            && record.envelope.get("executed_by").is_none()
+        {
+            let device_id = ordinary_event_device_id(record).ok_or_else(|| {
+                device_generation_fenced(
+                    "B-model Event Seal delta contains an Event without a device signer",
+                )
+            })?;
+            let event_device = devices
+                .iter()
+                .find(|device| device.device_id == device_id)
+                .ok_or_else(|| {
+                    device_generation_fenced(
+                        "B-model Event Seal delta contains an Event from an unknown device",
+                    )
+                })?;
+            if event_device.revoked_at.is_some()
+                || event_device.verification_state != "verified"
+                || event_device
+                    .payload
+                    .get("authorized_generation_ref")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(context.current_generation_ref.as_str())
+            {
+                return Err(device_generation_fenced(
+                    "B-model Event Seal delta contains an Event from an older device generation",
+                ));
+            }
+        }
+        new_ops.extend(
+            crate::routing::events::event_log::governance_proof::canonical_event_ops(
+                &event, digest,
+            )?,
+        );
+    }
+
+    let refreshed = device_generation_event_seal_context(state, &seal.realm_id)
+        .await?
+        .ok_or_else(|| {
+            device_generation_fenced("B-model device generation disappeared during Seal admission")
+        })?;
+    let mut refreshed_frontier = refreshed.accepted_frontier_refs.clone();
+    refreshed_frontier.sort();
+    let mut refreshed_cas_frontier = refreshed.cas_frontier_refs.clone();
+    refreshed_cas_frontier.sort();
+    if refreshed.current_generation_ref != admitted_generation_ref
+        || refreshed_frontier != admitted_frontier
+        || refreshed_cas_frontier != admitted_cas_frontier
+        || refreshed
+            .generation_fence
+            .as_ref()
+            .map(|requirement| &requirement.reanchor_digest)
+            != admitted_reanchor_digest.as_ref()
+    {
+        return Err(device_generation_fenced(
+            "B-model device generation or accepted frontier changed during Seal admission",
+        ));
+    }
+
+    match state.event_seal_committer.commit_if_frontier(
+        seal,
+        &context.cas_frontier_refs,
+        &new_ops,
+        &target,
+    ) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(device_generation_fenced(
+                "B-model device generation Seal lost the atomic frontier compare-and-swap",
+            ));
+        }
+        Err(StoreError::Conflict(error)) => return Err(seal_admission_error(error)),
+        Err(error) => {
+            return Err(AppError::new(
+                ErrorCode::InternalError,
+                format!("commit Event Seal atomically: {error}"),
+            ));
+        }
+    }
+    Ok(Some(SealEffect {
+        seal: seal.id.clone(),
+        accepted_move_ids: seal.delta.clone(),
+        rejected_moves: Vec::new(),
+        post_state_root: seal.state_root.clone(),
+    }))
+}
+
+pub(crate) async fn apply_inbound_seal(
+    state: &AppState,
+    seal: &Seal,
+) -> Result<SealEffect, AppError> {
+    let delta_entries = seal
+        .delta
+        .iter()
+        .map(|digest| digest.as_str().to_owned())
+        .collect::<Vec<_>>();
+    validate_seal_delta_entries(&delta_entries).map_err(|(code, reason)| {
+        AppError::new(code, reason).with_status(StatusCode::BAD_REQUEST)
+    })?;
+    crate::jws_verify::verify_replay_window(&seal.hlc, state.config.jws_replay_window_seconds)
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::SchemaViolation,
+                format!("seal replay_window: {error}"),
+            )
+            .with_status(StatusCode::CONFLICT)
+        })?;
+    if let Some(effect) = try_apply_device_generation_event_seal(state, seal).await? {
+        return Ok(effect);
+    }
+    let verifier = select_jws_verifier(state);
+    apply_seal(
+        seal,
+        state.move_store.as_ref(),
+        state.seal_store.as_ref(),
+        state.cell_store.as_ref(),
+        state.cell_registry.as_ref(),
+        verifier,
+    )
+    .map_err(AppError::from)
 }
 
 /// Response from `POST /_soland/peer/moves`.
@@ -206,37 +938,13 @@ async fn submit_seal(
     let _session = aa.authenticated_session(state, req).await?;
     let seal = body.into_inner();
 
-    // Seal delta entries MUST be sha256:<hex>; reject the removed
-    // `ak:event:<uuid>` form fail-closed.
-    let delta_entries: Vec<String> = seal.delta.iter().map(|m| m.as_str().to_owned()).collect();
-    if let Err((code, reason)) = validate_seal_delta_entries(&delta_entries) {
-        return Err(AppError::new(code, reason).with_status(StatusCode::BAD_REQUEST));
-    }
-
-    let move_store = state.move_store.as_ref();
-    let seal_store = state.seal_store.as_ref();
     let cell_store = state.cell_store.as_ref();
     let registry = state.cell_registry.as_ref();
-
-    // Replay-window check on Seal.hlc.
-    // seal.hlc is part of canonical_bytes_for_id signed by notary_signature;
-    // window=0 (test config) bypasses entirely.
-    if let Err(reject) =
-        crate::jws_verify::verify_replay_window(&seal.hlc, state.config.jws_replay_window_seconds)
-    {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
-            format!("seal replay_window: {reject}"),
-        )
-        .with_status(StatusCode::CONFLICT));
-    }
-    let verifier = select_jws_verifier(state);
-    // `SealReject` → `AppError` mapping lives in the `From` impl above;
-    // `?` propagates with the canonical (registry-bound) error code and
-    // the spec-compliant 409 wire status.
-    let effect = apply_seal(
-        &seal, move_store, seal_store, cell_store, registry, verifier,
-    )?;
+    // The shared admission path selects the canonical Event rail for a
+    // B-model principal-control Realm and the legacy Move rail elsewhere.
+    // Device-generation Seals always receive real device-key verification,
+    // including in development mode.
+    let effect = apply_inbound_seal(state, &seal).await?;
 
     let rejected = effect
         .rejected_moves
@@ -368,6 +1076,14 @@ async fn admin_sign_seal(
         AppError::new(ErrorCode::SchemaViolation, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
+    if device_generation_event_seal_context(state, &realm)
+        .await?
+        .is_some()
+    {
+        return Err(device_generation_fenced(
+            "service notary signing is disabled for B-model principal-control Realms",
+        ));
+    }
     let limit = max_control_moves.unwrap_or(100).min(1000);
 
     match crate::notary::run_one_signing_pass(state, &realm, limit) {
@@ -454,6 +1170,138 @@ mod seal_delta_tests {
     fn seal_delta_accepts_sha256() {
         let entries = vec![format!("sha256:{}", "a".repeat(64))];
         validate_seal_delta_entries(&entries).unwrap();
+    }
+
+    #[test]
+    fn bootstrap_first_seal_rejects_missing_and_partial_anchor_units() {
+        let create = MoveId::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let authorize = MoveId::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+        let required = vec![create.clone(), authorize.clone()];
+        assert!(
+            validate_bootstrap_first_seal(
+                &BTreeSet::new(),
+                &std::iter::once(create.clone()).collect(),
+                &required,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_bootstrap_first_seal(
+                &std::iter::once(create).collect(),
+                &std::iter::once(authorize).collect(),
+                &required,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn first_recovery_seal_binding_rejects_another_current_device() {
+        assert!(first_seal_signer_matches(
+            "ak:device:recovery",
+            "z6MkRecovery",
+            "ak:device:recovery",
+            "z6MkRecovery",
+        ));
+        assert!(!first_seal_signer_matches(
+            "ak:device:other",
+            "z6MkOther",
+            "ak:device:recovery",
+            "z6MkRecovery",
+        ));
+    }
+
+    #[test]
+    fn device_seal_signature_requires_the_bound_device_key() {
+        use arkret_sdk::signatures::Ed25519DetachedJwsSigner;
+
+        let signer = Ed25519DetachedJwsSigner::from_seed(
+            [7u8; 32],
+            "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
+        );
+        let public_key =
+            arkret_sdk::ed25519_pubkey_to_did_key_multibase(&signer.verifying_key().to_bytes());
+        let wrong_signer = Ed25519DetachedJwsSigner::from_seed(
+            [8u8; 32],
+            "did:webvh:z6mkfixture:alice.example#ak:device:other",
+        );
+        let wrong_public_key = arkret_sdk::ed25519_pubkey_to_did_key_multibase(
+            &wrong_signer.verifying_key().to_bytes(),
+        );
+        let empty_root = arkret_sdk::state::compute_state_root(&BTreeMap::new()).unwrap();
+        let placeholder_id = SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap();
+        let placeholder_digest =
+            arkret_sdk::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+        let mut seal = Seal {
+            id: placeholder_id,
+            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
+                .unwrap(),
+            predecessor_refs: Vec::new(),
+            delta: Vec::new(),
+            control_event_set_root: empty_root.clone(),
+            state_root: empty_root.clone(),
+            completeness_root: empty_root,
+            notary_seq: 0,
+            data_view_root: None,
+            data_event_set_root: None,
+            availability_root: None,
+            coverage_scope: None,
+            covered_event_digests: Vec::new(),
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            notary_signature: NotarySig::Single(arkret_sdk::MoveSignature {
+                alg: "EdDSA".to_owned(),
+                verification_method: "did:webvh:z6mkfixture:alice.example#ak:device:recovery"
+                    .to_owned(),
+                payload_digest: placeholder_digest,
+                created_at: chrono::Utc::now(),
+                jws: "eyJhbGciOiJFZERTQSJ9..AA".to_owned(),
+            }),
+            sealed_at: chrono::Utc::now(),
+            hlc: arkret_sdk::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
+            kind: arkret_sdk::SealKind::Normal,
+        };
+        let canonical_bytes = seal.canonical_bytes_for_id().unwrap();
+        seal.id = Seal::id_from_canonical_bytes(&canonical_bytes).unwrap();
+        seal.notary_signature = NotarySig::Single(arkret_sdk::MoveSignature {
+            alg: "EdDSA".to_owned(),
+            verification_method: "did:webvh:z6mkfixture:alice.example#ak:device:recovery"
+                .to_owned(),
+            payload_digest: arkret_sdk::Hash::new(arkret_sdk::canonical::sha256_digest(
+                &canonical_bytes,
+            ))
+            .unwrap(),
+            created_at: chrono::Utc::now(),
+            jws: signer.sign_detached_jws(&canonical_bytes),
+        });
+
+        verify_device_seal_signature(&seal, &public_key).unwrap();
+        assert!(verify_device_seal_signature(&seal, &wrong_public_key).is_err());
+    }
+
+    #[test]
+    fn device_verification_method_is_bound_to_device_id_or_key() {
+        let principal = "did:webvh:z6mkfixture:alice.example";
+        let device = "ak:device:recovery";
+        let key = "z6MkRecovery";
+        assert!(device_verification_method_matches(
+            principal,
+            device,
+            key,
+            &format!("{principal}#{device}"),
+        ));
+        assert!(device_verification_method_matches(
+            principal,
+            device,
+            key,
+            &format!("did:key:{key}"),
+        ));
+        assert!(!device_verification_method_matches(
+            principal,
+            device,
+            key,
+            &format!("{principal}#ak:device:other"),
+        ));
     }
 }
 
