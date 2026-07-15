@@ -109,8 +109,8 @@ fn wire_request(input: &PolicyCheckRequestInput) -> PolicyCheckRequestBody {
             source_ip_digest: Some(input.source_ip_digest.clone()),
             signed_transport: input.signed_transport,
         },
-        event_preview: input.event_preview.clone(),
-        auth_context: input.auth_context.clone(),
+        event_preview: serde_json::from_value(input.event_preview.clone()).ok(),
+        auth_context: serde_json::from_value(input.auth_context.clone()).ok(),
     }
 }
 
