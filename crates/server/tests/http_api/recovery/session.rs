@@ -1208,10 +1208,9 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_complete_rejected_after_cross_signing_reset() {
-    // A ak.cross_signing.reset retires the current generation (removes the
-    // accepted publish). A device-authorize binding can then no longer verify —
-    // completion MUST reject (cross_signing_state_missing), proving reset
-    // invalidates stale bindings.
+    // A ak.cross_signing.reset advances the accepted generation fence. A
+    // device-authorize binding for the retired generation must be rejected as
+    // stale before its SSK signature is considered.
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[117u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
@@ -1258,7 +1257,10 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
         StatusCode::CONFLICT,
     )
     .await;
-    assert_eq!(body["error"]["code"], "cross_signing_state_missing");
+    assert_eq!(
+        body["error"]["code"],
+        "device_recovery_ssk_generation_mismatch"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
