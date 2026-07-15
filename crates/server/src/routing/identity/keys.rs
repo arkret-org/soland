@@ -313,6 +313,7 @@ async fn keys_query(
                     cross_signing_binding: facet.cross_signing_binding,
                     enrollment_authority_binding: facet.enrollment_authority_binding,
                     device_authorize_event_id: facet.device_authorize_event_id,
+                    authorized_generation_ref: facet.authorized_generation_ref,
                 },
             );
         }
@@ -322,6 +323,7 @@ async fn keys_query(
         device_keys: result,
         failures: Vec::new(),
         cross_signing,
+        device_generations: BTreeMap::new(),
     })
 }
 

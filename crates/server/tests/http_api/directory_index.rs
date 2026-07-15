@@ -104,8 +104,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .await
         .unwrap();
     assert_eq!(
-        actors["actors"][0]["actor_id"],
-        "did:web:alice.example",
+        actors["actors"][0]["actor_id"], "did:web:alice.example",
         "search actors response: {actors}"
     );
     assert!(actors["actors"][0].get("preview").is_none());
@@ -459,7 +458,10 @@ async fn private_contact_discovery_rejects_plaintext_identifier_matching() {
     .send(&service)
     .await;
 
-    assert_eq!(response.status_code.unwrap(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response.status_code.unwrap(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "schema_violation");
     assert!(

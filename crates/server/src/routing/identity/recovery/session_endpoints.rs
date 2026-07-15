@@ -50,6 +50,7 @@ pub(super) fn recovery_session_summary(record: &RecoverySessionRecord) -> Value 
         "trust_domain": record.trust_domain,
         "policy_id": record.policy_id,
         "policy_version": record.policy_version,
+        "identity_model": "cross_signing",
         "ssk_generation": record.ssk_generation,
         "challenge": record.challenge,
         "state": record.state,
@@ -217,14 +218,6 @@ pub(super) async fn recovery_session_create(
             "trust_domain `{trust_domain}` must start with ak:trust_domain:",
         )));
     }
-    // Accepted cross-signing generation the requester believes is current. The
-    // server snapshots it onto the session; completion (C-P4) MUST reject if the
-    // accepted generation has since moved on (device_recovery_ssk_generation_mismatch).
-    let ssk_generation = u32::try_from(payload.ssk_generation)
-        .ok()
-        .filter(|generation| *generation >= 1)
-        .ok_or_else(|| AppError::invalid_param("ssk_generation must be >= 1 and fit u32"))?;
-
     // A session can only be opened against an accepted recovery policy — and the
     // requested trust_domain MUST match it (no domain confusion).
     let active = state
@@ -269,6 +262,19 @@ pub(super) async fn recovery_session_create(
         ))
         .with_wire_code("recovery_policy_mismatch"));
     }
+
+    // Snapshot the server-authoritative accepted generation only after the
+    // recovery policy has been validated. The client no longer supplies this
+    // value, which prevents choosing a stale or invented recovery basis.
+    let ssk_generation =
+        crate::routing::identity::cross_signing::resolve_current_cross_signing_publish(
+            state, &principal,
+        )
+        .and_then(|publish| u32::try_from(publish.generation.get()).ok())
+        .ok_or_else(|| {
+            AppError::conflict("no accepted cross-signing generation for recovery")
+                .with_wire_code("recovery_cross_signing_generation_missing")
+        })?;
 
     let now = chrono::Utc::now();
     let record = RecoverySessionRecord {
@@ -989,7 +995,19 @@ pub(super) async fn recovery_session_complete(
     let session_id = recovery_session_id.into_inner();
     let complete_request = body.into_inner();
     let authorization_event_id_typed = complete_request.authorization_event_id.clone();
-    let device_list_update_event_id_typed = complete_request.device_list_update_event_id.clone();
+    let identity_model = complete_request
+        .identity_model()
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    if identity_model != arkret_sdk::RecoveryIdentityModel::CrossSigning {
+        return Err(AppError::unsupported_feature(
+            "enrollment-authority recovery completion is not implemented",
+        )
+        .with_wire_code("recovery_identity_model_unsupported"));
+    }
+    let device_list_update_event_id_typed = complete_request
+        .device_list_update_event_id
+        .clone()
+        .ok_or_else(|| AppError::invalid_param("device_list_update_event_id is required"))?;
     let record = load_owned_recovery_session(&aa, state, req, &session_id).await?;
     let record = expire_if_elapsed(state, record).await?;
 
@@ -1188,8 +1206,11 @@ pub(super) async fn recovery_session_complete(
         state: recovery_session_state_from_record(&completed)?,
         device_id: DeviceId::new(completed.requesting_device_id.clone())
             .map_err(|error| stored_recovery_type_error("requesting_device_id", error))?,
+        identity_model,
         authorization_event_id: authorization_event_id_typed,
-        device_list_update_event_id: device_list_update_event_id_typed,
+        device_list_update_event_id: Some(device_list_update_event_id_typed),
+        reanchor_event_id: None,
+        reanchor_batch_receipt_id: None,
     })
 }
 

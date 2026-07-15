@@ -936,6 +936,7 @@ pub(crate) struct DeviceSigningDirectoryFacet {
     /// projection. Service-attested clients use this with
     /// `enrollment_authority_binding` as the hot-path trust anchor.
     pub device_authorize_event_id: Option<EventId>,
+    pub authorized_generation_ref: Option<arkret_sdk::NonEmptyString>,
 }
 
 /// Typed view of the fields the device projection
@@ -959,6 +960,8 @@ pub(crate) struct ProjectedDevicePayload {
     pub enrollment_authority_binding: Option<DeviceEnrollmentAuthorityBinding>,
     #[serde(default)]
     pub device_authorize_event_id: Option<String>,
+    #[serde(default)]
+    pub authorized_generation_ref: Option<arkret_sdk::NonEmptyString>,
 }
 
 /// Resolve the `keys/query` signing-key directory facet for `(principal_id,
@@ -995,6 +998,7 @@ pub(crate) async fn resolve_device_signing_directory_facet(
                 cross_signing_binding: None,
                 enrollment_authority_binding: None,
                 device_authorize_event_id: None,
+                authorized_generation_ref: None,
             };
         }
     };
@@ -1007,6 +1011,7 @@ pub(crate) async fn resolve_device_signing_directory_facet(
             cross_signing_binding: None,
             enrollment_authority_binding: None,
             device_authorize_event_id: None,
+            authorized_generation_ref: None,
         };
     }
     // Parse the stored projection row once through the typed view; a
@@ -1040,6 +1045,7 @@ pub(crate) async fn resolve_device_signing_directory_facet(
         cross_signing_binding: payload.cross_signing_binding,
         enrollment_authority_binding: payload.enrollment_authority_binding,
         device_authorize_event_id,
+        authorized_generation_ref: payload.authorized_generation_ref,
     }
 }
 

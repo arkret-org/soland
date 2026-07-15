@@ -9,7 +9,7 @@ use arkret_sdk::{Bottom, CellRef, Hash, LatticeOp, Move, MoveId, RealmId, Seal, 
 use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::pooled_connection::deadpool::Object;
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
 use soland_data::PgPool;
 
@@ -377,6 +377,73 @@ impl SealStore for PgSealStore {
             .await
             .map(|_| ())
             .map_err(diesel_to_store)
+        })
+    }
+
+    fn put_if_frontier(&self, seal: &Seal, expected_leaves: &[SealId]) -> StoreResult<bool> {
+        let pool = self.pool.clone();
+        let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
+        let predecessor_refs = seal_predecessor_refs_json(seal);
+        let id = seal.id.as_str().to_owned();
+        let realm_id = seal.realm_id.as_str().to_owned();
+        let is_genesis = seal.predecessor_refs.is_empty();
+        let mut expected: Vec<String> = expected_leaves
+            .iter()
+            .map(|leaf| leaf.as_str().to_owned())
+            .collect();
+        expected.sort();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            (&mut *conn)
+                .transaction::<bool, diesel::result::Error, _>(async move |conn| {
+                    sql_query(
+                        "SELECT 1::bigint AS value FROM (\
+                         SELECT pg_advisory_xact_lock(hashtext($1))\
+                         ) AS frontier_lock",
+                    )
+                    .bind::<Text, _>(&realm_id)
+                    .get_result::<CountRow>(&mut *conn)
+                    .await?;
+                    let current: Vec<String> = sql_query(
+                        "SELECT parent.id AS value \
+                         FROM state_seals parent \
+                         WHERE parent.realm_id = $1 \
+                           AND NOT EXISTS ( \
+                             SELECT 1 FROM state_seals child \
+                             WHERE child.realm_id = $1 \
+                               AND child.predecessor_refs ? parent.id \
+                           ) \
+                         ORDER BY parent.id ASC",
+                    )
+                    .bind::<Text, _>(&realm_id)
+                    .load::<TextRow>(&mut *conn)
+                    .await?
+                    .into_iter()
+                    .map(|row| row.value)
+                    .collect();
+                    if current != expected {
+                        return Ok(false);
+                    }
+                    sql_query(
+                        "INSERT INTO state_seals \
+                         (id, realm_id, seal_json, predecessor_refs, is_genesis) \
+                         VALUES ($1, $2, $3, $4, $5) \
+                         ON CONFLICT (id) DO UPDATE SET \
+                           seal_json = EXCLUDED.seal_json, \
+                           predecessor_refs = EXCLUDED.predecessor_refs, \
+                           is_genesis = EXCLUDED.is_genesis",
+                    )
+                    .bind::<Text, _>(&id)
+                    .bind::<Text, _>(&realm_id)
+                    .bind::<Jsonb, _>(&seal_json)
+                    .bind::<Jsonb, _>(&predecessor_refs)
+                    .bind::<Bool, _>(is_genesis)
+                    .execute(&mut *conn)
+                    .await?;
+                    Ok(true)
+                })
+                .await
+                .map_err(diesel_to_store)
         })
     }
 

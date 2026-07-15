@@ -283,7 +283,10 @@ async fn mimi_provider_facade_contracts_work() {
     .await
     .unwrap();
     assert_eq!(
-        key_material["failures"].as_array().map(Vec::len).unwrap_or(0),
+        key_material["failures"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or(0),
         0
     );
 
