@@ -85,7 +85,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert_eq!(
         claimed_once["one_time_keys"]["did:web:alice.example"]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["key"],
+            ["signed_curve25519"]["key"],
         "one-time"
     );
     let claimed_replay: Value = TestClient::post("http://server/_arkret/self/keys/claim")
