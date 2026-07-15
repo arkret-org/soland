@@ -1471,8 +1471,8 @@ mod tests {
             description: None,
             extra: Default::default(),
         }];
-        package.registration_epoch_evidence =
-            Some(arkret_sdk::applet::AppletRegistrationEpochEvidence::new(
+        package
+            .seal_registration_epoch(arkret_sdk::applet::AppletRegistrationEpochEvidence::new(
                 package.service_id.clone(),
                 Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
                 arkret_sdk::applet::AppletDidMethodVersionEvidence::unversioned("did:web").unwrap(),
@@ -1480,7 +1480,8 @@ mod tests {
                     key_ref: package.webhook_auth.key_ref.clone(),
                     public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
                 }],
-            ));
+            ))
+            .unwrap();
         package.seal().unwrap();
         let signer = Ed25519MoveSigner::from_did_key_seed(
             signer_seed,

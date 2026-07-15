@@ -531,9 +531,32 @@ async fn put_canonical_event_received_at(
     created_at: DateTime<Utc>,
     received_at: DateTime<Utc>,
 ) {
+    put_canonical_event_received_at_for_actor(
+        state,
+        event_id,
+        actor_seq,
+        kind,
+        payload,
+        ROSTER_ACTOR,
+        created_at,
+        received_at,
+    )
+    .await;
+}
+
+async fn put_canonical_event_received_at_for_actor(
+    state: &AppState,
+    event_id: &str,
+    actor_seq: u64,
+    kind: &str,
+    payload: Value,
+    actor_id: &str,
+    created_at: DateTime<Utc>,
+    received_at: DateTime<Utc>,
+) {
     let envelope = json!({
         "event_id": event_id,
-        "actor_id": ROSTER_ACTOR,
+        "actor_id": actor_id,
         "actor_seq": actor_seq,
         "realm_id": ROSTER_REALM,
         "kind": kind,
@@ -549,7 +572,7 @@ async fn put_canonical_event_received_at(
         .events()
         .put(crate::state::CanonicalEventRecord {
             event_id: event_id.to_owned(),
-            actor_id: ROSTER_ACTOR.to_owned(),
+            actor_id: actor_id.to_owned(),
             actor_seq,
             realm_id: Some(ROSTER_REALM.to_owned()),
             kind: kind.to_owned(),
@@ -1325,7 +1348,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         })
         .await
         .expect("second state event appended");
-    put_canonical_event_received_at(
+    put_canonical_event_received_at_for_actor(
         &state,
         "ak:event:01904100-0000-7000-8000-0000000000b1",
         2,
@@ -1334,6 +1357,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
             "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000a2",
             "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
         }),
+        ROSTER_CALLER,
         second_created_at,
         second_created_at,
     )

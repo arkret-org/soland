@@ -244,7 +244,7 @@ fn account_data_entry<'a>(sync: &'a Value, key: &str) -> Option<&'a Value> {
         .as_array()
         .into_iter()
         .flatten()
-        .find(|entry| entry["data_type"] == key)
+        .find(|entry| entry["payload"]["key"] == key)
 }
 
 fn read_cursor_payload(
@@ -439,7 +439,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     .await;
     let phone_account_data = account_data_entry(&phone_sync, "ak.account.blocklist")
         .expect("blocklist account_data visible to Alice's sibling device");
-    assert_eq!(phone_account_data["content"], encrypted_blocklist);
+    assert_eq!(phone_account_data["payload"]["body"], encrypted_blocklist);
 
     let phone_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {alice_phone}"), true)

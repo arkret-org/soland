@@ -5,8 +5,8 @@ use super::*;
 const REALM: &str = "ak:realm:0196419b-1000-7000-8000-000000000001";
 const OTHER_REALM: &str = "ak:realm:0196419b-2000-7000-8000-000000000001";
 const RECIPIENT: &str = "did:web:bob.example";
-const RECIPIENT_DEVICE: &str = "ak:device:bob-history";
-const SENDER_DEVICE: &str = "ak:device:alice-history";
+const RECIPIENT_DEVICE: &str = "ak:device:01904100-0000-7000-8000-0000000000b1";
+const SENDER_DEVICE: &str = "ak:device:01904100-0000-7000-8000-0000000000a1";
 
 fn realm_key_share_payload(effective_scope: Value) -> Value {
     json!({
