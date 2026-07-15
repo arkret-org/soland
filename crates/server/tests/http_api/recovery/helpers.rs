@@ -105,6 +105,7 @@ pub(crate) fn ensure_cross_signing(
 /// Build the canonical recovery-proof transcript the server reconstructs, and
 /// return a base64url Ed25519 signature over it by `signing`.
 pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> String {
+    let model_generation_ref = recovery_model_generation_ref(session);
     let transcript = serde_json::json!({
         "type": "ak.identity.recovery_proof.v1",
         "kind": "principal_signing",
@@ -114,7 +115,8 @@ pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> Stri
         "policy_id": session["policy_id"],
         "policy_version": session["policy_version"],
         "recovery_session_id": session["recovery_session_id"],
-        "ssk_generation": session["ssk_generation"],
+        "identity_model": session["identity_model"],
+        "model_generation_ref": model_generation_ref,
         "challenge": session["challenge"],
         "created_at": session["created_at"],
         "expires_at": session["expires_at"],
@@ -131,6 +133,7 @@ pub(crate) fn sign_trusted_recovery_service_proof(
     audience: &str,
     attestation_ref: Option<&str>,
 ) -> String {
+    let model_generation_ref = recovery_model_generation_ref(session);
     let mut proof_body = serde_json::json!({
         "kind": "trusted_recovery_service",
         "challenge": session["challenge"],
@@ -151,7 +154,8 @@ pub(crate) fn sign_trusted_recovery_service_proof(
         "policy_id": session["policy_id"],
         "policy_version": session["policy_version"],
         "recovery_session_id": session["recovery_session_id"],
-        "ssk_generation": session["ssk_generation"],
+        "identity_model": session["identity_model"],
+        "model_generation_ref": model_generation_ref,
         "challenge": session["challenge"],
         "created_at": session["created_at"],
         "expires_at": session["expires_at"],
@@ -159,6 +163,14 @@ pub(crate) fn sign_trusted_recovery_service_proof(
     });
     let bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
     URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
+}
+
+fn recovery_model_generation_ref(session: &Value) -> Value {
+    match session["identity_model"].as_str() {
+        Some("cross_signing") => session["ssk_generation"].clone(),
+        Some("enrollment_authority") => session["current_device_generation_ref"].clone(),
+        other => panic!("unexpected recovery identity model in fixture: {other:?}"),
+    }
 }
 
 /// The recovering device's keypair (fixed for tests). Its public key is stored
