@@ -224,24 +224,30 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         "https://soland.example/webvh/{local_id}/did.jsonl"
     );
 
+    let unauthorized_did_signing = SigningKey::from_bytes(&[39u8; 32]);
+    let unauthorized_update_signing = SigningKey::from_bytes(&[40u8; 32]);
+    let unauthorized_next_update_signing = SigningKey::from_bytes(&[38u8; 32]);
     let unauthorized = TestClient::post("http://server/_soland/root/identity/webvh/register")
         .json(&serde_json::json!({
             "local_id": "mallory",
-            "did_public_key_multibase": "z6Mkmallory",
-            "update_public_key_multibase": "z6Mkmalloryupdate",
-            "next_update_public_key_multibase": "z6Mkmallorynext"
+            "did_public_key_multibase": test_ed25519_multibase_public(&unauthorized_did_signing),
+            "update_public_key_multibase": test_ed25519_multibase_public(&unauthorized_update_signing),
+            "next_update_public_key_multibase": test_ed25519_multibase_public(&unauthorized_next_update_signing)
         }))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthorized.status_code.unwrap(), StatusCode::UNAUTHORIZED);
 
+    let reused_signing = SigningKey::from_bytes(&[44u8; 32]);
+    let reused_next_update_signing = SigningKey::from_bytes(&[45u8; 32]);
+    let reused_public_key = test_ed25519_multibase_public(&reused_signing);
     let mut reused_key = TestClient::post("http://server/_soland/root/identity/webvh/register")
         .add_header("authorization", "Bearer test-webvh-token", true)
         .json(&serde_json::json!({
             "local_id": "reused",
-            "did_public_key_multibase": "z6Mkreused",
-            "update_public_key_multibase": "z6Mkreused",
-            "next_update_public_key_multibase": "z6Mkreusednext"
+            "did_public_key_multibase": reused_public_key,
+            "update_public_key_multibase": reused_public_key,
+            "next_update_public_key_multibase": test_ed25519_multibase_public(&reused_next_update_signing)
         }))
         .send(&app_from_state(state.clone()))
         .await;
