@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 use arkret_sdk::{
     AgentKeyScope, AgentPcrRecoveryState, BackupClass, Did, Hash, Hlc, KeyBackup,
     KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding, RealmId,
-    RealmSealFrontierView, SealId, agent_requested_scope_digest,
+    RealmSealFrontierView, RecoveryHpkeSuite, RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse,
+    RecoveryPolicy, SealId, agent_requested_scope_digest,
 };
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -849,38 +850,67 @@ async fn validate_current_recovery_recipient(
                 "recovery_policy_mismatch",
             )
         })?;
+    let policy: RecoveryPolicy = serde_json::from_value(policy.raw_payload).map_err(|error| {
+        AppError::internal(format!(
+            "accepted controller recovery policy failed strong decoding: {error}"
+        ))
+    })?;
+    policy.validate().map_err(|error| {
+        AppError::internal(format!(
+            "accepted controller recovery policy failed validation: {error}"
+        ))
+    })?;
     let recipient = backup
         .encryption
         .recipient_key_ref
         .as_deref()
         .unwrap_or_default();
-    let current = policy
-        .raw_payload
-        .get("recovery_keys")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|entry| {
-            entry.get("verification_method").and_then(Value::as_str) == Some(recipient)
-                && entry.get("revoked_at").is_none_or(Value::is_null)
-                && entry
-                    .get("not_before")
-                    .and_then(Value::as_str)
-                    .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                    .is_some_and(|time| time.with_timezone(&Utc) <= evaluated_at)
-                && entry
-                    .get("expires_at")
-                    .and_then(Value::as_str)
-                    .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                    .is_some_and(|time| time.with_timezone(&Utc) > evaluated_at)
-        });
-    if !current {
+    let suite_id = backup
+        .encryption
+        .hpke_suite
+        .as_deref()
+        .unwrap_or(arkret_sdk::DEFAULT_HPKE_SUITE);
+    let suite: RecoveryHpkeSuite = serde_json::from_value(Value::String(suite_id.to_owned()))
+        .map_err(|_| {
+            AppError::new(
+                ErrorCode::UnsupportedHpkeSuite,
+                format!("managed Agent PCR backup HPKE suite is unsupported: {suite_id}"),
+            )
+        })?;
+    let agreements = policy
+        .recovery_key_agreements
+        .as_deref()
+        .unwrap_or_default();
+    let matching_recipient = agreements
+        .iter()
+        .find(|entry| current_backup_hpke_agreement(entry, recipient, evaluated_at));
+    let Some(agreement) = matching_recipient else {
         return Err(failed_precondition(
-            "managed Agent PCR backup recipient_key_ref is not a current controller recovery key",
+            "managed Agent PCR backup recipient_key_ref is not a current controller backup HPKE key agreement",
             "recovery_policy_mismatch",
+        ));
+    };
+    if !agreement.hpke_suites.contains(&suite) {
+        return Err(AppError::new(
+            ErrorCode::UnsupportedHpkeSuite,
+            format!(
+                "managed Agent PCR backup HPKE suite {suite_id} is not allowed by controller recovery agreement {recipient}"
+            ),
         ));
     }
     Ok(())
+}
+
+fn current_backup_hpke_agreement(
+    entry: &RecoveryKeyAgreementEntry,
+    recipient: &str,
+    evaluated_at: DateTime<Utc>,
+) -> bool {
+    entry.key_agreement_ref.as_str() == recipient
+        && entry.usage == RecoveryKeyAgreementUse::BackupHpke
+        && entry.revoked_at.is_none()
+        && entry.not_before <= evaluated_at
+        && entry.expires_at > evaluated_at
 }
 
 fn canonical_binding_bytes(binding: &ManagedPrincipalBinding) -> Result<Vec<u8>, AppError> {
@@ -1048,5 +1078,35 @@ mod tests {
         ordinary_realm["history_visibility"] = json!("shared");
         ordinary_realm["encryption_profile"] = json!("none");
         assert!(validate_agent_pcr_genesis_object(&ordinary_realm, AGENT, PCR).is_err());
+    }
+
+    #[test]
+    fn recovery_signing_key_cannot_be_used_as_managed_agent_backup_recipient() {
+        let now: DateTime<Utc> = "2026-07-15T00:00:00Z".parse().unwrap();
+        let agreement = RecoveryKeyAgreementEntry {
+            key_agreement_ref: arkret_sdk::DidUrl::new(format!("{CONTROLLER}#backup-hpke-1"))
+                .unwrap(),
+            alg: arkret_sdk::RecoveryKeyAgreementAlgorithm::X25519,
+            public_key_multibase: arkret_sdk::NonEmptyString::new(
+                "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW".to_owned(),
+            )
+            .unwrap(),
+            hpke_suites: vec![RecoveryHpkeSuite::X25519ChaCha20Poly1305],
+            usage: RecoveryKeyAgreementUse::BackupHpke,
+            not_before: now - chrono::TimeDelta::minutes(1),
+            expires_at: now + chrono::TimeDelta::days(1),
+            revoked_at: None,
+        };
+
+        assert!(current_backup_hpke_agreement(
+            &agreement,
+            agreement.key_agreement_ref.as_str(),
+            now
+        ));
+        assert!(!current_backup_hpke_agreement(
+            &agreement,
+            &format!("{CONTROLLER}#recovery-proof-1"),
+            now
+        ));
     }
 }
