@@ -23,24 +23,21 @@ use operations::{
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
 use projection::{
-    augment_timeline_message_json, projected_event_page, projected_event_page_for_realms_through,
+    projected_event_page, projected_event_page_for_realms_through,
     projected_event_replay_upper_bound, projection_event_json,
-    sync_timeline_message_json_with_projection,
 };
 use strand::{
-    default_discussion_track, discussion_track_for_projection_event, message_id_from_event_id,
-    strand_id_for_projection_event, strand_id_from_realm_id, strand_projection_for_realm,
+    discussion_track_for_projection_event, message_id_from_event_id, strand_id_for_projection_event,
 };
 
 use super::{
     TO_DEVICE_PAGE_LIMIT, append_audit_log, auth_or_render, authenticated_session,
-    device_message_envelopes_after, has_pending_call_signals_for_subscriber,
-    has_pending_typing_for_subscriber, is_realm_deleted, is_valid_discoverability,
+    device_message_envelopes_after, is_realm_deleted, is_valid_discoverability,
     is_valid_hash_digest, now, prune_expired_typing, query_param, query_param_all,
     realm_allows_plaintext_service_for_data_class, realm_discoverability,
     realm_event_visible_to_session, realm_has_member, realm_history_visibility,
     realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_manifest_for_realm,
-    touch_realm, typing_ephemeral_for_realm, validate_did, validate_space_id,
+    touch_realm, validate_did, validate_space_id,
 };
 
 pub fn router() -> Router {

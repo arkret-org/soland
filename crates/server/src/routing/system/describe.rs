@@ -16,7 +16,7 @@
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
-use arkret_sdk::ServerDescription;
+use arkret_sdk::ServiceDescribe;
 use arkret_sdk::http::ServerDescribeOutcome;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -269,7 +269,7 @@ fn unsupported_profiles_from_limits(
         .collect()
 }
 
-pub(crate) fn build_server_description(state: &AppState) -> ServerDescription {
+pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     let mut description = describe(
         &state.config.service_id,
         &state.config.public_base_url,
@@ -297,7 +297,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServerDescription {
     // `ak.schema.service_describe.v1`. `supported_operations` is
     // wire-callable only; this helper separates implementation state,
     // self-claims, cotest-verified claims, and compat surfaces while the
-    // response is still the SDK's typed `ServerDescription`.
+    // response is still the SDK's typed `ServiceDescribe`.
     apply_claim_level_partition(
         &mut description,
         state.verified_profiles.as_ref(),
@@ -320,7 +320,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServerDescription {
 /// Inject the T6.1 claim-level partition fields (`implemented_features`,
 /// `claimed_profiles`, `verified_profiles`, `compat_surfaces`) into a
 /// describe response. `experimental_features` is already carried by the typed
-/// [`crate::wire::describe`] `ServerDescription`.
+/// [`crate::wire::describe`] `ServiceDescribe`.
 ///
 /// Invariants enforced here:
 /// - `verified_profiles` MUST be empty when `development_mode=true`. The loader
@@ -334,7 +334,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServerDescription {
 ///   dropped with a `warn!` line. The wire never advertises a profile we don't also self-claim —
 ///   that would be a silent cross-binding lie.
 pub(crate) fn apply_claim_level_partition(
-    description: &mut arkret_sdk::ServerDescription,
+    description: &mut arkret_sdk::ServiceDescribe,
     loaded_verified: &[crate::verified_profiles::VerifiedProfileDescriptor],
     candidate_join_policy_enabled: bool,
 ) {

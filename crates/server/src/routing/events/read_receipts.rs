@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use arkret_sdk::{ReadReceipt, ReadScopeKind};
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::error::AppError;
 use crate::routing::events::event_log::{
@@ -145,38 +145,6 @@ fn require_string_field(
         )));
     }
     Ok(())
-}
-
-pub(crate) async fn read_receipt_ephemeral_for_realm(
-    state: &AppState,
-    realm_id: &str,
-    session: Option<&SessionRecord>,
-    full_sync: bool,
-) -> Vec<Value> {
-    let records =
-        pending_read_receipt_records_for_subscriber(state, realm_id, session, full_sync).await;
-    if let (Some(session), Some(max_position)) =
-        (session, records.iter().map(|record| record.position).max())
-    {
-        let _ = state
-            .persistence
-            .read_receipt_relay()
-            .advance(&session.actor, &session.device_id, realm_id, max_position)
-            .await;
-    }
-    let receipts = records
-        .into_iter()
-        .map(|record| record.receipt)
-        .collect::<Vec<_>>();
-    if receipts.is_empty() {
-        Vec::new()
-    } else {
-        vec![json!({
-            "type": "ak.receipt.read",
-            "realm_id": realm_id,
-            "receipts": receipts,
-        })]
-    }
 }
 
 pub(crate) async fn has_pending_read_receipts_for_subscriber(

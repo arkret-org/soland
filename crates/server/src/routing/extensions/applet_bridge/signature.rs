@@ -217,10 +217,6 @@ pub(super) fn applet_registration_verification_method(
     Ok(key_ref.to_owned())
 }
 
-pub(super) fn applet_content_digest_header(bytes: &[u8]) -> String {
-    crate::routing::federation::rfc9530_content_digest(bytes)
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn applet_source_signature_anchor(
     source_service_id: &str,
@@ -361,12 +357,6 @@ pub(super) fn applet_verify_signature_header(
         || applet_signature_error_invalid("signature verification failed"),
         || applet_resolve_verifying_key(state, verification_method),
     )
-}
-
-pub(super) fn applet_decode_signature_header(
-    value: &str,
-) -> Result<ed25519_dalek::Signature, &'static str> {
-    http_signature::decode_signature_header(value)
 }
 
 /// Resolve the Ed25519 public key for the registration verification method via

@@ -115,31 +115,6 @@ pub fn tombstone_projection_event_for_erased_actor(
     event.payload = tombstone_payload_value(&event.payload);
 }
 
-/// Fold a per-message redaction tombstone onto a timeline message value.
-///
-/// When the message identified by `event_id` is redacted (the parallel
-/// `redaction` cas-register holds a value), rewrite the timeline value into its
-/// spec tombstone form (strand-and-message.md §9): keep the slot + audit
-/// metadata, strip every plaintext / derived surface, and add the structured
-/// `redacted` / `state` / `redacted_at` / `redaction_ref` markers a client
-/// folds onto an existing message. Returns `true` when a tombstone was applied.
-pub fn apply_message_redaction_timeline_projection(
-    event: &mut Value,
-    event_id: &str,
-    projection: &crate::reducer::ProjectionState,
-) -> bool {
-    let Some(message) = projection.messages.get(event_id) else {
-        return false;
-    };
-    let Some(cell) = projection.redaction_cell_for_message(message) else {
-        return false;
-    };
-    let redacted_at = cell.redacted_at;
-    let redaction_ref = cell.redaction_event_id.as_deref();
-    arkret_sdk::events::redaction_tombstone_message_value(event, redacted_at, redaction_ref);
-    true
-}
-
 pub fn tombstone_projection_event_for_message_redaction(
     projection: &crate::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
@@ -163,45 +138,11 @@ pub fn tombstone_projection_event_for_message_redaction(
     );
 }
 
-pub fn tombstone_timeline_event_value(event: &mut Value) {
-    let Some(object) = event.as_object_mut() else {
-        return;
-    };
-    object.insert("sender".to_owned(), json!(ERASED_USER_PLACEHOLDER));
-    object.insert("erasure_tombstone".to_owned(), json!(true));
-    object.insert(
-        "content".to_owned(),
-        json!({
-            "kind": "ak.content.text",
-            "body": ERASED_USER_PLACEHOLDER,
-        }),
-    );
-    object.insert("encrypted".to_owned(), json!(false));
-    object.insert("decryption_state".to_owned(), json!("plaintext"));
-}
-
 pub fn retention_tombstone_for_event(
     state: &AppState,
     event_id: &str,
 ) -> Option<RetentionTombstoneRecord> {
     state.retention_tombstones.lock().get(event_id).cloned()
-}
-
-pub fn apply_message_expiry_timeline_projection(
-    event: &mut Value,
-    message: &crate::reducer::MessageState,
-    projection: &crate::reducer::ProjectionState,
-    now: DateTime<Utc>,
-) -> bool {
-    let Some(expiry) = projection.message_expiry_projection_at(message, now) else {
-        return false;
-    };
-    if !expiry.is_stub() {
-        add_message_expiry_hint(event, &expiry);
-        return false;
-    }
-    stub_timeline_event_for_message_expiry(event, &expiry);
-    true
 }
 
 pub fn stub_projection_event_for_message_expiry(
@@ -250,97 +191,6 @@ pub fn stub_pin_projection_event_for_invisible_target(
         return;
     }
     event.payload = pin_target_locked_stub_payload(&event.payload);
-}
-
-fn add_message_expiry_hint(event: &mut Value, expiry: &MessageExpiryProjection) {
-    let Some(object) = event.as_object_mut() else {
-        return;
-    };
-    object.insert("expiry_state".to_owned(), json!(expiry.state_str()));
-    object.insert("expiry_trigger".to_owned(), json!(expiry.trigger.as_str()));
-    if let Some(expires_at) = expiry.expires_at.as_ref() {
-        object.insert("expires_at".to_owned(), json!(expires_at.to_rfc3339()));
-    }
-    if let Some(anchor_hlc) = expiry.anchor_hlc.as_deref() {
-        object.insert("expiry_anchor_hlc".to_owned(), json!(anchor_hlc));
-    }
-}
-
-fn stub_timeline_event_for_message_expiry(event: &mut Value, expiry: &MessageExpiryProjection) {
-    let Some(object) = event.as_object_mut() else {
-        return;
-    };
-    strip_expiry_derived_fields(object);
-    object.insert("expiry_stub".to_owned(), json!(true));
-    object.insert("expiry_state".to_owned(), json!(expiry.state_str()));
-    object.insert("expiry_trigger".to_owned(), json!(expiry.trigger.as_str()));
-    if let Some(reason) = expiry.reason_code() {
-        object.insert("expiry_reason".to_owned(), json!(reason));
-    }
-    if let Some(expires_at) = expiry.expires_at.as_ref() {
-        object.insert("expired_at".to_owned(), json!(expires_at.to_rfc3339()));
-        object.insert("expires_at".to_owned(), json!(expires_at.to_rfc3339()));
-    }
-    if let Some(anchor_hlc) = expiry.anchor_hlc.as_deref() {
-        object.insert("expiry_anchor_hlc".to_owned(), json!(anchor_hlc));
-    }
-    object.insert("physical_delete".to_owned(), json!(false));
-    object.insert(
-        "cache_invalidation".to_owned(),
-        message_expiry_cache_invalidation_value(),
-    );
-    object.insert(
-        "content".to_owned(),
-        json!({
-            "kind": "ak.content.text",
-            "body": RETENTION_EXPIRED_PLACEHOLDER,
-        }),
-    );
-    object.insert("encrypted".to_owned(), json!(false));
-    object.insert("decryption_state".to_owned(), json!("plaintext"));
-}
-
-pub fn tombstone_timeline_event_for_retention(
-    event: &mut Value,
-    tombstone: &RetentionTombstoneRecord,
-) {
-    let Some(object) = event.as_object_mut() else {
-        return;
-    };
-    strip_expiry_derived_fields(object);
-    object.insert("retention_tombstone".to_owned(), json!(true));
-    object.insert("retention_state".to_owned(), json!("tombstoned"));
-    object.insert(
-        "retention_reason".to_owned(),
-        json!(tombstone.reason.as_str()),
-    );
-    object.insert(
-        "retention_expired_at".to_owned(),
-        json!(tombstone.expired_at.to_rfc3339()),
-    );
-    object.insert(
-        "retention_tombstoned_at".to_owned(),
-        json!(tombstone.tombstoned_at.to_rfc3339()),
-    );
-    object.insert(
-        "retention_seal_preserved".to_owned(),
-        json!(tombstone.sealed),
-    );
-    object.insert("physical_delete".to_owned(), json!(false));
-    object.insert(
-        "cache_invalidation".to_owned(),
-        message_expiry_cache_invalidation_value(),
-    );
-    insert_retention_risk_markers(object, tombstone);
-    object.insert(
-        "content".to_owned(),
-        json!({
-            "kind": "ak.content.text",
-            "body": RETENTION_EXPIRED_PLACEHOLDER,
-        }),
-    );
-    object.insert("encrypted".to_owned(), json!(false));
-    object.insert("decryption_state".to_owned(), json!("plaintext"));
 }
 
 pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProjection) -> Value {
@@ -633,111 +483,6 @@ mod tests {
     }
 
     #[test]
-    fn expired_message_timeline_uses_expiry_stub_without_redaction_or_derived_fields() {
-        let event_id = "ak:event:01904100-0000-7000-8000-0000000000a1";
-        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-        let message = expired_message(event_id, realm_id);
-        let projection = ProjectionState::new();
-
-        let event = crate::routing::events::projection::sync_timeline_message_json_with_projection(
-            &message,
-            &projection,
-        );
-
-        assert_eq!(event["expiry_stub"], json!(true));
-        assert_eq!(event["expiry_state"], json!("expired"));
-        assert_eq!(event["expiry_reason"], json!("ttl_expired"));
-        assert_eq!(
-            event["content"]["body"],
-            json!(RETENTION_EXPIRED_PLACEHOLDER)
-        );
-        assert_eq!(event["physical_delete"], json!(false));
-        assert!(event.get("redaction_ref").is_none());
-        assert!(event.get("redaction").is_none());
-        assert!(event.get("mentions").is_none());
-        assert!(event.get("reply_to").is_none());
-        assert!(event.get("reaction_summary").is_none());
-        let drop = invalidation_drop_values(&event);
-        assert!(drop.contains(&"blob_presign_cache"));
-        assert!(drop.contains(&"blob_preview_key_cache"));
-        assert!(drop.contains(&"blob_preview_bytes_cache"));
-        assert!(drop.contains(&"message_preview_cache"));
-        assert!(drop.contains(&"message_key_cache"));
-        assert!(drop.contains(&"search_index_cache"));
-        assert!(drop.contains(&"push_snippet_cache"));
-        let shred = invalidation_shred_values(&event);
-        assert!(shred.contains(&"blob_preview_key"));
-        assert!(shred.contains(&"blob_preview_bytes"));
-        assert!(shred.contains(&"search_index_plaintext"));
-        assert!(shred.contains(&"push_snippet_plaintext"));
-    }
-
-    #[test]
-    fn read_trigger_message_without_anchor_stays_pending_without_plaintext_downgrade() {
-        let event_id = "ak:event:01904100-0000-7000-8000-0000000000b1";
-        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-        let mut message = expired_message(event_id, realm_id);
-        message.expiry = Some(json!({
-            "ttl_ms": 86_400_000,
-            "trigger": "on_first_read",
-            "grace_ms": 0
-        }));
-        let projection = ProjectionState::new();
-
-        let event = crate::routing::events::projection::sync_timeline_message_json_with_projection(
-            &message,
-            &projection,
-        );
-
-        assert!(event.get("expiry_stub").is_none());
-        assert_eq!(event["expiry_state"], json!("active"));
-        assert_eq!(event["expiry_trigger"], json!("on_first_read"));
-        assert_eq!(event["content"]["body"], json!("secret"));
-        assert!(event.get("expires_at").is_none());
-        assert!(event.get("expiry_anchor_hlc").is_none());
-    }
-
-    #[test]
-    fn read_trigger_message_expires_after_aggregate_anchor() {
-        let event_id = "ak:event:01904100-0000-7000-8000-0000000000b2";
-        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-        let mut message = expired_message(event_id, realm_id);
-        message.expiry = Some(json!({
-            "ttl_ms": 1,
-            "trigger": "on_first_read",
-            "grace_ms": 0
-        }));
-        let mut projection = ProjectionState::new();
-        projection
-            .messages
-            .insert(event_id.to_owned(), message.clone());
-
-        assert!(projection.observe_message_read_for_expiry(
-            "did:web:bob.example",
-            event_id,
-            "019041000000-0001-00000001",
-            fixed_time("2020-01-01T00:00:00Z"),
-        ));
-
-        let event = crate::routing::events::projection::sync_timeline_message_json_with_projection(
-            &message,
-            &projection,
-        );
-
-        assert_eq!(event["expiry_stub"], json!(true));
-        assert_eq!(event["expiry_state"], json!("expired"));
-        assert_eq!(event["expiry_trigger"], json!("on_first_read"));
-        assert_eq!(
-            event["expiry_anchor_hlc"],
-            json!("019041000000-0001-00000001")
-        );
-        assert_eq!(
-            event["content"]["body"],
-            json!(RETENTION_EXPIRED_PLACEHOLDER)
-        );
-    }
-
-    #[test]
     fn on_last_read_waits_for_active_realm_member_aggregate() {
         let event_id = "ak:event:01904100-0000-7000-8000-0000000000b3";
         let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
@@ -913,29 +658,6 @@ mod tests {
     }
 
     #[test]
-    fn retention_timeline_tombstone_marks_no_risk_when_unsealed() {
-        let event_id = "ak:event:01904100-0000-7000-8000-0000000000c3";
-        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-        let tombstone = retention_tombstone(event_id, realm_id, false);
-        let mut event = json!({
-            "content": {"kind": "ak.content.text", "body": "secret"},
-            "push_snippet": "secret push",
-            "search_index": {"terms": ["secret"]},
-            "blob_preview_key": "secret-preview-key",
-        });
-
-        tombstone_timeline_event_for_retention(&mut event, &tombstone);
-
-        assert_eq!(event["retention_risk_ui"], json!(false));
-        assert_eq!(event["retention_risk_audit"], json!(false));
-        assert_eq!(event["retention_risk_reason"], json!("none"));
-        assert!(event.get("push_snippet").is_none());
-        assert!(event.get("search_index").is_none());
-        assert!(event.get("blob_preview_key").is_none());
-        assert!(invalidation_drop_values(&event).contains(&"push_snippet_cache"));
-    }
-
-    #[test]
     fn pin_projection_event_for_redacted_target_is_stubbed() {
         let event_id = "ak:event:01904100-0000-7000-8000-0000000000a1";
         let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
@@ -1025,107 +747,5 @@ mod tests {
         assert_eq!(event.payload["target"]["visibility"], json!("locked"));
         assert!(event.payload.get("target_ref").is_none());
         assert!(event.payload.get("note").is_none());
-    }
-
-    #[test]
-    fn timeline_message_for_redacted_event_surfaces_tombstone() {
-        let event_id = "ak:event:01904100-0000-7000-8000-0000000000e1";
-        let redaction_id = "ak:event:01904100-0000-7000-8000-0000000000e2";
-        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-        let now = chrono::Utc::now();
-        let mut projection = ProjectionState::new();
-        projection.messages.insert(
-            event_id.to_owned(),
-            MessageState {
-                event_id: event_id.to_owned(),
-                message_id: crate::reducer::message_id_from_event_id(event_id),
-                realm_id: realm_id.to_owned(),
-                sender: "did:web:bob.example".to_owned(),
-                thread_id: realm_id.to_owned(),
-                content: json!({"kind": "ak.content.text", "body": "secret"}),
-                expiry: None,
-                encrypted: false,
-                operation_id: "ak:operation:01904100-0000-7000-8000-0000000000e3".to_owned(),
-                created_at: now,
-                history_basis_seals: Vec::new(),
-                revision_of: None,
-                redacted_at: Some(now),
-            },
-        );
-        projection.redactions.insert(event_id.to_owned());
-        projection.redaction_cells.insert(
-            event_id.to_owned(),
-            Some(RedactionCellValue {
-                redacted_at: now,
-                by: "did:web:bob.example".to_owned(),
-                reason: Some("author_redaction".to_owned()),
-                redaction_event_id: Some(redaction_id.to_owned()),
-            }),
-        );
-        let message = projection.messages.get(event_id).cloned().unwrap();
-
-        let event = crate::routing::events::projection::sync_timeline_message_json_with_projection(
-            &message,
-            &projection,
-        );
-
-        assert_eq!(event["event_id"], json!(event_id));
-        assert_eq!(event["kind"], json!("ak.message.create"));
-        assert_eq!(event["redacted"], json!(true));
-        assert_eq!(event["state"], json!("redacted"));
-        assert_eq!(event["redaction_ref"], json!(redaction_id));
-        assert_ne!(event["content"]["body"], json!("secret"));
-        assert!(event.get("reactions").is_none());
-    }
-
-    #[test]
-    fn timeline_message_for_redacted_revision_surfaces_tombstone() {
-        let original_id = "ak:event:01904100-0000-7000-8000-0000000000f1";
-        let revision_id = "ak:event:01904100-0001-7000-8000-0000000000f1";
-        let message_id = "ak:message:01904100-0002-7000-8000-0000000000f1";
-        let redaction_id = "ak:event:01904100-0003-7000-8000-0000000000f1";
-        let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-        let now = chrono::Utc::now();
-        let mut projection = ProjectionState::new();
-        projection.messages.insert(
-            revision_id.to_owned(),
-            MessageState {
-                event_id: revision_id.to_owned(),
-                message_id: message_id.to_owned(),
-                realm_id: realm_id.to_owned(),
-                sender: "did:web:bob.example".to_owned(),
-                thread_id: realm_id.to_owned(),
-                content: json!({"kind": "ak.content.text", "body": "edited secret"}),
-                expiry: None,
-                encrypted: false,
-                operation_id: "ak:operation:01904100-0001-7000-8000-0000000000f1".to_owned(),
-                created_at: now,
-                history_basis_seals: Vec::new(),
-                revision_of: Some(original_id.to_owned()),
-                redacted_at: None,
-            },
-        );
-        projection.redactions.insert(original_id.to_owned());
-        projection.redaction_cells.insert(
-            original_id.to_owned(),
-            Some(RedactionCellValue {
-                redacted_at: now,
-                by: "did:web:bob.example".to_owned(),
-                reason: Some("author_redaction".to_owned()),
-                redaction_event_id: Some(redaction_id.to_owned()),
-            }),
-        );
-        let message = projection.messages.get(revision_id).cloned().unwrap();
-
-        let event = crate::routing::events::projection::sync_timeline_message_json_with_projection(
-            &message,
-            &projection,
-        );
-
-        assert_eq!(event["event_id"], json!(revision_id));
-        assert_eq!(event["redacted"], json!(true));
-        assert_eq!(event["state"], json!("redacted"));
-        assert_eq!(event["redaction_ref"], json!(redaction_id));
-        assert_ne!(event["content"]["body"], json!("edited secret"));
     }
 }

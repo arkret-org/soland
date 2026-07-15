@@ -147,7 +147,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
     }
 
     let message_id = crate::ids::generate("message");
-    let encrypted_content = json!({
+    let encrypted_content: arkret_sdk::EncryptedEnvelope = serde_json::from_value(json!({
         "scheme": "mls-rfc9420",
         "version": "1.0",
         "group_id": "mls_test",
@@ -165,7 +165,8 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         "ciphertext": "b3BhcXVl",
         "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-    });
+    }))
+    .unwrap();
     let message_payload = arkret_sdk::models::MessageCreatePayload::with_encrypted_content(
         arkret_sdk::StrandId::new(main_strand_id.clone()).unwrap(),
         "discussion",

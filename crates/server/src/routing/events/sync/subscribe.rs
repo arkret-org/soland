@@ -9,7 +9,7 @@ use crate::routing::spaces::space::presence_visible_to_session;
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
 pub(super) async fn account_describe(
     depot: &mut Depot,
-) -> crate::result::JsonResult<arkret_sdk::ServerDescription> {
+) -> crate::result::JsonResult<arkret_sdk::ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     crate::result::json_ok(crate::routing::system::describe::build_server_description(
         state,
@@ -507,18 +507,12 @@ pub(crate) async fn presence_events_for_actors(
 #[derive(Clone, Debug)]
 pub(crate) struct AggregatedPresence {
     pub status: String,
-    pub status_message: Option<String>,
-    pub last_active_at: Option<String>,
     pub updated_at: DateTime<Utc>,
-    /// Every device row has lapsed — the actor projects as `offline`
-    /// with the coarse stale-activity bucket appended.
-    pub all_expired: bool,
 }
 
 /// Deterministic multi-device merge: unexpired rows aggregate by the
 /// `dnd > online > idle` priority; no unexpired row at all projects as
-/// `offline`. `status_message` / `last_active_at` come from the most
-/// recently updated unexpired row carrying a value.
+/// `offline`.
 pub(crate) fn aggregate_presence_records(
     records: &[PresenceRecord],
     now: DateTime<Utc>,
@@ -531,10 +525,7 @@ pub(crate) fn aggregate_presence_records(
     if live.is_empty() {
         return Some(AggregatedPresence {
             status: "offline".to_owned(),
-            status_message: None,
-            last_active_at: None,
             updated_at: newest_updated_at,
-            all_expired: true,
         });
     }
     let status = arkret_sdk::aggregate_presence_states(
@@ -543,21 +534,12 @@ pub(crate) fn aggregate_presence_records(
     );
     let mut by_recency: Vec<&&PresenceRecord> = live.iter().collect();
     by_recency.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
-    let status_message = by_recency
-        .iter()
-        .find_map(|record| record.status_message.clone().filter(|m| !m.is_empty()));
-    let last_active_at = by_recency
-        .iter()
-        .find_map(|record| record.last_active_at.clone());
     Some(AggregatedPresence {
         status: status.as_wire().to_owned(),
-        status_message,
-        last_active_at,
         updated_at: by_recency
             .first()
             .map(|record| record.updated_at)
             .unwrap_or(newest_updated_at),
-        all_expired: false,
     })
 }
 
@@ -572,62 +554,4 @@ fn presence_record_expired(record: &PresenceRecord, now: DateTime<Utc>) -> bool 
     record.status == "online"
         && now.signed_duration_since(record.updated_at)
             > ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS)
-}
-
-pub(crate) fn presence_sync_event_json(
-    actor: &str,
-    aggregated: &AggregatedPresence,
-    reveal_activity_detail: bool,
-) -> Value {
-    let downgraded =
-        !reveal_activity_detail && matches!(aggregated.status.as_str(), "dnd" | "idle");
-    let status = if downgraded {
-        "offline".to_owned()
-    } else {
-        aggregated.status.clone()
-    };
-    let mut event = json!({
-        "user_id": actor,
-        "actor_id": actor,
-        "presence": status,
-        "status": status,
-        "updated_at": aggregated.updated_at,
-    });
-    let Some(object) = event.as_object_mut() else {
-        return event;
-    };
-    if downgraded {
-        // §3.4: for observers outside the visibility set `dnd` / `idle`
-        // degrade to `offline`; leaking a fresh status message or
-        // activity bucket alongside would reopen the same side channel.
-        return event;
-    }
-    if aggregated.all_expired {
-        object.insert(
-            "last_active_at".to_owned(),
-            json!(presence_last_active_bucket_interval(aggregated.updated_at)),
-        );
-        return event;
-    }
-    if let Some(status_message) = aggregated.status_message.as_ref() {
-        object.insert("status_message".to_owned(), json!(status_message));
-    }
-    if reveal_activity_detail && let Some(last_active_at) = aggregated.last_active_at.as_ref() {
-        object.insert("last_active_at".to_owned(), json!(last_active_at));
-    }
-    event
-}
-
-fn presence_last_active_bucket_interval(updated_at: DateTime<Utc>) -> String {
-    const LAST_ACTIVE_BUCKET_SECONDS: i64 = 60 * 60;
-    let bucket_start_seconds = updated_at
-        .timestamp()
-        .div_euclid(LAST_ACTIVE_BUCKET_SECONDS)
-        * LAST_ACTIVE_BUCKET_SECONDS;
-    let bucket_start =
-        DateTime::<Utc>::from_timestamp(bucket_start_seconds, 0).unwrap_or(updated_at);
-    format!(
-        "{}/PT1H",
-        bucket_start.to_rfc3339_opts(SecondsFormat::Secs, true)
-    )
 }

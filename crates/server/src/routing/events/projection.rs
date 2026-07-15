@@ -9,8 +9,8 @@
 //! - **inbound**: local operation builders, `federation::federation_push_operations` and
 //!   `federation::federation_transaction` call `project_accepted_operations` and
 //!   `ingest_federation_operations` from here.
-//! - **outbound**: `events::list_events` and `sync::*` consume `projected_event_page` and
-//!   `sync_timeline_message_json` to render timeline-shaped responses.
+//! - **outbound**: event-query and account-subscribe handlers consume the projection event log and
+//!   typed SDK response models.
 //!
 //! Today this layer only fans out `ak.message.*` / `ak.member.state` /
 //! `ak.realm.*` (security boundary, was `ak.space.*` pre-R1.2) lifecycle
@@ -21,10 +21,9 @@
 //! `space_state_events` + `space_members`.
 
 pub(super) use super::{
-    default_discussion_track, discussion_track_for_projection_event, is_valid_discoverability,
-    message_id_from_event_id, now, strand_id_for_projection_event, strand_id_from_realm_id,
-    touch_realm, validate_content_encryption_floor, validate_operation_policy,
-    validate_operation_semantics,
+    discussion_track_for_projection_event, is_valid_discoverability, message_id_from_event_id, now,
+    strand_id_for_projection_event, touch_realm, validate_content_encryption_floor,
+    validate_operation_policy, validate_operation_semantics,
 };
 
 mod account_data;
@@ -56,7 +55,6 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::kinds;
 
     const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
     const OPERATION_ID: &str = "ak:operation:01904100-0000-7000-8000-000000000002";

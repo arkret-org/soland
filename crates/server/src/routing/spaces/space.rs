@@ -23,14 +23,14 @@ use chrono::{DateTime, Utc};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{AuthArgs, accept_local_operations};
 use crate::error::{AppError, ErrorCode};
 use crate::reducer::{CHILD_ORDER_CELL_FAMILY, ObjectLifecycleState};
 use crate::routing::events::operations::operation_policy_reason_code;
 use crate::routing::organizations;
-use crate::state::{AppState, RealmDirectoryEntry, SessionRecord, TypingRecord};
+use crate::state::{AppState, RealmDirectoryEntry, SessionRecord};
 use crate::wire::now;
 use crate::{JsonResult, ids, json_ok};
 
@@ -1272,21 +1272,6 @@ pub(crate) async fn presence_visible_to_session(
     }
 }
 
-pub(crate) async fn presence_activity_detail_visible_to_session(
-    state: &AppState,
-    actor: &str,
-    session: Option<&SessionRecord>,
-) -> bool {
-    let Some(session) = session else {
-        return false;
-    };
-    if actor == session.actor {
-        return true;
-    }
-    personal_blocklist_allows_actor(state, session, actor).await
-        && accepted_contact_between(state, &session.actor, actor).await
-}
-
 async fn accepted_contact_between(state: &AppState, left: &str, right: &str) -> bool {
     if left == right {
         return true;
@@ -1365,112 +1350,6 @@ pub async fn typing_scope_allows_actor(
         ));
     }
     Ok(())
-}
-
-pub async fn typing_ephemeral_for_realm(
-    state: &AppState,
-    realm_id: &str,
-    session: Option<&SessionRecord>,
-    full_sync: bool,
-) -> Vec<serde_json::Value> {
-    let Some(session) = session else {
-        return Vec::new();
-    };
-    if !realm_has_member(state, realm_id, &session.actor).await {
-        return Vec::new();
-    }
-    let mut by_scope = std::collections::BTreeMap::<String, Vec<serde_json::Value>>::new();
-    let typing_records = state
-        .persistence
-        .typing()
-        .list_for_realm(realm_id)
-        .await
-        .unwrap_or_default();
-    for record in &typing_records {
-        if !typing_record_visible_to_session(state, record, session).await {
-            continue;
-        }
-        let Some(strand_id) = record.scope_id.clone() else {
-            continue;
-        };
-        by_scope.entry(strand_id).or_default().push(json!({
-            "actor": record.actor.clone(),
-            "expires_at": record.expires_at,
-            "updated_at": record.updated_at,
-        }));
-    }
-    let mut ephemeral: Vec<serde_json::Value> = by_scope
-        .into_iter()
-        .map(|(strand_id, actors)| {
-            json!({
-                "type": "ak.typing",
-                "realm_id": realm_id,
-                "strand_id": strand_id,
-                "actors": actors,
-            })
-        })
-        .collect();
-    // `webrtc-signaling.md` §5 — fold relayed `ak.call.signal` envelopes into
-    // the same per-Realm `ephemeral` segment as a typed item so canonical
-    // signals reach subscribers. Each envelope is delivered verbatim (proof
-    // intact) so the receiver verifies the signature itself.
-    // This is the real delivery point (the Realm is being emitted), so advance
-    // the per-subscriber-device deliver-once watermark here.
-    let call_signals =
-        deliver_call_signal_envelopes_for_subscriber(state, realm_id, session, full_sync).await;
-    if !call_signals.is_empty() {
-        ephemeral.push(json!({
-            "type": "ak.call.signal",
-            "realm_id": realm_id,
-            "call_signals": call_signals,
-        }));
-    }
-    ephemeral
-}
-
-pub async fn has_pending_typing_for_subscriber(
-    state: &AppState,
-    realm_id: &str,
-    session: Option<&SessionRecord>,
-) -> bool {
-    let Some(session) = session else {
-        return false;
-    };
-    if !realm_has_member(state, realm_id, &session.actor).await {
-        return false;
-    }
-    for record in state
-        .persistence
-        .typing()
-        .list_for_realm(realm_id)
-        .await
-        .unwrap_or_default()
-    {
-        if record.scope_id.is_some()
-            && typing_record_visible_to_session(state, &record, session).await
-        {
-            return true;
-        }
-    }
-    false
-}
-
-async fn typing_record_visible_to_session(
-    state: &AppState,
-    record: &TypingRecord,
-    session: &SessionRecord,
-) -> bool {
-    if !presence_visible_to_session(state, &record.actor, Some(session)).await {
-        return false;
-    }
-    typing_scope_allows_actor(
-        state,
-        &record.realm_id,
-        &session.actor,
-        record.scope_id.as_deref(),
-    )
-    .await
-    .is_ok()
 }
 
 const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ak.account.blocklist";
@@ -1556,95 +1435,6 @@ fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
     ["did", "actor", "id"]
         .iter()
         .any(|field| object.get(*field).and_then(Value::as_str) == Some(sender))
-}
-
-/// `webrtc-signaling.md` §5 / §7 — relayed `ak.call.signal` records a given
-/// subscriber should receive for `realm_id`: non-expired, excluding the
-/// subscriber's own device self-echo (a same-actor *other* device is retained
-/// so multi-device fan-out works).
-///
-/// Deliver-once: on an **incremental** sync only records with `position` above
-/// the subscriber-device watermark are returned (so a re-subscribe inside the
-/// TTL window does not re-emit a signal the device already saw). On a **full
-/// sync** every non-expired pending record is returned regardless of the
-/// watermark, so a reconnecting device recovers any still-pending invite.
-///
-/// This is a read-only peek — it never advances the watermark. The actual
-/// delivery path ([`deliver_call_signal_envelopes_for_subscriber`]) advances
-/// it after computing the same set, so the skip-predicate
-/// ([`has_pending_call_signals_for_subscriber`]) and the delivery agree.
-async fn pending_call_signal_records_for_subscriber(
-    state: &AppState,
-    realm_id: &str,
-    session: &SessionRecord,
-    full_sync: bool,
-) -> Vec<crate::state::CallSignalRelayRecord> {
-    let now = chrono::Utc::now();
-    let watermark = if full_sync {
-        0
-    } else {
-        state
-            .persistence
-            .call_signal_relay()
-            .delivered_through(&session.actor, &session.device_id, realm_id)
-            .await
-            .unwrap_or(0)
-    };
-    state
-        .persistence
-        .call_signal_relay()
-        .list_for_realm(realm_id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|record| record.expires_at > now)
-        .filter(|record| record.position > watermark)
-        .filter(|record| {
-            !(record.sender_actor == session.actor && record.sender_device == session.device_id)
-        })
-        .collect()
-}
-
-/// Deliver the relayed `ak.call.signal` envelopes for `session` and advance the
-/// per-subscriber-device deliver-once watermark to the highest position
-/// delivered this round (incremental and full sync both advance it, so a full
-/// sync re-aligns a reconnecting device's watermark instead of leaving it
-/// behind).
-pub async fn deliver_call_signal_envelopes_for_subscriber(
-    state: &AppState,
-    realm_id: &str,
-    session: &SessionRecord,
-    full_sync: bool,
-) -> Vec<serde_json::Value> {
-    let records =
-        pending_call_signal_records_for_subscriber(state, realm_id, session, full_sync).await;
-    if let Some(max_position) = records.iter().map(|record| record.position).max() {
-        let _ = state
-            .persistence
-            .call_signal_relay()
-            .advance(&session.actor, &session.device_id, realm_id, max_position)
-            .await;
-    }
-    records.into_iter().map(|record| record.envelope).collect()
-}
-
-/// `webrtc-signaling.md` §5 — whether `realm_id` has at least one relayed
-/// `ak.call.signal` envelope still pending delivery to `session` (used to keep
-/// incremental syncs from skipping a Realm whose only change is a live call
-/// signal). Read-only: this peek must NOT advance the watermark, otherwise the
-/// subsequent delivery would skip the very signal it gated on.
-pub async fn has_pending_call_signals_for_subscriber(
-    state: &AppState,
-    realm_id: &str,
-    session: Option<&SessionRecord>,
-    full_sync: bool,
-) -> bool {
-    let Some(session) = session else {
-        return false;
-    };
-    !pending_call_signal_records_for_subscriber(state, realm_id, session, full_sync)
-        .await
-        .is_empty()
 }
 
 #[cfg(test)]

@@ -28,7 +28,6 @@ pub(crate) use std::time::Duration;
 
 pub(crate) use arkret_sdk::RealmId;
 pub(crate) use arkret_sdk::http::EventsQueryOutcome;
-pub(crate) use arkret_sdk::lattice::CellState;
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use bytes::Bytes;
@@ -40,20 +39,16 @@ pub(crate) use serde_json::{Value, json};
 pub(crate) use tokio::sync::broadcast::error::RecvError;
 
 use super::super::identity::device_messages::prune_device_messages_for_limits;
-pub(crate) use super::projection::{
-    actor_erased_in_realm, apply_message_redaction_timeline_projection,
-    tombstone_timeline_event_value,
-};
 use super::read_receipts::has_pending_read_receipts_for_subscriber;
+#[cfg(test)]
+pub(crate) use super::strand::strand_id_from_realm_id;
 use super::{
-    TO_DEVICE_PAGE_LIMIT, augment_timeline_message_json, authenticated_session,
-    default_discussion_track, device_message_envelopes_after,
-    has_pending_call_signals_for_subscriber, has_pending_typing_for_subscriber, is_realm_deleted,
+    TO_DEVICE_PAGE_LIMIT, authenticated_session, device_message_envelopes_after, is_realm_deleted,
     now, projected_event_page, projected_event_page_for_realms_through,
     projected_event_replay_upper_bound, projection_event_json, prune_expired_typing, query_param,
     realm_discoverability, realm_event_visible_to_session, realm_has_member,
     realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
-    snapshot_manifest_for_realm, strand_id_from_realm_id, validate_did,
+    snapshot_manifest_for_realm, validate_did,
 };
 pub(crate) use crate::ids;
 pub(crate) use crate::persistence::SyncCursorRecord;

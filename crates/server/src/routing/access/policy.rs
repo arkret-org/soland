@@ -805,8 +805,10 @@ mod tests {
                 source_ip_digest: Some(test_hash()),
                 signed_transport: true,
             },
-            event_preview: Value::Null,
-            auth_context,
+            event_preview: None,
+            auth_context: auth_context
+                .as_object()
+                .map(|object| object.clone().into_iter().collect()),
         }
     }
 

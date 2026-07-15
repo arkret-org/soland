@@ -541,7 +541,7 @@ fn insert_constraint_extension(
 ) -> Result<(), AppError> {
     let key = GrantConstraintExtensionKey::new(key)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    constraint.extensions.insert(key.into_string(), value);
+    let _ = constraint.extensions.insert(key.into_string(), value);
     Ok(())
 }
 

@@ -629,26 +629,6 @@ pub(super) fn member_count_bucket_label(count: usize) -> RealmMemberCountBucketL
     }
 }
 
-pub(super) fn object_preview_for_address(parsed: &arkret_sdk::ParsedAddress) -> Option<Value> {
-    let strand_id = parsed
-        .strand
-        .as_deref()
-        .map(|strand| format!("ak:strand:{strand}"));
-    let message_id = parsed
-        .message
-        .as_deref()
-        .map(|message| format!("ak:message:{message}"));
-    strand_id.map(|strand_id| {
-        let mut preview = serde_json::Map::new();
-        preview.insert("strand_id".to_owned(), json!(strand_id));
-        if let Some(message_id) = message_id {
-            preview.insert("message_id".to_owned(), json!(message_id));
-        }
-        preview.insert("kind".to_owned(), json!(target_kind_for_address(parsed)));
-        Value::Object(preview)
-    })
-}
-
 pub(super) fn join_candidates_for_resolved_realm(
     state: &AppState,
     realm_id: &str,

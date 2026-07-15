@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{
-    Operation, ProfileSemanticRequirements, ServerDescription,
-    collect_profile_semantic_requirements,
+    Operation, ProfileSemanticRequirements, ServiceDescribe, collect_profile_semantic_requirements,
 };
 use serde_json::Value;
 
@@ -360,7 +359,7 @@ async fn peer_semantic_claims(
 async fn fetch_peer_description(
     state: &AppState,
     source_service_id: &str,
-) -> Option<ServerDescription> {
+) -> Option<ServiceDescribe> {
     let peer_url = super::peer_url_for_service_id(state, source_service_id)?;
     let url = format!("{}/_arkret/describe", peer_url.trim_end_matches('/'));
     let (url, client) = match crate::security::validate_http_url_for_egress_with_pinned_client(
@@ -413,7 +412,7 @@ async fn fetch_peer_description(
         );
         return None;
     }
-    match serde_json::from_str::<ServerDescription>(&text) {
+    match serde_json::from_str::<ServiceDescribe>(&text) {
         Ok(description) => {
             if let Err(error) = description.validate() {
                 tracing::warn!(
@@ -438,7 +437,7 @@ async fn fetch_peer_description(
     }
 }
 
-fn profile_ids_from_description(description: &ServerDescription) -> BTreeSet<String> {
+fn profile_ids_from_description(description: &ServiceDescribe) -> BTreeSet<String> {
     let mut profiles = BTreeSet::new();
     profiles.extend(description.supported_profiles.iter().cloned());
     profiles.extend(
@@ -456,7 +455,7 @@ fn profile_ids_from_description(description: &ServerDescription) -> BTreeSet<Str
     profiles
 }
 
-fn feature_ids_from_description(description: &ServerDescription) -> BTreeSet<String> {
+fn feature_ids_from_description(description: &ServiceDescribe) -> BTreeSet<String> {
     let mut features = BTreeSet::new();
     features.extend(description.supported_features.iter().cloned());
     features.extend(description.implemented_features.iter().cloned());

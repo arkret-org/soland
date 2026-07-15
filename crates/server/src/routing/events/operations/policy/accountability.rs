@@ -265,7 +265,7 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
 }
 
 /// SEC-08 — map the wire `aad_visibility_event_id` discriminator on an encrypted
-/// envelope to the SDK [`arkret_sdk::mls::AadVisibility`] enum. Returns `None`
+/// envelope to the SDK [`arkret_sdk::EncryptedEnvelopeAadVisibility`] enum. Returns `None`
 /// when the field is missing or carries an unknown value, which the caller
 /// treats as fail-closed for a minimal-metadata Realm.
 pub(super) fn validate_disappearing_message_policy(

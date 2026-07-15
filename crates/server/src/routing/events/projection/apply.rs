@@ -976,65 +976,6 @@ async fn project_realm_key_share_to_device(
     }
 }
 
-/// Relay an ephemeral `ak.realm_key.request` to the provider device named by
-/// `target_source_ref`. Mirrors [`project_realm_key_share_to_device`] /
-/// [`project_mls_welcome_to_device`]: the request rides the provider device's
-/// to-device queue so the provider can answer with a `ak.realm_key.share`.
-///
-/// Unlike the durable `ak.realm_key.share` projection, `ak.realm_key.request`
-/// is wire-scope ephemeral (reducer_input=false) — there is no projected
-/// operation here. The caller (the ephemeral relay) has already verified the
-/// sender's membership/device signature and resolved the provider principal
-/// that owns `target_device_id`; this function only enqueues the payload.
-///
-/// `idempotency_key` is prefixed `realm_key_request:` so a replayed request
-/// (same envelope) collapses to a single queued message.
-pub(crate) async fn project_realm_key_request_to_device(
-    state: &AppState,
-    origin: &str,
-    sender_device_id: &str,
-    realm_id: &str,
-    request_id: &str,
-    target_principal_id: &str,
-    target_device_id: &str,
-    payload: &Value,
-    created_at: chrono::DateTime<chrono::Utc>,
-    expires_at: chrono::DateTime<chrono::Utc>,
-) {
-    let sender_device_id = sender_device_id.trim();
-    let target_device_id = target_device_id.trim();
-    if target_device_id.is_empty() {
-        tracing::warn!(
-            %request_id,
-            "cannot enqueue realm key request without a target device id"
-        );
-        return;
-    }
-    let content = realm_key_request_device_message_content(
-        sender_device_id,
-        realm_id,
-        request_id,
-        payload,
-        expires_at,
-    );
-    let record = DeviceMessageRecord {
-        idempotency_key: format!("realm_key_request:{request_id}"),
-        sender: origin.to_owned(),
-        recipient: target_principal_id.to_owned(),
-        device_id: target_device_id.to_owned(),
-        position: state.next_to_device_position(),
-        content,
-        created_at,
-    };
-    if let Err(error) = state.persistence.device_messages().append(record).await {
-        tracing::warn!(
-            %error,
-            %request_id,
-            "failed to enqueue realm key request to-device message"
-        );
-    }
-}
-
 fn realm_key_share_device_message_content(
     sender_device_id: &str,
     realm_id: &str,
@@ -1047,25 +988,6 @@ fn realm_key_share_device_message_content(
         "content": {
             "realm_id": realm_id,
             "operation_id": operation_id,
-            "payload": payload,
-        },
-    })
-}
-
-fn realm_key_request_device_message_content(
-    sender_device_id: &str,
-    realm_id: &str,
-    request_id: &str,
-    payload: &Value,
-    expires_at: chrono::DateTime<chrono::Utc>,
-) -> Value {
-    json!({
-        "kind": "ak.realm_key.request",
-        "sender_device_id": sender_device_id,
-        "expires_at": expires_at,
-        "content": {
-            "realm_id": realm_id,
-            "request_id": request_id,
             "payload": payload,
         },
     })
@@ -1358,54 +1280,5 @@ mod tests {
         assert_eq!(delivered[0].content["realm_id"], realm_id);
         assert_eq!(delivered[0].content["operation_id"], operation_id);
         assert_eq!(delivered[0].content["payload"], payload);
-    }
-
-    #[test]
-    fn realm_key_request_device_projection_preserves_payload_in_envelope_content() {
-        let realm_id = "ak:realm:0196419b-1000-7000-8000-000000000001";
-        let request_id = "sha256:request";
-        let sender = "did:web:bob.example";
-        let sender_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
-        let recipient = "did:web:alice.example";
-        let recipient_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-        let payload = json!({
-            "key_scope": {
-                "effective_scope": {"realm_id": realm_id},
-                "from_epoch": 0,
-                "to_epoch": 0
-            },
-            "recipient_principal_id": sender,
-            "recipient_device_id": sender_device,
-            "recipient_hpke_public_key": "cHVia2V5",
-            "requested_source_class": "verified_member_device",
-            "target_source_ref": recipient_device,
-            "target_principal_id": recipient,
-            "created_at": "2026-06-30T00:00:00Z"
-        });
-        let created_at = chrono::Utc::now();
-        let expires_at = created_at + chrono::Duration::minutes(5);
-        let record = DeviceMessageRecord {
-            idempotency_key: format!("realm_key_request:{request_id}"),
-            sender: sender.to_owned(),
-            recipient: recipient.to_owned(),
-            device_id: recipient_device.to_owned(),
-            position: 1,
-            content: realm_key_request_device_message_content(
-                sender_device,
-                realm_id,
-                request_id,
-                &payload,
-                expires_at,
-            ),
-            created_at,
-        };
-
-        let delivered = device_message_envelopes_after(&[record]);
-        assert_eq!(delivered.len(), 1);
-        assert_eq!(delivered[0].kind, "ak.realm_key.request");
-        assert_eq!(delivered[0].content["realm_id"], realm_id);
-        assert_eq!(delivered[0].content["request_id"], request_id);
-        assert_eq!(delivered[0].content["payload"], payload);
-        assert_eq!(delivered[0].expires_at, expires_at);
     }
 }

@@ -440,53 +440,6 @@ fn verify_keys_upload_device_signature(
         .map_err(|_| AppError::invalid_param("keys/upload signature verification failed"))
 }
 
-fn verify_detached_jws_ed25519_with_device_key(
-    device_public_key: &str,
-    canonical_bytes: &[u8],
-    jws: &str,
-) -> Result<(), AppError> {
-    let parts = jws.split('.').collect::<Vec<_>>();
-    if parts.len() != 3 || !parts[1].is_empty() {
-        return Err(AppError::invalid_param(
-            "keys/upload device_signature.jws must be detached header..signature",
-        ));
-    }
-    let header_bytes = URL_SAFE_NO_PAD
-        .decode(parts[0].as_bytes())
-        .map_err(|_| AppError::invalid_param("keys/upload JWS header is not base64url"))?;
-    let header: Value = arkret_sdk::canonical::from_canonical_json_slice(&header_bytes)
-        .map_err(|_| AppError::invalid_param("keys/upload JWS header is not canonical JSON"))?;
-    if header.get("alg").and_then(Value::as_str) != Some("EdDSA") {
-        return Err(AppError::invalid_param(
-            "keys/upload JWS protected alg must be EdDSA",
-        ));
-    }
-    if header.get("crit").is_some() {
-        return Err(AppError::invalid_param(
-            "keys/upload JWS protected header declares unsupported crit",
-        ));
-    }
-    let sig_bytes = URL_SAFE_NO_PAD
-        .decode(parts[2].as_bytes())
-        .map_err(|_| AppError::invalid_param("keys/upload JWS signature is not base64url"))?;
-    let sig_array: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| AppError::invalid_param("keys/upload Ed25519 signature must be 64 bytes"))?;
-    let signature = Signature::from_bytes(&sig_array);
-    let verifying_key =
-        crate::routing::identity::cross_signing::decode_ed25519_key(device_public_key, "multibase")
-            .map_err(|error| {
-                AppError::invalid_param(format!(
-                    "keys/upload device_public_key is not Ed25519 multibase: {error}"
-                ))
-            })?;
-    let payload_b64 = URL_SAFE_NO_PAD.encode(canonical_bytes);
-    let signing_input = format!("{}.{}", parts[0], payload_b64);
-    verifying_key
-        .verify_strict(signing_input.as_bytes(), &signature)
-        .map_err(|_| AppError::invalid_param("keys/upload device_signature verification failed"))
-}
-
 #[endpoint(
     operation_id = "ak.self.keys.command.claim",
     tags("keys"),

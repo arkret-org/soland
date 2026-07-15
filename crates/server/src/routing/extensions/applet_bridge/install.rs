@@ -1558,17 +1558,28 @@ mod tests {
             ok: true,
             install_id: "ak:install:01974100-0000-7000-8000-000000000001".to_owned(),
             applet_id: package.applet_id.clone(),
-            registration_event_ref: "ak:event:01974100-0000-7000-8000-000000000010".to_owned(),
+            registration_event_ref: Some(
+                arkret_sdk::EventId::new(
+                    "ak:event:01974100-0000-7000-8000-000000000010".to_owned(),
+                )
+                .unwrap(),
+            ),
             registration_epoch: package.registration_epoch.clone(),
             bot_actor_id: package.bot_actor_id.clone(),
             capability_grant_refs: vec![
-                "ak:grant:01974100-0000-7000-8000-000000000020".to_owned(),
-                "ak:grant:01974100-0000-7000-8000-000000000021".to_owned(),
+                arkret_sdk::GrantId::new(
+                    "ak:grant:01974100-0000-7000-8000-000000000020".to_owned(),
+                )
+                .unwrap(),
+                arkret_sdk::GrantId::new(
+                    "ak:grant:01974100-0000-7000-8000-000000000021".to_owned(),
+                )
+                .unwrap(),
             ],
             membership_event_refs: Vec::new(),
             e2ee_authorization_refs: Vec::new(),
             widget_policy_ref: None,
-            effective_status: "installed".to_owned(),
+            effective_status: arkret_sdk::AppletInstallEffectiveStatus::Installed,
             rejected: Vec::new(),
         }
     }
@@ -1582,13 +1593,13 @@ mod tests {
             ..Default::default()
         };
         let actor_policy = arkret_sdk::AppletActorPolicy {
-            bot_membership: "join".to_owned(),
-            ghost_actor_mode: "policy_declared".to_owned(),
+            bot_membership: Some(arkret_sdk::AppletBotMembership::Join),
+            ghost_actor_mode: Some(arkret_sdk::AppletGhostActorMode::PolicyDeclared),
         };
         assert!(allow_ghost_actors_for_install(
             &package,
             &[GHOST_PROVISION_ACTION.to_owned()],
-            &actor_policy
+            Some(&actor_policy)
         ));
 
         package.ghost_policy = arkret_sdk::applet::AppletGhostPolicy {
@@ -1599,7 +1610,7 @@ mod tests {
         assert!(!allow_ghost_actors_for_install(
             &package,
             &[GHOST_PROVISION_ACTION.to_owned()],
-            &actor_policy
+            Some(&actor_policy)
         ));
     }
 
@@ -1723,7 +1734,9 @@ mod tests {
         assert_eq!(accepted["status"], json!("completed"));
         let produced_refs = accepted["produced_event_refs"].as_array().unwrap();
         assert_eq!(produced_refs.len(), 3);
-        assert!(produced_refs.contains(&json!(response.registration_event_ref.as_str())));
+        assert!(produced_refs.contains(&json!(
+            response.registration_event_ref.as_ref().unwrap().as_str()
+        )));
         assert!(produced_refs.contains(&json!(response.capability_grant_refs[0].as_str())));
         let accepted_steps = accepted["steps"].as_array().unwrap();
         assert!(
@@ -1733,7 +1746,7 @@ mod tests {
         );
         assert_eq!(
             accepted_steps[0]["event_ref"],
-            json!(response.registration_event_ref.as_str())
+            json!(response.registration_event_ref.as_ref().unwrap().as_str())
         );
         assert_eq!(
             accepted_steps[1]["event_ref"],

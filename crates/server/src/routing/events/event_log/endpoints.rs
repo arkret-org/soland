@@ -21,7 +21,7 @@ pub(in crate::routing::events) fn router() -> Router {
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "events_describe"))]
-async fn events_describe(depot: &mut Depot) -> JsonResult<arkret_sdk::ServerDescription> {
+async fn events_describe(depot: &mut Depot) -> JsonResult<arkret_sdk::ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut description = describe(
         &state.config.service_id,

@@ -769,7 +769,7 @@ fn htu_path(htu: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::GrantId;
+    use arkret_sdk::{GrantId, RealmId};
 
     use super::*;
 
@@ -891,7 +891,7 @@ mod tests {
             session_public_key: "{}".to_owned(),
             cnf_jkt: Some("holder-thumbprint".to_owned()),
             proof_kind: None,
-            scope_details: Value::Null,
+            scope_details: None,
             freshness_state: None,
         }
     }
@@ -916,19 +916,11 @@ mod tests {
         grant.device_id = None;
         grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = serde_json::json!({
-            "controller_id": "did:web:alice.example",
-            "resources": {
-                "realm_refs": ["ak:realm:team"],
-                "strand_refs": [],
-            },
-            "constraints": {
-                "allowed_tracks": [],
-                "allowed_data_classes": [],
-                "allowed_endpoints": [],
-            },
-            "capability_grant_refs": [],
-            "policy_refs": [],
+        grant.scope_details = Some(arkret_sdk::SessionGrantScopeDetails {
+            realm_ids: vec![
+                RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000003".to_owned()).unwrap(),
+            ],
+            ..Default::default()
         });
         grant.freshness_state = Some(FreshnessState::Fresh);
 
@@ -945,8 +937,8 @@ mod tests {
             vec!["ak.agent.action:message.send"]
         );
         assert_eq!(
-            agent_session.scope_details["controller_id"],
-            "did:web:alice.example"
+            agent_session.scope_details["realm_ids"][0],
+            "ak:realm:0196419b-0000-7000-8000-000000000003"
         );
     }
 
@@ -968,7 +960,7 @@ mod tests {
         let mut grant = test_introspection_grant();
         grant.subject = "did:web:agent.example".to_owned();
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = serde_json::json!({});
+        grant.scope_details = Some(arkret_sdk::SessionGrantScopeDetails::default());
         grant.freshness_state = Some(FreshnessState::Fresh);
 
         let err = session_binding_from_introspection(&grant).unwrap_err();
@@ -983,19 +975,11 @@ mod tests {
         let mut grant = test_introspection_grant();
         grant.subject = "did:web:agent.example".to_owned();
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = serde_json::json!({
-            "controller_id": "did:web:alice.example",
-            "resources": {
-                "realm_refs": [],
-                "strand_refs": [],
-            },
-            "constraints": {
-                "allowed_tracks": [],
-                "allowed_data_classes": [],
-                "allowed_endpoints": [],
-            },
-            "capability_grant_refs": [],
-            "policy_refs": [],
+        grant.scope_details = Some(arkret_sdk::SessionGrantScopeDetails {
+            realm_ids: vec![
+                RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000004".to_owned()).unwrap(),
+            ],
+            ..Default::default()
         });
 
         let err = session_binding_from_introspection(&grant).unwrap_err();

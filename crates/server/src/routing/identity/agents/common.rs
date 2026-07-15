@@ -390,6 +390,10 @@ mod requested_scope_tests {
         record
     }
 
+    fn resource(value: Value) -> arkret_sdk::WireResourceSelector {
+        serde_json::from_value(value).unwrap()
+    }
+
     #[test]
     fn realm_grant_actions_cannot_exceed_provision_ceiling() {
         let record = record_with_scope(json!({
@@ -418,20 +422,20 @@ mod requested_scope_tests {
         assert!(agent_grant_within_requested_scope(
             &record,
             &[ACTION_EVENT_READ.to_owned()],
-            &[json!({
+            &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
                 "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
-            })],
+            }))],
             &[]
         ));
         assert!(!agent_grant_within_requested_scope(
             &record,
             &[ACTION_EVENT_READ.to_owned()],
-            &[json!({
+            &[resource(json!({
                 "kind": "realm",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000099"
-            })],
+            }))],
             &[]
         ));
 
@@ -445,11 +449,11 @@ mod requested_scope_tests {
         assert!(agent_grant_within_requested_scope(
             &realm_wide_strand_ceiling,
             &[ACTION_EVENT_READ.to_owned()],
-            &[json!({
+            &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
                 "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
-            })],
+            }))],
             &[]
         ));
 
@@ -460,11 +464,11 @@ mod requested_scope_tests {
         assert!(agent_grant_within_requested_scope(
             &global_strand_ceiling,
             &[ACTION_EVENT_READ.to_owned()],
-            &[json!({
+            &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000099",
                 "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
-            })],
+            }))],
             &[]
         ));
 
@@ -479,41 +483,47 @@ mod requested_scope_tests {
         assert!(agent_grant_within_requested_scope(
             &circle_ceiling,
             &[ACTION_EVENT_READ.to_owned()],
-            &[json!({
+            &[resource(json!({
                 "kind": "circle",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
                 "circle_id": "ak:circle:019f6000-0000-7000-8000-000000000003"
-            })],
+            }))],
             &[]
         ));
         assert!(!agent_grant_within_requested_scope(
             &circle_ceiling,
             &[ACTION_EVENT_READ.to_owned()],
-            &[json!({
+            &[resource(json!({
                 "kind": "circle",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
                 "circle_id": "ak:circle:019f6000-0000-7000-8000-000000000004"
-            })],
+            }))],
             &[]
         ));
     }
 
     #[test]
     fn realm_grant_must_preserve_provision_constraints() {
-        let mandatory = json!({"controller_approval_required": true});
+        let mut mandatory = arkret_sdk::GrantConstraint::new(
+            arkret_sdk::GrantConstraintType::ClaimBased,
+            arkret_sdk::GrantConstraintEffect::Allow,
+        );
+        mandatory.subtype = Some(arkret_sdk::GrantConstraintSubtype::Approval);
+        mandatory.controller_approval_required = Some(true);
+        let mandatory_value = serde_json::to_value(&mandatory).unwrap();
         let record = record_with_scope(json!({
             "actions": [ACTION_EVENT_READ],
             "resources": [{
                 "kind": "operation",
                 "operation": "ak.self.events.stream.subscribe"
             }],
-            "constraints": [mandatory.clone()]
+            "constraints": [mandatory_value]
         }));
-        let resources = [json!({
+        let resources = [resource(json!({
             "kind": "strand",
             "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
             "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
-        })];
+        }))];
 
         assert!(agent_grant_within_requested_scope(
             &record,

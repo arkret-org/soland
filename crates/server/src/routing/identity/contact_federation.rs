@@ -66,7 +66,7 @@ struct PeerContactDeliveryOutcome {
 /// `fact_kind` is one of the `ak.contact.*` kinds. `fact_payload` carries the
 /// projection fields the recipient needs (requester/target/scope/message/
 /// granted_scopes/consent grant refs). The fact is wrapped in a dev-proof
-/// EventEnvelope scoped to the issuer's Principal Control Realm so it is a
+/// Event scoped to the issuer's Principal Control Realm so it is a
 /// real signed contact fact the recipient can project as the original
 /// envelope (spec §2).
 pub(crate) async fn federate_contact_fact(
@@ -158,7 +158,7 @@ pub(crate) async fn federate_contact_fact(
     Ok(true)
 }
 
-/// Build a dev-proof contact-fact EventEnvelope scoped to the issuer's
+/// Build a dev-proof contact-fact Event scoped to the issuer's
 /// Principal Control Realm. The recipient validates + projects this as the
 /// original signed envelope; it never re-signs it as a local fact (spec §2).
 fn build_contact_envelope(

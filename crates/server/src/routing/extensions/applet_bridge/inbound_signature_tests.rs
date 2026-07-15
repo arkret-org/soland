@@ -1,8 +1,7 @@
 use serde_json::json;
 
 use super::signature::{
-    applet_content_digest_header, applet_http_signature_base, applet_source_signature_anchor,
-    applet_validate_signature_params,
+    applet_http_signature_base, applet_source_signature_anchor, applet_validate_signature_params,
 };
 
 fn params(created: i64, expires: i64) -> String {
@@ -18,7 +17,7 @@ fn params(created: i64, expires: i64) -> String {
 /// `sha-256=:<base64>:` structured form, not the `sha256:<hex>` digest.
 #[test]
 fn content_digest_header_is_rfc9421_structured() {
-    let header = applet_content_digest_header(b"{}");
+    let header = crate::routing::federation::rfc9530_content_digest(b"{}");
     assert!(header.starts_with("sha-256=:"));
     assert!(header.ends_with(':'));
     assert!(!header.contains("sha256:"));

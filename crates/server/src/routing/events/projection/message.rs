@@ -103,26 +103,3 @@ fn message_content_from_payload(payload: &Value, scope_circle_id: Option<String>
     }
     content
 }
-
-pub(super) fn add_scope_circle_metadata(
-    event: &mut serde_json::Value,
-    content: &serde_json::Value,
-) {
-    let Some(scope_circle_id) = content
-        .get("scope_circle_id")
-        .and_then(serde_json::Value::as_str)
-    else {
-        return;
-    };
-    let Some(object) = event.as_object_mut() else {
-        return;
-    };
-    object.insert(
-        "scope_circle_id".to_owned(),
-        serde_json::Value::String(scope_circle_id.to_owned()),
-    );
-    object.insert(
-        "effective_scope".to_owned(),
-        serde_json::Value::String(scope_circle_id.to_owned()),
-    );
-}

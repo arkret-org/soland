@@ -31,12 +31,11 @@ use arkret_sdk::{
     AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, BlobRef,
     DeliveryBindingHint, DeliveryMode, Did, DirectoryActorSearchOutcome,
     DirectoryAgentSelectorResolutionOutcome, DirectoryAnnounceOutcome,
-    DirectoryAnnounceRequestBody, DirectoryDescription, DirectoryHandleResolutionOutcome,
-    DirectoryIntent, DirectoryListHandlesForSubjectRequestBody,
-    DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
-    DirectoryPrivateContactDiscoveryOutcome, DirectoryPrivateContactDiscoveryRequestBody,
-    DirectoryPushRegisterOutcome, DirectoryPushRegisterRequestBody,
-    DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
+    DirectoryAnnounceRequestBody, DirectoryHandleResolutionOutcome, DirectoryIntent,
+    DirectoryListHandlesForSubjectRequestBody, DirectoryOrganizationResolutionOutcome,
+    DirectoryOrganizationSearchOutcome, DirectoryPrivateContactDiscoveryOutcome,
+    DirectoryPrivateContactDiscoveryRequestBody, DirectoryPushRegisterOutcome,
+    DirectoryPushRegisterRequestBody, DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
     DirectoryResolveAgentSelectorRequestBody, DirectoryResolveHandleRequestBody,
     DirectoryResolveOrganizationRequestBody, DirectoryResolveRealmRequestBody,
     DirectoryResolveTargetRequestBody, DirectoryResourceKind, DirectorySearchActorsRequestBody,
@@ -47,8 +46,8 @@ use arkret_sdk::{
     OrganizationPreview, PayloadProof, RealmId, RealmJoinCandidate, RealmJoinCandidateRole,
     RealmJoinCandidateServiceType, RealmJoinCandidateSource, RealmJoinMethod,
     RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview, RealmRef,
-    RecipientServiceType, TargetDescriptor, TargetKind, UserSearchOutcome, canonical,
-    parse_address, proof_kind, target_digest, validate_agent_slug,
+    RecipientServiceType, ServiceDescribe, TargetDescriptor, TargetKind, UserSearchOutcome,
+    canonical, parse_address, proof_kind, target_digest, validate_agent_slug,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -146,7 +145,7 @@ pub(crate) fn protocol_router() -> Router {
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "directory_describe"))]
-async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescription> {
+async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_id = Did::new(state.config.service_id.clone())
         .map_err(|error| AppError::internal(format!("invalid configured service_id: {error}")))?;
@@ -161,7 +160,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescriptio
         "directory.resolve".to_owned(),
         "directory.ingest_push".to_owned(),
     ];
-    let description = DirectoryDescription {
+    let description = ServiceDescribe {
         service_id,
         trust_domain,
         service_type: "directory_service".to_owned(),

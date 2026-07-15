@@ -25,7 +25,7 @@ A successful `POST /_arkret/self/events` walks the following stages:
 
 1. **Wire validation** (`routing::events::event_log`). The Salvo handler
    normalizes the request body into a canonical
-   `arkret_sdk::events::EventEnvelope`, validates the schema-backed payload,
+   `arkret_sdk::Event`, validates the schema-backed payload,
    and binds the envelope to the authenticated principal.
 
 2. **Replay window + signature verification**

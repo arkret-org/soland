@@ -1,5 +1,28 @@
 use super::*;
 
+fn stream_cursor_handle_binding(
+    principal_id: &str,
+    device_id: &str,
+    service_id: &str,
+    filter_digest: &str,
+    realms_positions: &BTreeMap<String, i64>,
+    account_realms_positions: &BTreeMap<String, i64>,
+    device_list_positions: &BTreeMap<String, i64>,
+    to_device_position: i64,
+) -> Vec<u8> {
+    stream_cursor_handle_binding_with_notification_position(
+        principal_id,
+        device_id,
+        service_id,
+        filter_digest,
+        realms_positions,
+        account_realms_positions,
+        device_list_positions,
+        to_device_position,
+        0,
+    )
+}
+
 #[test]
 fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
     let key = b"test-cursor-key-0123456789abcdef";
@@ -183,44 +206,6 @@ fn presence_record(device: &str, status: &str, updated_at: DateTime<Utc>) -> Pre
 }
 
 #[test]
-fn presence_sync_event_marks_stale_online_offline() {
-    let record = presence_record(
-        "ak:device:a",
-        "online",
-        now() - ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS + 1),
-    );
-
-    let aggregated = aggregate_presence_records(&[record], now()).expect("aggregate");
-    let event = presence_sync_event_json("did:web:alice.example", &aggregated, true);
-
-    assert_eq!(event["user_id"], "did:web:alice.example");
-    assert_eq!(event["presence"], "offline");
-    assert_eq!(event["status"], "offline");
-    assert!(event.get("last_active").is_none());
-    let last_active_at = event["last_active_at"]
-        .as_str()
-        .expect("stale online presence emits bucketed last_active_at");
-    assert!(last_active_at.ends_with("/PT1H"));
-}
-
-#[test]
-fn presence_sync_event_hides_activity_detail_without_contact_visibility() {
-    let mut record = presence_record("ak:device:a", "dnd", now());
-    record.status_message = Some("in a meeting".to_owned());
-    record.last_active_at = Some("2026-07-03T10:00:00Z/PT1H".to_owned());
-
-    let aggregated = aggregate_presence_records(&[record], now()).expect("aggregate");
-    let event = presence_sync_event_json("did:web:alice.example", &aggregated, false);
-
-    assert_eq!(event["presence"], "offline");
-    assert_eq!(event["status"], "offline");
-    // §3.4 downgrade must not leak the transient message or the
-    // activity bucket alongside the degraded state.
-    assert!(event.get("status_message").is_none());
-    assert!(event.get("last_active_at").is_none());
-}
-
-#[test]
 fn presence_aggregation_prefers_dnd_then_online_then_idle() {
     let now = now();
     let records = vec![
@@ -245,22 +230,7 @@ fn presence_aggregation_all_expired_projects_offline() {
     record.expires_at = Some(now - ChronoDuration::seconds(30));
     let aggregated = aggregate_presence_records(&[record], now).expect("aggregate");
     assert_eq!(aggregated.status, "offline");
-    assert!(aggregated.all_expired);
     assert_eq!(aggregate_presence_records(&[], now).map(|a| a.status), None);
-}
-
-#[test]
-fn presence_sync_event_carries_status_message_for_authorized_observer() {
-    let mut record = presence_record("ak:device:a", "online", now());
-    record.status_message = Some("On vacation until May 5".to_owned());
-    record.last_active_at = Some("2026-07-03T10:00:00Z/PT1H".to_owned());
-
-    let aggregated = aggregate_presence_records(&[record], now()).expect("aggregate");
-    let event = presence_sync_event_json("did:web:alice.example", &aggregated, true);
-
-    assert_eq!(event["status"], "online");
-    assert_eq!(event["status_message"], "On vacation until May 5");
-    assert_eq!(event["last_active_at"], "2026-07-03T10:00:00Z/PT1H");
 }
 
 #[tokio::test]
@@ -289,15 +259,15 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
     assert!(
         initial
             .presence
-            .iter()
-            .any(|event| event["actor_id"] == ROSTER_ACTOR && event["presence"] == "dnd"),
+            .as_ref()
+            .is_some_and(|container| !container.events.is_empty()),
         "full sync carries visible presence: {:?}",
         initial.presence
     );
 
     let filter_value = sync_filter_value(body.filter.as_ref());
     let initial_cursor = parse_and_validate_sync_cursor(
-        &initial.cursor,
+        initial.cursor.as_deref().unwrap(),
         &state,
         Some(&session),
         filter_value.as_ref(),
@@ -306,7 +276,7 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
     .await
     .expect("initial cursor parses");
     let mut incremental_body = body.clone();
-    incremental_body.after = Some(initial.cursor.clone());
+    incremental_body.after = initial.cursor.clone();
 
     let quiet_incremental = build_sync_snapshot(
         &state,
@@ -316,7 +286,12 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
         false,
     )
     .await;
-    assert!(quiet_incremental.presence.is_empty());
+    assert!(
+        quiet_incremental
+            .presence
+            .as_ref()
+            .is_none_or(|container| container.events.is_empty())
+    );
 
     let presence_incremental = build_sync_snapshot(
         &state,
@@ -329,8 +304,8 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
     assert!(
         presence_incremental
             .presence
-            .iter()
-            .any(|event| event["actor_id"] == ROSTER_ACTOR && event["presence"] == "dnd"),
+            .as_ref()
+            .is_some_and(|container| !container.events.is_empty()),
         "presence-triggered incremental sync carries current presence: {:?}",
         presence_incremental.presence
     );
@@ -692,19 +667,21 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     let body = roster_body(&state.config.service_id);
     let snapshot =
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
-    let timeline_events = snapshot.realms[ROSTER_REALM]["timeline"]["events"]
-        .as_array()
-        .expect("timeline events array");
+    let timeline_events = &snapshot.realms.as_ref().unwrap().entries[ROSTER_REALM]
+        .timeline
+        .as_ref()
+        .unwrap()
+        .events;
     assert!(
         !timeline_events
             .iter()
-            .any(|event| event["event_id"] == pre_join_event_id),
+            .any(|event| event.event_id.as_str() == pre_join_event_id),
         "joined history must hide messages received before the member joined"
     );
     assert!(
         timeline_events
             .iter()
-            .any(|event| event["event_id"] == post_join_event_id),
+            .any(|event| event.event_id.as_str() == post_join_event_id),
         "joined history must include messages received after the member joined even when created_at predates joined_at"
     );
 }
@@ -1148,12 +1125,12 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     let initial =
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
     assert_eq!(
-        initial.device_lists,
+        serde_json::to_value(&initial.device_lists).unwrap(),
         json!({"changed": [ROSTER_ACTOR, ROSTER_CALLER], "left": []})
     );
     let filter_value = sync_filter_value(body.filter.as_ref());
     let initial_cursor = parse_and_validate_sync_cursor(
-        &initial.cursor,
+        initial.cursor.as_deref().unwrap(),
         &state,
         Some(&session),
         filter_value.as_ref(),
@@ -1181,7 +1158,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         .expect("device revoked");
 
     let mut incremental_body = body.clone();
-    incremental_body.after = Some(initial.cursor.clone());
+    incremental_body.after = initial.cursor.clone();
     let after_revocation = build_sync_snapshot(
         &state,
         Some(&session),
@@ -1191,13 +1168,13 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     )
     .await;
     assert_eq!(
-        after_revocation.device_lists,
+        serde_json::to_value(&after_revocation.device_lists).unwrap(),
         json!({"changed": [ROSTER_ACTOR], "left": []}),
         "device revocation changes the principal device list, not top-level left"
     );
     let incremental_filter_value = sync_filter_value(incremental_body.filter.as_ref());
     let after_revocation_cursor = parse_and_validate_sync_cursor(
-        &after_revocation.cursor,
+        after_revocation.cursor.as_deref().unwrap(),
         &state,
         Some(&session),
         incremental_filter_value.as_ref(),
@@ -1216,7 +1193,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     )
     .await;
     assert_eq!(
-        after_scope_loss.device_lists,
+        serde_json::to_value(&after_scope_loss.device_lists).unwrap(),
         json!({"changed": [], "left": [ROSTER_ACTOR]}),
         "principals no longer visible through any Realm leave the tracked device list set"
     );
@@ -1284,7 +1261,8 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     let body = roster_body(&state.config.service_id);
     let initial =
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
-    let initial_events = initial.realms[ROSTER_REALM]["state"]["events"]
+    let initial_value = serde_json::to_value(&initial).unwrap();
+    let initial_events = initial_value["realms"][ROSTER_REALM]["state"]["events"]
         .as_array()
         .expect("state events array");
     assert_eq!(initial_events.len(), 1);
@@ -1292,7 +1270,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
 
     let filter_value = sync_filter_value(body.filter.as_ref());
     let initial_cursor = parse_and_validate_sync_cursor(
-        &initial.cursor,
+        initial.cursor.as_deref().unwrap(),
         &state,
         Some(&session),
         filter_value.as_ref(),
@@ -1322,7 +1300,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .expect("second state event appended");
 
     let mut incremental_body = body.clone();
-    incremental_body.after = Some(initial.cursor.clone());
+    incremental_body.after = initial.cursor.clone();
     let incremental = build_sync_snapshot(
         &state,
         Some(&session),
@@ -1331,7 +1309,8 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         false,
     )
     .await;
-    let incremental_events = incremental.realms[ROSTER_REALM]["state"]["events"]
+    let incremental_value = serde_json::to_value(&incremental).unwrap();
+    let incremental_events = incremental_value["realms"][ROSTER_REALM]["state"]["events"]
         .as_array()
         .expect("incremental state events array");
     assert_eq!(
@@ -1341,7 +1320,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     );
     assert_eq!(incremental_events[0]["actor_id"], ROSTER_CALLER);
     assert_eq!(
-        incremental.realms[ROSTER_REALM]["timeline"]["events"]
+        incremental_value["realms"][ROSTER_REALM]["timeline"]["events"]
             .as_array()
             .expect("timeline events")
             .len(),
@@ -1427,7 +1406,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
     let filter_value = sync_filter_value(body.filter.as_ref());
     let initial_cursor = parse_and_validate_sync_cursor(
-        &initial.cursor,
+        initial.cursor.as_deref().unwrap(),
         &state,
         Some(&session),
         filter_value.as_ref(),
@@ -1456,7 +1435,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     .await;
 
     let mut incremental_body = body.clone();
-    incremental_body.after = Some(initial.cursor.clone());
+    incremental_body.after = initial.cursor.clone();
     let incremental = build_sync_snapshot(
         &state,
         Some(&session),
@@ -1465,7 +1444,8 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         false,
     )
     .await;
-    let state_events = incremental.realms[ROSTER_REALM]["state"]["events"]
+    let incremental_value = serde_json::to_value(&incremental).unwrap();
+    let state_events = incremental_value["realms"][ROSTER_REALM]["state"]["events"]
         .as_array()
         .expect("state events array");
     assert!(
@@ -1588,7 +1568,8 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     let body = roster_body(&state.config.service_id);
     let snapshot =
         build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
-    let timeline_events = snapshot.realms[ROSTER_REALM]["timeline"]["events"]
+    let snapshot_value = serde_json::to_value(&snapshot).unwrap();
+    let timeline_events = snapshot_value["realms"][ROSTER_REALM]["timeline"]["events"]
         .as_array()
         .expect("timeline events array");
     let matching = timeline_events

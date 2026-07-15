@@ -141,9 +141,6 @@ pub(crate) async fn build_sync_snapshot(
             && timeline_events.is_empty()
             && state_events.is_empty()
             && !account_projection_changed
-            && !has_pending_call_signals_for_subscriber(state, &realm_id, session, !is_incremental)
-                .await
-            && !has_pending_typing_for_subscriber(state, &realm_id, session).await
             && !has_pending_read_receipts_for_subscriber(state, &realm_id, session, !is_incremental)
                 .await
         {
@@ -1032,92 +1029,6 @@ async fn realm_event_visible_to_session_with_projection(
     }
 }
 
-fn bottom_cells_for_realm(projection: &ProjectionState, realm_id: &str) -> Vec<Value> {
-    projection
-        .cells
-        .iter()
-        .filter_map(|(cell, state)| {
-            let CellState::Bottom(bottom) = state else {
-                return None;
-            };
-            let cell_id = cell.as_str();
-            if !cell_id.contains(realm_id) {
-                return None;
-            }
-            Some(json!({
-                "realm_id": realm_id,
-                "cell_id": cell_id,
-                "state": "bottom",
-                "bottom": bottom,
-            }))
-        })
-        .collect()
-}
-
-fn seal_view_for_realm(bottom_cells: &[Value]) -> Value {
-    let cells = bottom_cells
-        .iter()
-        .filter_map(|entry| {
-            let cell_id = entry.get("cell_id").and_then(Value::as_str)?;
-            let bottom = entry.get("bottom")?;
-            let status = match bottom.get("kind").and_then(Value::as_str) {
-                Some("Conflict") | Some("conflict") => "expose",
-                _ => "reject",
-            };
-            let heads = bottom_heads_for_sync(bottom);
-            Some((
-                cell_id.to_owned(),
-                json!({
-                    "bottom": status,
-                    "heads": heads,
-                    "diagnostic": bottom,
-                }),
-            ))
-        })
-        .collect::<serde_json::Map<_, _>>();
-    json!({
-        "frontier": [],
-        "leaves": [],
-        "state_root": Value::Null,
-        "cells": cells,
-    })
-}
-
-fn bottom_heads_for_sync(bottom: &Value) -> Vec<Value> {
-    if let Some(heads) = bottom.get("heads").and_then(Value::as_array)
-        && !heads.is_empty()
-    {
-        return heads
-            .iter()
-            .filter_map(|head| {
-                if let Some(object) = head.as_object() {
-                    let move_id = object
-                        .get("move_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    if move_id.is_empty() {
-                        return None;
-                    }
-                    return Some(json!({
-                        "move_id": move_id,
-                        "value": object.get("value").cloned().unwrap_or(Value::Null),
-                    }));
-                }
-                let move_id = head.as_str()?;
-                Some(json!({"move_id": move_id, "value": Value::Null}))
-            })
-            .collect();
-    }
-    bottom
-        .get("move_ids")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|move_id| move_id.as_str())
-        .map(|move_id| json!({"move_id": move_id, "value": Value::Null}))
-        .collect()
-}
-
 pub(crate) async fn projection_record_visible_to_session(
     state: &AppState,
     event: &ProjectionEventRecord,
@@ -1234,62 +1145,4 @@ fn circle_scope_visible_to_session(
         return false;
     };
     projection.circle_scope_visible_to_actor_at(scope_circle_id, &session.actor, event_created_at)
-}
-
-fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json::Value) {
-    let Some(scope_circle_id) = message_scope_circle_id(content) else {
-        return;
-    };
-    let Some(object) = event.as_object_mut() else {
-        return;
-    };
-    object.insert(
-        "scope_circle_id".to_owned(),
-        serde_json::Value::String(scope_circle_id.to_owned()),
-    );
-    object.insert(
-        "effective_scope".to_owned(),
-        serde_json::Value::String(scope_circle_id.to_owned()),
-    );
-}
-
-fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
-    // strand_id is always derived from realm_id (one strand per Realm for
-    // the message timeline) — thread_id is the discussion *track* within
-    // that strand, NOT the strand itself. The removed top-level `branch` object
-    // was replaced by the concrete v1 `track_name` wire field.
-    let strand_id = strand_id_from_realm_id(&message.realm_id);
-    let track_id = message.thread_id.clone();
-    let mut event = json!({
-        "kind": "ak.message.create",
-        "event_id": message.event_id,
-        "message_id": message.message_id,
-        "strand_id": strand_id,
-        "realm_id": message.realm_id,
-        "track_name": default_discussion_track(&strand_id, &track_id),
-        "thread_id": message.thread_id,
-        "actor_id": message.sender,
-        "sender_actor_id": message.sender,
-        "sender": message.sender,
-        "content": message.content,
-        "encrypted": message.encrypted,
-        "decryption_state": if message.encrypted { "opaque" } else { "plaintext" },
-        "created_at": message.created_at,
-    });
-    add_scope_circle_metadata(&mut event, &message.content);
-    event
-}
-
-fn sync_timeline_message_record_json_with_projection(
-    message: &crate::state::MessageRecord,
-    projection: &ProjectionState,
-) -> serde_json::Value {
-    let mut event = sync_timeline_message_record_json(message);
-    if actor_erased_in_realm(projection, &message.sender, &message.realm_id) {
-        tombstone_timeline_event_value(&mut event);
-    }
-    if apply_message_redaction_timeline_projection(&mut event, &message.event_id, projection) {
-        return event;
-    }
-    augment_timeline_message_json(event, &message.event_id, &message.content, projection)
 }

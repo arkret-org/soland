@@ -262,35 +262,6 @@ pub(crate) fn derive_cursor_handle(cursor_key: &[u8], canonical_binding: &[u8]) 
     URL_SAFE_NO_PAD.encode(&tag[..16])
 }
 
-/// Canonical byte string a STREAM cursor handle is derived from.
-///
-/// Excludes the per-mint `positions.devices` timestamp (it is a wall-clock
-/// stamp, not a content position; including it would defeat determinism — see
-/// `_cursor_todos.md` C1). Includes every field the integrity check binds, so a
-/// cross-binding handle never collides.
-pub(crate) fn stream_cursor_handle_binding(
-    principal_id: &str,
-    device_id: &str,
-    service_id: &str,
-    filter_digest: &str,
-    realms_positions: &BTreeMap<String, i64>,
-    account_realms_positions: &BTreeMap<String, i64>,
-    device_list_positions: &BTreeMap<String, i64>,
-    to_device_position: i64,
-) -> Vec<u8> {
-    stream_cursor_handle_binding_with_notification_position(
-        principal_id,
-        device_id,
-        service_id,
-        filter_digest,
-        realms_positions,
-        account_realms_positions,
-        device_list_positions,
-        to_device_position,
-        0,
-    )
-}
-
 pub(crate) fn stream_cursor_handle_binding_with_notification_position(
     principal_id: &str,
     device_id: &str,
@@ -339,7 +310,7 @@ pub(crate) fn events_query_cursor_handle_binding(
 
 /// Canonical byte string the GENERIC service-level cursor handle is derived
 /// from (`sync_token_for_state`: empty positions, no session binding). Shaped
-/// differently from [`stream_cursor_handle_binding`] so the two namespaces
+/// differently from the stream binding so the two namespaces
 /// can never collide.
 fn service_cursor_handle_binding(
     service_id: &str,

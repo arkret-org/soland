@@ -50,10 +50,10 @@ pub(super) fn agent_participation_failed_precondition(reason: &'static str) -> A
 pub(super) async fn set_agent_participation(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<AgentParticipationSetReqBody>,
+    body: JsonBody<AgentParticipationReplaceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentParticipationResBody> {
+) -> JsonResult<AgentParticipationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
@@ -135,7 +135,7 @@ pub(super) async fn set_agent_participation(
             revoke_capability_grant(state, &session, &realm, &grant_id).await?;
         }
     }
-    json_ok(AgentParticipationResBody {
+    json_ok(AgentParticipationOutcome {
         ok: true,
         agent_id,
         entries: vec![AgentParticipationEntry {
@@ -255,7 +255,7 @@ pub(super) async fn get_agent_participation(
     agent_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentParticipationResBody> {
+) -> JsonResult<AgentParticipationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
@@ -295,7 +295,7 @@ pub(super) async fn get_agent_participation(
             effective,
         });
     }
-    json_ok(AgentParticipationResBody {
+    json_ok(AgentParticipationOutcome {
         ok: true,
         agent_id,
         entries,

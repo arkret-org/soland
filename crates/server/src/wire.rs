@@ -7,7 +7,7 @@ use arkret_sdk::{
     AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
     ClaimedProfileEntry, MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH,
     MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH,
-    ServerDescription, SessionGrantProofKind,
+    ServiceDescribe, SessionGrantProofKind,
 };
 pub use arkret_sdk::{
     ContactListRow, ContactState, DeviceMessageEnvelope, DeviceMessageTarget,
@@ -59,7 +59,7 @@ pub struct HealthOutcome {
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandServerDescribeOutcome {
     #[serde(flatten)]
-    pub service: ServerDescription,
+    pub service: ServiceDescribe,
     pub unsupported_profiles: Vec<UnsupportedProfileDescriptor>,
     pub proof_verifier_mode: String,
     pub admin_auth_mode: String,
@@ -344,7 +344,7 @@ pub struct OutboundPushBridgeCacheInvalidateOutcome {
     pub cache_state: String,
 }
 
-// client-sync family DTOs come straight from the SDK (`SyncDescription`
+// Client-sync family DTOs come straight from the SDK (`ServiceDescribe`
 // answers `account/describe`, `SyncRequestBody` carries the subscribe/sync
 // request); both derive ToSchema under the `salvo` feature, so soland keeps
 // no private copies that could drift. NOTE: the explicit `model::` path
@@ -799,7 +799,7 @@ pub fn describe(
     trust_domain: &str,
     resumable_upload_incomplete_ttl_seconds: u64,
     to_device_queue_capacity: usize,
-) -> ServerDescription {
+) -> ServiceDescribe {
     // Account Authority discovery (service-surface §2.5.1): the client-visible
     // owner of the auth-side `/_arkret/gate/account/*` ops the client posts to
     // (session-grant issuance + hard logout). Those are served by the Auth
@@ -867,7 +867,7 @@ pub fn describe(
     // in routing::system::describe::apply_claim_level_partition still
     // overrides these typed fields before serialization — we keep typed
     // defaults here so out-of-tree typed consumers see the correct shape
-    // and pass `ServerDescription::validate`.
+    // and pass `ServiceDescribe::validate`.
     // Round 4 — typed entries match `service-describe.schema.json`
     // (`claimed_profiles[*]`, `compat_surfaces[*]`). The routing-layer
     // `apply_claim_level_partition` populates these SDK-typed fields
@@ -940,7 +940,7 @@ pub fn describe(
         extra: Default::default(),
     };
 
-    ServerDescription {
+    ServiceDescribe {
         service_id: service_id.parse().expect("valid service DID"),
         trust_domain: trust_domain
             .parse()
