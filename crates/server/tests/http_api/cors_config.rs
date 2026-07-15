@@ -164,31 +164,16 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         "membership": "invite",
         "reason": "realm_invite",
     });
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": "ak.member.state",
-        "schema_id": "ak.schema.event.v1",
-        "actor_id": alice_did,
-        "actor_seq": 100_u64,
-        "realm_id": realm_id.clone(),
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "created_at": "2026-05-20T16:00:00Z",
-        "prev_refs": [],
-        "auth_refs": [],
-        "refs": [],
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{alice_did}#01904100-0000-7000-8000-a11ce0000001"),
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload),
-        }],
-        "payload": payload,
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let event = signed_canonical_event(
+        event_id,
+        "ak.member.state",
+        alice_did,
+        "01904100-0000-7000-8000-a11ce0000001",
+        &realm_id,
+        100,
+        Vec::new(),
+        payload,
+    );
 
     let submit = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice}"), true)

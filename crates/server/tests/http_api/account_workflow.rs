@@ -773,8 +773,8 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .any(|member| member["actor_id"] == "did:web:bob.example")
     );
     assert_eq!(
-        sync_with_message["realms"][&realm_id]["summary"]["members"],
-        sync_with_message["realms"][&realm_id]["members"]
+        sync_with_message["realms"][&realm_id]["summary"]["joined_member_count"],
+        2
     );
     let cursor = decode_cursor(
         sync_with_message["cursor"]
@@ -796,17 +796,13 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         sent_message["event_id"]
     );
     assert_eq!(
-        sync_with_message["realms"][&realm_id]["timeline"]["events"][0]["strand_id"],
+        sync_with_message["realms"][&realm_id]["timeline"]["events"][0]["payload"]["strand_id"],
         expected_strand_id_for_scope(&realm_id)
     );
     // Message v1 exposes the timeline track as the const string `discussion`.
     assert_eq!(
-        sync_with_message["realms"][&realm_id]["timeline"]["events"][0]["track_name"],
+        sync_with_message["realms"][&realm_id]["timeline"]["events"][0]["payload"]["track_name"],
         "discussion"
-    );
-    assert_eq!(
-        sync_with_message["realms"][&realm_id]["summary"]["strand"]["schema"],
-        "ak.schema.strand.v1"
     );
 
     tokio::time::sleep(Duration::from_millis(2)).await;

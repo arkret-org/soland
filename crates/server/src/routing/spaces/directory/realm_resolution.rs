@@ -238,12 +238,19 @@ pub(super) async fn resolve_target(
     } else {
         Vec::new()
     };
+    let as_of = now();
+    let object_preview = object_preview_for_address(
+        &parsed,
+        target_kind,
+        as_of,
+        policy_revision.as_deref().unwrap_or("local"),
+    )?;
     json_ok(DirectoryTargetResolutionOutcome {
         target_kind,
         realm_preview: Some(realm_preview),
-        object_preview: None,
+        object_preview,
         join_rule: Some(join_rule_enum(&join_rule)),
-        as_of: now(),
+        as_of,
         source_refs: Vec::new(),
         join_candidates,
         policy_revision: arkret_sdk::NonEmptyString::new(policy_revision.unwrap_or_else(|| {
@@ -253,6 +260,46 @@ pub(super) async fn resolve_target(
         }))
         .map_err(|error| AppError::internal(format!("policy revision is invalid: {error}")))?,
     })
+}
+
+fn object_preview_for_address(
+    parsed: &arkret_sdk::ParsedAddress,
+    target_kind: TargetKind,
+    as_of: DateTime<Utc>,
+    policy_revision: &str,
+) -> Result<Option<ObjectPreview>, AppError> {
+    let (object_id, object_kind) = match target_kind {
+        TargetKind::Realm => return Ok(None),
+        TargetKind::Strand => {
+            let strand = parsed
+                .strand
+                .as_deref()
+                .ok_or_else(|| AppError::internal("strand target is missing strand id"))?;
+            let id = StrandId::new(format!("ak:strand:{strand}"))
+                .map_err(|error| AppError::internal(format!("invalid strand target: {error}")))?;
+            (ObjectPreviewId::Strand(id), "strand")
+        }
+        TargetKind::Message => {
+            let message = parsed
+                .message
+                .as_deref()
+                .ok_or_else(|| AppError::internal("message target is missing message id"))?;
+            let id = MessageId::new(format!("ak:message:{message}"))
+                .map_err(|error| AppError::internal(format!("invalid message target: {error}")))?;
+            (ObjectPreviewId::Message(id), "message")
+        }
+    };
+    Ok(Some(ObjectPreview {
+        object_id,
+        object_kind: object_kind.to_owned(),
+        title: None,
+        summary: None,
+        as_of,
+        source_refs: Vec::new(),
+        policy_revision: policy_revision.to_owned(),
+        stale: None,
+        divergent: None,
+    }))
 }
 
 pub(super) async fn resolve_realm_for_address(
@@ -496,6 +543,7 @@ pub(super) fn actor_preview_from_value(actor: &Value) -> Result<ActorPreview, Ap
             })?,
         avatar_blob_ref: actor
             .get("avatar_blob_ref")
+            .filter(|value| !value.is_null())
             .cloned()
             .map(serde_json::from_value)
             .transpose()

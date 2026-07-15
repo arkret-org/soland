@@ -84,7 +84,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     );
     let created_at = Utc::now();
     event["created_at"] = serde_json::json!(created_at.to_rfc3339());
-    event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
+    reseal_canonical_event(&mut event);
     put_event_record(&state, event, created_at).await;
 
     let query_target =
@@ -151,17 +151,15 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let now = Utc::now();
     for idx in 0..16 {
         let event_id = format!("ak:event:01904100-0000-7000-8000-fede000001{idx:02x}");
-        let mut event = signed_event_envelope(&event_id, 41, Vec::new());
-        event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
+        let event = signed_event_envelope(&event_id, 41, Vec::new());
         put_event_record(&state, event, now + ChronoDuration::seconds(idx)).await;
     }
 
-    let mut overflow = signed_event_envelope(
+    let overflow = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede000001ff",
         41,
         Vec::new(),
     );
-    overflow["canonical_digest"] = serde_json::json!(event_canonical_digest(&overflow));
     let body = peer_submit_body(&overflow);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
@@ -242,8 +240,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
     .iter()
     .enumerate()
     {
-        let mut event = signed_event_envelope(event_id, 42, Vec::new());
-        event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
+        let event = signed_event_envelope(event_id, 42, Vec::new());
         put_event_record(&state, event, now + ChronoDuration::seconds(idx as i64)).await;
     }
 
@@ -295,7 +292,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     // source trust domain (`remote.example`) nor a member of the demo
     // Realm's membership index.
     event["actor_id"] = serde_json::json!("did:web:intruder.evil");
-    event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
+    reseal_canonical_event(&mut event);
     let body = peer_submit_body(&event);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
@@ -384,7 +381,6 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
     let welcome_event = event_envelope(
         welcome_event_id,
         "ak.mls.welcome",
-        "ak.schema.event.v1",
         "did:web:alice.example",
         51,
         mls_welcome_payload("claim-peer-01", "opaque-peer-welcome"),
@@ -437,7 +433,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     event["actor_id"] = serde_json::json!("did:web:alice.example");
     event["effective_scope"] = serde_json::json!(TEST_CIRCLE_ID);
     event["created_at"] = serde_json::json!((now - ChronoDuration::seconds(5)).to_rfc3339());
-    event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
+    reseal_canonical_event(&mut event);
     put_event_record(&state, event, now - ChronoDuration::seconds(10)).await;
 
     let query_target =
@@ -514,63 +510,7 @@ async fn self_events_reject_federation_wire() {
 }
 
 fn peer_submit_body(event: &Value) -> Value {
-    let mut wire_event = event.clone();
-    let wire_object = wire_event.as_object_mut().unwrap();
-    for legacy_field in [
-        "schema_id",
-        "device_id",
-        "audience",
-        "domain",
-        "auth_refs",
-        "canonical_digest",
-        "canonical_hash",
-    ] {
-        wire_object.remove(legacy_field);
-    }
-    wire_object.entry("created_at").or_insert_with(|| {
-        serde_json::json!(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-    });
-    wire_object.entry("hlc").or_insert_with(|| {
-        serde_json::json!(format!(
-            "{:012x}-0000-a13f9c2e",
-            Utc::now().timestamp_millis()
-        ))
-    });
-    wire_object
-        .entry("refs")
-        .or_insert_with(|| serde_json::json!([]));
-    let mut proof_source = wire_event.clone();
-    let proof_source_object = proof_source.as_object_mut().unwrap();
-    for derived_field in [
-        "proofs",
-        "unsigned",
-        "effective_scope",
-        "actor_kind",
-        "canonical_digest",
-        "canonical_hash",
-    ] {
-        proof_source_object.remove(derived_field);
-    }
-    let proof_source_bytes = arkret_sdk::canonical::canonical_json_bytes(&proof_source).unwrap();
-    let proof_event_digest =
-        arkret_sdk::canonical::canonical_digest_with_suite(&proof_source_bytes, "sha256").unwrap();
-    if let Some(proofs) = wire_event.get_mut("proofs").and_then(Value::as_array_mut) {
-        for proof in proofs {
-            let verification_method = proof["verification_method"].clone();
-            let domain = proof["domain"].clone();
-            let audience = proof["audience"].clone();
-            *proof = serde_json::json!({
-                "kind": "detached_jws",
-                "alg": "EdDSA",
-                "verification_method": verification_method,
-                "event_digest": &proof_event_digest,
-                "created_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                "domain": domain,
-                "audience": audience,
-                "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
-            });
-        }
-    }
+    let wire_event = event.clone();
     let event_id = wire_event["event_id"].as_str().unwrap().to_owned();
     let event_digest = event_canonical_digest(&wire_event);
     let binding_payload = serde_json::json!({
@@ -691,7 +631,6 @@ fn realm_sync_endpoint_event(event_id: &str, source_service_id: &str, seq: u64) 
     event_envelope(
         event_id,
         "ak.realm.create",
-        "ak.schema.realm.v1",
         "did:web:admin.example",
         seq,
         payload,
@@ -718,7 +657,6 @@ fn member_binding_event(
     event_envelope(
         event_id,
         "ak.member.state",
-        "ak.schema.member_state.v1",
         "did:web:admin.example",
         seq,
         payload,
@@ -733,14 +671,7 @@ fn circle_member_event(event_id: &str, member_did: &str, sender: &str, seq: u64)
         "sender": sender,
         "manage_capability_verified": true
     });
-    event_envelope(
-        event_id,
-        "ak.circle.member.state",
-        "ak.schema.circle_member_state.v1",
-        sender,
-        seq,
-        payload,
-    )
+    event_envelope(event_id, "ak.circle.member.state", sender, seq, payload)
 }
 
 fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
@@ -815,35 +746,20 @@ fn b64(bytes: &[u8]) -> String {
 fn event_envelope(
     event_id: &str,
     kind: &str,
-    schema_id: &str,
     actor_id: &str,
     actor_seq: u64,
     payload: Value,
 ) -> Value {
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": kind,
-        "schema_id": schema_id,
-        "actor_id": actor_id,
-        "actor_seq": actor_seq,
-        "realm_id": TEST_REALM_ID,
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": SERVICE_ID,
-        "domain": SERVICE_ID,
-        "prev_refs": [],
-        "auth_refs": [],
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor_id}#01904100-0000-7000-8000-a11ce0000001"),
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": SERVICE_ID,
-            "domain": SERVICE_ID,
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
-    event
+    signed_canonical_event(
+        event_id,
+        kind,
+        actor_id,
+        "01904100-0000-7000-8000-a11ce0000001",
+        TEST_REALM_ID,
+        actor_seq,
+        Vec::new(),
+        payload,
+    )
 }
 
 async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<Utc>) {
@@ -852,8 +768,8 @@ async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<
     let actor_seq = event["actor_seq"].as_u64().unwrap();
     let realm_id = event["realm_id"].as_str().unwrap().to_owned();
     let kind = event["kind"].as_str().unwrap().to_owned();
-    let schema_id = event["schema_id"].as_str().unwrap().to_owned();
-    let canonical_digest = event["canonical_digest"].as_str().unwrap().to_owned();
+    let schema_id = "ak.schema.event_envelope.v1".to_owned();
+    let canonical_digest = event_canonical_digest(&event);
     let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&event).unwrap();
     state
         .persistence

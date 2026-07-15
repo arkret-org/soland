@@ -53,7 +53,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
     )
     .await;
     let entry = account_data_entry(&sync, "ak.client.ui_state");
-    assert_eq!(entry["content"], body);
+    assert_eq!(entry["payload"]["body"], body);
 
     let denied = submit_actor_private_event(
         state.clone(),
@@ -129,7 +129,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
     )
     .await;
     let initial_entry = account_data_entry(&initial_sync, &key);
-    assert_eq!(initial_entry["content"], remark);
+    assert_eq!(initial_entry["payload"]["encrypted_payload"], remark);
 
     // Second event updates the same key with the new payload.
     let updated_remark = account_data_encrypted_value(
@@ -165,7 +165,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
     )
     .await;
     let entry = account_data_entry(&sync_resp, &key);
-    assert_eq!(entry["content"], updated_remark);
+    assert_eq!(entry["payload"]["encrypted_payload"], updated_remark);
 
     // Actor isolation: Bob's /sync does NOT see Alice's remark.
     let bob_sync = account_subscribe_frame(
@@ -179,7 +179,9 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         .cloned()
         .unwrap_or_default();
     assert!(
-        bob_entries.iter().all(|e| e["data_type"] != key.as_str()),
+        bob_entries
+            .iter()
+            .all(|entry| entry["payload"]["key"] != key.as_str()),
         "bob must not see alice's account_data"
     );
 
@@ -213,7 +215,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|entry| entry["data_type"] != key.as_str()),
+            .all(|entry| entry["payload"]["key"] != key.as_str()),
         "tombstoned account_data must not appear in account subscribe"
     );
 }
@@ -265,7 +267,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
     )
     .await;
     let entry = account_data_entry(&sync, key);
-    assert_eq!(entry["content"], envelope);
+    assert_eq!(entry["payload"]["encrypted_payload"], envelope);
 
     let rejected = submit_actor_private_event(
         state.clone(),
@@ -373,7 +375,7 @@ fn account_data_entry<'a>(sync: &'a Value, key: &str) -> &'a Value {
         .as_array()
         .unwrap()
         .iter()
-        .find(|entry| entry["data_type"] == key)
+        .find(|entry| entry["payload"]["key"] == key)
         .expect("account_data entry present in sync response")
 }
 

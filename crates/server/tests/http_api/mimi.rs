@@ -138,6 +138,7 @@ fn mimi_room_update_body(
         "epoch": 1,
         "sender_actor_id": MIMI_SOURCE_SERVICE_ID,
         "update": {
+            "kind": "ak.mimi.room_binding",
             "payload": mimi_opaque_payload(binding, "payload_digest")
         }
     })
@@ -281,7 +282,10 @@ async fn mimi_provider_facade_contracts_work() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(key_material["failures"], json!([]));
+    assert_eq!(
+        key_material["failures"].as_array().map(Vec::len).unwrap_or(0),
+        0
+    );
 
     let room_id = "01JSMIMI";
     let group_id = "mimi-group-01JSMIMI";

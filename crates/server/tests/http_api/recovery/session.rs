@@ -21,30 +21,16 @@ fn cross_signing_reset_event(
     payload: Value,
 ) -> Value {
     let realm_id = soland::test_support::principal_control_realm_for_did(actor);
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": "ak.cross_signing.reset",
-        "schema_id": "ak.schema.cross_signing_reset.v1",
-        "actor_id": actor,
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": realm_id,
-        "device_id": device_id,
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": [],
-        "auth_refs": [],
-        "payload": payload.clone(),
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor}#{device_id}"),
-            "device_id": device_id,
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    event
+    signed_canonical_event(
+        event_id,
+        "ak.cross_signing.reset",
+        actor,
+        device_id,
+        &realm_id,
+        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        Vec::new(),
+        payload,
+    )
 }
 
 fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value {

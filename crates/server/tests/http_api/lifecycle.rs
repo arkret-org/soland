@@ -637,7 +637,12 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(first_transition["realm_id"], DEMO_REALM_ID);
     assert_eq!(first_transition["from"], "todo");
     assert_eq!(first_transition["to"], "in_progress");
-    assert_eq!(first_transition["timestamp"], "2026-05-17T00:00:00+00:00");
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(first_transition["timestamp"].as_str().unwrap())
+            .unwrap(),
+        chrono::DateTime::parse_from_rfc3339(good_in_progress["created_at"].as_str().unwrap())
+            .unwrap()
+    );
 
     let second_transition = &status_transitions[1]["payload"];
     assert_eq!(second_transition["actor"], "did:web:alice.example");
@@ -646,7 +651,11 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(second_transition["realm_id"], DEMO_REALM_ID);
     assert_eq!(second_transition["from"], "in_progress");
     assert_eq!(second_transition["to"], "done");
-    assert_eq!(second_transition["timestamp"], "2026-05-17T00:00:00+00:00");
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(second_transition["timestamp"].as_str().unwrap())
+            .unwrap(),
+        chrono::DateTime::parse_from_rfc3339(good_done["created_at"].as_str().unwrap()).unwrap()
+    );
 }
 
 #[tokio::test]

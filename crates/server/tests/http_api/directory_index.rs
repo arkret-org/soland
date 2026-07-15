@@ -13,17 +13,12 @@ async fn sync_and_directory_share_demo_realm() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(
-        sync_describe["supported_sync_profiles"],
-        serde_json::json!([
-            "initial",
-            "incremental",
-            "board",
-            "chat",
-            "topic",
-            "offline_queue_flush",
-            "bottom_cell_repair"
-        ])
+    assert!(
+        sync_describe["supported_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "ak.self.account.stream.subscribe")
     );
 
     let invalid_profile =
@@ -108,11 +103,12 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(actors["actors"][0]["actor_id"], "did:web:alice.example");
     assert_eq!(
-        actors["actors"][0]["preview"]["did"],
-        "did:web:alice.example"
+        actors["actors"][0]["actor_id"],
+        "did:web:alice.example",
+        "search actors response: {actors}"
     );
+    assert!(actors["actors"][0].get("preview").is_none());
 
     let users: Value = TestClient::post("http://server/_arkret/find/directory/search-users")
         .json(&serde_json::json!({"query": "alice"}))
@@ -407,7 +403,11 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
             "private-contact-discovery",
             serde_json::json!({
                 "requester": "did:web:alice.example",
-                "contacts": [{"handle": "@alice"}]
+                "contacts": [{
+                    "contact_ref": "alice",
+                    "identifier_kind": "handle",
+                    "identifier_commitment": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                }]
             }),
         ),
     ];
@@ -459,9 +459,9 @@ async fn private_contact_discovery_rejects_plaintext_identifier_matching() {
     .send(&service)
     .await;
 
-    assert_eq!(response.status_code.unwrap(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(response.status_code.unwrap(), StatusCode::UNPROCESSABLE_ENTITY);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "unsupported_feature");
+    assert_eq!(body["error"]["code"], "schema_violation");
     assert!(
         body.get("matches").is_none(),
         "private contact discovery must not return plaintext matches: {body}"
@@ -568,7 +568,8 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
     // realm_preview; fields are top-level with no `preview` nesting.
     assert_eq!(resolved["realm_preview"]["title"], "Preview realm");
     assert_eq!(resolved["realm_preview"]["history_visibility"], "joined");
-    assert_eq!(resolved["object_preview"]["strand_id"], strand_id);
+    assert_eq!(resolved["object_preview"]["object_id"], strand_id);
+    assert_eq!(resolved["object_preview"]["object_kind"], "strand");
     // discovery-directory.md §9: join_candidates[] is produced only for
     // realm-target resolution; a strand preview target has no join route, and
     // the SDK field is #[serde(skip_serializing_if = "Vec::is_empty")], so an

@@ -581,6 +581,50 @@ pub(crate) fn event_canonical_digest(event: &Value) -> String {
     sha256_json(&canonical)
 }
 
+pub(crate) fn signed_canonical_event(
+    event_id: &str,
+    kind: &str,
+    actor_id: &str,
+    device_id: &str,
+    realm_id: &str,
+    actor_seq: u64,
+    prev_refs: Vec<&str>,
+    payload: Value,
+) -> Value {
+    let now = chrono::Utc::now();
+    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut event = serde_json::json!({
+        "event_id": event_id,
+        "kind": kind,
+        "realm_id": realm_id,
+        "actor_id": actor_id,
+        "actor_seq": actor_seq,
+        "created_at": created_at,
+        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
+        "prev_refs": prev_refs,
+        "refs": [],
+        "payload": payload,
+        "proofs": [],
+    });
+    let event_digest = event_canonical_digest(&event);
+    event["proofs"] = serde_json::json!([{
+        "kind": "detached_jws",
+        "alg": "EdDSA",
+        "verification_method": format!("{actor_id}#{device_id}"),
+        "event_digest": event_digest,
+        "created_at": created_at,
+        "jws": "dev-mode-fixture",
+    }]);
+    event
+}
+
+pub(crate) fn reseal_canonical_event(event: &mut Value) {
+    let event_digest = event_canonical_digest(event);
+    let created_at = event["created_at"].clone();
+    event["proofs"][0]["event_digest"] = Value::String(event_digest);
+    event["proofs"][0]["created_at"] = created_at;
+}
+
 pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
     let payload = serde_json::json!({
         "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
@@ -591,30 +635,16 @@ pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: V
             "format": "plain"
         }
     });
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": "ak.message.create",
-        "schema_id": "ak.schema.message.v1",
-        "actor_id": "did:web:alice.example",
-        "actor_seq": actor_seq,
-        "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": prev_refs,
-        "auth_refs": [],
-        "payload": payload.clone(),
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    event
+    signed_canonical_event(
+        event_id,
+        "ak.message.create",
+        "did:web:alice.example",
+        "01904100-0000-7000-8000-a11ce0000001",
+        DEMO_REALM_ID,
+        actor_seq,
+        prev_refs,
+        payload,
+    )
 }
 
 pub(crate) fn signed_message_event_envelope(
@@ -690,30 +720,16 @@ pub(crate) fn signed_message_event_envelope(
         }
         payload["content"] = content;
     }
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": "ak.message.create",
-        "schema_id": "ak.schema.message.v1",
-        "actor_id": actor,
-        "actor_seq": actor_seq,
-        "realm_id": realm_id,
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": [],
-        "auth_refs": [],
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor}#01904100-0000-7000-8000-a11ce0000001"),
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    event
+    signed_canonical_event(
+        &event_id,
+        "ak.message.create",
+        actor,
+        "01904100-0000-7000-8000-a11ce0000001",
+        realm_id,
+        actor_seq,
+        Vec::new(),
+        payload,
+    )
 }
 
 pub(crate) fn signed_actor_private_event_envelope(
@@ -723,30 +739,17 @@ pub(crate) fn signed_actor_private_event_envelope(
     kind: &str,
     payload: Value,
 ) -> Value {
-    let mut event = serde_json::json!({
-        "event_id": new_prefixed_uuid7("ak:event:"),
-        "kind": kind,
-        "schema_id": "ak.schema.event.v1",
-        "actor_id": actor,
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": realm_id,
-        "device_id": device_id,
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": [],
-        "auth_refs": [],
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor}#{device_id}"),
-            "device_id": device_id,
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    event
+    let event_id = new_prefixed_uuid7("ak:event:");
+    signed_canonical_event(
+        &event_id,
+        kind,
+        actor,
+        device_id,
+        realm_id,
+        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        Vec::new(),
+        payload,
+    )
 }
 
 pub(crate) async fn submit_actor_private_event(
@@ -1111,31 +1114,16 @@ pub(crate) fn signed_space_event(
 ) -> Value {
     normalize_space_container_payload(kind, &mut payload);
     payload = typed_space_container_payload(kind, payload);
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": kind,
-        "schema_id": "ak.schema.space.v1",
-        "actor_id": "did:web:alice.example",
-        "actor_seq": actor_seq,
-        "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
-        "created_at": "2026-05-17T00:00:00Z",
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": prev_refs,
-        "auth_refs": [],
-        "payload": payload.clone(),
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    event
+    signed_canonical_event(
+        event_id,
+        kind,
+        "did:web:alice.example",
+        "01904100-0000-7000-8000-a11ce0000001",
+        DEMO_REALM_ID,
+        actor_seq,
+        prev_refs,
+        payload,
+    )
 }
 
 pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value) {
@@ -1218,8 +1206,8 @@ fn optional_string(payload: &Value, field: &str) -> Option<String> {
 // `StatusCode::PRECONDITION_FAILED`).
 
 /// Build a signed `ak.strand.*` event envelope for the Strand state-machine
-/// integration test. Mirror of `signed_space_event` with a Strand-specific
-/// schema_id.
+/// integration test. Mirror of `signed_space_event` with Strand payload
+/// normalization selected from the event kind.
 pub(crate) fn signed_strand_event(
     event_id: &str,
     actor_seq: u64,
@@ -1228,31 +1216,16 @@ pub(crate) fn signed_strand_event(
     prev_refs: Vec<&str>,
 ) -> Value {
     normalize_strand_payload(kind, &mut payload);
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": kind,
-        "schema_id": "ak.schema.strand.v1",
-        "actor_id": "did:web:alice.example",
-        "actor_seq": actor_seq,
-        "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
-        "created_at": "2026-05-17T00:00:00Z",
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": prev_refs,
-        "auth_refs": [],
-        "payload": payload.clone(),
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    event
+    signed_canonical_event(
+        event_id,
+        kind,
+        "did:web:alice.example",
+        "01904100-0000-7000-8000-a11ce0000001",
+        DEMO_REALM_ID,
+        actor_seq,
+        prev_refs,
+        payload,
+    )
 }
 
 pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
@@ -1312,31 +1285,16 @@ pub(crate) fn signed_morph_event(
 ) -> Value {
     normalize_morph_payload(kind, &mut payload);
     payload = typed_morph_payload(kind, payload);
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": kind,
-        "schema_id": "ak.schema.morph.v1",
-        "actor_id": "did:web:alice.example",
-        "actor_seq": actor_seq,
-        "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
-        "created_at": "2026-05-17T00:00:00Z",
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": prev_refs,
-        "auth_refs": [],
-        "payload": payload.clone(),
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    event
+    signed_canonical_event(
+        event_id,
+        kind,
+        "did:web:alice.example",
+        "01904100-0000-7000-8000-a11ce0000001",
+        DEMO_REALM_ID,
+        actor_seq,
+        prev_refs,
+        payload,
+    )
 }
 
 pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
@@ -1417,31 +1375,16 @@ pub(crate) fn signed_relation_event(
     prev_refs: Vec<&str>,
 ) -> Value {
     payload = typed_relation_create_payload(payload);
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": "ak.relation.create",
-        "schema_id": "ak.schema.event_payload.v1",
-        "actor_id": "did:web:alice.example",
-        "actor_seq": actor_seq,
-        "realm_id": DEMO_REALM_ID,
-        "created_at": "2026-05-17T00:00:00Z",
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": prev_refs,
-        "auth_refs": [],
-        "payload": payload.clone(),
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    event
+    signed_canonical_event(
+        event_id,
+        "ak.relation.create",
+        "did:web:alice.example",
+        "01904100-0000-7000-8000-a11ce0000001",
+        DEMO_REALM_ID,
+        actor_seq,
+        prev_refs,
+        payload,
+    )
 }
 
 fn typed_relation_create_payload(payload: Value) -> Value {
@@ -1504,30 +1447,16 @@ pub(crate) fn signed_redaction_event(
         object.remove("object_ref");
         object.remove("by");
     }
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": "ak.redaction",
-        "schema_id": "ak.schema.message.v1",
-        "actor_id": "did:web:alice.example",
-        "actor_seq": actor_seq,
-        "realm_id": DEMO_REALM_ID,
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "audience": "did:web:soland.local",
-        "domain": "did:web:soland.local",
-        "prev_refs": prev_refs,
-        "auth_refs": [],
-        "payload": payload.clone(),
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "audience": "did:web:soland.local",
-            "domain": "did:web:soland.local",
-            "payload_digest": sha256_json(&payload)
-        }]
-    });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    event
+    signed_canonical_event(
+        event_id,
+        "ak.redaction",
+        "did:web:alice.example",
+        "01904100-0000-7000-8000-a11ce0000001",
+        DEMO_REALM_ID,
+        actor_seq,
+        prev_refs,
+        payload,
+    )
 }
 
 // The following comment blocks are descriptive notes for tests that have

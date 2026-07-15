@@ -52,11 +52,7 @@ async fn identity_surface_works() {
         .take_json()
         .await
         .unwrap();
-    // `did_document` is a DidDocumentRef wrapper: `{did, document}`.
-    assert_eq!(
-        resolved["did_document"]["document"]["id"],
-        "did:web:alice.example"
-    );
+    assert_eq!(resolved["did_document"]["id"], "did:web:alice.example");
 
     let document: Value =
         TestClient::get("http://server/_arkret/root/identity/document?did=did:web:alice.example")
@@ -65,10 +61,7 @@ async fn identity_surface_works() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(
-        document["did_document"]["document"]["id"],
-        "did:web:alice.example"
-    );
+    assert_eq!(document["did_document"]["id"], "did:web:alice.example");
 
     let log: Value =
         TestClient::get("http://server/_arkret/root/identity/log?did=did:web:alice.example")
@@ -349,9 +342,8 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .take_json()
         .await
         .unwrap();
-    // `did_document` is a DidDocumentRef wrapper: `{did, document}`.
     assert_eq!(
-        resolved["did_document"]["document"]["id"], registered["did"],
+        resolved["did_document"]["id"], registered["did"],
         "resolve response: {resolved}"
     );
     assert_eq!(resolved["key_log_head"], registered["key_log_head"]);

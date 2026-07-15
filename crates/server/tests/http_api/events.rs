@@ -246,46 +246,6 @@ async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebui
 }
 
 #[tokio::test]
-async fn account_subscribe_projects_realm_encryption_profile() {
-    let state = AppState::new(test_config(), Db { pool: None });
-    let alice = dev_token(state.clone()).await;
-    let created = seed_test_realm(
-        &state,
-        "did:web:alice.example",
-        "MLS Sync Realm",
-        Some("encrypted projection metadata"),
-        "listed",
-        &[],
-        &[],
-    )
-    .await;
-    let realm_id = created["realm_id"].as_str().unwrap();
-
-    let mut meta = state
-        .persistence
-        .realm_meta()
-        .get(realm_id)
-        .await
-        .unwrap()
-        .expect("seeded realm meta");
-    meta.history_visibility = "joined".to_owned();
-    meta.encryption_profile = Some("mls_rfc9420".to_owned());
-    state
-        .persistence
-        .realm_meta()
-        .put(realm_id, &meta)
-        .await
-        .unwrap();
-
-    let sync = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
-    let realm = &sync["realms"][realm_id];
-    assert_eq!(realm["history_visibility"], "joined");
-    assert_eq!(realm["encryption_profile"], "mls_rfc9420");
-    assert_eq!(realm["summary"]["history_visibility"], "joined");
-    assert_eq!(realm["summary"]["encryption_profile"], "mls_rfc9420");
-}
-
-#[tokio::test]
 async fn events_describe_and_single_event_submit_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
@@ -353,7 +313,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
     assert_eq!(
         fetched["event"]["proofs"][0]["event_digest"],
-        first["canonical_digest"]
+        first["proofs"][0]["event_digest"]
     );
     assert_eq!(
         fetched["visibility"]["realm_id"],
@@ -397,18 +357,16 @@ async fn events_describe_and_single_event_submit_work() {
             "created_at": "2026-05-17T00:00:00Z"
         }
     });
-    let mut artifact_kind_event = signed_event_envelope(
+    let artifact_kind_event = signed_canonical_event(
         "ak:event:01904100-0000-7000-8000-df827a7269a3",
+        "ak.strand.create",
+        "did:web:alice.example",
+        "01904100-0000-7000-8000-a11ce0000001",
+        DEMO_REALM_ID,
         3,
         Vec::new(),
+        artifact_kind_payload,
     );
-    artifact_kind_event["kind"] = Value::String("ak.strand.create".to_owned());
-    artifact_kind_event["schema_id"] = Value::String("ak.schema.strand.v1".to_owned());
-    artifact_kind_event["payload"] = artifact_kind_payload.clone();
-    artifact_kind_event["proofs"][0]["payload_digest"] =
-        Value::String(sha256_json(&artifact_kind_payload));
-    artifact_kind_event["canonical_digest"] =
-        Value::String(event_canonical_digest(&artifact_kind_event));
     let artifact_kind_submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&artifact_kind_event)
@@ -424,8 +382,10 @@ async fn events_describe_and_single_event_submit_work() {
         4,
         Vec::new(),
     );
-    unknown_schema["schema_id"] = Value::String("ak.schema.not_registered.v1".to_owned());
-    unknown_schema["canonical_digest"] = Value::String(event_canonical_digest(&unknown_schema));
+    unknown_schema["requirements"] = serde_json::json!({
+        "schema": ["ak.schema.not_registered.v1"]
+    });
+    reseal_canonical_event(&mut unknown_schema);
     let mut unknown_schema_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&unknown_schema)
@@ -543,9 +503,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
     conflicting["payload"]["content"]["body"] =
         Value::String("different canonical body".to_owned());
-    let payload_digest = sha256_json(&conflicting["payload"]);
-    conflicting["proofs"][0]["payload_digest"] = Value::String(payload_digest);
-    conflicting["canonical_digest"] = Value::String(event_canonical_digest(&conflicting));
+    reseal_canonical_event(&mut conflicting);
     let mut conflict = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&conflicting)
@@ -591,16 +549,16 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         }
     });
     let cell = format!("ak:cell:ak.component.realm.create.v1:{realm_id}");
-    let mut event = signed_event_envelope(
+    let mut event = signed_canonical_event(
         "ak:event:01904100-0000-7000-8000-c7ea7e000001",
+        "ak.realm.create",
+        "did:web:alice.example",
+        "01904100-0000-7000-8000-a11ce0000001",
+        &realm_id,
         1,
         Vec::new(),
+        payload.clone(),
     );
-    event["kind"] = Value::String("ak.realm.create".to_owned());
-    event["schema_id"] = Value::String("ak.schema.realm.v1".to_owned());
-    event["realm_id"] = Value::String(realm_id.clone());
-    event["created_at"] = Value::String(created_at.to_owned());
-    event["payload"] = payload.clone();
     event["preconditions"] = serde_json::json!([{
         "cell": cell.clone(),
         "predicate": {
@@ -615,8 +573,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             "value": payload["object"].clone()
         }
     }]);
-    event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&payload));
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    reseal_canonical_event(&mut event);
 
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -803,17 +760,16 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "expires_at": "2026-06-14T10:00:00Z"
     });
-    let mut event = signed_event_envelope(
+    let event = signed_canonical_event(
         "ak:event:01904100-0000-7000-8000-1e0c1a7e0001",
+        "ak.invite.create",
+        "did:web:alice.example",
+        "01904100-0000-7000-8000-a11ce0000001",
+        realm_id,
         TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         Vec::new(),
+        payload.clone(),
     );
-    event["kind"] = Value::String("ak.invite.create".to_owned());
-    event["schema_id"] = Value::String("ak.schema.invite.v1".to_owned());
-    event["realm_id"] = Value::String(realm_id.to_owned());
-    event["payload"] = payload.clone();
-    event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&payload));
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
 
     let submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)

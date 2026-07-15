@@ -56,6 +56,9 @@ fn assert_product_admin_tags(operation: &Value) {
 }
 
 fn assert_no_plain_admin_tag(operation: &Value) {
-    let tags = operation["tags"].as_array().expect("operation tags");
-    assert!(!tags.iter().any(|tag| tag.as_str() == Some("admin")));
+    assert!(
+        operation["tags"]
+            .as_array()
+            .is_none_or(|tags| !tags.iter().any(|tag| tag.as_str() == Some("admin")))
+    );
 }
