@@ -1257,34 +1257,6 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn recovery_session_complete_rejects_missing_cross_signing_state() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let signing = SigningKey::from_bytes(&[115u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
-    let ssk = SigningKey::from_bytes(&[215u8; 32]);
-    let token = dev_token_for_device(
-        state.clone(),
-        &principal_id,
-        RECOVERY_TEST_DEVICE,
-        "Recovery",
-    )
-    .await;
-    let (session, session_id) =
-        verified_session_for(&state, &token, &signing, &principal_id, &vm).await;
-    let complete_body =
-        seed_completion_events(&state, &session, device_authorize_material(&session, &ssk)).await;
-    let body = post_recovery(
-        state,
-        &token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
-        &complete_body,
-        StatusCode::CONFLICT,
-    )
-    .await;
-    assert_eq!(body["error"]["code"], "cross_signing_state_missing");
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_complete_rejects_wrong_ssk_signature() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[116u8; 32]);

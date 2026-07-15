@@ -458,7 +458,8 @@ mod tests {
             id: did.clone(),
             verification_methods,
             also_known_as: Vec::new(),
-            updated_at: chrono::Utc::now(),
+            updated_at: Some(chrono::Utc::now()),
+            raw_properties: BTreeMap::new(),
         };
         let now = chrono::Utc::now();
         persistence

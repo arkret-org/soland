@@ -1116,11 +1116,11 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
     let no_device_body: Value = no_device.take_json().await.unwrap();
     assert_eq!(no_device_body["error"]["code"], "invalid_param");
 
-    // Missing proof → invalid_param.
+    // Missing proof is rejected by the strong wire extractor.
     let mut no_proof = post_signal(state.clone(), token, envelope("invite", true, false)).await;
-    assert_eq!(no_proof.status_code.unwrap().as_u16(), 400);
+    assert_eq!(no_proof.status_code.unwrap().as_u16(), 422);
     let no_proof_body: Value = no_proof.take_json().await.unwrap();
-    assert_eq!(no_proof_body["error"]["code"], "invalid_param");
+    assert_eq!(no_proof_body["error"]["code"], "schema_violation");
 }
 
 #[tokio::test]

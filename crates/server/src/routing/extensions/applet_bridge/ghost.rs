@@ -4,8 +4,8 @@
 use arkret_sdk::{
     AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
     AppletDelegatedEventAuthorization, AppletId, AppletNamespaceDomain, Did, Event, EventRef,
-    GhostActorProfileRequest, GhostActorProvisionRequestBody, Hash, Hlc, Proof, RealmId, canonical,
-    namespace_pattern_matches,
+    GhostActorProfileRequest, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof, Proof,
+    RealmId, canonical, namespace_pattern_matches,
 };
 use serde_json::{Value, json};
 
@@ -416,7 +416,7 @@ pub(super) fn production_payload_proof(
     label: &str,
     payload: &Value,
     created_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Proof, AppError> {
+) -> Result<PayloadProof, AppError> {
     let binding = json!({
         "label": label,
         "payload": payload,
@@ -433,15 +433,16 @@ pub(super) fn production_payload_proof(
             .map_err(|error| {
                 AppError::internal(format!("accountability proof signing failed: {error}"))
             })?;
-    Ok(Proof {
+    Ok(PayloadProof {
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method: format!("{signing_did}#applet-service-key"),
-        event_digest: Hash::new(digest)
+        payload_digest: Hash::new(digest)
             .map_err(|error| AppError::internal(format!("proof digest invalid: {error}")))?,
         created_at,
         domain: None,
         audience: None,
+        proof_purpose: None,
         jws,
     })
 }

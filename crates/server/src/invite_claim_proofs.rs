@@ -507,7 +507,8 @@ mod tests {
                     id: document_did,
                     verification_methods: BTreeMap::new(),
                     also_known_as: Vec::new(),
-                    updated_at: chrono::Utc::now(),
+                    updated_at: Some(chrono::Utc::now()),
+                    raw_properties: BTreeMap::new(),
                 });
             entry.verification_methods.insert(
                 method.to_owned(),

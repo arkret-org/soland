@@ -12,7 +12,10 @@
 //! `verification_method == actor_id`, and `payload_digest` = the sha256 of
 //! the canonical payload bytes.
 
-use arkret_sdk::canonical;
+use arkret_sdk::{
+    AccountabilityGrantPayload, AccountabilityScope, AgentSelectorClaim, Did, HandleBindingState,
+    HandleVisibility, Hash, PayloadProof, canonical,
+};
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
 
@@ -271,10 +274,14 @@ pub(super) async fn fanout_provision_subevents(
     agent_slug: &str,
 ) -> Result<(String, String), AppError> {
     let controller = session.actor.clone();
+    let controller_did = Did::new(controller.clone())
+        .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?;
+    let agent_did = Did::new(agent_id.to_owned())
+        .map_err(|error| AppError::internal(format!("agent DID invalid: {error}")))?;
     // 1. Accountability grant, issuer = controller and subject = Agent.
     let now_utc = Utc::now();
     let created_at = now_utc.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let mut accountability_payload = json!({
+    let accountability_unsigned = json!({
         "schema": "ak.schema.accountability_grant.v1",
         "issuer": controller,
         "subject": agent_id,
@@ -282,7 +289,21 @@ pub(super) async fn fanout_provision_subevents(
         "not_before": created_at,
         "grant_status": "active",
     });
-    insert_nested_dev_proof(&mut accountability_payload, "proof", &controller)?;
+    let accountability_proof =
+        development_payload_proof(&accountability_unsigned, &controller, now_utc)?;
+    let accountability_payload = serde_json::to_value(AccountabilityGrantPayload::new(
+        controller_did.clone(),
+        agent_did.clone(),
+        AccountabilityScope::Single("agent_operator".to_owned()),
+        now_utc,
+        None,
+        accountability_proof,
+    ))
+    .map_err(|error| {
+        AppError::internal(format!(
+            "accountability grant serialization failed: {error}"
+        ))
+    })?;
     let accountability_event = submit_agent_fanout_event(
         state,
         session,
@@ -294,7 +315,7 @@ pub(super) async fn fanout_provision_subevents(
 
     // 2. Controller-scoped selector claim. It remains pending until the
     // controller client has bootstrapped the Agent PCR/Profile and recovery.
-    let mut selector_payload = json!({
+    let selector_unsigned = json!({
         "schema": "ak.schema.agent_selector_claim.v1",
         "controller_subject": controller,
         "agent_slug": agent_slug,
@@ -305,7 +326,29 @@ pub(super) async fn fanout_provision_subevents(
         "created_at": created_at,
         "source_refs": [accountability_event],
     });
-    insert_nested_dev_proofs(&mut selector_payload, &controller)?;
+    let selector_proof = development_payload_proof(&selector_unsigned, &controller, now_utc)?;
+    let selector_payload = serde_json::to_value(AgentSelectorClaim {
+        schema: arkret_sdk::AGENT_SELECTOR_CLAIM_SCHEMA.to_owned(),
+        controller_subject: controller_did.clone(),
+        agent_slug: agent_slug.to_owned(),
+        subject: agent_did,
+        issuer: controller_did,
+        issuer_service_id: None,
+        binding_state: HandleBindingState::Pending,
+        visibility: HandleVisibility::Private,
+        audience: None,
+        claim_scope: Default::default(),
+        expires_at: None,
+        created_at: now_utc,
+        verified_at: None,
+        source_refs: vec![accountability_event.clone()],
+        proofs: vec![selector_proof],
+    })
+    .map_err(|error| {
+        AppError::internal(format!(
+            "agent selector claim serialization failed: {error}"
+        ))
+    })?;
     let selector_event = submit_agent_fanout_event(
         state,
         session,
@@ -318,36 +361,25 @@ pub(super) async fn fanout_provision_subevents(
     Ok((accountability_event, selector_event))
 }
 
-fn insert_nested_dev_proof(
-    payload: &mut Value,
-    field: &str,
+fn development_payload_proof(
+    payload: &Value,
     controller: &str,
-) -> Result<(), AppError> {
+    created_at: chrono::DateTime<Utc>,
+) -> Result<PayloadProof, AppError> {
     let digest = canonical::canonical_sha256(payload)
         .map_err(|error| AppError::internal(format!("nested proof digest failed: {error}")))?;
-    payload.as_object_mut().expect("payload object").insert(
-        field.to_owned(),
-        json!({
-            "type": "dev-proof",
-            "verification_method": controller,
-            "payload_digest": digest,
-        }),
-    );
-    Ok(())
-}
-
-fn insert_nested_dev_proofs(payload: &mut Value, controller: &str) -> Result<(), AppError> {
-    let digest = canonical::canonical_sha256(payload)
-        .map_err(|error| AppError::internal(format!("nested proofs digest failed: {error}")))?;
-    payload.as_object_mut().expect("payload object").insert(
-        "proofs".to_owned(),
-        json!([{
-            "type": "dev-proof",
-            "verification_method": controller,
-            "payload_digest": digest,
-        }]),
-    );
-    Ok(())
+    Ok(PayloadProof {
+        kind: "detached_jws".to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method: format!("{controller}#controller-key"),
+        payload_digest: Hash::new(digest)
+            .map_err(|error| AppError::internal(format!("proof digest invalid: {error}")))?,
+        created_at,
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: "eyJhbGciOiJFZERTQSJ9..c2ln".to_owned(),
+    })
 }
 
 async fn materialize_grant(
