@@ -256,7 +256,7 @@ fn selector_resource_id(
 mod tests {
     use serde_json::json;
 
-    use super::parse_authz_resource;
+    use super::{capability_resource_selector, parse_authz_resource};
 
     #[test]
     fn realm_selector_uses_realm_id_as_resource() {
@@ -288,6 +288,43 @@ mod tests {
         assert_eq!(
             parsed.resource,
             "ak:strand:01970000-0000-7000-8000-000000000002"
+        );
+    }
+
+    #[test]
+    fn persisted_resource_is_reencoded_with_closed_selector_fields() {
+        const REALM: &str = "ak:realm:01970000-0000-7000-8000-000000000001";
+        const CIRCLE: &str = "ak:circle:01970000-0000-7000-8000-000000000002";
+        const STRAND: &str = "ak:strand:01970000-0000-7000-8000-000000000003";
+
+        let realm =
+            serde_json::to_value(capability_resource_selector(REALM, REALM).unwrap()).unwrap();
+        assert_eq!(realm, json!({"kind": "realm", "realm_id": REALM}));
+
+        let circle =
+            serde_json::to_value(capability_resource_selector(REALM, CIRCLE).unwrap()).unwrap();
+        assert_eq!(
+            circle,
+            json!({"kind": "circle", "realm_id": REALM, "circle_id": CIRCLE})
+        );
+
+        let strand =
+            serde_json::to_value(capability_resource_selector(REALM, STRAND).unwrap()).unwrap();
+        assert_eq!(
+            strand,
+            json!({"kind": "strand", "realm_id": REALM, "strand_id": STRAND})
+        );
+
+        let object =
+            serde_json::to_value(capability_resource_selector(REALM, "document:summary").unwrap())
+                .unwrap();
+        assert_eq!(
+            object,
+            json!({
+                "kind": "object",
+                "realm_id": REALM,
+                "object_ref": "document:summary"
+            })
         );
     }
 }
@@ -568,26 +605,25 @@ fn capability_resource_selector(
     } else if resource == realm_id || resource.starts_with("ak:realm:") {
         json!({
             "kind": "realm",
-            "realm_id": realm_id,
-            "id": resource,
+            "realm_id": resource,
         })
     } else if resource.starts_with("ak:circle:") {
         json!({
             "kind": "circle",
             "realm_id": realm_id,
-            "id": resource,
+            "circle_id": resource,
         })
     } else if resource.starts_with("ak:strand:") {
         json!({
             "kind": "strand",
             "realm_id": realm_id,
-            "id": resource,
+            "strand_id": resource,
         })
     } else {
         json!({
             "kind": "object",
             "realm_id": realm_id,
-            "id": resource,
+            "object_ref": resource,
         })
     };
     serde_json::from_value(value)
