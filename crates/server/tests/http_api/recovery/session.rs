@@ -252,7 +252,7 @@ async fn recovery_session_create_and_get_roundtrip() {
 async fn recovery_session_create_requires_active_policy() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[102u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
+    let (principal_id, _) = did_key_principal(&signing);
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
