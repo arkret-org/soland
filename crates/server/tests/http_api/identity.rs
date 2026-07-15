@@ -226,11 +226,15 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
 
     let unauthorized_did_signing = SigningKey::from_bytes(&[39u8; 32]);
     let unauthorized_update_signing = SigningKey::from_bytes(&[40u8; 32]);
+    let unauthorized_next_update_signing = SigningKey::from_bytes(&[43u8; 32]);
     let unauthorized = TestClient::post("http://server/_soland/root/identity/webvh/register")
         .json(&serde_json::json!({
             "local_id": "mallory",
             "did_public_key_multibase": test_ed25519_multibase_public(&unauthorized_did_signing),
-            "update_public_key_multibase": test_ed25519_multibase_public(&unauthorized_update_signing)
+            "update_public_key_multibase": test_ed25519_multibase_public(&unauthorized_update_signing),
+            "next_update_public_key_multibase": test_ed25519_multibase_public(
+                &unauthorized_next_update_signing
+            )
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -254,14 +258,17 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
 
     let did_signing = SigningKey::from_bytes(&[41u8; 32]);
     let update_signing = SigningKey::from_bytes(&[42u8; 32]);
+    let next_update_signing = SigningKey::from_bytes(&[44u8; 32]);
     let did_public_key = test_ed25519_multibase_public(&did_signing);
     let update_public_key = test_ed25519_multibase_public(&update_signing);
+    let next_update_public_key = test_ed25519_multibase_public(&next_update_signing);
     let version_time = "2026-05-12T00:00:00Z";
     let proof = test_embedded_webvh_proof(
         "https://soland.example",
         "alice",
         &did_public_key,
         &update_public_key,
+        &next_update_public_key,
         "did-key-1",
         &update_signing,
         version_time,
@@ -273,6 +280,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
             "local_id": "alice",
             "did_public_key_multibase": did_public_key,
             "update_public_key_multibase": update_public_key,
+            "next_update_public_key_multibase": next_update_public_key,
             "did_key_id": "did-key-1",
             "update_key_id": "update-key-1",
             "also_known_as": ["acct:alice@example.com"],

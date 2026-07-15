@@ -446,9 +446,9 @@ async fn events_describe_and_single_event_submit_work() {
         "ak:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
-    // Realm selector → spec Realm Seal view: the registered sourcing for
-    // single-leaf seal_basis / seal_ref. The Genesis Seal is materialized on
-    // demand for a Realm this deployment notarizes.
+    // Realm selector exposes only an accepted Seal. A projection-only fixture
+    // has no canonical Control Event history, so it must not receive a
+    // synthetic Seal.
     let seeded = seed_test_realm(
         &state,
         "did:web:alice.example",
@@ -651,7 +651,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
             op_type: arkret_sdk::LatticeOpType::Transition,
             tag: None,
             value: None,
-            from: Some(serde_json::json!("invited")),
+            from: Some(serde_json::json!("leave")),
             to: Some(serde_json::json!("join")),
             reason: None,
             issuer_seq: None,

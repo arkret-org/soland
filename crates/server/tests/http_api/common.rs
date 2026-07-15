@@ -986,6 +986,7 @@ pub(crate) fn test_embedded_webvh_proof(
     local_id: &str,
     did_public_key_multibase: &str,
     update_public_key_multibase: &str,
+    next_update_public_key_multibase: &str,
     did_key_fragment: &str,
     update_signing: &SigningKey,
     version_time: &str,
@@ -1000,6 +1001,9 @@ pub(crate) fn test_embedded_webvh_proof(
             "scid": "{SCID}",
             "method": "did:webvh:1.0",
             "updateKeys": [update_public_key_multibase],
+            "nextKeyHashes": [test_sha256_multihash_base58btc(
+                next_update_public_key_multibase.as_bytes()
+            )],
         },
         "state": {
             "@context": ["https://www.w3.org/ns/did/v1"],

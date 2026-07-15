@@ -107,7 +107,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "one-time key claim must be single-use"
     );
 
-    let invalid_device_message = TestClient::post("http://server/_arkret/self/device_messages")
+    let mut invalid_device_message = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "bad-txn", true)
         .json(&serde_json::json!({
@@ -124,7 +124,15 @@ async fn auth_keys_device_messages_and_blobs_work() {
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(invalid_device_message.status_code.unwrap().as_u16(), 400);
+    assert_eq!(
+        invalid_device_message.status_code.unwrap(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let invalid_device_message_body: Value = invalid_device_message.take_json().await.unwrap();
+    assert_eq!(
+        invalid_device_message_body["error"]["code"],
+        "schema_violation"
+    );
 
     let send: Value = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
