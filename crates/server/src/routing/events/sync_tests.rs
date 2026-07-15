@@ -193,6 +193,37 @@ fn timeline_position_disambiguates_same_second_events() {
     assert!(welcome_message > realm_create);
 }
 
+fn test_presence_envelope(
+    actor: &str,
+    device: &str,
+    status: &str,
+    sent_at: DateTime<Utc>,
+) -> arkret_sdk::EphemeralEnvelope {
+    let envelope_device = if arkret_sdk::DeviceId::new(device.to_owned()).is_ok() {
+        device
+    } else {
+        "ak:device:01904100-0000-7000-8000-000000000001"
+    };
+    serde_json::from_value(serde_json::json!({
+        "kind": "ak.presence",
+        "realm_id": "ak:realm:01964137-0000-7000-8000-000000000001",
+        "actor_id": actor,
+        "device_id": envelope_device,
+        "sent_at": sent_at,
+        "expires_at": sent_at + ChronoDuration::seconds(60),
+        "payload": {"state": status},
+        "proof": {
+            "kind": "detached_jws",
+            "alg": "EdDSA",
+            "verification_method": format!("{actor}#{envelope_device}"),
+            "event_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "created_at": sent_at,
+            "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+        }
+    }))
+    .unwrap()
+}
+
 fn presence_record(device: &str, status: &str, updated_at: DateTime<Utc>) -> PresenceRecord {
     PresenceRecord {
         actor: "did:web:alice.example".to_owned(),
@@ -202,6 +233,7 @@ fn presence_record(device: &str, status: &str, updated_at: DateTime<Utc>) -> Pre
         last_active_at: None,
         expires_at: Some(updated_at + ChronoDuration::seconds(60)),
         updated_at,
+        envelope: test_presence_envelope("did:web:alice.example", device, status, updated_at),
     }
 }
 
@@ -249,6 +281,12 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
             last_active_at: None,
             expires_at: Some(now() + ChronoDuration::seconds(60)),
             updated_at: now(),
+            envelope: test_presence_envelope(
+                ROSTER_ACTOR,
+                "ak:device:01904100-0000-7000-8000-a11ce0000001",
+                "dnd",
+                now(),
+            ),
         })
         .await
         .expect("presence stored");

@@ -1492,5 +1492,44 @@ pub(crate) async fn persist_test_message(
         created_at: chrono::Utc::now(),
     };
     state.persistence.messages().put(&record).await.unwrap();
+    let envelope = signed_canonical_event(
+        &record.event_id,
+        "ak.message.create",
+        sender,
+        "01904100-0000-7000-8000-a11ce0000001",
+        realm_id,
+        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        Vec::new(),
+        serde_json::json!({
+            "strand_id": expected_strand_id_for_scope(realm_id),
+            "track_name": "discussion",
+            "content": {
+                "kind": "ak.content.text",
+                "body": body,
+                "format": "plain"
+            }
+        }),
+    );
+    let canonical_digest = envelope["proofs"][0]["event_digest"]
+        .as_str()
+        .expect("signed fixture digest")
+        .to_owned();
+    state
+        .persistence
+        .events()
+        .put(soland::state::CanonicalEventRecord {
+            event_id: record.event_id.clone(),
+            actor_id: sender.to_owned(),
+            actor_seq: envelope["actor_seq"].as_u64().unwrap(),
+            realm_id: Some(realm_id.to_owned()),
+            kind: "ak.message.create".to_owned(),
+            schema_id: "ak.schema.event_envelope.v1".to_owned(),
+            canonical_digest,
+            canonical_bytes: arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap(),
+            envelope,
+            received_at: record.created_at,
+        })
+        .await
+        .unwrap();
     record
 }

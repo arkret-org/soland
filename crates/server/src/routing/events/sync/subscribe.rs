@@ -474,32 +474,33 @@ pub(crate) async fn presence_events_for_actors(
     state: &AppState,
     actors: BTreeSet<String>,
     session: Option<&SessionRecord>,
-) -> Vec<arkret_sdk::Event> {
-    let mut latest = BTreeMap::<String, (DateTime<Utc>, arkret_sdk::Event)>::new();
-    for record in state
-        .persistence
-        .events()
-        .snapshot_all()
-        .await
-        .unwrap_or_default()
-    {
-        if record.kind != arkret_sdk::events::kinds::PRESENCE
-            || !actors.contains(&record.actor_id)
-            || !presence_visible_to_session(state, &record.actor_id, session).await
-        {
+) -> Vec<arkret_sdk::EphemeralEnvelope> {
+    let now = Utc::now();
+    let mut events = Vec::new();
+    for actor in actors {
+        if !presence_visible_to_session(state, &actor, session).await {
             continue;
         }
-        let Ok(event) = serde_json::from_value::<arkret_sdk::Event>(record.envelope) else {
-            continue;
-        };
-        let replace = latest
-            .get(&record.actor_id)
-            .is_none_or(|(received_at, _)| record.received_at > *received_at);
-        if replace {
-            latest.insert(record.actor_id, (record.received_at, event));
-        }
+        events.extend(
+            state
+                .persistence
+                .presence()
+                .list_for_actor(&actor)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|record| !presence_record_expired(record, now))
+                .map(|record| record.envelope),
+        );
     }
-    latest.into_values().map(|(_, event)| event).collect()
+    events.sort_by_key(|event| {
+        (
+            event.actor_id.clone(),
+            event.device_id.clone(),
+            event.sent_at,
+        )
+    });
+    events
 }
 
 /// One actor's presence after merging their per-device broadcasts

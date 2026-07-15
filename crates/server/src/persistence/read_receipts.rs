@@ -178,15 +178,19 @@ struct ReadReceiptRelayRow {
     visibility: String,
     #[diesel(sql_type = Jsonb)]
     receipt: Value,
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
     expires_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl From<ReadReceiptRelayRow> for ReadReceiptRelayRecord {
-    fn from(row: ReadReceiptRelayRow) -> Self {
-        Self {
+impl TryFrom<ReadReceiptRelayRow> for ReadReceiptRelayRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: ReadReceiptRelayRow) -> PersistenceResult<Self> {
+        Ok(Self {
             realm_id: row.realm_id,
             actor_id: row.actor_id,
             sender_device: row.sender_device,
@@ -195,10 +199,15 @@ impl From<ReadReceiptRelayRow> for ReadReceiptRelayRecord {
             target_actor: row.target_actor,
             visibility: row.visibility,
             receipt: row.receipt,
+            envelope: serde_json::from_value(row.envelope).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "stored read receipt envelope is invalid: {error}"
+                ))
+            })?,
             created_at: row.created_at,
             expires_at: row.expires_at,
             position: row.position.max(0) as u64,
-        }
+        })
     }
 }
 
@@ -211,6 +220,9 @@ struct ReadReceiptWatermarkRow {
 #[async_trait]
 impl ReadReceiptRelayStore for PgReadReceiptRelayStore {
     async fn append(&self, mut record: ReadReceiptRelayRecord) -> PersistenceResult<()> {
+        let envelope = serde_json::to_value(&record.envelope).map_err(|error| {
+            PersistenceError::Internal(format!("failed to encode read receipt envelope: {error}"))
+        })?;
         let mut conn = pg_conn(&self.pool).await?;
         let position_row = sql_query(
             "INSERT INTO read_receipt_relay_position (realm_id, next_position, updated_at) \
@@ -229,8 +241,8 @@ impl ReadReceiptRelayStore for PgReadReceiptRelayStore {
 
         sql_query(
             "INSERT INTO read_receipt_relay \
-             (id, realm_id, position, actor_id, sender_device, event_id, read_scope, target_actor, visibility, receipt, created_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+             (id, realm_id, position, actor_id, sender_device, event_id, read_scope, target_actor, visibility, receipt, envelope, created_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind::<SqlUuid, _>(Uuid::now_v7())
         .bind::<Text, _>(&record.realm_id)
@@ -242,6 +254,7 @@ impl ReadReceiptRelayStore for PgReadReceiptRelayStore {
         .bind::<Nullable<Text>, _>(record.target_actor.as_deref())
         .bind::<Text, _>(&record.visibility)
         .bind::<Jsonb, _>(&record.receipt)
+        .bind::<Jsonb, _>(&envelope)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.expires_at)
         .execute(&mut *conn)
@@ -267,7 +280,7 @@ impl ReadReceiptRelayStore for PgReadReceiptRelayStore {
     ) -> PersistenceResult<Vec<ReadReceiptRelayRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT realm_id, position, actor_id, sender_device, event_id, read_scope, target_actor, visibility, receipt, created_at, expires_at \
+            "SELECT realm_id, position, actor_id, sender_device, event_id, read_scope, target_actor, visibility, receipt, envelope, created_at, expires_at \
              FROM read_receipt_relay \
              WHERE realm_id = $1 AND expires_at > NOW() \
              ORDER BY position ASC",
@@ -276,7 +289,9 @@ impl ReadReceiptRelayStore for PgReadReceiptRelayStore {
         .load::<ReadReceiptRelayRow>(&mut *conn)
         .await
         .map_err(PersistenceError::from)?;
-        Ok(rows.into_iter().map(ReadReceiptRelayRecord::from).collect())
+        rows.into_iter()
+            .map(ReadReceiptRelayRecord::try_from)
+            .collect()
     }
 
     async fn list_for_event(
@@ -285,7 +300,7 @@ impl ReadReceiptRelayStore for PgReadReceiptRelayStore {
     ) -> PersistenceResult<Vec<ReadReceiptRelayRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT realm_id, position, actor_id, sender_device, event_id, read_scope, target_actor, visibility, receipt, created_at, expires_at \
+            "SELECT realm_id, position, actor_id, sender_device, event_id, read_scope, target_actor, visibility, receipt, envelope, created_at, expires_at \
              FROM read_receipt_relay \
              WHERE event_id = $1 AND expires_at > NOW() \
              ORDER BY position ASC",
@@ -294,7 +309,9 @@ impl ReadReceiptRelayStore for PgReadReceiptRelayStore {
         .load::<ReadReceiptRelayRow>(&mut *conn)
         .await
         .map_err(PersistenceError::from)?;
-        Ok(rows.into_iter().map(ReadReceiptRelayRecord::from).collect())
+        rows.into_iter()
+            .map(ReadReceiptRelayRecord::try_from)
+            .collect()
     }
 
     async fn prune_expired(&self) -> PersistenceResult<usize> {

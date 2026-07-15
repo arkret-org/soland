@@ -213,8 +213,8 @@ CREATE TABLE public.blobs (
 
 -- Realm-broadcast relay for `ak.call.signal` ephemeral envelopes
 -- (`webrtc-signaling.md` §5). One row per relayed signed envelope, retained
--- until `expires_at`; receivers pick it up off the subscribe
--- `ephemeral.call_signals` segment and verify the carried `proof`. `position`
+-- until `expires_at`; receivers pick it up from the subscribe Realm
+-- `ephemeral.events` container and verify the carried `proof`. `position`
 -- is a monotonic per-Realm deliver-once cursor sourced from
 -- `call_signal_relay_position`.
 CREATE TABLE public.call_signal_relay (
@@ -268,6 +268,7 @@ CREATE TABLE public.read_receipt_relay (
     target_actor text,
     visibility text NOT NULL,
     receipt jsonb NOT NULL,
+    envelope jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL
 );
@@ -872,6 +873,7 @@ CREATE TABLE public.presence (
     status text NOT NULL,
     status_message text,
     last_active_at text,
+    envelope jsonb NOT NULL,
     expires_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );

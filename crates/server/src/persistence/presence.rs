@@ -23,7 +23,7 @@ pub trait TypingStore: Send + Sync {
 
 /// Realm-broadcast relay for `ak.call.signal` ephemeral envelopes
 /// (`webrtc-signaling.md` §5). Stores the verbatim signed envelope per Realm
-/// with a TTL; receivers pick it up off the subscribe `ephemeral.call_signals`
+/// with a TTL; receivers pick it up from the subscribe `ephemeral.events`
 /// segment and verify the carried `proof`. Auto-prunes expired entries and
 /// caps each Realm to the most recent `CALL_SIGNAL_RELAY_MAX_PER_REALM`.
 ///
@@ -271,11 +271,15 @@ struct PresenceRow {
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
 }
 
-impl From<PresenceRow> for PresenceRecord {
-    fn from(row: PresenceRow) -> Self {
-        Self {
+impl TryFrom<PresenceRow> for PresenceRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: PresenceRow) -> PersistenceResult<Self> {
+        Ok(Self {
             actor: row.actor,
             device_id: row.device_id,
             status: row.status,
@@ -283,23 +287,32 @@ impl From<PresenceRow> for PresenceRecord {
             last_active_at: row.last_active_at,
             expires_at: row.expires_at,
             updated_at: row.updated_at,
-        }
+            envelope: serde_json::from_value(row.envelope).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "stored presence envelope is invalid: {error}"
+                ))
+            })?,
+        })
     }
 }
 
 #[async_trait]
 impl PresenceStore for PgPresenceStore {
     async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
+        let envelope = serde_json::to_value(&presence.envelope).map_err(|error| {
+            PersistenceError::Internal(format!("failed to encode presence envelope: {error}"))
+        })?;
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO presence (id, device_id, status, status_message, last_active_at, expires_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+            "INSERT INTO presence (id, device_id, status, status_message, last_active_at, expires_at, updated_at, envelope) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (id, device_id) DO UPDATE SET \
                 status = EXCLUDED.status, \
                 status_message = EXCLUDED.status_message, \
                 last_active_at = EXCLUDED.last_active_at, \
                 expires_at = EXCLUDED.expires_at, \
-                updated_at = EXCLUDED.updated_at",
+                updated_at = EXCLUDED.updated_at, \
+                envelope = EXCLUDED.envelope",
         )
         .bind::<Text, _>(&presence.actor)
         .bind::<Text, _>(&presence.device_id)
@@ -308,6 +321,7 @@ impl PresenceStore for PgPresenceStore {
         .bind::<Nullable<Text>, _>(&presence.last_active_at)
         .bind::<Nullable<Timestamptz>, _>(presence.expires_at)
         .bind::<Timestamptz, _>(presence.updated_at)
+        .bind::<Jsonb, _>(&envelope)
         .execute(&mut *conn)
         .await
         .map(|_| ())
@@ -317,14 +331,16 @@ impl PresenceStore for PgPresenceStore {
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<PresenceRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id AS actor, device_id, status, status_message, last_active_at, expires_at, updated_at \
+            "SELECT id AS actor, device_id, status, status_message, last_active_at, expires_at, updated_at, envelope \
              FROM presence WHERE id = $1",
         )
         .bind::<Text, _>(actor)
         .load::<PresenceRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(PresenceRecord::from).collect())
-        .map_err(PersistenceError::from)
+        .map_err(PersistenceError::from)?
+        .into_iter()
+        .map(PresenceRecord::try_from)
+        .collect()
     }
 
     async fn delete(&self, actor: &str) -> PersistenceResult<()> {
@@ -371,17 +387,23 @@ struct CallSignalRelayRow {
     expires_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl From<CallSignalRelayRow> for CallSignalRelayRecord {
-    fn from(row: CallSignalRelayRow) -> Self {
-        Self {
+impl TryFrom<CallSignalRelayRow> for CallSignalRelayRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: CallSignalRelayRow) -> PersistenceResult<Self> {
+        Ok(Self {
             realm_id: row.realm_id,
             sender_actor: row.sender_actor,
             sender_device: row.sender_device,
             call_id: row.call_id,
             expires_at: row.expires_at,
-            envelope: row.envelope,
+            envelope: serde_json::from_value(row.envelope).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "stored call signal envelope is invalid: {error}"
+                ))
+            })?,
             position: row.position.max(0) as u64,
-        }
+        })
     }
 }
 
@@ -394,6 +416,9 @@ struct CallSignalWatermarkRow {
 #[async_trait]
 impl CallSignalRelayStore for PgCallSignalRelayStore {
     async fn append(&self, mut record: CallSignalRelayRecord) -> PersistenceResult<()> {
+        let envelope = serde_json::to_value(&record.envelope).map_err(|error| {
+            PersistenceError::Internal(format!("failed to encode call signal envelope: {error}"))
+        })?;
         let mut conn = pg_conn(&self.pool).await?;
         // Assign the monotonic per-Realm position from a dedicated counter that
         // never decreases — even after the relay log is pruned — so a recycled
@@ -425,7 +450,7 @@ impl CallSignalRelayStore for PgCallSignalRelayStore {
         .bind::<Text, _>(&record.sender_actor)
         .bind::<Text, _>(&record.sender_device)
         .bind::<Text, _>(&record.call_id)
-        .bind::<Jsonb, _>(&record.envelope)
+        .bind::<Jsonb, _>(&envelope)
         .bind::<Timestamptz, _>(record.expires_at)
         .execute(&mut *conn)
         .await
@@ -463,7 +488,9 @@ impl CallSignalRelayStore for PgCallSignalRelayStore {
         .load::<CallSignalRelayRow>(&mut *conn)
         .await
         .map_err(PersistenceError::from)?;
-        Ok(rows.into_iter().map(CallSignalRelayRecord::from).collect())
+        rows.into_iter()
+            .map(CallSignalRelayRecord::try_from)
+            .collect()
     }
 
     async fn prune_expired(&self) -> PersistenceResult<usize> {

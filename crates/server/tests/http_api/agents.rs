@@ -51,6 +51,72 @@ async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
         .unwrap();
 }
 
+async fn seed_agent_provision_prerequisites(state: &AppState, controller: &str) {
+    let now = chrono::Utc::now();
+    let policy_id = new_prefixed_uuid7("ak:policy:");
+    state
+        .persistence
+        .recovery_policies()
+        .insert(soland::state::RecoveryPolicyRecord {
+            policy_id: policy_id.clone(),
+            principal_id: controller.to_owned(),
+            version: 1,
+            trust_domain: "ak:trust_domain:soland.local".to_owned(),
+            allowed_proof_kinds: vec!["principal_signing".to_owned()],
+            supersedes: None,
+            expires_at: Some(now + chrono::Duration::days(30)),
+            issued_at: now,
+            raw_payload: serde_json::json!({
+                "schema": "ak.schema.recovery_policy.v1",
+                "policy_id": policy_id,
+                "principal_id": controller,
+                "version": 1,
+                "trust_domain": "ak:trust_domain:soland.local",
+                "allowed_proof_kinds": ["principal_signing"],
+                "issued_at": now,
+                "expires_at": now + chrono::Duration::days(30)
+            }),
+            accepted_at: now,
+            verification_method: format!("{controller}#controller-key"),
+        })
+        .await
+        .unwrap();
+
+    let realm_id = soland::test_support::principal_control_realm_for_did(controller);
+    let typed_realm_id = arkret_sdk::RealmId::new(realm_id.clone()).unwrap();
+    let mut entry = soland::state::RealmDirectoryEntry::new(typed_realm_id, "Principal Control");
+    entry
+        .members
+        .insert(arkret_sdk::Did::new(controller.to_owned()).unwrap());
+    state.realms.lock().upsert(entry);
+    state
+        .persistence
+        .realm_meta()
+        .put(
+            &realm_id,
+            &soland::state::RealmMetaRecord {
+                owner: controller.to_owned(),
+                deleted: false,
+                discoverability: "private".to_owned(),
+                history_visibility: "joined".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
+                encryption_profile: Some("mls_rfc9420".to_owned()),
+                plaintext_visible_services: Default::default(),
+                plaintext_visible_service_classes: Default::default(),
+                minimal_metadata_realm: false,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn production_agent_provision_fails_closed_without_durable_fanout() {
     let mut config = test_config();
@@ -59,6 +125,7 @@ async fn production_agent_provision_fails_closed_without_durable_fanout() {
     let controller = "did:web:alice.example";
     let token = "prod-agent-provision-session";
     seed_controller_session(&state, token, controller).await;
+    seed_agent_provision_prerequisites(&state, controller).await;
 
     let mut response = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -110,6 +177,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     let controller = "did:web:alice.example";
     let token = "agent-list-session";
     seed_controller_session(&state, token, controller).await;
+    seed_agent_provision_prerequisites(&state, controller).await;
 
     let requested_scope = serde_json::json!({
         "actions": [

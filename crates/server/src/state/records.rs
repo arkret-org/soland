@@ -760,6 +760,8 @@ pub struct PresenceRecord {
     /// fallback to aggregation.
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// Original proof-bearing broadcast envelope delivered to subscribers.
+    pub envelope: arkret_sdk::EphemeralEnvelope,
 }
 
 #[derive(Clone, Debug)]
@@ -769,19 +771,21 @@ pub struct TypingRecord {
     pub scope_id: Option<String>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// Original proof-bearing broadcast envelope delivered to subscribers.
+    pub envelope: arkret_sdk::EphemeralEnvelope,
 }
 
 /// Relayed `ak.call.signal` envelope for realm-broadcast ephemeral delivery
 /// (`webrtc-signaling.md` §5). The full signed envelope is stored verbatim so
 /// the receiver can verify `proof` over the canonical bytes.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct CallSignalRelayRecord {
     pub realm_id: String,
     pub sender_actor: String,
     pub sender_device: String,
     pub call_id: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub envelope: serde_json::Value,
+    pub envelope: arkret_sdk::EphemeralEnvelope,
     /// Monotonic per-Realm position assigned by `CallSignalRelayStore::append`.
     /// Drives per-subscriber-device deliver-once: a subscriber's watermark
     /// records the highest `position` already delivered to that device, so an
@@ -793,7 +797,7 @@ pub struct CallSignalRelayRecord {
 /// Relayed `ak.receipt.read` payload for short-TTL read receipt delivery.
 /// The normalized `receipt` value is the wire object emitted to subscribers;
 /// relay metadata drives visibility and deliver-once behavior.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ReadReceiptRelayRecord {
     pub realm_id: String,
     pub actor_id: String,
@@ -803,6 +807,7 @@ pub struct ReadReceiptRelayRecord {
     pub target_actor: Option<String>,
     pub visibility: String,
     pub receipt: serde_json::Value,
+    pub envelope: arkret_sdk::EphemeralEnvelope,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     /// Monotonic per-Realm position assigned by `ReadReceiptRelayStore::append`.

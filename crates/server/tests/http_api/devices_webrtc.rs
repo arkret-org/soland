@@ -27,7 +27,7 @@ fn pair_device_pubkey(device_id: &str) -> Value {
         "kty": "OKP",
         "kid": device_id,
         "alg": "EdDSA",
-        "public_key": test_ed25519_multibase_public(&signing)
+        "key": test_ed25519_multibase_public(&signing)
     })
 }
 
@@ -57,7 +57,7 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     let token = dev_token(state.clone()).await;
     let sibling = "ak:device:01904100-0000-7000-8000-9b04e0000008";
     let sibling_pubkey = pair_device_pubkey(sibling);
-    let sibling_device_public_key = sibling_pubkey["public_key"].as_str().unwrap();
+    let sibling_device_public_key = sibling_pubkey["key"].as_str().unwrap();
 
     let unauthenticated = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .json(&serde_json::json!({
@@ -1226,18 +1226,18 @@ async fn post_ephemeral(state: AppState, token: &str, envelope: &Value) -> salvo
 }
 
 /// Extract the verbatim relayed `ak.call.signal` envelopes from a subscribe
-/// frame's per-Realm `ephemeral` segment (the typed `ak.call.signal` item).
+/// frame's canonical ephemeral event container.
 fn call_signals_in_subscribe(frame: &Value, realm_id: &str) -> Vec<Value> {
     let Some(realm) = frame["realms"].get(realm_id) else {
         return Vec::new();
     };
-    let Some(ephemeral) = realm["ephemeral"].as_array() else {
+    let Some(ephemeral) = realm["ephemeral"]["events"].as_array() else {
         return Vec::new();
     };
     ephemeral
         .iter()
-        .filter(|item| item["type"] == "ak.call.signal")
-        .flat_map(|item| item["call_signals"].as_array().cloned().unwrap_or_default())
+        .filter(|item| item["kind"] == "ak.call.signal")
+        .cloned()
         .collect()
 }
 
@@ -1381,7 +1381,14 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
             sender_device: alice_device.to_owned(),
             call_id: call_id.to_owned(),
             expires_at: chrono::Utc::now() - chrono::Duration::seconds(1),
-            envelope: call_signal_envelope(alice, alice_device, call_id, "hangup", 2),
+            envelope: serde_json::from_value(call_signal_envelope(
+                alice,
+                alice_device,
+                call_id,
+                "hangup",
+                2,
+            ))
+            .unwrap(),
             position: 0,
         })
         .await

@@ -61,17 +61,17 @@ pub(crate) const LIST_EVENT_ID: &str = "ak:event:01964137-0000-7000-8000-0000000
 pub(crate) async fn open_recovery_session(
     state: AppState,
     token: &str,
-    _signing: &SigningKey,
+    signing: &SigningKey,
     principal_id: &str,
     vm: &str,
 ) -> Value {
     ingest_fresh_recovery_did_document(&state, principal_id).await;
     seed_recovery_policy(&state, principal_id, vm, 1, None).await;
+    ensure_cross_signing(state.clone(), principal_id, vm, signing);
     let create_body = serde_json::json!({
         "principal_id": principal_id,
         "trust_domain": "ak:trust_domain:soland.local",
         "requesting_device_id": "ak:device:01904100-0000-7000-8000-000000000099",
-        "ssk_generation": 1,
     });
     post_recovery(
         state,
@@ -81,6 +81,25 @@ pub(crate) async fn open_recovery_session(
         StatusCode::CREATED,
     )
     .await
+}
+
+pub(crate) fn ensure_cross_signing(
+    state: AppState,
+    principal_id: &str,
+    vm: &str,
+    signing: &SigningKey,
+) {
+    let principal = Did::new(principal_id.to_owned()).unwrap();
+    if state
+        .cross_signing
+        .lock()
+        .current_cross_signing(&principal)
+        .is_none()
+    {
+        let ssk = SigningKey::from_bytes(&[231u8; 32]);
+        let usk = SigningKey::from_bytes(&[232u8; 32]);
+        seed_cross_signing(&state, principal_id, vm, signing, &ssk, &usk);
+    }
 }
 
 /// Build the canonical recovery-proof transcript the server reconstructs, and

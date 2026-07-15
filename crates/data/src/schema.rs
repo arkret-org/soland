@@ -322,10 +322,15 @@ diesel::table! {
 }
 
 diesel::table! {
-    presence (id) {
+    presence (id, device_id) {
         id -> Text,
+        device_id -> Text,
         status -> Text,
+        status_message -> Nullable<Text>,
+        last_active_at -> Nullable<Text>,
+        expires_at -> Nullable<Timestamptz>,
         updated_at -> Timestamptz,
+        envelope -> Jsonb,
     }
 }
 
@@ -373,6 +378,7 @@ diesel::table! {
         target_actor -> Nullable<Text>,
         visibility -> Text,
         receipt -> Jsonb,
+        envelope -> Jsonb,
         created_at -> Timestamptz,
         expires_at -> Timestamptz,
     }

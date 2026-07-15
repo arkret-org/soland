@@ -229,9 +229,9 @@ async fn push_profile_and_moderation_contracts_work() {
     let presence_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     let profile = presence_event(&presence_sync, "did:web:alice.example");
     assert_eq!(profile["actor_id"], "did:web:alice.example");
-    assert_eq!(profile["status"], "dnd");
+    assert_eq!(profile["payload"]["state"], "dnd");
     assert_eq!(
-        profile["status_message"], "In a meeting",
+        profile["payload"]["status_message"], "In a meeting",
         "admitted status_message must survive into the presence projection: {profile}"
     );
 
@@ -246,17 +246,23 @@ async fn push_profile_and_moderation_contracts_work() {
             last_active_at: None,
             expires_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
             updated_at: chrono::Utc::now() - chrono::Duration::seconds(10),
+            envelope: serde_json::from_value(broadcast_ephemeral_envelope(
+                "ak.presence",
+                serde_json::json!({"state": "online"}),
+            ))
+            .unwrap(),
         })
         .await
         .unwrap();
     let stale_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
-    let stale_profile = presence_event(&stale_sync, "did:web:alice.example");
-    assert_eq!(stale_profile["status"], "offline");
-    let last_active_at = stale_profile["last_active_at"]
-        .as_str()
-        .expect("stale presence emits bucketed last_active_at");
-    assert!(last_active_at.ends_with("/PT1H"));
-    assert!(stale_profile.get("last_active").is_none());
+    assert!(
+        stale_sync["presence"]["events"]
+            .as_array()
+            .is_some_and(|events| events
+                .iter()
+                .all(|event| event["actor_id"] != "did:web:alice.example")),
+        "expired presence is represented by absence: {stale_sync}"
+    );
 
     let typing_strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000003";
     insert_typing_scope_strand(state.clone(), typing_strand_id, Some(true));
@@ -486,6 +492,11 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
             last_active_at: None,
             expires_at: Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
             updated_at: chrono::Utc::now(),
+            envelope: serde_json::from_value(broadcast_ephemeral_envelope(
+                "ak.presence",
+                serde_json::json!({"state": "online"}),
+            ))
+            .unwrap(),
         })
         .await
         .unwrap();
@@ -763,19 +774,15 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
         &format!("catchup=true&after={cursor}"),
     )
     .await;
-    let ephemeral = delta["realms"][DEMO_REALM_ID]["ephemeral"]
+    let ephemeral = delta["realms"][DEMO_REALM_ID]["ephemeral"]["events"]
         .as_array()
         .unwrap_or_else(|| panic!("incremental typing delta must include realm: {delta}"));
     assert!(
         ephemeral.iter().any(|entry| {
-            entry["type"] == "ak.typing"
+            entry["kind"] == "ak.typing"
                 && entry["realm_id"] == DEMO_REALM_ID
-                && entry["strand_id"] == strand_id
-                && entry["actors"].as_array().is_some_and(|actors| {
-                    actors
-                        .iter()
-                        .any(|actor| actor["actor"] == "did:web:alice.example")
-                })
+                && entry["payload"]["strand_id"] == strand_id
+                && entry["actor_id"] == "did:web:alice.example"
         }),
         "incremental typing delta must include Alice typing: {delta}"
     );
@@ -924,18 +931,14 @@ async fn typing_fanout_respects_receiver_blocklist() {
     assert_eq!(typing["accepted"], true);
 
     let bob_sync = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
-    let bob_ephemeral = bob_sync["realms"][DEMO_REALM_ID]["ephemeral"]
+    let bob_ephemeral = bob_sync["realms"][DEMO_REALM_ID]["ephemeral"]["events"]
         .as_array()
         .expect("demo realm ephemeral segment");
     assert!(
-        bob_ephemeral.iter().all(|entry| {
-            entry["type"] != "ak.typing"
-                || entry["actors"].as_array().is_none_or(|actors| {
-                    actors
-                        .iter()
-                        .all(|actor| actor["actor"] != "did:web:alice.example")
-                })
-        }),
+        bob_ephemeral
+            .iter()
+            .all(|entry| entry["kind"] != "ak.typing"
+                || entry["actor_id"] != "did:web:alice.example"),
         "Bob's blocklist must suppress Alice typing fanout: {bob_ephemeral:?}"
     );
 }
@@ -963,24 +966,25 @@ async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
             scope_id: Some(strand_id.to_owned()),
             expires_at: now + chrono::Duration::seconds(30),
             updated_at: now,
+            envelope: serde_json::from_value(broadcast_ephemeral_envelope(
+                "ak.typing",
+                serde_json::json!({"strand_id": strand_id, "typing": true}),
+            ))
+            .unwrap(),
         })
         .await
         .unwrap();
 
     let bob_sync = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
-    let bob_ephemeral = bob_sync["realms"][DEMO_REALM_ID]["ephemeral"]
+    let bob_ephemeral = bob_sync["realms"][DEMO_REALM_ID]["ephemeral"]["events"]
         .as_array()
         .cloned()
         .unwrap_or_default();
     assert!(
-        bob_ephemeral.iter().all(|entry| {
-            entry["type"] != "ak.typing"
-                || entry["actors"].as_array().is_none_or(|actors| {
-                    actors
-                        .iter()
-                        .all(|actor| actor["actor"] != "did:web:alice.example")
-                })
-        }),
+        bob_ephemeral
+            .iter()
+            .all(|entry| entry["kind"] != "ak.typing"
+                || entry["actor_id"] != "did:web:alice.example"),
         "disabled discussion track must suppress cached typing fanout: {bob_ephemeral:?}"
     );
 }

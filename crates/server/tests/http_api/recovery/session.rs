@@ -252,7 +252,7 @@ async fn recovery_session_create_and_get_roundtrip() {
 async fn recovery_session_create_requires_active_policy() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[102u8; 32]);
-    let (principal_id, _vm) = did_key_principal(&signing);
+    let (principal_id, vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -265,7 +265,6 @@ async fn recovery_session_create_requires_active_policy() {
         "principal_id": principal_id,
         "trust_domain": "ak:trust_domain:soland.local",
         "requesting_device_id": "ak:device:01904100-0000-7000-8000-000000000099",
-        "ssk_generation": 1,
     });
     let body = post_recovery(
         state,
@@ -429,7 +428,7 @@ async fn recovery_session_principal_signing_rejects_bad_signature() {
 async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[134u8; 32]);
-    let (principal_id, _vm) = did_key_principal(&signing);
+    let (principal_id, vm) = did_key_principal(&signing);
     let service_key = SigningKey::from_bytes(&[135u8; 32]);
     let (service_id, service_vm) = did_key_principal(&service_key);
     seed_reset_recovery_policy(
@@ -441,6 +440,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
         }),
     )
     .await;
+    ensure_cross_signing(state.clone(), &principal_id, &vm, &signing);
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -452,7 +452,6 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
         "principal_id": principal_id.clone(),
         "trust_domain": "ak:trust_domain:soland.local",
         "requesting_device_id": "ak:device:01904100-0000-7000-8000-000000000139",
-        "ssk_generation": 1,
     });
     let session = post_recovery(
         state.clone(),
@@ -540,7 +539,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
 async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_allows_retry() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[136u8; 32]);
-    let (principal_id, _vm) = did_key_principal(&signing);
+    let (principal_id, vm) = did_key_principal(&signing);
     let service_key = SigningKey::from_bytes(&[137u8; 32]);
     let (service_id, service_vm) = did_key_principal(&service_key);
     let attacker_service_key = SigningKey::from_bytes(&[138u8; 32]);
@@ -554,6 +553,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
         }),
     )
     .await;
+    ensure_cross_signing(state.clone(), &principal_id, &vm, &signing);
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -565,7 +565,6 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
         "principal_id": principal_id.clone(),
         "trust_domain": "ak:trust_domain:soland.local",
         "requesting_device_id": "ak:device:01904100-0000-7000-8000-000000000140",
-        "ssk_generation": 1,
     });
     let session = post_recovery(
         state.clone(),
@@ -663,7 +662,13 @@ async fn recovery_session_proof_rejects_challenge_mismatch() {
     let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
 
     let proof_body = serde_json::json!({
-        "proof": { "kind": "principal_signing", "challenge": "not-the-real-challenge" },
+        "proof": {
+            "kind": "principal_signing",
+            "challenge": "not-the-real-challenge",
+            "verification_method": vm,
+            "alg": "EdDSA",
+            "signature": "c2ln"
+        },
     });
     let body = post_recovery(
         state,
@@ -695,7 +700,25 @@ async fn recovery_session_proof_rejects_kind_not_allowed_by_policy() {
     // `device_quorum` is a valid enum value but the policy only allows
     // `principal_signing`.
     let proof_body = serde_json::json!({
-        "proof": { "kind": "device_quorum", "challenge": challenge },
+        "proof": {
+            "kind": "device_quorum",
+            "challenge": challenge,
+            "threshold": 2,
+            "signatures": [
+                {
+                    "device_id": "ak:device:01904100-0000-7000-8000-000000000071",
+                    "verification_method": format!("{principal_id}#device-a"),
+                    "alg": "EdDSA",
+                    "signature": "c2ln"
+                },
+                {
+                    "device_id": "ak:device:01904100-0000-7000-8000-000000000072",
+                    "verification_method": format!("{principal_id}#device-b"),
+                    "alg": "EdDSA",
+                    "signature": "c2ln"
+                }
+            ]
+        },
     });
     let body = post_recovery(
         state,

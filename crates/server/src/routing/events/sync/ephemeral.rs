@@ -115,7 +115,7 @@ pub(super) async fn submit_ephemeral(
 
 /// `webrtc-signaling.md` Â§5 â€” persist the verbatim signed `ak.call.signal`
 /// envelope into the realm-broadcast relay so subscribers in the Realm pick it
-/// up off `ephemeral.call_signals` and verify the carried `proof`. The
+/// up from `ephemeral.events` and verify the carried `proof`. The
 /// envelope is stored unmodified (proof intact) and pruned at its TTL.
 async fn relay_ephemeral_call_signal(
     state: &AppState,
@@ -124,18 +124,13 @@ async fn relay_ephemeral_call_signal(
     payload: &arkret_sdk::CallSignalPayload,
     envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<u64, crate::error::AppError> {
-    let envelope_value = serde_json::to_value(envelope).map_err(|error| {
-        crate::error::AppError::invalid_param(format!(
-            "ak.call.signal envelope is not serialisable: {error}"
-        ))
-    })?;
     let record = crate::state::CallSignalRelayRecord {
         realm_id: realm_id.to_owned(),
         sender_actor: session.actor.clone(),
         sender_device: session.device_id.clone(),
         call_id: payload.call_id.to_string(),
         expires_at: envelope.expires_at,
-        envelope: envelope_value,
+        envelope: envelope.clone(),
         // `append` assigns the monotonic per-Realm position.
         position: 0,
     };
@@ -240,6 +235,7 @@ async fn persist_ephemeral_typing(
                 scope_id: Some(strand_id),
                 expires_at: envelope.expires_at,
                 updated_at: chrono::Utc::now(),
+                envelope: envelope.clone(),
             })
             .await
         {
@@ -332,6 +328,7 @@ async fn persist_ephemeral_presence(
             last_active_at,
             expires_at: Some(envelope.expires_at),
             updated_at: chrono::Utc::now(),
+            envelope: envelope.clone(),
         })
         .await
     {

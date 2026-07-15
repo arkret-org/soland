@@ -221,13 +221,13 @@ fn receipts_in_subscribe(frame: &Value, realm_id: &str) -> Vec<Value> {
     let Some(realm) = frame["realms"].get(realm_id) else {
         return Vec::new();
     };
-    let Some(ephemeral) = realm["ephemeral"].as_array() else {
+    let Some(ephemeral) = realm["ephemeral"]["events"].as_array() else {
         return Vec::new();
     };
     ephemeral
         .iter()
-        .filter(|item| item["type"] == "ak.receipt.read")
-        .flat_map(|item| item["receipts"].as_array().cloned().unwrap_or_default())
+        .filter(|item| item["kind"] == "ak.receipt.read")
+        .filter_map(|item| item.get("payload").cloned())
         .collect()
 }
 

@@ -1,5 +1,36 @@
 use super::*;
 
+fn test_presence_envelope(
+    actor: &str,
+    device: &str,
+    status: &str,
+    sent_at: chrono::DateTime<Utc>,
+) -> arkret_sdk::EphemeralEnvelope {
+    let envelope_device = if arkret_sdk::DeviceId::new(device.to_owned()).is_ok() {
+        device
+    } else {
+        "ak:device:01904100-0000-7000-8000-000000000001"
+    };
+    serde_json::from_value(serde_json::json!({
+        "kind": "ak.presence",
+        "realm_id": "ak:realm:01964137-0000-7000-8000-000000000001",
+        "actor_id": actor,
+        "device_id": envelope_device,
+        "sent_at": sent_at,
+        "expires_at": sent_at + chrono::Duration::seconds(60),
+        "payload": {"state": status},
+        "proof": {
+            "kind": "detached_jws",
+            "alg": "EdDSA",
+            "verification_method": format!("{actor}#{envelope_device}"),
+            "event_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "created_at": sent_at,
+            "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+        }
+    }))
+    .unwrap()
+}
+
 fn runtime_approval_write(binding: &str) -> AgentRuntimeApprovalWrite {
     AgentRuntimeApprovalWrite {
         agent_id: "did:web:agent.example".to_owned(),
@@ -1029,6 +1060,7 @@ async fn memory_presence_store_put_list_matches_trait() {
         last_active_at: None,
         expires_at: Some(now + chrono::Duration::seconds(60)),
         updated_at: now,
+        envelope: test_presence_envelope("did:web:alice.example", "ak:device:a", "online", now),
     };
     store.put(record.clone()).await.unwrap();
 

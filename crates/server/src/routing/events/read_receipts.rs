@@ -67,6 +67,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
         target_actor: Some(target.actor_id.clone()),
         visibility: visibility.to_owned(),
         receipt: normalized.receipt,
+        envelope: envelope.clone(),
         created_at: normalized.created_at,
         expires_at: envelope.expires_at,
         position: 0,
@@ -156,6 +157,26 @@ pub(crate) async fn has_pending_read_receipts_for_subscriber(
     !pending_read_receipt_records_for_subscriber(state, realm_id, session, full_sync)
         .await
         .is_empty()
+}
+
+pub(crate) async fn deliver_read_receipt_envelopes_for_subscriber(
+    state: &AppState,
+    realm_id: &str,
+    session: Option<&SessionRecord>,
+    full_sync: bool,
+) -> Vec<arkret_sdk::EphemeralEnvelope> {
+    let records =
+        pending_read_receipt_records_for_subscriber(state, realm_id, session, full_sync).await;
+    if let (Some(session), Some(max_position)) =
+        (session, records.iter().map(|record| record.position).max())
+    {
+        let _ = state
+            .persistence
+            .read_receipt_relay()
+            .advance(&session.actor, &session.device_id, realm_id, max_position)
+            .await;
+    }
+    records.into_iter().map(|record| record.envelope).collect()
 }
 
 async fn pending_read_receipt_records_for_subscriber(
