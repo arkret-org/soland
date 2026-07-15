@@ -70,6 +70,16 @@ fn unauthenticated(message: &'static str) -> AuthError {
     (StatusCode::UNAUTHORIZED, "unauthenticated", message)
 }
 
+fn configured_service_audience(state: &AppState) -> Result<Did, AuthError> {
+    Did::new(state.config.service_id.clone()).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "auth_misconfigured",
+            "principal service_id is not a DID",
+        )
+    })
+}
+
 // ── Introspection cache ──────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -207,7 +217,7 @@ async fn introspect_session_grant_remote(
     let request = SessionGrantIntrospectRequestBody {
         id: None,
         grant_jwt: Some(grant_jwt.to_owned()),
-        audience: Some(state.config.service_id.clone()),
+        audience: Some(configured_service_audience(state)?),
         // The Account Authority returns non-secret grant metadata over this
         // authenticated S2S channel; holder possession is verified below by the
         // request's DPoP proof against the returned `cnf_jkt`.
@@ -544,7 +554,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
     grant_jwt: &str,
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<SessionRecord, AuthError> {
-    if grant.audience != state.config.service_id {
+    if grant.audience.as_str() != state.config.service_id {
         return Err(unauthenticated(
             "session grant audience does not match this principal server",
         ));
@@ -645,7 +655,7 @@ pub(crate) async fn grant_dpop_session(
     let grant = introspect_session_grant_cached(state, grant_jwt, force_fresh).await?;
 
     // 5. audience == this service's service_id.
-    if grant.audience != state.config.service_id {
+    if grant.audience.as_str() != state.config.service_id {
         return Err(unauthenticated(
             "session grant audience does not match this principal server",
         ));
@@ -880,7 +890,7 @@ mod tests {
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
             ),
-            audience: "did:web:soland.local".to_owned(),
+            audience: Did::new("did:web:soland.local".to_owned()).unwrap(),
             scopes: vec![
                 PRINCIPAL_SESSION_BIND_SCOPE.to_owned(),
                 format!("{DEVICE_SCOPE_PREFIX}ak:device:0196419b-0000-7000-8000-000000000001"),

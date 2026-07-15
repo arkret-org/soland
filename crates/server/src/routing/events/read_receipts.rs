@@ -61,7 +61,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
     let record = ReadReceiptRelayRecord {
         realm_id: realm_id.to_owned(),
         actor_id: session.actor.clone(),
-        sender_device: envelope.device_id.as_ref().map(ToString::to_string),
+        sender_device: Some(envelope.device_id.to_string()),
         event_id: normalized.event_id,
         read_scope: normalized.read_scope,
         target_actor: Some(target.actor_id.clone()),

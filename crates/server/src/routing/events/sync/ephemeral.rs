@@ -47,6 +47,9 @@ pub(super) async fn submit_ephemeral(
             "actor is not a joined member of the realm",
         ));
     }
+    if matches!(envelope.kind.as_str(), "ak.presence" | "ak.typing") {
+        verify_ephemeral_device_proof(state, &envelope).await?;
+    }
 
     let mut dispatched_to: Option<u64> = None;
     let should_wake_account_sync = match envelope.kind.as_str() {
@@ -213,7 +216,15 @@ async fn persist_ephemeral_typing(
         .unwrap_or(true);
     if typing {
         if presence_visibility_for_actor(state, actor).await == PresenceVisibilityPolicy::Nobody {
-            let _ = state.persistence.typing().remove(actor, realm_id).await;
+            state
+                .persistence
+                .typing()
+                .remove(actor, realm_id)
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, "failed to clear hidden ephemeral typing");
+                    ephemeral_channel_unavailable("clear hidden typing state")
+                })?;
             return Ok(());
         }
         let strand_id = envelope
@@ -226,7 +237,7 @@ async fn persist_ephemeral_typing(
                 crate::error::AppError::invalid_param("ak.typing payload requires strand_id")
             })?;
         typing_scope_allows_actor(state, realm_id, actor, Some(strand_id.as_str())).await?;
-        if let Err(error) = state
+        state
             .persistence
             .typing()
             .put(TypingRecord {
@@ -238,11 +249,20 @@ async fn persist_ephemeral_typing(
                 envelope: envelope.clone(),
             })
             .await
-        {
-            tracing::error!(%error, "failed to persist ephemeral typing");
-        }
+            .map_err(|error| {
+                tracing::error!(%error, "failed to persist ephemeral typing");
+                ephemeral_channel_unavailable("persist typing state")
+            })?;
     } else {
-        let _ = state.persistence.typing().remove(actor, realm_id).await;
+        state
+            .persistence
+            .typing()
+            .remove(actor, realm_id)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "failed to clear ephemeral typing");
+                ephemeral_channel_unavailable("clear typing state")
+            })?;
     }
     Ok(())
 }
@@ -305,19 +325,21 @@ async fn persist_ephemeral_presence(
         }
     };
     if presence_visibility_for_actor(state, actor).await == PresenceVisibilityPolicy::Nobody {
-        if let Err(error) = state.persistence.presence().delete(actor).await {
-            tracing::error!(%error, "failed to clear hidden ephemeral presence");
-        }
+        state
+            .persistence
+            .presence()
+            .delete(actor)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "failed to clear hidden ephemeral presence");
+                ephemeral_channel_unavailable("clear hidden presence state")
+            })?;
         return Ok(());
     }
     // `validate_ephemeral_broadcast_proof_shape` already guaranteed the
     // proof-bound device_id is present.
-    let device_id = envelope
-        .device_id
-        .as_ref()
-        .map(|device| device.as_str().to_owned())
-        .unwrap_or_else(|| session.device_id.clone());
-    if let Err(error) = state
+    let device_id = envelope.device_id.as_str().to_owned();
+    state
         .persistence
         .presence()
         .put(PresenceRecord {
@@ -331,10 +353,18 @@ async fn persist_ephemeral_presence(
             envelope: envelope.clone(),
         })
         .await
-    {
-        tracing::error!(%error, "failed to persist ephemeral presence");
-    }
+        .map_err(|error| {
+            tracing::error!(%error, "failed to persist ephemeral presence");
+            ephemeral_channel_unavailable("persist presence state")
+        })?;
     Ok(())
+}
+
+fn ephemeral_channel_unavailable(action: &str) -> crate::error::AppError {
+    crate::error::AppError::new(
+        crate::error::ErrorCode::EphemeralChannelUnavailable,
+        format!("ephemeral channel unavailable while attempting to {action}"),
+    )
 }
 
 /// Strict closed-set `state` admission (profiles-presence.md Â§3.2):
@@ -461,19 +491,15 @@ fn admit_ephemeral_call_signal(
 /// `proof` present, `verification_method == {actor_id}#{device_id}`, and
 /// `event_digest` covering the canonical envelope bytes without `proof`.
 ///
-/// Boundary (unchanged from the call.signal-only era): the relay does NOT
-/// perform cryptographic `proof` verification â€” the spec assigns signature
-/// verification to the *receiver*. The relay enforces the structural contract
-/// so malformed signals never enter the ephemeral fan-out.
+/// Presence / typing receive an additional cryptographic check against the
+/// authoritative device directory in [`verify_ephemeral_device_proof`]. Call
+/// signals and read receipts retain their profile-specific receiver-side
+/// verification rules after this shared structural gate.
 fn validate_ephemeral_broadcast_proof_shape(
     envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
     let kind = envelope.kind.as_str();
-    let device_id = envelope.device_id.as_ref().ok_or_else(|| {
-        crate::error::AppError::invalid_param(format!(
-            "{kind} device_id is required for broadcast ephemeral signals"
-        ))
-    })?;
+    let device_id = &envelope.device_id;
     let proof = &envelope.proof;
     proof.validate_production().map_err(|error| {
         crate::error::AppError::invalid_param(format!(
@@ -492,8 +518,7 @@ fn validate_ephemeral_broadcast_proof_shape(
             "{kind} proof.jws must be detached header..signature"
         )));
     }
-    // The digest covers the canonical envelope without `proof`; the typed
-    // clone with `proof = None` serializes to exactly those bytes.
+    // The digest covers the canonical envelope without `proof`.
     let mut without_proof = serde_json::to_value(envelope).map_err(|error| {
         crate::error::AppError::invalid_param(format!(
             "{kind} envelope is not serialisable: {error}"
@@ -516,4 +541,68 @@ fn validate_ephemeral_broadcast_proof_shape(
         )));
     }
     Ok(())
+}
+
+/// `profiles-presence.md` §3.4 requires the Sync Service to authenticate every
+/// presence / typing source before persistence or fan-out. The authoritative
+/// key is the active, non-revoked device signing key projected by the device
+/// lifecycle directory; the detached JWS signs the SDK-defined canonical proof
+/// binding object and binds the canonical proof-less envelope through its
+/// `event_digest`.
+async fn verify_ephemeral_device_proof(
+    state: &AppState,
+    envelope: &arkret_sdk::EphemeralEnvelope,
+) -> Result<(), crate::error::AppError> {
+    let device_id = &envelope.device_id;
+    let facet =
+        crate::routing::identity::cross_signing::try_resolve_device_signing_directory_facet(
+            state,
+            envelope.actor_id.as_str(),
+            device_id.as_str(),
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, actor = %envelope.actor_id, device = %device_id, "failed to resolve ephemeral device signing key");
+            ephemeral_channel_unavailable("resolve the device signing directory")
+        })?;
+    if !matches!(facet.status, arkret_sdk::DeviceStatus::Active) {
+        return Err(ephemeral_proof_invalid(
+            "ephemeral proof device is not active and authorized",
+        ));
+    }
+    let multibase = facet
+        .signing_key_did
+        .as_deref()
+        .and_then(|value| value.strip_prefix("did:key:"))
+        .ok_or_else(|| {
+            ephemeral_proof_invalid("ephemeral proof device signing key is unavailable")
+        })?;
+    let public_key = arkret_sdk::signatures::PublicKeyMaterial::Ed25519Multibase {
+        value: multibase.to_owned(),
+    };
+    arkret_sdk::signatures::verify_eddsa_detached_jws_ephemeral_proof(envelope, &public_key)
+    .map_err(|error| {
+        tracing::warn!(%error, actor = %envelope.actor_id, device = %device_id, "ephemeral device proof verification failed");
+        ephemeral_proof_invalid("ephemeral device proof verification failed")
+    })
+}
+
+fn ephemeral_proof_invalid(message: impl Into<String>) -> crate::error::AppError {
+    crate::error::AppError::invalid_param(message)
+        .with_reason_code(crate::error::reasons::PROOF_INVALID)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persistence_failure_maps_to_retriable_ephemeral_channel_error() {
+        let error = ephemeral_channel_unavailable("persist presence state");
+        assert_eq!(
+            error.code,
+            crate::error::ErrorCode::EphemeralChannelUnavailable
+        );
+        assert_eq!(error.http_status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
 }

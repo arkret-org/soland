@@ -22,8 +22,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use arkret_sdk::{
-    SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
-    SessionGrantIntrospection,
+    Did, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
+    SessionGrantIntrospectStatus, SessionGrantIntrospection,
 };
 use parking_lot::Mutex;
 use salvo::http::StatusCode;
@@ -212,10 +212,15 @@ pub(crate) async fn introspect_admin_scopes(
         )
         .with_status(StatusCode::UNAUTHORIZED)
     })?;
+    let audience = Did::new(state.config.service_id.clone()).map_err(|error| {
+        AppError::internal(format!(
+            "configured principal service_id is not a DID: {error}"
+        ))
+    })?;
     let request = SessionGrantIntrospectRequestBody {
         id: None,
         grant_jwt: Some(token),
-        audience: Some(state.config.service_id.clone()),
+        audience: Some(audience),
         proof: None,
     };
     let bearer = state

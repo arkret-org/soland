@@ -7,13 +7,24 @@ use soland::state::EventNotificationKind;
 use super::helpers::*;
 use crate::common::*;
 
-/// Broadcast ephemeral envelope with the structural admission contract
-/// (`ephemeral-envelope.schema.json`): `device_id` present and a
-/// detached-JWS `proof` whose `verification_method` is
-/// `{actor_id}#{device_id}` and whose `event_digest` covers the
-/// canonical envelope bytes without `proof`. The relay checks shape
-/// only — signature bytes stay dummy.
+/// Broadcast ephemeral envelope with the authenticated source contract from
+/// `profiles-presence.md` §3.4. The deterministic test key is projected into
+/// the authoritative device directory by [`ephemeral_test_token`].
 fn broadcast_ephemeral_envelope(kind: &str, payload: Value) -> Value {
+    let actor_id = "did:web:alice.example";
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    broadcast_ephemeral_envelope_signed_by(
+        kind,
+        payload,
+        test_ephemeral_device_signing_key(actor_id, device_id),
+    )
+}
+
+fn broadcast_ephemeral_envelope_signed_by(
+    kind: &str,
+    payload: Value,
+    signing_key: SigningKey,
+) -> Value {
     let actor_id = "did:web:alice.example";
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let sent_at = chrono::Utc::now();
@@ -29,15 +40,126 @@ fn broadcast_ephemeral_envelope(kind: &str, payload: Value) -> Value {
     });
     let canonical = arkret_sdk::canonical::canonical_json_bytes(&env).unwrap();
     let event_digest = arkret_sdk::canonical::sha256_digest(&canonical);
-    env["proof"] = serde_json::json!({
-        "kind": "detached_jws",
-        "alg": "EdDSA",
-        "verification_method": format!("{actor_id}#{device_id}"),
-        "event_digest": event_digest,
-        "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
-    });
+    let verification_method = format!("{actor_id}#{device_id}");
+    let mut proof = arkret_sdk::Proof {
+        kind: "detached_jws".to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method: verification_method.clone(),
+        event_digest: arkret_sdk::Hash::new(event_digest).unwrap(),
+        created_at: sent_at,
+        domain: None,
+        audience: None,
+        jws: String::new(),
+    };
+    let actor = arkret_sdk::Did::new(actor_id.to_owned()).unwrap();
+    let binding = proof.canonical_ephemeral_binding_bytes(&actor).unwrap();
+    let signer =
+        arkret_sdk::signatures::Ed25519DetachedJwsSigner::new(signing_key, verification_method);
+    proof.jws = signer.sign_detached_jws(&binding);
+    env["proof"] = serde_json::to_value(proof).unwrap();
     env
+}
+
+async fn ephemeral_test_token(state: AppState) -> String {
+    let actor = "did:web:alice.example";
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let token = dev_token(state.clone()).await;
+    let signing_key = test_ephemeral_device_signing_key(actor, device_id);
+    seed_verified_device_with_public_key(
+        &state,
+        actor,
+        device_id,
+        &test_ed25519_multibase_public(&signing_key),
+    )
+    .await;
+    token
+}
+
+#[tokio::test]
+async fn ephemeral_presence_requires_active_authorized_device_signature() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = ephemeral_test_token(state.clone()).await;
+
+    let wrong_key = SigningKey::from_bytes(&[0x6d; 32]);
+    let mut rejected = TestClient::post("http://server/_arkret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&broadcast_ephemeral_envelope_signed_by(
+            "ak.presence",
+            serde_json::json!({"state": "online"}),
+            wrong_key,
+        ))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(rejected.status_code, Some(StatusCode::BAD_REQUEST));
+    let rejected_body: Value = rejected.take_json().await.unwrap();
+    assert_eq!(rejected_body["error"]["code"], "invalid_param");
+    assert_eq!(
+        rejected_body["error"]["details"]["reason_code"],
+        "proof_invalid"
+    );
+    assert!(
+        state
+            .persistence
+            .presence()
+            .list_for_actor("did:web:alice.example")
+            .await
+            .unwrap()
+            .is_empty(),
+        "a signature from an unbound key must not reach presence storage"
+    );
+
+    let accepted = TestClient::post("http://server/_arkret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&broadcast_ephemeral_envelope(
+            "ak.presence",
+            serde_json::json!({"state": "online"}),
+        ))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(accepted.status_code, Some(StatusCode::OK));
+
+    let actor = "did:web:alice.example";
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let sibling_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000002";
+    let sibling_token = dev_token_for_device(
+        state.clone(),
+        actor,
+        sibling_device_id,
+        "Alice Sibling Device",
+    )
+    .await;
+    let sibling_key = test_ephemeral_device_signing_key(actor, sibling_device_id);
+    seed_verified_device_with_public_key(
+        &state,
+        actor,
+        sibling_device_id,
+        &test_ed25519_multibase_public(&sibling_key),
+    )
+    .await;
+    let mut device = state
+        .persistence
+        .devices()
+        .get(actor, device_id)
+        .await
+        .unwrap()
+        .unwrap();
+    device.revoked_at = Some(chrono::Utc::now());
+    state.persistence.devices().put(&device).await.unwrap();
+
+    let mut revoked = TestClient::post("http://server/_arkret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {sibling_token}"), true)
+        .json(&broadcast_ephemeral_envelope(
+            "ak.presence",
+            serde_json::json!({"state": "dnd"}),
+        ))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(revoked.status_code, Some(StatusCode::BAD_REQUEST));
+    let revoked_body: Value = revoked.take_json().await.unwrap();
+    assert_eq!(
+        revoked_body["error"]["details"]["reason_code"],
+        "proof_invalid"
+    );
 }
 
 #[tokio::test]
@@ -186,7 +308,7 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
 #[tokio::test]
 async fn push_profile_and_moderation_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
+    let token = ephemeral_test_token(state.clone()).await;
     let unauth_presence = TestClient::post("http://server/_arkret/self/ephemeral")
         .json(&broadcast_ephemeral_envelope(
             "ak.presence",
@@ -467,7 +589,7 @@ async fn push_profile_and_moderation_contracts_work() {
 #[tokio::test]
 async fn presence_visibility_account_data_requires_encrypted_content() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
+    let token = ephemeral_test_token(state.clone()).await;
 
     let plaintext_policy =
         TestClient::put("http://server/_arkret/self/account_data/ak.presence.visibility")
@@ -641,7 +763,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
 #[tokio::test]
 async fn typing_submit_rejects_unknown_strand_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
+    let token = ephemeral_test_token(state.clone()).await;
 
     let rejected_typing = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -667,7 +789,7 @@ async fn typing_submit_rejects_unknown_strand_scope() {
 #[tokio::test]
 async fn typing_submit_accepts_default_realm_strand_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
+    let token = ephemeral_test_token(state.clone()).await;
     let default_strand_id = DEMO_REALM_ID.replacen("ak:realm:", "ak:strand:", 1);
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -701,7 +823,7 @@ async fn typing_submit_accepts_default_realm_strand_scope() {
 #[tokio::test]
 async fn typing_submit_wakes_account_subscribe_stream() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
+    let token = ephemeral_test_token(state.clone()).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000004";
     insert_typing_scope_strand(state.clone(), strand_id, Some(true));
     let mut wakeups = state.event_broadcast.subscribe();
@@ -736,7 +858,7 @@ async fn typing_submit_wakes_account_subscribe_stream() {
 async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
     let state = AppState::new(test_config(), Db { pool: None });
     add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
-    let alice_token = dev_token(state.clone()).await;
+    let alice_token = ephemeral_test_token(state.clone()).await;
     let bob_token = dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
@@ -791,7 +913,7 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
 #[tokio::test]
 async fn typing_submit_rejects_disabled_discussion_strand_scope() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
+    let token = ephemeral_test_token(state.clone()).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000001";
     insert_typing_scope_strand(state.clone(), strand_id, Some(false));
     let rejected_typing = TestClient::post("http://server/_arkret/self/ephemeral")
@@ -874,7 +996,7 @@ async fn public_read_receipt_policy_rejected_for_world_readable_realm_without_op
 #[tokio::test]
 async fn typing_fanout_respects_receiver_blocklist() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice_token = dev_token(state.clone()).await;
+    let alice_token = ephemeral_test_token(state.clone()).await;
     add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
     let bob_token = dev_token_for_device(
         state.clone(),
@@ -1105,16 +1227,16 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
     let bad_type_body: Value = bad_type.take_json().await.unwrap();
     assert_eq!(bad_type_body["error"]["code"], "invalid_param");
 
-    // Missing device_id → invalid_param.
+    // Missing device_id is rejected by the strong wire extractor.
     let mut no_device = post_signal(
         state.clone(),
         token.clone(),
         envelope("invite", false, true),
     )
     .await;
-    assert_eq!(no_device.status_code.unwrap().as_u16(), 400);
+    assert_eq!(no_device.status_code.unwrap().as_u16(), 422);
     let no_device_body: Value = no_device.take_json().await.unwrap();
-    assert_eq!(no_device_body["error"]["code"], "invalid_param");
+    assert_eq!(no_device_body["error"]["code"], "schema_violation");
 
     // Missing proof is rejected by the strong wire extractor.
     let mut no_proof = post_signal(state.clone(), token, envelope("invite", true, false)).await;

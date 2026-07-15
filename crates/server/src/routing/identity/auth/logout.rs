@@ -197,10 +197,15 @@ async fn introspect_session_grant_for_logout(
             "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
         ));
     };
+    let audience = arkret_sdk::Did::new(state.config.service_id.clone()).map_err(|error| {
+        AppError::internal(format!(
+            "configured principal service_id is not a DID: {error}"
+        ))
+    })?;
     let request = SessionGrantIntrospectRequestBody {
         id: None,
         grant_jwt: Some(grant_jwt.to_owned()),
-        audience: Some(state.config.service_id.clone()),
+        audience: Some(audience),
         proof: None,
     };
     let (introspection_url, client) =

@@ -369,7 +369,10 @@ pub(super) async fn list_key_backups(
         .key_backups()
         .list_for_actor(&session.actor)
         .await
-        .unwrap_or_default()
+        .map_err(|error| {
+            tracing::error!(%error, actor = %session.actor, "failed to list encrypted key backups");
+            AppError::internal("failed to read encrypted key backups")
+        })?
         .into_iter()
         .filter(|backup| match series_filter.as_deref() {
             Some(series) => backup.get("series_id").and_then(Value::as_str) == Some(series),

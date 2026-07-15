@@ -981,6 +981,15 @@ pub(crate) fn test_ed25519_multibase_public(signing: &SigningKey) -> String {
     format!("z{}", bs58::encode(bytes).into_string())
 }
 
+pub(crate) fn test_ephemeral_device_signing_key(actor: &str, device_id: &str) -> SigningKey {
+    let mut hasher = Sha256::new();
+    hasher.update(b"soland:test:ephemeral-device-key:");
+    hasher.update(actor.as_bytes());
+    hasher.update([0]);
+    hasher.update(device_id.as_bytes());
+    SigningKey::from_bytes(&hasher.finalize().into())
+}
+
 pub(crate) fn test_embedded_webvh_proof(
     principal_server_url: &str,
     local_id: &str,

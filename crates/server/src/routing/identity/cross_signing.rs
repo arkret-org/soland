@@ -1011,37 +1011,35 @@ pub(crate) async fn resolve_device_signing_directory_facet(
     principal_id: &str,
     device_id: &str,
 ) -> DeviceSigningDirectoryFacet {
+    try_resolve_device_signing_directory_facet(state, principal_id, device_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, %principal_id, %device_id, "failed to resolve device signing directory facet");
+            revoked_device_signing_directory_facet()
+        })
+}
+
+/// Strict variant of [`resolve_device_signing_directory_facet`] for admission
+/// paths that must distinguish an unavailable authoritative directory from an
+/// unknown, unverified, or revoked device. A persistence failure is propagated
+/// so callers can return a retriable service error instead of misclassifying it
+/// as an invalid device proof.
+pub(crate) async fn try_resolve_device_signing_directory_facet(
+    state: &AppState,
+    principal_id: &str,
+    device_id: &str,
+) -> Result<DeviceSigningDirectoryFacet, crate::persistence::PersistenceError> {
     let record = match state
         .persistence
         .devices()
         .get(principal_id, device_id)
-        .await
+        .await?
     {
-        Ok(Some(record)) => record,
-        _ => {
-            return DeviceSigningDirectoryFacet {
-                signing_key_did: None,
-                hpke_key: None,
-                trust_algorithms: None,
-                status: DeviceStatus::Revoked,
-                cross_signing_binding: None,
-                enrollment_authority_binding: None,
-                device_authorize_event_id: None,
-                authorized_generation_ref: None,
-            };
-        }
+        Some(record) => record,
+        None => return Ok(revoked_device_signing_directory_facet()),
     };
     if record.revoked_at.is_some() || record.verification_state != "verified" {
-        return DeviceSigningDirectoryFacet {
-            signing_key_did: None,
-            hpke_key: None,
-            trust_algorithms: None,
-            status: DeviceStatus::Revoked,
-            cross_signing_binding: None,
-            enrollment_authority_binding: None,
-            device_authorize_event_id: None,
-            authorized_generation_ref: None,
-        };
+        return Ok(revoked_device_signing_directory_facet());
     }
     // Parse the stored projection row once through the typed view; a
     // malformed stored value drops the affected optional field rather than
@@ -1050,9 +1048,7 @@ pub(crate) async fn resolve_device_signing_directory_facet(
         serde_json::from_value(record.payload.clone()).unwrap_or_default();
     let generation =
         crate::routing::identity::device_generation::current_device_generation(state, principal_id)
-            .await
-            .ok()
-            .flatten();
+            .await?;
     let generation_usable = match generation {
         Some(generation) => {
             generation.status
@@ -1063,7 +1059,7 @@ pub(crate) async fn resolve_device_signing_directory_facet(
         None => payload.authorized_generation_ref.is_none(),
     };
     if !generation_usable {
-        return DeviceSigningDirectoryFacet {
+        return Ok(DeviceSigningDirectoryFacet {
             signing_key_did: None,
             hpke_key: None,
             trust_algorithms: None,
@@ -1072,7 +1068,7 @@ pub(crate) async fn resolve_device_signing_directory_facet(
             enrollment_authority_binding: None,
             device_authorize_event_id: None,
             authorized_generation_ref: payload.authorized_generation_ref,
-        };
+        });
     }
     let signing_key_did = payload
         .device_public_key
@@ -1092,7 +1088,7 @@ pub(crate) async fn resolve_device_signing_directory_facet(
     let device_authorize_event_id = payload
         .device_authorize_event_id
         .and_then(|value| EventId::new(value).ok());
-    DeviceSigningDirectoryFacet {
+    Ok(DeviceSigningDirectoryFacet {
         signing_key_did,
         hpke_key,
         trust_algorithms,
@@ -1101,6 +1097,19 @@ pub(crate) async fn resolve_device_signing_directory_facet(
         enrollment_authority_binding: payload.enrollment_authority_binding,
         device_authorize_event_id,
         authorized_generation_ref: payload.authorized_generation_ref,
+    })
+}
+
+fn revoked_device_signing_directory_facet() -> DeviceSigningDirectoryFacet {
+    DeviceSigningDirectoryFacet {
+        signing_key_did: None,
+        hpke_key: None,
+        trust_algorithms: None,
+        status: DeviceStatus::Revoked,
+        cross_signing_binding: None,
+        enrollment_authority_binding: None,
+        device_authorize_event_id: None,
+        authorized_generation_ref: None,
     }
 }
 
