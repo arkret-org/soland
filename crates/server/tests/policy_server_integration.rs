@@ -232,9 +232,9 @@ async fn policy_server_integration_hits_mock() {
     let decision = check_with_policy_server(
         &engine,
         "did:web:alice.example",
-        // Use `read` so the LOCAL capability check passes via the
-        // member-default rule (engine.check needs alice in `members`).
-        "read",
+        // Use the registered read capability so the LOCAL owner check passes
+        // before the remote policy decision is evaluated.
+        "ak.event.read",
         "ak:realm:01904100-0000-7000-8000-000000000001",
         REALM_ID,
         Some("did:web:alice.example"),
@@ -291,7 +291,7 @@ async fn policy_server_integration_timeout_fails_closed() {
     let decision = check_with_policy_server(
         &engine,
         "did:web:alice.example",
-        "read",
+        "ak.event.read",
         "ak:realm:01904100-0000-7000-8000-000000000001",
         REALM_ID,
         Some("did:web:alice.example"),

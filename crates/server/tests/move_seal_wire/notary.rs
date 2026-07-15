@@ -15,8 +15,8 @@ async fn notary_worker_signs_pending_move_and_publishes_seal() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    // 1. Submit a Move (membership FSM transition invite->join).
-    let move_obj = build_invited_to_join_move();
+    // 1. Submit a Move (membership FSM transition leave->join).
+    let move_obj = build_left_to_join_move();
     let submit: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
@@ -114,7 +114,7 @@ async fn notary_pass_broadcasts_frontier_frame_to_subscribers() {
         // Submit a Move + trigger the notary; both happen on the
         // seal-pipeline Realm (`realm_id()`), and the broadcast goes
         // out tagged with that realm_id.
-        let move_obj = build_invited_to_join_move();
+        let move_obj = build_left_to_join_move();
         let _: Value = TestClient::post("http://server/_soland/peer/moves")
             .add_header("Authorization", format!("Bearer {token_writer}"), true)
             .json(&move_obj)
@@ -196,7 +196,7 @@ async fn notary_pass_populates_projection_cells_map() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    let move_obj = build_invited_to_join_move();
+    let move_obj = build_left_to_join_move();
     let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
@@ -323,7 +323,7 @@ async fn notary_worker_is_idempotent_when_no_pending_moves() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    let move_obj = build_invited_to_join_move();
+    let move_obj = build_left_to_join_move();
     let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)

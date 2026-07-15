@@ -16,9 +16,9 @@ fn eddsa_detached_jws(signature: &[u8]) -> String {
 
 proptest! {
     #[test]
-    fn jws_shape_accepts_nonempty_detached_eddsa_signatures(
+    fn jws_shape_accepts_well_formed_detached_eddsa_signatures(
         payload in prop::collection::vec(any::<u8>(), 1..128),
-        signature in prop::collection::vec(any::<u8>(), 1..96),
+        signature in prop::collection::vec(any::<u8>(), 64),
     ) {
         let jws = eddsa_detached_jws(&signature);
         prop_assume!(!jws.rsplit('.').next().unwrap_or_default().bytes().all(|b| b == b'A'));
@@ -45,7 +45,10 @@ proptest! {
             "did:web:alice.example#k1",
             "did:web:alice.example",
         ).unwrap_err();
-        prop_assert_eq!(err, "detached JWS payload segment must be empty");
+        prop_assert_eq!(
+            err,
+            "invalid signature encoding: detached JWS must be header..signature with empty payload segment"
+        );
     }
 
     #[test]

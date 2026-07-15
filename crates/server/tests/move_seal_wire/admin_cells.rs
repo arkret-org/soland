@@ -13,13 +13,13 @@
 use super::common::*;
 
 /// Submit a Move + trigger notary signing pass so the member cell
-/// transitions invite->join AND lands in `ProjectionState::cells`. Returns
+/// transitions leave->join AND lands in `ProjectionState::cells`. Returns
 /// the URL-encoded path-segment form of the cell id (which for our
 /// cell ids — only `:`s and `.`s, both URL-path-safe — is the raw
 /// string).
 async fn seed_member_cell_join(state: AppState, token: &str) -> String {
     let app = service(state.clone());
-    let move_obj = build_invited_to_join_move();
+    let move_obj = build_left_to_join_move();
     let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
@@ -79,7 +79,7 @@ async fn admin_get_cell_returns_value_after_sealed_move() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    // Drive a Move + Seal so the member cell transitions invite->join
+    // Drive a Move + Seal so the member cell transitions leave->join
     // and lands in ProjectionState::cells.
     let cell_id = seed_member_cell_join(state.clone(), &token).await;
 

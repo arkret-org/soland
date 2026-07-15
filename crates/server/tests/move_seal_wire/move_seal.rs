@@ -19,7 +19,7 @@ async fn move_then_seal_apply_returns_recomputed_state_root() {
 
     // 1. Submit Move — soland verifies signature + effect shape and stashes it in the in-memory
     //    MoveStore.
-    let move_obj = build_invited_to_join_move();
+    let move_obj = build_left_to_join_move();
     let submit: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
@@ -102,7 +102,7 @@ async fn seal_with_unknown_predecessor_is_rejected_with_conflict() {
     let app = service(state.clone());
 
     // Submit a Move first so the seal has a delta candidate.
-    let move_obj = build_invited_to_join_move();
+    let move_obj = build_left_to_join_move();
     let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
@@ -139,12 +139,12 @@ async fn seal_with_unknown_predecessor_is_rejected_with_conflict() {
 }
 
 #[tokio::test]
-async fn seal_with_non_empty_delta_without_genesis_predecessor_is_rejected() {
+async fn genesis_seal_with_non_empty_delta_applies_move() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    let move_obj = build_invited_to_join_move();
+    let move_obj = build_left_to_join_move();
     let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
@@ -157,20 +157,22 @@ async fn seal_with_non_empty_delta_without_genesis_predecessor_is_rejected() {
     let mut expected = BTreeMap::new();
     expected.insert(member_cell(), CellState::Value(json!("join")));
     let expected_root = compute_state_root(&expected).unwrap();
-    let seal = build_seal(vec![], vec![move_obj.id], expected_root);
+    let seal = build_seal(vec![], vec![move_obj.id.clone()], expected_root.clone());
 
     let mut resp = TestClient::post("http://server/_soland/peer/seals")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&seal)
         .send(&app)
         .await;
-    assert_eq!(resp.status_code, Some(StatusCode::CONFLICT));
+    assert_eq!(resp.status_code, Some(StatusCode::OK));
     let body: Value = resp.take_json().await.unwrap();
-    let stringified = body.to_string().to_ascii_lowercase();
-    assert!(
-        stringified.contains("genesis") || stringified.contains("delta"),
-        "rejection reason should mention Genesis delta shape (got {body})"
+    assert_eq!(body["seal_id"], seal.id.as_str());
+    assert_eq!(
+        body["accepted_move_ids"],
+        json!([move_obj.id.as_str()]),
+        "Genesis Seal should atomically admit its first Move (got {body})"
     );
+    assert_eq!(body["post_state_root"], expected_root.as_str());
 }
 
 #[tokio::test]
@@ -179,7 +181,7 @@ async fn seal_with_wrong_state_root_rolls_back_with_conflict() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    let move_obj = build_invited_to_join_move();
+    let move_obj = build_left_to_join_move();
     let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)

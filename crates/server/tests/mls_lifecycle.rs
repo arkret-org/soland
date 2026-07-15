@@ -97,29 +97,30 @@ fn signed_event(
     kind: &str,
     payload: Value,
 ) -> Value {
+    let now = Utc::now();
+    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut event = json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "ak.schema.event.v1",
+        "realm_id": realm_id,
         "actor_id": actor,
         "actor_seq": actor_seq,
-        "realm_id": realm_id,
-        "device_id": device_id,
-        "audience": "did:web:soland-mls-test.local",
-        "domain": "did:web:soland-mls-test.local",
+        "created_at": created_at,
+        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
         "prev_refs": [],
-        "auth_refs": [],
+        "refs": [],
         "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{actor}#{device_id}"),
-            "device_id": device_id,
-            "audience": "did:web:soland-mls-test.local",
-            "domain": "did:web:soland-mls-test.local",
-            "payload_digest": sha256_json(&payload),
-        }],
+        "proofs": [],
     });
-    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    let event_digest = event_canonical_digest(&event);
+    event["proofs"] = json!([{
+        "kind": "detached_jws",
+        "alg": "EdDSA",
+        "verification_method": format!("{actor}#{device_id}"),
+        "event_digest": event_digest,
+        "created_at": created_at,
+        "jws": "dev-mode-fixture",
+    }]);
     event
 }
 
@@ -465,7 +466,7 @@ async fn mls_lifecycle_end_to_end() {
         "signature": {
             "kid": format!("{alice_did}#self-signing"),
             "alg": "EdDSA",
-            "sig": ""
+            "sig": b64(&[0_u8; 64])
         }
     });
     let claim_envelope_model: MlsWelcomeClaimEnvelope =

@@ -12,9 +12,9 @@
 //! here because those helpers are private to the SDK test modules.
 //!
 //! Cells: the tests transition
-//! `ak:cell:ak.component.member.state.v1:did.web.alice.example` from
-//! `invite` to `join`. That cell family is pre-registered in
-//! `MemoryCellRegistry::default()` as an FSM with `invite -> join`
+//! `ak:cell:ak.component.member.state.v1:did.web.move-seal-fixture.example` from
+//! `leave` to `join`. The generated SDK registry initializes membership
+//! at `leave` and admits the `leave -> join`
 //! transition, so the Move passes verify and the post-state is
 //! `Value("join")`.
 
@@ -36,7 +36,7 @@ pub(crate) use salvo::http::StatusCode;
 pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::{Value, json};
 pub(crate) use sha2::{Digest, Sha256};
-pub(crate) use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+pub(crate) use soland::config::{AppConfig, ObjectStorageConfig};
 pub(crate) use soland::service;
 pub(crate) use soland::state::AppState;
 pub(crate) use soland_data::Db;
@@ -62,7 +62,10 @@ pub(crate) fn realm_id() -> RealmId {
 }
 
 pub(crate) fn member_cell() -> CellRef {
-    CellRef::new("ak:cell:ak.component.member.state.v1:did.web.alice.example".to_owned()).unwrap()
+    CellRef::new(
+        "ak:cell:ak.component.member.state.v1:did.web.move-seal-fixture.example".to_owned(),
+    )
+    .unwrap()
 }
 
 pub(crate) fn zero_seal_id_value() -> String {
@@ -97,14 +100,14 @@ pub(crate) fn dev_detached_jws(canonical_bytes: &[u8]) -> String {
         .expect("sign canonical move bytes with dev key")
 }
 
-pub(crate) fn build_invited_to_join_move() -> Move {
+pub(crate) fn build_left_to_join_move() -> Move {
     let body = json!({
         "issuer": "did:web:admin.example",
         "realm_id": realm_id().as_str(),
         "preconditions": [],
         "effects": [{
             "cell": member_cell().as_str(),
-            "op": { "kind": "transition", "from": "invite", "to": "join" }
+            "op": { "kind": "transition", "from": "leave", "to": "join" }
         }],
         "seal_basis": empty_seal_basis_value(),
         "refs": [],

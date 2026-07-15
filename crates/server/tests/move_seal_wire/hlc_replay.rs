@@ -15,7 +15,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
         "preconditions": [],
         "effects": [{
             "cell": member_cell().as_str(),
-            "op": { "kind": "transition", "from": "invite", "to": "join" }
+            "op": { "kind": "transition", "from": "leave", "to": "join" }
         }],
         "seal_basis": empty_seal_basis_value(),
         "refs": [],
