@@ -405,26 +405,18 @@ mod tests {
     use super::*;
     use crate::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
 
-    fn encrypted_envelope() -> Value {
-        json!({
-            "scheme": "mls-rfc9420",
-            "version": "1.0",
-            "group_id": "testGroup",
-            "epoch": 1,
-            "content_type": "application/vnd.arkret.account-data+json",
-            "ciphertext": "b3BhcXVl",
-            "aad_visibility_event_id": "hidden",
-            "aad": {
-                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
-                "event_kind": "ak.account_data.set"
-            },
-            "key_ref": {
-                "algorithm": "MLS",
-                "group_state_ref": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-            },
-            "aad_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-            "payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-        })
+    fn encrypted_envelope(data_type: &str) -> Value {
+        serde_json::to_value(
+            arkret_sdk::account_data_crypto::seal_account_data_value_with_nonce(
+                &[7u8; 32],
+                "did:web:alice.example",
+                data_type,
+                &json!({"private": true}),
+                [9u8; 24],
+            )
+            .unwrap(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -454,28 +446,28 @@ mod tests {
         assert!(
             validate_private_account_data_content(
                 key,
-                &json!({"encrypted_payload": encrypted_envelope()}),
+                &json!({"encrypted_payload": encrypted_envelope(key)}),
             )
             .is_ok()
         );
         assert!(
             validate_private_account_data_content(
                 "ak.account.blocklist",
-                &json!({"encrypted_payload": encrypted_envelope()}),
+                &json!({"encrypted_payload": encrypted_envelope("ak.account.blocklist")}),
             )
             .is_ok()
         );
         assert!(
             validate_private_account_data_content(
                 "ak.push_rules",
-                &json!({"encrypted_payload": encrypted_envelope()}),
+                &json!({"encrypted_payload": encrypted_envelope("ak.push_rules")}),
             )
             .is_ok()
         );
         assert!(
             validate_private_account_data_content(
                 "ak.presence.preference",
-                &json!({"encrypted_payload": encrypted_envelope()}),
+                &json!({"encrypted_payload": encrypted_envelope("ak.presence.preference")}),
             )
             .is_ok()
         );
@@ -506,7 +498,7 @@ mod tests {
         let transfer_key = "ak.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         let err = validate_private_account_data_content(
             transfer_key,
-            &json!({"filename": "private.pdf", "encrypted_payload": encrypted_envelope()}),
+            &json!({"filename": "private.pdf", "encrypted_payload": encrypted_envelope(key)}),
         )
         .unwrap_err();
         assert!(err.to_string().contains("plaintext"));

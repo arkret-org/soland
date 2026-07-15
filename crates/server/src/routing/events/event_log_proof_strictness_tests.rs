@@ -49,12 +49,21 @@ fn session() -> SessionRecord {
 /// the ingestion instant.
 async fn ingest_fresh_webvh_document(state: &AppState, did: &str) {
     let now = chrono::Utc::now();
+    let public_key_multibase = arkret_sdk::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]);
     state
         .persistence
         .webvh()
         .put_document(crate::state::WebvhDocumentRecord {
             did: did.to_owned(),
-            did_document: json!({ "id": did, "verificationMethod": [] }),
+            did_document: json!({
+                "id": did,
+                "verificationMethod": [{
+                    "id": format!("{did}#k1"),
+                    "type": "Multikey",
+                    "controller": did,
+                    "publicKeyMultibase": public_key_multibase,
+                }]
+            }),
             key_log_head: Some("sha256:head".to_owned()),
             seq: 1,
             method_evidence: json!({ "mode": "test" }),
@@ -1057,11 +1066,16 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
 
 #[test]
 fn event_payload_validator_catalog_covers_active_standard_durable_events() {
+    const SIBLING_SCHEMA_EVENT_KINDS: &[&str] = &[
+        arkret_sdk::events::kinds::MODERATION_FRANKING_PROOF,
+        arkret_sdk::events::kinds::RELATION_TOMBSTONE,
+    ];
     let catalog = arkret_sdk::schema::event_payload_validator_catalog().unwrap();
     let event_kinds = artifacts::active_durable_event_kinds()
         .iter()
         .map(String::as_str)
         .filter(|kind| arkret_sdk::events::is_standard_event_kind(kind))
+        .filter(|kind| !SIBLING_SCHEMA_EVENT_KINDS.contains(kind))
         .collect::<Vec<_>>();
     let missing = catalog.missing_payload_validators_for(event_kinds.iter().copied());
     assert!(

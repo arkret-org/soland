@@ -1178,6 +1178,7 @@ mod tests {
             "recipient_principal_id": recipient,
             "recipient_device_id": recipient_device,
             "sender_device_id": sender_device,
+            "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000001a1",
             "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
@@ -1241,6 +1242,7 @@ mod tests {
             "recipient_principal_id": recipient,
             "recipient_device_id": recipient_device,
             "sender_device_id": sender_device,
+            "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000000a1",
             "sender_device_signature": {
                 "alg": "EdDSA",
                 "kid": "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",

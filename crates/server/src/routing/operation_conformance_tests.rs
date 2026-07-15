@@ -116,9 +116,9 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "relation delete",
             kind: arkret_sdk::events::kinds::RELATION_TOMBSTONE,
-            // relation.delete resolves to object_lifecycle_payload: required {target_ref},
-            // additionalProperties=false.
-            payload: json!({"target_ref": "ak:relation:01904100-0000-7000-8000-71604d58ec0b"}),
+            // relation tombstones are validated by relation.schema.json and
+            // identify the edge with relation_id.
+            payload: json!({"relation_id": "ak:relation:01904100-0000-7000-8000-71604d58ec0b"}),
             valid: true,
         },
         OperationVector {

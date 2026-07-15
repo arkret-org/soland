@@ -131,7 +131,8 @@ fn backup_class_wire(backup_class: arkret_sdk::BackupClass) -> &'static str {
 }
 
 fn active_series_subject(actor_id: &str, backup_class: &str) -> String {
-    format!("{actor_id}::{backup_class}")
+    arkret_sdk::composite_subject(&[actor_id, backup_class])
+        .expect("string cell-subject parts always have canonical JSON encoding")
 }
 
 fn validate_active_series_frontier_ref(

@@ -76,8 +76,10 @@ fn key_backup_active_series_projects_pointer_and_cell() {
     assert_eq!(projected.previous_series_ids, vec![PREVIOUS_SERIES]);
     assert_eq!(projected.ssk_generation, 2);
 
+    let subject = arkret_sdk::composite_subject(&[ACTOR, "secret_storage"])
+        .expect("active series composite subject");
     let cell = arkret_sdk::CellRef::new(format!(
-        "ak:cell:ak.component.key_backup.active_series.v1:{ACTOR}::secret_storage"
+        "ak:cell:ak.component.key_backup.active_series.v1:{subject}"
     ))
     .expect("active series cell ref");
     assert!(state.cell_value(&cell).is_some());

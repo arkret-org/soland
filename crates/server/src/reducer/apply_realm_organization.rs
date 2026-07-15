@@ -180,8 +180,9 @@ impl ProjectionState {
         organization_id: &str,
         relationship: &str,
     ) -> Option<arkret_sdk::CellRef> {
+        let subject = arkret_sdk::composite_subject(&[organization_id, relationship]).ok()?;
         arkret_sdk::CellRef::new(format!(
-            "ak:cell:ak.component.realm.organization.v1:{organization_id}::{relationship}"
+            "ak:cell:ak.component.realm.organization.v1:{subject}"
         ))
         .ok()
     }

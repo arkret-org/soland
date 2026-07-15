@@ -361,7 +361,7 @@ mod tests {
             "issuer": "did:web:peer.example",
             "frontier_root": format!("sha256:{}", "a".repeat(64)),
             "observed_at": "2026-01-01T00:00:00Z",
-            "signature": {}
+            "signature": {"alg": "EdDSA", "value": "c2ln"}
         });
         let state: arkret_sdk::EventsFrontierFederationPeerState =
             serde_json::from_value(body).expect("valid peer state fixture");

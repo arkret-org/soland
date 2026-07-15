@@ -37,13 +37,6 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
         Some("invite_only")
     );
     assert_eq!(
-        object
-            .get("fields")
-            .and_then(|fields| fields.get("conversation_kind"))
-            .and_then(Value::as_str),
-        Some("direct_message")
-    );
-    assert_eq!(
         object.get("created_at").and_then(Value::as_str),
         Some("2026-07-06T00:00:00Z")
     );

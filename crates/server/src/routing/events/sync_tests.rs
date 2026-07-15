@@ -252,6 +252,17 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
         })
         .await
         .expect("presence stored");
+    let presence_at = now();
+    put_canonical_event_received_at(
+        &state,
+        "ak:event:01904100-0000-7000-8000-0000000000f1",
+        1,
+        arkret_sdk::events::kinds::PRESENCE,
+        json!({"status": "dnd"}),
+        presence_at,
+        presence_at,
+    )
+    .await;
 
     let body = roster_body(&state.config.service_id);
     let initial =
@@ -528,6 +539,9 @@ async fn put_canonical_event_received_at(
         "kind": kind,
         "payload": payload,
         "created_at": created_at,
+        "hlc": "019041000000-0000-00000001",
+        "prev_refs": [],
+        "proofs": [],
     });
     let canonical_bytes = serde_json::to_vec(&envelope).expect("canonical event test envelope");
     state
@@ -1257,6 +1271,19 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         })
         .await
         .expect("first state event appended");
+    put_canonical_event_received_at(
+        &state,
+        "ak:event:01904100-0000-7000-8000-0000000000a1",
+        1,
+        arkret_sdk::events::kinds::STRAND_UPDATE,
+        json!({
+            "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000a2",
+            "patch": {"synthesis": {"$op": "set", "value": "first"}}
+        }),
+        first_created_at,
+        first_created_at,
+    )
+    .await;
 
     let body = roster_body(&state.config.service_id);
     let initial =
@@ -1298,6 +1325,19 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         })
         .await
         .expect("second state event appended");
+    put_canonical_event_received_at(
+        &state,
+        "ak:event:01904100-0000-7000-8000-0000000000b1",
+        2,
+        arkret_sdk::events::kinds::STRAND_UPDATE,
+        json!({
+            "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000a2",
+            "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
+        }),
+        second_created_at,
+        second_created_at,
+    )
+    .await;
 
     let mut incremental_body = body.clone();
     incremental_body.after = initial.cursor.clone();
@@ -1433,6 +1473,20 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         &[pin_add],
     )
     .await;
+    put_canonical_event_received_at(
+        &state,
+        "ak:event:01904100-0000-7000-8000-0000000000d5",
+        5,
+        arkret_sdk::events::kinds::PIN_ADD,
+        json!({
+            "pin_scope": {"kind": "strand", "id": strand_id},
+            "target_ref": message_id,
+            "rank": "r1"
+        }),
+        base + ChronoDuration::seconds(4),
+        base + ChronoDuration::seconds(4),
+    )
+    .await;
 
     let mut incremental_body = body.clone();
     incremental_body.after = initial.cursor.clone();
@@ -1449,10 +1503,10 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         .as_array()
         .expect("state events array");
     assert!(
-        state_events.iter().any(
-            |event| event["event_kind"] == arkret_sdk::events::kinds::PIN_ADD
-                && event["payload"]["target_ref"] == message_id
-        ),
+        state_events
+            .iter()
+            .any(|event| event["kind"] == arkret_sdk::events::kinds::PIN_ADD
+                && event["payload"]["target_ref"] == message_id),
         "joined members must receive shared pin state events through account sync"
     );
 }
@@ -1564,6 +1618,21 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         ],
     )
     .await;
+    put_canonical_event_received_at(
+        &state,
+        revision_event_id,
+        5,
+        arkret_sdk::events::kinds::MESSAGE_REVISE,
+        json!({
+            "message_id": message_id,
+            "target_ref": message_id,
+            "redacted": true,
+            "state": "redacted"
+        }),
+        base + ChronoDuration::seconds(4),
+        base + ChronoDuration::seconds(4),
+    )
+    .await;
 
     let body = roster_body(&state.config.service_id);
     let snapshot =
@@ -1574,7 +1643,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         .expect("timeline events array");
     let matching = timeline_events
         .iter()
-        .filter(|event| event["message_id"] == message_id)
+        .filter(|event| event["payload"]["message_id"] == message_id)
         .collect::<Vec<_>>();
 
     assert_eq!(
@@ -1583,8 +1652,8 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         "timeline must surface one logical tombstone per message_id"
     );
     assert_eq!(matching[0]["event_id"], revision_event_id);
-    assert_eq!(matching[0]["redacted"], true);
-    assert_eq!(matching[0]["state"], "redacted");
+    assert_eq!(matching[0]["payload"]["redacted"], true);
+    assert_eq!(matching[0]["payload"]["state"], "redacted");
 }
 
 #[test]

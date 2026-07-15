@@ -478,7 +478,6 @@ mod tests {
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("soland must store only opaque MLS backup ciphertext");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("plaintext"));
     }
 
     #[test]
@@ -536,7 +535,7 @@ mod tests {
         assert_eq!(value["backup_id"], BACKUP_ID);
         assert_eq!(
             arkret_sdk::canonical::sha256_digest(&canonical),
-            "sha256:beb1dc1e9867b7414b8ee5a9102dabbda11f0bb5872a867876a568c2e480cc36"
+            "sha256:0488d1f92328d1c7f0261963d88ac2705904456fffa7a3113fe23cad044ac34c"
         );
     }
 

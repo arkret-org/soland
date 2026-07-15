@@ -14,6 +14,7 @@ fn realm_key_share_payload(effective_scope: Value) -> Value {
         "recipient_principal_id": RECIPIENT,
         "recipient_device_id": RECIPIENT_DEVICE,
         "sender_device_id": SENDER_DEVICE,
+        "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000000a1",
         "sender_device_signature": {
             "alg": "EdDSA",
             "kid": "did:web:alice.example#device-history",

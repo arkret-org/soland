@@ -1981,6 +1981,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
             "recipient_verification_method": format!("{recovery_principal}#rrk-1"),
             "recovery_recipient_id": "rrk-1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d1d2",
+            "source_authorization_ref": "ak:event:01904100-0000-7000-8000-00000000d1a1",
             "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
@@ -2096,6 +2097,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
             "recipient_principal_id": bob,
             "recipient_device_id": bob_device,
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d3d2",
+            "source_authorization_ref": "ak:event:01904100-0000-7000-8000-00000000d3a1",
             "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
@@ -2158,6 +2160,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
             "recipient_principal_id": "did:web:stranger.example",
             "recipient_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d2",
+            "source_authorization_ref": "ak:event:01904100-0000-7000-8000-00000000d2a1",
             "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},

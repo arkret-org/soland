@@ -1403,7 +1403,10 @@ pub(super) fn capability_allows_message_create(capability: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::{AppletNamespaceEntry, Did, Ed25519MoveSigner, Hash};
+    use arkret_sdk::{
+        AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry, Did,
+        Ed25519MoveSigner, Hash,
+    };
 
     use super::*;
 
@@ -1461,6 +1464,13 @@ mod tests {
             },
         );
         package.requested_scopes = vec!["ak.message.create".to_owned()];
+        package.endpoint_policy.endpoints = vec![AppletEndpointEntry {
+            method: AppletEndpointMethod::Post,
+            path: "/events".to_owned(),
+            auth: Some(AppletEndpointAuth::WebhookSignature),
+            description: None,
+            extra: Default::default(),
+        }];
         package.registration_epoch_evidence =
             Some(arkret_sdk::applet::AppletRegistrationEpochEvidence::new(
                 package.service_id.clone(),

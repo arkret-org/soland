@@ -207,6 +207,7 @@ mod realm_key_share_schema_tests {
             "recipient_principal_id": "did:web:bob.example",
             "recipient_device_id": "ak:device:01904100-0000-7000-8000-0000000000b1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-0000000000a1",
+            "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000000a1",
             "sender_device_signature": {
                 "alg": "Ed25519",
                 "signature": "c2lnbmF0dXJl",
@@ -1042,7 +1043,7 @@ mod derived_relation_and_morph_immutability_tests {
         );
         assert_eq!(
             validate_device_authorize_payload(&operation),
-            Err(arkret_sdk::DEVICE_AUTHORIZE_BINDING_ONE_OF_REASON)
+            Err("ak.device.authorize payload violates SDK artifact schema")
         );
     }
 

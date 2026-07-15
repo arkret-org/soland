@@ -390,8 +390,11 @@ mod tests {
 
     #[test]
     fn unregistered_account_data_is_not_reinterpreted() {
-        validate_encrypted_account_data_value("ak.client.ui_state", &json!({"local_name": "Acme"}))
-            .unwrap();
+        validate_encrypted_account_data_value(
+            "com.example.client.ui_state",
+            &json!({"local_name": "Acme"}),
+        )
+        .unwrap();
     }
 
     #[test]
