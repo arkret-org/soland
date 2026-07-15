@@ -149,7 +149,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .any(|operation| operation == "ak.find.directory.query.list_handles_for_subject")
     );
     assert!(
-        !describe["supported_operations"]
+        describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()

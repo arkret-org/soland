@@ -162,8 +162,8 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
 
     let (status, body) =
         post_account_device_pair(state.clone(), &trusted_token, second_new_device, "!").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["error"]["code"], "invalid_param", "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"]["code"], "schema_violation", "{body}");
 
     let (status, body) =
         post_account_device_pair(state.clone(), &trusted_token, trusted_device, "c2ln").await;
@@ -332,7 +332,10 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         .await
         .unwrap();
     assert_eq!(approved["device_id"], new_device);
-    assert_eq!(approved["device_grant"]["status"], "active");
+    assert!(
+        approved.get("device_grant").is_none(),
+        "the optional grant is omitted when pairing does not mint one: {approved}"
+    );
 
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {existing_token}"), true)

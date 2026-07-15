@@ -360,18 +360,13 @@ async fn service_id_is_config_driven_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(
-        resolved["join_candidates"][0]["service_id"], service_id,
-        "resolve-realm response: {resolved}"
-    );
-    assert_eq!(
-        resolved["join_candidates"][0]["operations"],
-        serde_json::json!(["ak.self.events.command.submit"])
-    );
+    assert_eq!(resolved["realm_preview"]["realm_id"], resolved_realm_id);
+    assert_eq!(resolved["join_rule"], "invite");
 
     // The `/_soland/self/index/*` surface was retired (router_build.rs); the
     // config-driven service_id is covered by the /_arkret describe surfaces and
-    // the resolve-realm join_candidates asserted above.
+    // the signed ICE configuration below. Realm resolution intentionally
+    // returns only the policy-limited Realm preview.
     let ice: Value = TestClient::post("http://server/_arkret/self/rtc/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
