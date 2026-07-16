@@ -327,6 +327,9 @@ pub struct AppConfig {
     /// soland consumes the resulting session grants and may expose DID provider
     /// primitives for trusted server-to-server calls.
     pub account_authority_url: Option<String>,
+    /// B-model enrollment authority DID pinned by this Principal Server's
+    /// deployment configuration and advertised to account-first clients.
+    pub account_authority_enrollment_did: Option<String>,
     /// OAuth/OIDC `client_id` this soland deployment is registered as at the
     /// Auth Server, advertised to browser clients in
     /// `/_arkret/describe.auth_metadata.methods[].oidc.client_id`. The web
@@ -836,6 +839,7 @@ impl AppConfig {
             livekit: LiveKitConfig::default(),
             cors_allow_origin: None,
             account_authority_url: None,
+            account_authority_enrollment_did: None,
             oidc_client_id: None,
             development_mode: false,
             session_grant_introspection_url: None,
@@ -924,6 +928,18 @@ impl AppConfig {
         let ice = load_ice_servers_config()?;
         let livekit = load_livekit_config()?;
         let account_authority_url = env_non_empty("SOLAND_ACCOUNT_AUTHORITY_URL");
+        let account_authority_enrollment_did =
+            env_non_empty("SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID");
+        if account_authority_url.is_some() != account_authority_enrollment_did.is_some() {
+            anyhow::bail!(
+                "SOLAND_ACCOUNT_AUTHORITY_URL and SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID must be set together"
+            );
+        }
+        if let Some(value) = account_authority_enrollment_did.as_deref() {
+            arkret_sdk::Did::new(value.to_owned()).map_err(|error| {
+                anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID is invalid: {error}")
+            })?;
+        }
         let oidc_client_id = env_non_empty("SOLAND_OAUTH_CLIENT_ID");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
@@ -1132,6 +1148,7 @@ impl AppConfig {
             livekit,
             cors_allow_origin,
             account_authority_url,
+            account_authority_enrollment_did,
             oidc_client_id,
             development_mode,
             session_grant_introspection_url,
