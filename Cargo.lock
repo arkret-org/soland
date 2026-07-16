@@ -185,9 +185,6 @@ dependencies = [
  "arkret-state",
  "arkret-wire-base",
  "arkret-wire-edge",
- "base64",
- "blake3",
- "bs58",
  "chrono",
  "chrono-tz",
  "getrandom 0.4.3",
@@ -201,7 +198,6 @@ dependencies = [
  "sha2 0.11.0",
  "subtle",
  "thiserror",
- "tracing",
  "unicode-normalization",
  "url",
  "zeroize",
@@ -242,7 +238,6 @@ dependencies = [
  "arkret-core",
  "arkret-signatures",
  "arkret-state",
- "base64",
  "chrono",
  "futures-util",
  "getrandom 0.4.3",
@@ -280,7 +275,6 @@ dependencies = [
  "secret-service",
  "security-framework",
  "sha2 0.11.0",
- "tracing",
  "windows",
  "zeroize",
 ]
@@ -293,17 +287,14 @@ dependencies = [
  "arkret-wire-base",
  "chrono",
  "chrono-tz",
- "salvo",
  "serde",
  "serde_json",
- "thiserror",
 ]
 
 [[package]]
 name = "arkret-schema"
 version = "0.3.0"
 dependencies = [
- "arkret-canonical",
  "arkret-wire-base",
  "chrono",
  "regex",
@@ -4792,7 +4783,6 @@ dependencies = [
  "bs58",
  "bytes",
  "chrono",
- "deadpool",
  "diesel",
  "diesel-async",
  "dotenvy",
