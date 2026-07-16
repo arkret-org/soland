@@ -733,10 +733,22 @@ pub(crate) fn canonical_event_ops(
         event.realm_id.as_str()
     ))
     .map_err(proof_state_error)?;
+    let producer_create_cell = if object
+        .get("fields")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|fields| fields.get("purpose"))
+        .and_then(serde_json::Value::as_str)
+        == Some("principal_control")
+    {
+        CellRef::new("ak:cell:ak.component.realm.create.v1:principal_control")
+            .map_err(proof_state_error)?
+    } else {
+        create_cell.clone()
+    };
     if !event
         .effects
         .iter()
-        .any(|effect| effect.cell == create_cell)
+        .any(|effect| effect.cell == producer_create_cell)
     {
         return Err(AppError::new(
             ErrorCode::StateMismatch,
@@ -763,7 +775,9 @@ pub(crate) fn canonical_event_ops(
         .effects
         .iter()
         .filter(|effect| {
-            effect.cell != create_cell && effect.cell != notary_cell && effect.cell != member_cell
+            effect.cell != producer_create_cell
+                && effect.cell != notary_cell
+                && effect.cell != member_cell
         })
         .map(|effect| {
             (

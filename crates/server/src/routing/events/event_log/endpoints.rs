@@ -12,11 +12,61 @@ pub(in crate::routing::events) fn router() -> Router {
         .push(Router::with_path("events/query").post(super::super::sync::events_query_post))
         .push(Router::with_path("events/resolve").post(resolve_events))
         .push(Router::with_path("events/frontier").get(events_frontier))
+        .push(Router::with_path("events/seals").post(submit_event_seal))
         .push(
             Router::with_path("events/mls-governance-proof")
                 .post(super::governance_proof::mls_governance_proof),
         )
         .push(Router::with_path("events/{event_id}").get(get_event))
+}
+
+#[endpoint(
+    operation_id = "ak.self.events.command.submit_seal",
+    tags("events", "seals"),
+    summary = "Submit a current-device-signed principal-control Seal"
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.command.submit_seal"))]
+async fn submit_event_seal(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<Seal>,
+) -> JsonResult<EventSealSubmitOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    super::super::require_agent_session_scope(&session, "ak.self.events.command.submit_seal")?;
+    let seal = body.into_inner();
+    let expected_realm =
+        crate::routing::identity::recovery::principal_control_realm_for_did(&session.actor);
+    if seal.realm_id.as_str() != expected_realm {
+        return Err(AppError::new(
+            ErrorCode::PolicyViolation,
+            "self Seal submission is limited to the caller's principal-control Realm",
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+    let expected_method = format!("{}#{}", session.actor, session.device_id);
+    let NotarySig::Single(signature) = &seal.notary_signature else {
+        return Err(AppError::new(
+            ErrorCode::PolicyViolation,
+            "self Seal submission requires one bound device signature",
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    };
+    if signature.verification_method != expected_method {
+        return Err(AppError::new(
+            ErrorCode::PolicyViolation,
+            "Seal signer does not match the authenticated session device",
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+
+    let effect = crate::routing::federation::move_seal::apply_inbound_seal(state, &seal).await?;
+    json_ok(EventSealSubmitOutcome {
+        seal_id: effect.seal,
+        accepted_event_digests: effect.accepted_move_ids,
+        post_state_root: effect.post_state_root,
+    })
 }
 
 #[endpoint]
