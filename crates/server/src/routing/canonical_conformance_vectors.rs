@@ -100,19 +100,9 @@ fn validator_accepts_sorted_snake_case_keys() {
 }
 
 #[test]
-fn validator_rejects_unsorted_keys() {
-    // serde_json::Map uses BTreeMap which auto-sorts keys, so we parse
-    // a raw JSON string with unsorted keys to test the validator.
-    // Note: serde_json with default features sorts keys on parse via BTreeMap,
-    // so this test verifies the canonical_json_bytes roundtrip catches it.
-    // The validator at root level calls canonical_json_bytes which would
-    // succeed (it sorts internally), but the explicit key ordering check
-    // runs first. Since BTreeMap auto-sorts, we test with a nested object
-    // where the parent has sorted keys but we verify the logic is sound.
-    // Instead, test that the SDK canonical encoding is consistent:
+fn validator_accepts_sdk_canonical_encoding() {
     let value = json!({"a": 1, "b": 2});
     assert!(validate_canonical_json_value(&value).is_ok());
-    // Verify that the canonical form is compact and sorted.
     let canonical = arkret_sdk::canonical::canonical_json_string(&value).unwrap();
     assert_eq!(canonical, r#"{"a":1,"b":2}"#);
 }
