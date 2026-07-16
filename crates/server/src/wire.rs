@@ -5,7 +5,7 @@ pub use arkret_sdk::models::product::{
 pub use arkret_sdk::ops::HardeningStatus;
 use arkret_sdk::{
     AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
-    ClaimedProfileEntry, MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH,
+    ClaimedProfileEntry, Did, MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH,
     MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH,
     ServiceDescribe, SessionGrantProofKind,
 };
@@ -720,6 +720,7 @@ pub fn describe(
     storage: &'static str,
     development_mode: bool,
     account_authority_url: Option<&str>,
+    account_authority_enrollment_did: Option<&str>,
     oidc_client_id: Option<&str>,
     trust_domain: &str,
     resumable_upload_incomplete_ttl_seconds: u64,
@@ -776,6 +777,11 @@ pub fn describe(
         account_authority: Some(AccountAuthority {
             origin: account_origin,
             gate_account_base,
+            enrollment_authority_did: account_authority_enrollment_did
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| Did::new(value.trim().to_owned()))
+                .transpose()
+                .expect("validated account authority enrollment DID"),
         }),
         methods,
         did_binding_methods: Vec::new(),
@@ -1288,6 +1294,7 @@ mod tests {
             true,
             None,
             None,
+            None,
             "ak:trust_domain:soland.example",
             86_400,
             10_000,
@@ -1315,6 +1322,7 @@ mod tests {
             "https://soland.example/",
             "memory",
             true,
+            None,
             None,
             None,
             "ak:trust_domain:soland.example",

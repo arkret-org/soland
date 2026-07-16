@@ -105,19 +105,27 @@ pub(crate) fn encode_cursor(cursor: &Value) -> String {
 pub(crate) fn signed_federation_push_headers(
     origin: &str,
     destination: &str,
+    destination_trust_domain: &str,
     target_uri: &str,
     body: &Value,
 ) -> Vec<(&'static str, String)> {
-    signed_federation_request_headers("POST", origin, destination, target_uri, body)
+    signed_federation_request_headers(
+        "POST",
+        origin,
+        destination,
+        destination_trust_domain,
+        target_uri,
+        body,
+    )
 }
 
 pub(crate) fn signed_federation_get_headers(
     origin: &str,
     destination: &str,
+    destination_trust_domain: &str,
     target_uri: &str,
 ) -> Vec<(&'static str, String)> {
     let source_trust_domain = trust_domain_from_service_id(origin);
-    let destination_trust_domain = trust_domain_from_service_id(destination);
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
     let keyid = format!("{origin}#federation-fanout-key");
@@ -140,7 +148,10 @@ pub(crate) fn signed_federation_get_headers(
         ("source-service-id", origin.to_owned()),
         ("destination-service-id", destination.to_owned()),
         ("source-trust-domain", source_trust_domain),
-        ("destination-trust-domain", destination_trust_domain),
+        (
+            "destination-trust-domain",
+            destination_trust_domain.to_owned(),
+        ),
         ("signature-input", format!("sig1={signature_params}")),
         (
             "signature",
@@ -153,6 +164,7 @@ fn signed_federation_request_headers(
     method: &str,
     origin: &str,
     destination: &str,
+    destination_trust_domain: &str,
     target_uri: &str,
     body: &Value,
 ) -> Vec<(&'static str, String)> {
@@ -160,7 +172,6 @@ fn signed_federation_request_headers(
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let request_digest = format!("sha256:{}", hex::encode(Sha256::digest(&body_bytes)));
     let source_trust_domain = trust_domain_from_service_id(origin);
-    let destination_trust_domain = trust_domain_from_service_id(destination);
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
     let keyid = format!("{origin}#federation-fanout-key");
@@ -187,7 +198,10 @@ fn signed_federation_request_headers(
         ("source-service-id", origin.to_owned()),
         ("destination-service-id", destination.to_owned()),
         ("source-trust-domain", source_trust_domain),
-        ("destination-trust-domain", destination_trust_domain),
+        (
+            "destination-trust-domain",
+            destination_trust_domain.to_owned(),
+        ),
         ("signature-input", format!("sig1={signature_params}")),
         (
             "signature",

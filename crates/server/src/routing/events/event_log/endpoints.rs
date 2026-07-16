@@ -79,6 +79,7 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<arkret_sdk::ServiceDes
         state.db.mode(),
         state.config.development_mode,
         state.config.account_authority_url.as_deref(),
+        state.config.account_authority_enrollment_did.as_deref(),
         state.config.oidc_client_id.as_deref(),
         &state.config.trust_domain,
         state.config.resumable_upload_incomplete_ttl_seconds,

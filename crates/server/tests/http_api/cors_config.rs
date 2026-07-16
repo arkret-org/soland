@@ -265,6 +265,8 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
 async fn server_describe_advertises_account_authority_and_oidc_method_when_configured() {
     let mut config = test_config();
     config.account_authority_url = Some("https://auth.local.host".to_owned());
+    config.account_authority_enrollment_did =
+        Some("did:key:z6Mkfmm57fsb6VL7zVusP8zeA9SYkCKdvUhby2G7Yh8vvQ1P".to_owned());
     config.oidc_client_id = Some("01GFWR28C4KNE04WG3HKXB7C9R".to_owned());
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
@@ -278,6 +280,10 @@ async fn server_describe_advertises_account_authority_and_oidc_method_when_confi
     assert_eq!(
         describe["auth_metadata"]["account_authority"]["gate_account_base"],
         "https://auth.local.host/_arkret/gate/account"
+    );
+    assert_eq!(
+        describe["auth_metadata"]["account_authority"]["enrollment_authority_did"],
+        "did:key:z6Mkfmm57fsb6VL7zVusP8zeA9SYkCKdvUhby2G7Yh8vvQ1P"
     );
     assert_eq!(describe["auth_metadata"]["methods"][0]["method"], "oidc");
     assert_eq!(

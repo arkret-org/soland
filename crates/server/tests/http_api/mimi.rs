@@ -93,7 +93,7 @@ fn mimi_provider_signing_key(verification_method: &str) -> SigningKey {
 }
 
 fn mimi_room_uri(room_id: &str) -> String {
-    format!("mimi://soland.local/rooms/{room_id}")
+    format!("mimi://soland.local/webvh/service/rooms/{room_id}")
 }
 
 fn mimi_opaque_payload(value: Value, digest_field: &str) -> Value {
@@ -276,7 +276,7 @@ async fn mimi_provider_facade_contracts_work() {
         "requester": "did:web:alice.example",
         "strand_id": MIMI_TEST_STRAND_ID,
         "device_id": MIMI_TEST_DEVICE_ID,
-        "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
+        "mimi_room_uri": mimi_room_uri("01JSMIMI"),
         "realm_id": DEMO_REALM_ID,
         "mls_group_id": "mimi-group-01JSMIMI",
         "epoch": 1,
@@ -334,7 +334,8 @@ async fn mimi_provider_facade_contracts_work() {
     )
     .expect("group_info must contain JSON");
     assert_eq!(
-        decoded_group_info["mimi_room_uri"], "mimi://soland.local/rooms/01JSMIMI",
+        decoded_group_info["mimi_room_uri"],
+        mimi_room_uri("01JSMIMI"),
         "group_info response: {group_info}"
     );
     assert_eq!(

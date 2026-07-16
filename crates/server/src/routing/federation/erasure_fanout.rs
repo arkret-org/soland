@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(outbox[0].peer_url, "http://127.0.0.1:9");
         assert_eq!(outbox[0].peer_did, "did:web:peer1.example");
         let body: serde_json::Value = serde_json::from_str(&outbox[0].payload_json).unwrap();
-        assert_eq!(body["origin"], "did:web:test.local");
+        assert_eq!(body["origin"], state.service_id);
         assert_eq!(body["destination"], "did:web:peer1.example");
         assert_eq!(
             body["operations"][0]["object_type"],

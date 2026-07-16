@@ -51,6 +51,7 @@ SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 # SOLAND_FIRST_PROVISIONING is not required.
 # SOLAND_DEFAULT_WEBVH_PROVIDER_ID=soland.embedded
 SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example
+SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID=did:key:z6Mk...
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect
 SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth>
 SOLAND_OBJECT_STORAGE_BACKEND=s3-compatible
@@ -173,6 +174,7 @@ docker run --name soland --restart=always -d \
   -e SOLAND_KEYSTORE_MASTER_KEY_FILE=/run/secrets/soland-keystore-master-key \
   -e SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=/var/lib/soland/identity-bundle \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
+  -e SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID=did:key:z6Mk... \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
@@ -205,6 +207,7 @@ helm template soland ./deploy/helm/soland \
   --set env.SOLAND_KEYSTORE_PATH=/var/lib/soland/keystore/soland.v1 \
   --set secretEnv.SOLAND_KEYSTORE_MASTER_KEY='<base64-random-32-byte-key>' \
   --set env.SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
+  --set env.SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID=did:key:z6Mk... \
   --set secretEnv.DATABASE_URL='postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full' \
   --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_BEARER='<shared-secret-configured-in-coauth>'
@@ -448,6 +451,7 @@ pre-upgrade backup if you need to roll back.
 
 - `SOLAND_DEVELOPMENT_MODE` is unset (or explicitly `false`).
 - `SOLAND_ACCOUNT_AUTHORITY_URL` points at coauth's public account authority.
+- `SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID` pins the distinct B-model device enrollment authority published to clients.
 - `SOLAND_SESSION_GRANT_INTROSPECTION_URL` points at coauth's
   `/_arkret/gate/account/session-grants/introspect`, and
   `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` matches the shared

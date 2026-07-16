@@ -108,7 +108,10 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         captured.captured
     );
     assert!(
-        lower.contains("source-service-id: did:web:soland-outbox.local"),
+        lower.contains(&format!(
+            "source-service-id: {}",
+            captured.state.service_id.to_ascii_lowercase()
+        )),
         "captured request missing Source-Service-ID binding; got: {}",
         captured.captured
     );
@@ -135,7 +138,10 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
     assert!(
         lower.contains("signature-input: sig1=")
             && lower.contains("\"@authority\"")
-            && lower.contains("keyid=\"did:web:soland-outbox.local#federation-fanout-key\""),
+            && lower.contains(&format!(
+                "keyid=\"{}#federation-fanout-key\"",
+                captured.state.service_id.to_ascii_lowercase()
+            )),
         "captured request missing RFC 9421 Signature-Input; got: {}",
         captured.captured
     );

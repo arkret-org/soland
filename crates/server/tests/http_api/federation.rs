@@ -33,6 +33,7 @@ fn seed_peer_delivery_binding(state: &AppState) {
 }
 const SERVICE_ID: &str =
     "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
+const DESTINATION_TRUST_DOMAIN: &str = "ak:trust_domain:soland.local";
 const TEST_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
 const TEST_CIRCLE_ID: &str = "ak:circle:0196419b-0000-7000-8000-0000000000c1";
 
@@ -99,7 +100,14 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(page["events"].as_array().unwrap().len(), 1, "{page:?}");
+    assert_eq!(
+        page["events"]
+            .as_array()
+            .unwrap_or_else(|| panic!("peer query response has no events array: {page:?}"))
+            .len(),
+        1,
+        "{page:?}"
+    );
     let returned_event_id = page["events"][0]["event_id"]
         .as_str()
         .or_else(|| page["events"][0]["event"]["event_id"].as_str());
@@ -163,8 +171,13 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let body = peer_submit_body(&overflow);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
-    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, target, &body)
-    {
+    for (name, value) in signed_federation_push_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        target,
+        &body,
+    ) {
         submit = submit.add_header(name, value, true);
     }
     let outcome: Value = submit
@@ -209,8 +222,13 @@ async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
     // so verification must happen before any typed serde normalization.
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
-    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, target, &body)
-    {
+    for (name, value) in signed_federation_push_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        target,
+        &body,
+    ) {
         submit = submit.add_header(name, value, true);
     }
     let outcome: Value = submit
@@ -296,8 +314,13 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     let body = peer_submit_body(&event);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
-    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, target, &body)
-    {
+    for (name, value) in signed_federation_push_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        target,
+        &body,
+    ) {
         submit = submit.add_header(name, value, true);
     }
     let outcome: Value = submit
@@ -360,8 +383,13 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     let body = peer_submit_body(&event);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
-    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, target, &body)
-    {
+    for (name, value) in signed_federation_push_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        target,
+        &body,
+    ) {
         submit = submit.add_header(name, value, true);
     }
     let outcome: Value = submit
@@ -460,9 +488,13 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
         "include_payload": true
     });
     let mut resolve = TestClient::post(resolve_target).json(&resolve_body);
-    for (name, value) in
-        signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, resolve_target, &resolve_body)
-    {
+    for (name, value) in signed_federation_push_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        resolve_target,
+        &resolve_body,
+    ) {
         resolve = resolve.add_header(name, value, true);
     }
     let resolved: Value = resolve
@@ -537,8 +569,13 @@ async fn submit_peer_event(state: AppState, event: &Value) -> Value {
     let body = peer_submit_body(event);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
-    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_ID, target, &body)
-    {
+    for (name, value) in signed_federation_push_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        target,
+        &body,
+    ) {
         submit = submit.add_header(name, value, true);
     }
     submit
@@ -550,7 +587,12 @@ async fn submit_peer_event(state: AppState, event: &Value) -> Value {
 }
 
 fn peer_get_headers(target_uri: &str) -> Vec<(&'static str, String)> {
-    signed_federation_get_headers(PEER_SOURCE_DID, SERVICE_ID, target_uri)
+    signed_federation_get_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        target_uri,
+    )
 }
 
 async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str, member_did: &str) {

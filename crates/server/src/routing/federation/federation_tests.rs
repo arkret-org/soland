@@ -126,9 +126,9 @@ async fn mesh_policy_broadcasts_to_every_peer() {
     let cfg = config_with_policy(
         FederationFanoutTopology::Mesh,
         vec![
-            "https://peer-a.example".to_owned(),
-            "https://peer-b.example".to_owned(),
-            "https://peer-c.example".to_owned(),
+            "https://peer-a.example|did:web:peer-a.example".to_owned(),
+            "https://peer-b.example|did:web:peer-b.example".to_owned(),
+            "https://peer-c.example|did:web:peer-c.example".to_owned(),
         ],
     );
     let state = AppState::new(cfg, Db { pool: None });
@@ -140,7 +140,7 @@ async fn mesh_policy_broadcasts_to_every_peer() {
     let transcript = state
         .persistence
         .federation_transactions()
-        .get("did:web:test.local", &txn_id)
+        .get(&state.service_id, &txn_id)
         .await
         .unwrap()
         .expect("outbound transcript persisted");
@@ -197,9 +197,9 @@ async fn hub_policy_broadcasts_to_hub_only() {
     let cfg = config_with_policy(
         FederationFanoutTopology::Hub,
         vec![
-            "https://hub.example".to_owned(),
-            "https://peer-b.example".to_owned(),
-            "https://peer-c.example".to_owned(),
+            "https://hub.example|did:web:hub.example".to_owned(),
+            "https://peer-b.example|did:web:peer-b.example".to_owned(),
+            "https://peer-c.example|did:web:peer-c.example".to_owned(),
         ],
     );
     let state = AppState::new(cfg, Db { pool: None });
@@ -349,7 +349,7 @@ async fn operation_frontier_tracks_persisted_operation_ids() {
 async fn seal_fanout_records_seal_target_and_retry_metadata() {
     let cfg = config_with_policy(
         FederationFanoutTopology::Mesh,
-        vec!["https://peer-seal.example".to_owned()],
+        vec!["https://peer-seal.example|did:web:peer-seal.example".to_owned()],
     );
     let state = AppState::new(cfg, Db { pool: None });
     let targets = broadcast_seal_to_peers(&state, "ak:seal:sha256:02").await;
@@ -361,7 +361,7 @@ async fn seal_fanout_records_seal_target_and_retry_metadata() {
     let transcript = state
         .persistence
         .federation_transactions()
-        .get("did:web:test.local", &txn_id)
+        .get(&state.service_id, &txn_id)
         .await
         .unwrap()
         .expect("outbound seal transcript persisted");
@@ -378,7 +378,7 @@ async fn seal_fanout_records_seal_target_and_retry_metadata() {
 async fn retry_pass_claims_due_outbound_transcript_and_reschedules() {
     let cfg = config_with_policy(
         FederationFanoutTopology::Mesh,
-        vec!["https://peer-retry.example".to_owned()],
+        vec!["https://peer-retry.example|did:web:peer-retry.example".to_owned()],
     );
     let state = AppState::new(cfg, Db { pool: None });
     broadcast_move_to_peers(&state, "sha256:retry").await;
@@ -389,7 +389,7 @@ async fn retry_pass_claims_due_outbound_transcript_and_reschedules() {
     let before = state
         .persistence
         .federation_transactions()
-        .get("did:web:test.local", &txn_id)
+        .get(&state.service_id, &txn_id)
         .await
         .unwrap()
         .expect("outbound transcript persisted");
@@ -406,7 +406,7 @@ async fn retry_pass_claims_due_outbound_transcript_and_reschedules() {
     let after = state
         .persistence
         .federation_transactions()
-        .get("did:web:test.local", &txn_id)
+        .get(&state.service_id, &txn_id)
         .await
         .unwrap()
         .expect("updated outbound transcript persisted");
