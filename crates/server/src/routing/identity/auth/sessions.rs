@@ -217,7 +217,7 @@ mod tests {
         ));
         assert!(method_path_requires_fresh_introspection(
             &Method::DELETE,
-            "/_arkret/self/account_data/m.push_rules"
+            "/_arkret/self/account_data/ak.push_rules"
         ));
     }
 
