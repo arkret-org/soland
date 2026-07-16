@@ -14,7 +14,7 @@
 //!
 //! The test runs against a fresh in-memory soland (no Pg) using the
 //! shared `dev-login` shortcut for bearer issuance — same pattern as
-//! `tests/http_api.rs`.
+//! `tests/http_api/`.
 
 use std::collections::BTreeMap;
 

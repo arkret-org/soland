@@ -181,9 +181,9 @@ fn validate_ephemeral_envelope(
     // ephemeral-envelope.schema.json: every broadcast ephemeral kind MUST
     // carry `device_id` and a detached-JWS `proof` whose verification_method
     // is `{actor_id}#{device_id}` and whose event_digest covers the canonical
-    // envelope bytes without `proof`. (`ak.realm_key.request` is a targeted
-    // to-device relay, not one of the four broadcast kinds, and keeps its own
-    // admission rules in realm_key_request.rs.)
+    // envelope bytes without `proof`. `ak.realm_key.request` is a targeted
+    // to-device relay, not one of the four broadcast kinds, so it is outside
+    // this broadcast-only proof-shape gate.
     if matches!(
         envelope.kind.as_str(),
         "ak.call.signal" | "ak.presence" | "ak.typing" | "ak.receipt.read"
