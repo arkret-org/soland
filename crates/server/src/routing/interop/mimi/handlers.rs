@@ -102,7 +102,7 @@ pub(super) async fn mimi_room_update(
                     AppError::invalid_param(
                         "room_binding requires `binding_scope.realm_id` or a top-level `realm_id`",
                     )
-                    .with_wire_code(MIMI_REASON_GOVERNANCE_BINDING_MISSING)
+                    .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
                 })?;
             Some(event_id)
         }
@@ -162,7 +162,7 @@ pub(super) async fn mimi_notify(
     // into projection_events so it doesn't pollute durable history.
     let realm_id = mimi_bound_realm_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Arkret Realm")
-            .with_wire_code(MIMI_REASON_GOVERNANCE_BINDING_MISSING)
+            .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
     })?;
     let event_id = ids::generate_event_id();
     let notify_record = ProjectionEventRecord {
@@ -268,7 +268,7 @@ pub(super) async fn mimi_room_message(
         .await
         .ok_or_else(|| {
             AppError::not_found("MIMI room is not bound to any Arkret Realm")
-                .with_wire_code(MIMI_REASON_GOVERNANCE_BINDING_MISSING)
+                .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
         })?;
     enforce_mimi_submit_binding(&room_binding, &body, &message)?;
     let realm_id = room_binding.realm_id.clone();
@@ -415,7 +415,7 @@ pub(super) async fn mimi_group_info(
     }
     let realm_id = mimi_bound_realm_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Arkret Realm")
-            .with_wire_code(MIMI_REASON_GOVERNANCE_BINDING_MISSING)
+            .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
     })?;
     let projection = mimi_room_projection(state, &room_id, &realm_id);
     let projection_bytes = serde_json::to_vec(&projection)
@@ -702,7 +702,7 @@ pub(super) async fn mimi_report_abuse(
         return Err(AppError::invalid_param(
             "mimi report requires `realm_id` or a `mimi_room_uri` that resolves to a bound Arkret Realm",
         )
-        .with_wire_code(MIMI_REASON_GOVERNANCE_BINDING_MISSING));
+        .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
     };
     let reporter = body
         .get("reporter_did")
