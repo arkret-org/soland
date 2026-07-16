@@ -12,7 +12,10 @@ targets = [
 ]
 
 [advisories]
-yanked = "deny"
+# object_store 0.14.1 currently reaches yanked spin 0.10.0 through
+# crc-fast 1.10.0. Keep this visible as a warning until crc-fast updates its
+# spin requirement; vulnerabilities remain denied.
+yanked = "warn"
 ignore = []
 
 [licenses]
@@ -33,6 +36,8 @@ allow = [
   "CC0-1.0",
   "CDLA-Permissive-2.0",
   "OpenSSL",
+  "BSL-1.0",
+  "PostgreSQL",
 ]
 confidence-threshold = 0.8
 
@@ -51,4 +56,4 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+allow-git = ["https://github.com/openmls/openmls.git"]

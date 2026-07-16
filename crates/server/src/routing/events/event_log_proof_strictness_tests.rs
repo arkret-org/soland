@@ -1922,7 +1922,7 @@ fn data_event_capability_ref_reports_upstream_revoked_parent() {
     )
     .expect_err("child capability_ref with revoked parent must reject");
 
-    assert_eq!(err.code, crate::authz::ReasonCode::GRANT_REVOKED_UPSTREAM);
+    assert_eq!(err.code, arkret_sdk::ReasonCode::GRANT_REVOKED_UPSTREAM);
     assert!(err.message.contains("revoked upstream"));
 }
 

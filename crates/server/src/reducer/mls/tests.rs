@@ -421,7 +421,7 @@ fn keypackage_claim_rejects_stale_cross_signing_generation() {
     let effect = apply_keypackage_claim(&mut state, &claim);
     match effect {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH);
+            assert_eq!(reason, arkret_sdk::ReasonCode::CLAIM_GENERATION_MISMATCH);
         }
         other => panic!("expected Rejected, got {other:?}"),
     }
