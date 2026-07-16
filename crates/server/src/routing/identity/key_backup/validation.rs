@@ -223,9 +223,8 @@ pub(super) fn validate_key_backup_domain_separation_typed(
         .device_id
         .as_ref()
         .map(|device_id| device_id.as_str())
-        .or(backup.encryption.recipient_key_ref.as_deref())
-        .unwrap_or_default();
-    if aad.device_id != expected_device {
+        .or(backup.encryption.recipient_key_ref.as_deref());
+    if aad.device_id.as_deref() != expected_device {
         return Err(schema_error(
             "domain_separation.aead_aad.device_id must match device_id or recipient_key_ref",
         ));
