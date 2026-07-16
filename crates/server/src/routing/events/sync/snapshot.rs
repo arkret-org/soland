@@ -1132,52 +1132,13 @@ fn timeline_event_tie_breaker(event_id: &str) -> i64 {
 
 async fn realm_event_visible_to_session_with_projection(
     state: &AppState,
-    projection: &ProjectionState,
+    _projection: &ProjectionState,
     realm_id: &str,
     event_created_at: DateTime<Utc>,
     sender: Option<&str>,
     session: Option<&SessionRecord>,
 ) -> bool {
-    if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
-        return true;
-    }
-    match realm_history_visibility(state, realm_id).await.as_str() {
-        "world_readable" => true,
-        "shared" => {
-            if realm_discoverability(state, realm_id).await == "public" {
-                return true;
-            }
-            match session {
-                Some(session) => realm_has_member(state, realm_id, &session.actor).await,
-                None => false,
-            }
-        }
-        "joined" | "invited" => {
-            let Some(session) = session else {
-                return false;
-            };
-            let mut joined_at = projection
-                .member(realm_id, &session.actor)
-                .filter(|member| member.state == "join")
-                .map(|member| member.joined_at);
-            if joined_at.is_none() {
-                let meta = state
-                    .persistence
-                    .realm_meta()
-                    .get(realm_id)
-                    .await
-                    .ok()
-                    .flatten();
-                if let Some(meta) = meta
-                    && meta.owner == session.actor
-                {
-                    joined_at = Some(meta.created_at);
-                }
-            }
-            joined_at.is_some_and(|joined_at| event_created_at >= joined_at)
-        }
-        _ => false,
-    }
+    realm_event_visible_to_session(state, realm_id, event_created_at, sender, session).await
 }
 
 pub(crate) async fn projection_record_visible_to_session(

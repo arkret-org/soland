@@ -48,9 +48,8 @@ use super::{
     TO_DEVICE_PAGE_LIMIT, authenticated_session, device_message_envelopes_after, is_realm_deleted,
     now, projected_event_page, projected_event_page_for_realms_through,
     projected_event_replay_upper_bound, projection_event_json, prune_expired_typing, query_param,
-    realm_discoverability, realm_event_visible_to_session, realm_has_member,
-    realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
-    snapshot_manifest_for_realm, validate_did,
+    realm_event_visible_to_session, realm_has_member, realm_id_accessible, realm_visible_to,
+    render_error, sha256_hex, snapshot_manifest_for_realm, validate_did,
 };
 pub(crate) use crate::ids;
 pub(crate) use crate::persistence::SyncCursorRecord;

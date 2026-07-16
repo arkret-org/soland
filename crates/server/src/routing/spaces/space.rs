@@ -969,13 +969,7 @@ pub async fn realm_history_visibility_for_id(state: &AppState, realm_id: &str) -
         .ok()
         .flatten()
         .map(|record| record.history_visibility.clone())
-        .unwrap_or_else(|| {
-            if directory_realm_is_public(state, realm_id) {
-                "shared".to_owned()
-            } else {
-                "joined".to_owned()
-            }
-        })
+        .unwrap_or_else(|| "joined".to_owned())
 }
 
 fn directory_realm_is_public(state: &AppState, realm_id: &str) -> bool {

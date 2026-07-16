@@ -186,6 +186,15 @@ pub(crate) fn router() -> Router {
         )
 }
 
+fn ensure_organization_registry_admin(state: &AppState, actor: &str) -> Result<(), AppError> {
+    if state.is_admin_principal(actor) {
+        return Ok(());
+    }
+    Err(AppError::capability_denied(
+        "organization registry write requires a server administrator",
+    ))
+}
+
 pub(crate) async fn refresh_organization_projection(
     state: &AppState,
 ) -> Result<(), crate::persistence::PersistenceError> {
@@ -290,11 +299,7 @@ async fn upsert_organization(
     // Registering an organization (a verified, listable org-principal record) is
     // a deployment-governance act, gated to the server's configured admin
     // principals — not every authenticated user may mint organizations.
-    if !state.is_admin_principal(&session.actor) {
-        return Err(AppError::capability_denied(
-            "organization registry write requires a server administrator",
-        ));
-    }
+    ensure_organization_registry_admin(state, &session.actor)?;
     let body = body.into_inner();
     validate_did(&body.organization_did)
         .map_err(|_| AppError::invalid_param("organization_did must be a DID"))?;
@@ -416,6 +421,7 @@ async fn upsert_organization_policy(
 ) -> JsonResult<OrganizationPolicyView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    ensure_organization_registry_admin(state, &session.actor)?;
     let organization_id = normalized_organization_id(&organization_did.into_inner())?;
     ensure_organization_placeholder(state, &organization_id, &session.actor)
         .await
@@ -508,6 +514,7 @@ async fn link_organization_realm(
 ) -> JsonResult<OrganizationRealmLinkOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    ensure_organization_registry_admin(state, &session.actor)?;
     let organization_id = normalized_organization_id(&organization_did.into_inner())?;
     let body = body.into_inner();
     ensure_organization_placeholder(state, &organization_id, &session.actor)
@@ -860,7 +867,7 @@ async fn ensure_organization_placeholder(
         display_name: display_name_from_organization_id(organization_id),
         source_refs: vec![ids::generate_event_id()],
         policy_revision: "local".to_owned(),
-        verified: true,
+        verified: false,
         members: BTreeSet::new(),
         member_count: 0,
         created_by: actor.to_owned(),
