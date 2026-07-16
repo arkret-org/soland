@@ -267,6 +267,11 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
     let founding_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
     let did = "did:web:bob.example";
     let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .json(&serde_json::json!({
             "principal_id": did,
             "display_name": "bob",

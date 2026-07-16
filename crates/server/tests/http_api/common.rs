@@ -31,6 +31,7 @@ pub(crate) const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-0000000
 /// derived TURN credential is deterministic in assertions. Mirrors
 /// `SOLAND_TURN_SHARED_SECRET`.
 pub(crate) const SOLAND_TEST_TURN_SHARED_SECRET: &str = "soland-test-turn-shared-secret-0123456789";
+pub(crate) const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
 pub(crate) static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
 pub(crate) fn test_config() -> AppConfig {
     AppConfig {
@@ -41,6 +42,7 @@ pub(crate) fn test_config() -> AppConfig {
             ..IceServersConfig::default()
         },
         development_mode: true,
+        embedded_webvh_registration_bearer: Some(ACCOUNT_REGISTER_BEARER.to_owned()),
         // Tests use fixed-time HLC fixtures; window=0 disables replay-window
         // enforcement so they keep passing.
         jws_replay_window_seconds: 0,
@@ -886,6 +888,11 @@ pub(crate) async fn register_account(
             "display_name": handle.trim_start_matches('@'),
             "device_id": device_id
         }))
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await
         .take_json()

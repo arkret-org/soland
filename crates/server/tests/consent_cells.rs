@@ -7,9 +7,12 @@ use soland::state::AppState;
 use soland::{ids, service};
 use soland_data::Db;
 
+const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
+
 fn test_config() -> AppConfig {
     AppConfig {
         development_mode: true,
+        embedded_webvh_registration_bearer: Some(ACCOUNT_REGISTER_BEARER.to_owned()),
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "peer".to_owned()],
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
@@ -19,6 +22,11 @@ fn test_config() -> AppConfig {
 
 async fn ensure_account(app: &salvo::Service, actor: &str) {
     let mut response = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .json(&serde_json::json!({
             "principal_id": actor,
             "display_name": actor,

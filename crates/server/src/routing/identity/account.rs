@@ -51,6 +51,7 @@ use super::consent::{
     has_active_consent_for_scope, normalize_scope, persist_consent_cell, record_pending_request,
     revoke_contact_managed_consent,
 };
+use super::did::require_embedded_webvh_registration_bearer;
 use super::{
     AuthArgs, append_audit_log, bearer_token, normalize_localpart, now, sha256_hex, validate_did,
 };
@@ -93,46 +94,6 @@ fn principal_handle_domain(state: &AppState) -> String {
 fn handle_domain_from_public_base_url(public_base_url: &str) -> Option<String> {
     let url = reqwest::Url::parse(public_base_url).ok()?;
     valid_handle_domain_candidate(url.host_str()?)
-}
-
-/// Resolve the account localpart from a canonical registration handle
-/// (`<localpart>:<domain>`). The Principal Server only issues handle bindings
-/// for its own domain; a foreign domain or an already-taken localpart is
-/// rejected. The signed handle claim itself is re-derived on demand from the
-/// `account_localparts` binding, so the claim is never persisted.
-async fn resolve_registration_localpart(
-    state: &AppState,
-    handle: &str,
-) -> Result<String, AppError> {
-    let (localpart, domain) = handle
-        .split_once(':')
-        .ok_or_else(|| AppError::invalid_param("handle must be canonical <localpart>:<domain>"))?;
-    let service_domain = principal_handle_domain(state);
-    if domain != service_domain {
-        return Err(AppError::invalid_param(format!(
-            "handle domain `{domain}` is not served by this principal server (`{service_domain}`)"
-        )));
-    }
-    let localpart = normalize_localpart(localpart);
-    if localpart.is_empty() {
-        return Err(AppError::invalid_param(
-            "handle localpart must not be empty",
-        ));
-    }
-    let taken = state
-        .persistence
-        .account_localparts()
-        .owner_of(&localpart)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .is_some();
-    if taken {
-        return Err(AppError::new(
-            crate::error::ErrorCode::DuplicateConflict,
-            format!("handle localpart `{localpart}` is already taken"),
-        ));
-    }
-    Ok(localpart)
 }
 
 /// The account's Principal-Server-signed primary handle claim, re-derived on
@@ -1105,14 +1066,10 @@ async fn account_viewer(
 /// `POST /_arkret/gate/account/register` — spec-canonical registration
 /// binding (`ak.gate.account.command.register`, surface group `account_auth`).
 ///
-/// Spec: sync/service-http-binding.md — request is
-/// `AccountRegisterRequestBody {principal_id, handle?, display_name?,
-/// device_id?, proof?, policy_evidence?}`. When `handle` is present the
-/// Principal Server records the first localpart binding; otherwise the account
-/// is provisioned without a published handle. The optional lifecycle `proof`
-/// shares the session-grant proof vocabulary; signature verification of
-/// that proof is future work (cf. the device-pairing scaffolds), the field
-/// is currently accepted without cryptographic validation.
+/// This Principal Server endpoint is the deployment projection edge used by
+/// the Account Authority after it has verified the identity-creation protocol.
+/// It requires the configured service bearer, never accepts the client-facing
+/// `identity_creation` branch, and does not create a handle as a side effect.
 #[endpoint(
     operation_id = "ak.gate.account.command.register",
     tags("account"),
@@ -1122,19 +1079,24 @@ async fn account_viewer(
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.register"))]
 async fn gate_account_register(
     depot: &mut Depot,
+    req: &mut Request,
     body: JsonBody<AccountRegisterRequestBody>,
 ) -> JsonResult<AccountRegisterOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    require_embedded_webvh_registration_bearer(state, req)?;
     let body = body.into_inner();
+    if body.identity_creation.is_some() {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "identity_creation must be verified by the Account Authority",
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
     let did = body.principal_id.as_str().to_owned();
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &did)?;
-    let registration_audit = enforce_account_registration_policy(
-        state,
-        &did,
-        body.handle.as_deref(),
-        body.policy_evidence.as_ref(),
-    )
-    .await?;
+    let registration_audit =
+        enforce_account_registration_policy(state, &did, None, body.policy_evidence.as_ref())
+            .await?;
     let existing = state
         .persistence
         .accounts()
@@ -1176,16 +1138,13 @@ async fn gate_account_register(
             handle_claim_digests: Vec::new(),
             profile: None,
             registration_audit: Some(registration_audit),
+            binding_receipt: None,
         });
     }
-    let localpart = match body.handle.as_deref() {
-        Some(handle) => resolve_registration_localpart(state, handle).await?,
-        None => String::new(),
-    };
     let account = AccountRecord {
         id: crate::ids::generate_account_id(),
         did: did.clone(),
-        localpart,
+        localpart: String::new(),
         display_name: body.display_name.clone(),
         bio: None,
         avatar_blob_ref: None,
@@ -1259,6 +1218,7 @@ async fn gate_account_register(
         handle_claim_digests: Vec::new(),
         profile: None,
         registration_audit: Some(registration_audit),
+        binding_receipt: None,
     })
 }
 

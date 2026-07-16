@@ -26,6 +26,22 @@ async fn external_bearer_without_dpop_is_rejected() {
 }
 
 #[tokio::test]
+async fn account_register_requires_account_authority_bearer() {
+    let state = AppState::new(test_config(), Db { pool: None });
+
+    let mut response = TestClient::post("http://server/_arkret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": "did:web:unauthorized-register.example",
+        }))
+        .send(&app_from_state(state))
+        .await;
+
+    assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "unauthenticated");
+}
+
+#[tokio::test]
 async fn account_registration_policy_rejects_closed_and_audits() {
     let state = AppState::new(test_config(), Db { pool: None });
     {
@@ -34,6 +50,11 @@ async fn account_registration_policy_rejects_closed_and_audits() {
     }
 
     let mut response = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .json(&serde_json::json!({
             "principal_id": "did:web:closed-register.example",
         }))
@@ -82,6 +103,11 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     }
 
     let mut missing_code = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .json(&serde_json::json!({
             "principal_id": "did:web:alice.example.edu",
         }))
@@ -96,6 +122,11 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     );
 
     let mut wrong_org = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .json(&serde_json::json!({
             "principal_id": "did:web:bob.other.example",
             "policy_evidence": {
@@ -114,6 +145,11 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     );
 
     let mut missing_invite = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .json(&serde_json::json!({
             "principal_id": "did:web:invite-missing.example.edu",
             "policy_evidence": {
@@ -131,6 +167,11 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     );
 
     let accepted: Value = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .json(&serde_json::json!({
             "principal_id": "did:web:carol.example.edu",
             "display_name": "Carol",
@@ -160,6 +201,11 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     // body ("同一对象...的不同 canonical body 是普通后继写...MUST NOT 仅因
     // identity 相同返回 duplicate_conflict").
     let duplicate: Value = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .json(&serde_json::json!({
             "principal_id": "did:web:carol.example.edu",
             "policy_evidence": {
@@ -186,6 +232,11 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
         });
     }
     let _: Value = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .json(&serde_json::json!({
             "principal_id": "did:web:rate-register.example",
         }))
@@ -195,6 +246,11 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
         .await
         .unwrap();
     let mut limited = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .json(&serde_json::json!({
             "principal_id": "did:web:rate-register.example",
         }))
