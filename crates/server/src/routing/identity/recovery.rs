@@ -97,20 +97,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("recovery-policies").get(recovery_policies_get))
         .push(Router::with_path("recovery-receipt").post(recovery_receipt_put))
         .push(Router::with_path("recovery-receipts").get(recovery_receipts_get))
-        .push(
-            Router::with_path("recovery-sessions").post(recovery_session_create), // C-P2 (REC-1)
-        )
-        .push(
-            Router::with_path("recovery-sessions/{recovery_session_id}").get(recovery_session_get),
-        )
-        .push(
-            Router::with_path("recovery-sessions/{recovery_session_id}/proofs")
-                .post(recovery_session_proof_submit),
-        )
-        .push(
-            Router::with_path("recovery-sessions/{recovery_session_id}/complete")
-                .post(recovery_session_complete),
-        )
 }
 
 /// Deterministic principal control realm id for a principal DID

@@ -10,7 +10,7 @@ use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use soland_data::PgPool;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_postgres::{AsyncMessage, NoTls};
 
 pub(crate) const MAX_SUBSCRIBE_RECONNECT_WINDOW_MS: u64 = 86_400_000;
@@ -95,7 +95,7 @@ pub enum EventNotificationKind {
 #[derive(Clone)]
 pub struct EventBroadcast {
     local: broadcast::Sender<EventNotification>,
-    relay: Option<Arc<PgEventNotificationRelay>>,
+    relay_tx: Option<mpsc::Sender<EventNotification>>,
 }
 
 #[derive(Clone)]
@@ -123,15 +123,27 @@ impl EventBroadcast {
                     origin: uuid::Uuid::now_v7().to_string(),
                 })
             });
-        if let Some(relay) = relay.clone()
+        let relay_tx = if let Some(relay) = relay
             && let Ok(handle) = tokio::runtime::Handle::try_current()
         {
             let local_for_listener = local.clone();
+            let relay_for_listener = relay.clone();
             handle.spawn(async move {
-                relay.listen_forever(local_for_listener).await;
+                relay_for_listener.listen_forever(local_for_listener).await;
             });
-        }
-        Self { local, relay }
+            let (relay_tx, mut relay_rx) = mpsc::channel(capacity.max(1));
+            handle.spawn(async move {
+                while let Some(notification) = relay_rx.recv().await {
+                    if let Err(error) = relay.publish(notification).await {
+                        tracing::warn!(%error, "failed to publish event notification over PostgreSQL");
+                    }
+                }
+            });
+            Some(relay_tx)
+        } else {
+            None
+        };
+        Self { local, relay_tx }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<EventNotification> {
@@ -142,17 +154,18 @@ impl EventBroadcast {
         &self,
         notification: EventNotification,
     ) -> Result<usize, broadcast::error::SendError<EventNotification>> {
-        let local_result = self.local.send(notification.clone());
-        if let Some(relay) = self.relay.clone()
-            && let Ok(handle) = tokio::runtime::Handle::try_current()
-        {
-            handle.spawn(async move {
-                if let Err(error) = relay.publish(notification).await {
-                    tracing::warn!(%error, "failed to publish event notification over PostgreSQL");
+        if let Some(relay_tx) = &self.relay_tx {
+            match relay_tx.try_send(notification.clone()) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!("PostgreSQL event notification queue is full");
                 }
-            });
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::warn!("PostgreSQL event notification publisher stopped");
+                }
+            }
         }
-        local_result
+        self.local.send(notification)
     }
 }
 

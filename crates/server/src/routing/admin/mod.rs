@@ -15,8 +15,8 @@ mod moderation;
 mod queries;
 mod retention;
 mod seal;
+mod server_ops;
 mod settings;
-mod spec;
 
 use audit::append_audit_log;
 pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
@@ -117,8 +117,8 @@ pub fn router() -> Router {
         .push(settings::router())
 }
 
-pub fn spec_router() -> Router {
-    spec::router().hoop(RequireAdmin::scope(arkret_sdk::admin_scopes::ADMIN_READ))
+pub fn server_ops_router() -> Router {
+    server_ops::router().hoop(RequireAdmin::scope(arkret_sdk::admin_scopes::ADMIN_READ))
 }
 
 pub fn admin_router() -> Router {

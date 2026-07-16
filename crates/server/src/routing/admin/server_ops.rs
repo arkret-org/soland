@@ -12,7 +12,7 @@
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::audit::append_audit_log;
 use super::require_admin_principal;
@@ -76,7 +76,7 @@ struct AdminServerStatsOutcome {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct AdminAccountStatusRequestBody {
+struct SolandAdminAccountStatusRequestBody {
     status: String,
     #[serde(default)]
     reason: Option<String>,
@@ -107,7 +107,7 @@ struct AdminAccountLifecycleOutcome {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct AdminRevokeDeviceRequestBody {
+struct SolandAdminRevokeDeviceRequestBody {
     #[serde(default)]
     actor: Option<String>,
     #[serde(default)]
@@ -117,7 +117,7 @@ struct AdminRevokeDeviceRequestBody {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct AdminRevokeDeviceOutcome {
+struct SolandAdminRevokeDeviceOutcome {
     actor: String,
     device_id: String,
     revoked_by: String,
@@ -126,7 +126,7 @@ struct AdminRevokeDeviceOutcome {
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AdminModerationQueueOutcome {
-    items: Vec<Value>,
+    items: Vec<super::moderation::ModerationQueueItemOutcome>,
     total: usize,
     generated_at: String,
 }
@@ -306,7 +306,7 @@ async fn update_account_status(
     depot: &mut Depot,
     req: &mut Request,
     account_id: PathParam<String>,
-    body: JsonBody<AdminAccountStatusRequestBody>,
+    body: JsonBody<SolandAdminAccountStatusRequestBody>,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -546,8 +546,8 @@ async fn revoke_device(
     depot: &mut Depot,
     req: &mut Request,
     device_id: PathParam<String>,
-    body: JsonBody<AdminRevokeDeviceRequestBody>,
-) -> JsonResult<AdminRevokeDeviceOutcome> {
+    body: JsonBody<SolandAdminRevokeDeviceRequestBody>,
+) -> JsonResult<SolandAdminRevokeDeviceOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -584,7 +584,7 @@ async fn revoke_device(
         "accepted",
     )
     .await;
-    json_ok(AdminRevokeDeviceOutcome {
+    json_ok(SolandAdminRevokeDeviceOutcome {
         actor: target_actor,
         device_id,
         revoked_by: session.actor,
@@ -614,6 +614,10 @@ async fn get_moderation_queue(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let total = items.len();
+    let items = items
+        .into_iter()
+        .map(super::moderation::ModerationQueueItemOutcome::from_value)
+        .collect();
     json_ok(AdminModerationQueueOutcome {
         items,
         total,

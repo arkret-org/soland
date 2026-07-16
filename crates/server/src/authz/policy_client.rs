@@ -720,7 +720,7 @@ fn resolve_policy_ed25519_pubkey(
                 .and_then(|fragment| document.verification_methods.get(fragment))
         })
         .or_else(|| {
-            if document.verification_methods.len() == 1 {
+            if did.method() == "key" && document.verification_methods.len() == 1 {
                 document.verification_methods.values().next()
             } else {
                 None

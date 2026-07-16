@@ -385,13 +385,19 @@ async fn try_apply_device_generation_event_seal(
     state: &AppState,
     seal: &Seal,
 ) -> Result<Option<SealEffect>, AppError> {
-    let _guard = crate::routing::identity::device_generation::DEVICE_GENERATION_ADMISSION_LOCK
-        .lock()
-        .await;
     seal.validate_id()
         .map_err(|error| seal_admission_error(format!("Seal id: {error}")))?;
     seal.validate_structural()
         .map_err(|error| seal_admission_error(format!("Seal structure: {error}")))?;
+    let Some(initial_context) = device_generation_event_seal_context(state, &seal.realm_id).await?
+    else {
+        return Ok(None);
+    };
+    let generation_lock =
+        crate::routing::identity::device_generation::device_generation_admission_lock(
+            &initial_context.principal_id,
+        );
+    let _guard = generation_lock.lock().await;
     if let Some(existing) = state.seal_store.get(&seal.id).map_err(|error| {
         AppError::new(
             ErrorCode::InternalError,
@@ -412,7 +418,9 @@ async fn try_apply_device_generation_event_seal(
     }
     let Some(mut context) = device_generation_event_seal_context(state, &seal.realm_id).await?
     else {
-        return Ok(None);
+        return Err(seal_admission_error(
+            "principal-control Realm disappeared during Seal admission",
+        ));
     };
     if !state
         .seal_store

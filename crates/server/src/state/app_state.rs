@@ -1370,6 +1370,10 @@ impl AppState {
         if map.contains_key(&key) {
             return false;
         }
+        const AGENT_APPROVAL_NONCE_MAX_ENTRIES: usize = 4096;
+        if map.len() >= AGENT_APPROVAL_NONCE_MAX_ENTRIES {
+            return false;
+        }
         map.insert(key, expires_at);
         true
     }

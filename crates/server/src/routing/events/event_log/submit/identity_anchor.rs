@@ -55,10 +55,9 @@ pub(super) async fn submit_identity_anchor_batch(
         .ok_or_else(|| unit_error("identity anchor Event requires actor_id"))?;
     let actor_lock = actor_submit_lock(&lock_actor);
     let _guard = actor_lock.lock().await;
-    let _generation_guard =
-        crate::routing::identity::device_generation::DEVICE_GENERATION_ADMISSION_LOCK
-            .lock()
-            .await;
+    let generation_lock =
+        crate::routing::identity::device_generation::device_generation_admission_lock(&lock_actor);
+    let _generation_guard = generation_lock.lock().await;
     if let Some(outcome) = identical_historical_retry(state, &envelopes).await? {
         return Ok(outcome);
     }

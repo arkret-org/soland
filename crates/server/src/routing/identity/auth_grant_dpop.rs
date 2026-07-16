@@ -281,8 +281,17 @@ async fn introspect_session_grant_remote(
 /// `iat`-bounded expiry; once past it, the jti is swept and re-usable only
 /// because the `iat` freshness check would have already rejected it. Same
 /// process-local trade-off as the introspection cache.
-static DPOP_REPLAY: LazyLock<Mutex<HashMap<String, DateTime<Utc>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+struct DpopReplayLedger {
+    entries: HashMap<String, DateTime<Utc>>,
+    next_sweep_at: DateTime<Utc>,
+}
+
+static DPOP_REPLAY: LazyLock<Mutex<DpopReplayLedger>> = LazyLock::new(|| {
+    Mutex::new(DpopReplayLedger {
+        entries: HashMap::new(),
+        next_sweep_at: DateTime::<Utc>::MIN_UTC,
+    })
+});
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DpopReplayRegistration {
@@ -295,8 +304,19 @@ enum DpopReplayRegistration {
 /// closed when the bounded replay ledger is full.
 fn register_dpop_jti(jti: &str, expires_at: DateTime<Utc>) -> DpopReplayRegistration {
     let now = crate::wire::now();
-    let mut seen = DPOP_REPLAY.lock();
-    register_dpop_jti_locked(&mut seen, jti, expires_at, now, DPOP_REPLAY_MAX_ENTRIES)
+    let mut ledger = DPOP_REPLAY.lock();
+    let sweep_expired = now >= ledger.next_sweep_at;
+    if sweep_expired {
+        ledger.next_sweep_at = now + Duration::seconds(1);
+    }
+    register_dpop_jti_locked(
+        &mut ledger.entries,
+        jti,
+        expires_at,
+        now,
+        DPOP_REPLAY_MAX_ENTRIES,
+        sweep_expired,
+    )
 }
 
 fn register_dpop_jti_locked(
@@ -305,8 +325,11 @@ fn register_dpop_jti_locked(
     expires_at: DateTime<Utc>,
     now: DateTime<Utc>,
     max_entries: usize,
+    sweep_expired: bool,
 ) -> DpopReplayRegistration {
-    seen.retain(|_, expiry| *expiry > now);
+    if sweep_expired || seen.len() >= max_entries {
+        seen.retain(|_, expiry| *expiry > now);
+    }
     if seen.contains_key(jti) {
         return DpopReplayRegistration::Replay;
     }
@@ -831,14 +854,15 @@ mod tests {
                     &format!("capacity-jti-{index}"),
                     expiry,
                     now,
-                    3
+                    3,
+                    true,
                 ),
                 DpopReplayRegistration::Accepted
             );
         }
 
         assert_eq!(
-            register_dpop_jti_locked(&mut seen, "capacity-overflow", expiry, now, 3),
+            register_dpop_jti_locked(&mut seen, "capacity-overflow", expiry, now, 3, true),
             DpopReplayRegistration::Full
         );
         assert!(!seen.contains_key("capacity-overflow"));

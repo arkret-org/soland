@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, OnceLock};
 
 use arkret_sdk::{MoveId, RealmId, SealId};
 use serde_json::Value;
@@ -6,8 +8,21 @@ use serde_json::Value;
 use crate::persistence::PersistenceError;
 use crate::state::{AppState, CanonicalEventRecord};
 
-pub static DEVICE_GENERATION_ADMISSION_LOCK: tokio::sync::Mutex<()> =
-    tokio::sync::Mutex::const_new(());
+const DEVICE_GENERATION_ADMISSION_LOCK_SHARDS: usize = 1024;
+
+static DEVICE_GENERATION_ADMISSION_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> =
+    OnceLock::new();
+
+pub fn device_generation_admission_lock(scope_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = DEVICE_GENERATION_ADMISSION_LOCKS.get_or_init(|| {
+        (0..DEVICE_GENERATION_ADMISSION_LOCK_SHARDS)
+            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+            .collect()
+    });
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    scope_id.hash(&mut hasher);
+    locks[(hasher.finish() as usize) % DEVICE_GENERATION_ADMISSION_LOCK_SHARDS].clone()
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceGenerationStatus {
@@ -25,7 +40,11 @@ pub async fn current_device_generation(
     state: &AppState,
     principal_id: &str,
 ) -> Result<Option<DeviceGenerationView>, PersistenceError> {
-    let records = state.persistence.events().snapshot_all().await?;
+    let records = state
+        .persistence
+        .events()
+        .list_for_actor(principal_id)
+        .await?;
     generation_view_from_records(state, principal_id, &records).await
 }
 
@@ -204,7 +223,11 @@ pub async fn authorized_generation_for_event(
     state: &AppState,
     record: &CanonicalEventRecord,
 ) -> Result<Option<String>, PersistenceError> {
-    let records = state.persistence.events().snapshot_all().await?;
+    let records = state
+        .persistence
+        .events()
+        .list_for_actor(&record.actor_id)
+        .await?;
     let predecessor = record
         .envelope
         .get("prev_refs")
@@ -221,17 +244,23 @@ pub async fn authorized_generation_for_event(
             .and_then(Value::as_str)
             .map(ToOwned::to_owned));
     }
-    Ok(current_device_generation(state, &record.actor_id)
-        .await?
-        .filter(|view| view.status == DeviceGenerationStatus::Active)
-        .map(|view| view.current_ref))
+    Ok(
+        generation_view_from_records(state, &record.actor_id, &records)
+            .await?
+            .filter(|view| view.status == DeviceGenerationStatus::Active)
+            .map(|view| view.current_ref),
+    )
 }
 
 pub async fn quarantined_generation_event_digests(
     state: &AppState,
     principal_id: &str,
 ) -> Result<BTreeSet<String>, PersistenceError> {
-    let records = state.persistence.events().snapshot_all().await?;
+    let records = state
+        .persistence
+        .events()
+        .list_for_actor(principal_id)
+        .await?;
     Ok(quarantined_generation_event_digests_from_records(
         principal_id,
         &records,

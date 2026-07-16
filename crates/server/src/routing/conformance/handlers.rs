@@ -2,9 +2,8 @@
 //!
 //! Each handler is intentionally thin: it pulls the request body, runs the
 //! forked conformance primitive in [`super::util`], and serializes the
-//! result. The handlers are gated behind the `ak.profile.conformance_harness.v1`
-//! build profile: the `/_arkret/_conformance/*` namespace is only mounted when
-//! that profile is active (development_mode=true), and [`super::ensure_enabled`]
+//! result. The `/_arkret/_conformance/*` namespace is only mounted when
+//! `development_mode=true`, and [`super::ensure_enabled`]
 //! is the defense-in-depth handler guard. See [`super`] and
 //! `service-http-binding.md` §2.1.2.
 //!

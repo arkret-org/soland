@@ -166,9 +166,10 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
     Ok(())
 }
 
-pub(super) fn key_backup_duplicate_for_actor(
+pub(super) fn key_backup_idempotent_retry(
     existing: Option<&Value>,
     actor_id: &str,
+    incoming: &Value,
 ) -> Result<bool, AppError> {
     if let Some(existing) = existing
         && existing.get("actor_id").and_then(Value::as_str) != Some(actor_id)
@@ -178,7 +179,25 @@ pub(super) fn key_backup_duplicate_for_actor(
                 .with_status(StatusCode::CONFLICT),
         );
     }
-    Ok(existing.is_some())
+    let Some(existing) = existing else {
+        return Ok(false);
+    };
+    let existing_bytes =
+        arkret_sdk::canonical::canonical_json_bytes(existing).map_err(|error| {
+            AppError::internal(format!("stored key backup is not canonical: {error}"))
+        })?;
+    let incoming_bytes =
+        arkret_sdk::canonical::canonical_json_bytes(incoming).map_err(|error| {
+            AppError::internal(format!("key backup canonicalization failed: {error}"))
+        })?;
+    if existing_bytes != incoming_bytes {
+        return Err(AppError::new(
+            ErrorCode::DuplicateConflict,
+            "backup_id already exists with different canonical content",
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
+    Ok(true)
 }
 
 pub(super) fn key_backup_metadata_for_list(mut backup: Value) -> Value {
@@ -278,7 +297,6 @@ pub(super) async fn put_key_backup(
         )
         .await?;
     }
-    enforce_key_backup_series_chain_typed(state, &session.actor, &backup).await?;
     enforce_recovery_policy_ref_typed(state, &session.actor, &backup).await?;
     crate::routing::identity::managed_agent_pcr::validate_managed_agent_key_backup(
         state,
@@ -289,8 +307,19 @@ pub(super) async fn put_key_backup(
     let ciphertext_digest = backup.ciphertext_digest.clone();
     let backup_value = key_backup_to_value(&backup)?;
     let store = state.persistence.key_backups();
-    let existing = store.get(&backup_id).await.ok().flatten();
-    let duplicate = key_backup_duplicate_for_actor(existing.as_ref(), &session.actor)?;
+    let existing = store
+        .get(&backup_id)
+        .await
+        .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?;
+    let duplicate = key_backup_idempotent_retry(existing.as_ref(), &session.actor, &backup_value)?;
+    if duplicate {
+        return json_ok(KeysBackupsReplaceOutcome {
+            status: KeyBackupPutStatus::Duplicate,
+            backup_id: typed_backup_id,
+            ciphertext_digest,
+        });
+    }
+    enforce_key_backup_series_chain_typed(state, &session.actor, &backup).await?;
     store
         .put(backup_id.clone(), backup_value)
         .await
@@ -432,8 +461,7 @@ pub(super) async fn unlock_key_backup(
         .key_backups()
         .get(&backup_id)
         .await
-        .ok()
-        .flatten()
+        .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?
     else {
         return Err(AppError::not_found("key backup not found"));
     };
@@ -507,10 +535,11 @@ pub(super) async fn delete_key_backup(
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
     let store = state.persistence.key_backups();
-    let owned_backup =
-        store.get(&backup_id).await.ok().flatten().filter(|backup| {
-            backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor)
-        });
+    let owned_backup = store
+        .get(&backup_id)
+        .await
+        .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?
+        .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor));
     let Some(backup) = owned_backup else {
         // spec `keys_backups_delete_outcome` models `deleted: const true` only;
         // a backup that does not exist (or is not owned by this actor) cannot be
@@ -519,16 +548,21 @@ pub(super) async fn delete_key_backup(
     };
     verify_delete_ownership_proof(state, req, &backup_id, &session.actor).await?;
     ensure_key_backup_delete_allowed(state, &session.actor, &backup).await?;
-    let deleted = store.delete(&backup_id).await.unwrap_or(false);
+    let deleted = store
+        .delete(&backup_id)
+        .await
+        .map_err(|error| AppError::internal(format!("key backup delete failed: {error}")))?;
     if !deleted {
         return Err(AppError::not_found("key backup not found"));
     }
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.key_backup.delete",
+        "ak.audit.accessed",
         json!({
+            "access_kind": "key_backup_delete",
             "backup_id": backup_id.clone(),
+            "device_id": session.device_id,
             "backup_class": backup.get("backup_class").cloned().unwrap_or(Value::Null),
             "series_id": backup.get("series_id").cloned().unwrap_or(Value::Null),
             "series_seq": backup.get("series_seq").cloned().unwrap_or(Value::Null),

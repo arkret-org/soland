@@ -574,7 +574,6 @@ pub fn validate_canonical_json_value_inner(
             }
         }
         serde_json::Value::Object(object) => {
-            let mut prev_key: Option<&str> = None;
             for key in object.keys() {
                 // snake_case validation: lowercase alphanumeric and underscores,
                 // with an exception for $-prefixed JSON Schema fields ($id, $schema, $ref, etc.).
@@ -605,13 +604,6 @@ pub fn validate_canonical_json_value_inner(
                         "canonical JSON field name must not contain consecutive underscores",
                     );
                 }
-                // Unicode code point ascending order.
-                if let Some(prev) = prev_key
-                    && key.as_bytes() <= prev.as_bytes()
-                {
-                    return Err("canonical JSON object keys must be sorted in ascending order");
-                }
-                prev_key = Some(key);
             }
             for (key, value) in object {
                 // A `patch` map is a ak.schema.patch.v1 (`ak.patch.v1`) field

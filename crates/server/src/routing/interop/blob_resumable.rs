@@ -32,7 +32,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -128,7 +128,7 @@ fn is_safe_upload_id(id: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
 }
 
-static UPLOAD_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+static UPLOAD_LOCKS: OnceLock<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
     OnceLock::new();
 
 /// Per-upload write serialization. PATCH / DELETE on the same
@@ -137,9 +137,13 @@ static UPLOAD_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>
 fn upload_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = UPLOAD_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut map = locks.lock();
-    map.entry(id.to_owned())
-        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-        .clone()
+    map.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = map.get(id).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    map.insert(id.to_owned(), Arc::downgrade(&lock));
+    lock
 }
 
 /// Drop the lock entry once the staged upload is gone (terminated,

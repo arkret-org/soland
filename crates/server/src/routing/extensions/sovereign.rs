@@ -34,7 +34,7 @@ use serde_json::{Value, json};
 
 use crate::config::AppConfig;
 use crate::error::AppError;
-use crate::routing::admin::require_admin_principal;
+use crate::routing::admin::{RequireAdmin, require_admin_principal};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{
     AppState, SovereignAuditRecord, SovereignEnclaveRecord, SovereignExternalAccountRecord,
@@ -428,6 +428,7 @@ fn unknown_did() -> String {
 
 pub(super) fn admin_router() -> Router {
     Router::with_path("deployment")
+        .hoop(RequireAdmin::scope(arkret_sdk::admin_scopes::ADMIN_READ))
         .push(Router::with_path("info").get(deployment_info))
         .push(Router::with_path("configure").post(configure_deployment))
         .push(Router::with_path("register-enclave").post(register_enclave))

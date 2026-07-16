@@ -5,29 +5,16 @@ use serde_json::{Value, json};
 
 /// Error raised when an embedded Arkret artifact fails to parse.
 ///
-/// The artifacts (event-kind / schema / operation / id-kind registries) are
-/// `include_str!`'d at build time, so a parse failure represents a build-vs-spec
-/// mismatch — not a runtime input. Callers should surface this through their
+/// The artifacts are loaded from the SDK's embedded snapshot, so a failure represents a
+/// build-vs-spec mismatch — not a runtime input. Callers should surface this through their
 /// startup path (see [`validate_embedded_artifacts`]) rather than allowing the
 /// first HTTP request to panic on lazy initialisation.
 #[derive(Debug, thiserror::Error)]
-#[error("invalid embedded Arkret {label}: {source}")]
+#[error("invalid embedded Arkret {label}: {detail}")]
 pub struct ArtifactError {
     pub label: &'static str,
-    #[source]
-    pub source: serde_json::Error,
+    pub detail: String,
 }
-
-pub const EVENT_KIND_REGISTRY_JSON: &str =
-    include_str!("../../../../arkret-spec/spec/v1/artifacts/registry/event-kind-registry.json");
-pub const SCHEMA_REGISTRY_JSON: &str =
-    include_str!("../../../../arkret-spec/spec/v1/artifacts/registry/schema-registry.json");
-pub const OPERATION_REGISTRY_JSON: &str =
-    include_str!("../../../../arkret-spec/spec/v1/artifacts/registry/operation-registry.json");
-pub const ID_KIND_REGISTRY_JSON: &str =
-    include_str!("../../../../arkret-spec/spec/v1/artifacts/registry/id-kind-registry.json");
-pub const DEPLOYMENT_PROBES_JSON: &str =
-    include_str!("../../../../arkret-spec/spec/v1/artifacts/deployment-probes.json");
 
 pub const PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ARTIFACT_REF: &str = "deployment-probes.json#/probes/0";
 
@@ -76,24 +63,29 @@ pub struct OperationSurfaceGroup {
 }
 
 pub fn event_kind_registry() -> &'static Value {
-    EVENT_KIND_REGISTRY
-        .get_or_init(|| parse_artifact(EVENT_KIND_REGISTRY_JSON, "event-kind registry"))
+    EVENT_KIND_REGISTRY.get_or_init(|| {
+        embedded_artifact("registry/event-kind-registry.json", "event-kind registry")
+    })
 }
 
 pub fn schema_registry() -> &'static Value {
-    SCHEMA_REGISTRY.get_or_init(|| parse_artifact(SCHEMA_REGISTRY_JSON, "schema registry"))
+    SCHEMA_REGISTRY
+        .get_or_init(|| embedded_artifact("registry/schema-registry.json", "schema registry"))
 }
 
 pub fn operation_registry() -> &'static Value {
-    OPERATION_REGISTRY.get_or_init(|| parse_artifact(OPERATION_REGISTRY_JSON, "operation registry"))
+    OPERATION_REGISTRY
+        .get_or_init(|| embedded_artifact("registry/operation-registry.json", "operation registry"))
 }
 
 pub fn id_kind_registry() -> &'static Value {
-    ID_KIND_REGISTRY.get_or_init(|| parse_artifact(ID_KIND_REGISTRY_JSON, "id-kind registry"))
+    ID_KIND_REGISTRY
+        .get_or_init(|| embedded_artifact("registry/id-kind-registry.json", "id-kind registry"))
 }
 
 pub fn deployment_probes() -> &'static Value {
-    DEPLOYMENT_PROBES.get_or_init(|| parse_artifact(DEPLOYMENT_PROBES_JSON, "deployment probes"))
+    DEPLOYMENT_PROBES
+        .get_or_init(|| embedded_artifact("deployment-probes.json", "deployment probes"))
 }
 
 pub fn pq_hybrid_tls_required_group() -> &'static str {
@@ -364,8 +356,8 @@ pub fn registry_summary() -> Value {
     })
 }
 
-fn parse_artifact(source: &str, label: &str) -> Value {
-    serde_json::from_str(source).unwrap_or_else(|error| {
+fn embedded_artifact(path: &str, label: &str) -> Value {
+    arkret_sdk::schema::embedded_json_artifact(path).unwrap_or_else(|error| {
         // Should be unreachable for release builds because
         // `validate_embedded_artifacts` runs in main.rs at startup. Lazy
         // callers may still hit this if validation was skipped — fail loudly.
@@ -380,14 +372,17 @@ fn parse_artifact(source: &str, label: &str) -> Value {
 /// process on the first HTTP request that happens to touch the offending
 /// `OnceLock`.
 pub fn validate_embedded_artifacts() -> Result<(), ArtifactError> {
-    for (json, label) in [
-        (EVENT_KIND_REGISTRY_JSON, "event-kind registry"),
-        (SCHEMA_REGISTRY_JSON, "schema registry"),
-        (OPERATION_REGISTRY_JSON, "operation registry"),
-        (ID_KIND_REGISTRY_JSON, "id-kind registry"),
-        (DEPLOYMENT_PROBES_JSON, "deployment probes"),
+    for (path, label) in [
+        ("registry/event-kind-registry.json", "event-kind registry"),
+        ("registry/schema-registry.json", "schema registry"),
+        ("registry/operation-registry.json", "operation registry"),
+        ("registry/id-kind-registry.json", "id-kind registry"),
+        ("deployment-probes.json", "deployment probes"),
     ] {
-        serde_json::from_str::<Value>(json).map_err(|source| ArtifactError { label, source })?;
+        arkret_sdk::schema::embedded_json_artifact(path).map_err(|error| ArtifactError {
+            label,
+            detail: error.to_string(),
+        })?;
     }
     Ok(())
 }

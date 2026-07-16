@@ -901,7 +901,7 @@ async fn notify_audit_agent_for_report(
     // egress policy and ride the same pinned host.
     let (identity_url, client) =
         match crate::security::validate_http_url_for_egress_with_pinned_client(
-            &format!("{agent_url}/_arkret/self/audit-agent/identity"),
+            &format!("{agent_url}/_soland/audit-agent/identity"),
             "audit agent identity",
             state.config.development_mode,
             Duration::from_secs(3),
@@ -913,7 +913,7 @@ async fn notify_audit_agent_for_report(
             }
         };
     let events_url = match crate::security::validate_http_url_for_egress(
-        &format!("{agent_url}/_arkret/self/audit-agent/events"),
+        &format!("{agent_url}/_soland/audit-agent/events"),
         "audit agent events",
         state.config.development_mode,
     ) {

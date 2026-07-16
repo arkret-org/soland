@@ -57,8 +57,11 @@ async fn list_realm_organizations(
     req: &mut Request,
 ) -> JsonResult<RealmOrganizationRelationshipList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
+    let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
+    if !crate::routing::realm_has_member(state, &realm_id, &session.actor).await {
+        return Err(AppError::not_found("realm not found"));
+    }
     let now = chrono::Utc::now();
 
     let mut relationships = Vec::new();

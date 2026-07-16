@@ -62,10 +62,10 @@ pub fn router_with_rate_limiter_and_request_size_config(
     // COT-06-002 / service-http-binding.md §2.1.2: decide whether to expose the
     // test-only `/_arkret/_conformance/*` namespace before `state` is moved into
     // the affix hoop. The namespace is mounted only when the
-    // `ak.profile.conformance_harness.v1` profile is active; otherwise the
+    // service runs with `development_mode=true`; otherwise the
     // segment stays unknown and falls through to `api_not_found` (404
     // `unrecognized_endpoint`), exactly as §2.1.2 requires.
-    let conformance_harness_enabled = conformance::harness_profile_enabled(&state.config);
+    let conformance_harness_enabled = conformance::conformance_harness_enabled(&state.config);
     let router = Router::new()
         .hoop(crate::metrics::MetricsMiddleware)
         .hoop(SecureMaxSize::new(max_request_size_bytes))
@@ -86,7 +86,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
         // `_soland` parent prepends the new namespace segment in one place.
         // Four sibling sub-trees are resolved by salvo fallthrough; ordering
         // matters only where paths overlap:
-        //   1. `spec_router`   — soland-local admin endpoints
+        //   1. `server_ops_router` — soland-local admin endpoints
         //      (server/status, accounts, devices, moderation/queue).
         //   2. `admin_router`  — operator surface (notary / multisig /
         //      bottom / seal-dag / gc-candidates / delivery-binding /
@@ -99,7 +99,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
         //      peer federation router so it sits in the admin namespace.
         .push(
             Router::with_path("_soland")
-                .push(admin::spec_router())
+                .push(admin::server_ops_router())
                 .push(admin::admin_router())
                 .push(admin::router())
         .push(federation::admin_seal_sign_router())

@@ -487,7 +487,7 @@ mod tests {
             "actor_id": "did:web:bob.example"
         });
 
-        let err = key_backup_duplicate_for_actor(Some(&existing), ACTOR)
+        let err = key_backup_idempotent_retry(Some(&existing), ACTOR, &existing)
             .expect_err("other actor must not overwrite backup_id");
 
         assert_eq!(err.code, ErrorCode::CapabilityDenied);
@@ -501,10 +501,30 @@ mod tests {
             "actor_id": ACTOR
         });
 
-        let duplicate = key_backup_duplicate_for_actor(Some(&existing), ACTOR)
+        let duplicate = key_backup_idempotent_retry(Some(&existing), ACTOR, &existing)
             .expect("same actor idempotent retry is allowed");
 
         assert!(duplicate);
+    }
+
+    #[test]
+    fn duplicate_backup_id_rejects_different_content() {
+        let existing = json!({
+            "backup_id": BACKUP_ID,
+            "actor_id": ACTOR,
+            "ciphertext": "first"
+        });
+        let incoming = json!({
+            "backup_id": BACKUP_ID,
+            "actor_id": ACTOR,
+            "ciphertext": "second"
+        });
+
+        let err = key_backup_idempotent_retry(Some(&existing), ACTOR, &incoming)
+            .expect_err("same id with different content must conflict");
+
+        assert_eq!(err.code, ErrorCode::DuplicateConflict);
+        assert_eq!(err.http_status(), StatusCode::CONFLICT);
     }
 
     #[test]

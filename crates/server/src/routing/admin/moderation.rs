@@ -67,7 +67,7 @@ pub struct ModerationQueueItemOutcome {
 }
 
 impl ModerationQueueItemOutcome {
-    fn from_value(value: Value) -> Self {
+    pub(super) fn from_value(value: Value) -> Self {
         let Value::Object(mut fields) = value else {
             let mut extra = BTreeMap::new();
             extra.insert("value".to_owned(), value);

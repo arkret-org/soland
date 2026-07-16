@@ -39,6 +39,7 @@ pub trait EventStore: Send + Sync {
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>>;
     async fn contains(&self, event_id: &str) -> PersistenceResult<bool>;
     async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>>;
+    async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     async fn peer_authz_state_records(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     async fn peer_events_query_page(
@@ -255,6 +256,18 @@ impl EventStore for MemoryEventStore {
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
         Ok(self.data.lock().values().cloned().collect())
+    }
+
+    async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut records = self
+            .data
+            .lock()
+            .values()
+            .filter(|record| record.actor_id == actor_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(event_position_cmp);
+        Ok(records)
     }
 
     async fn peer_authz_state_records(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
@@ -840,6 +853,19 @@ impl EventStore for PgEventStore {
              FROM canonical_events ORDER BY received_at ASC, id ASC",
         )
         .load::<CanonicalEventRow>(&mut *conn).await
+        .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE actor_id = $1 ORDER BY actor_seq ASC, received_at ASC, id ASC",
+        )
+        .bind::<Text, _>(actor_id)
+        .load::<CanonicalEventRow>(&mut *conn)
+        .await
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
         .map_err(PersistenceError::from)
     }
