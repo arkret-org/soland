@@ -6,7 +6,7 @@
 //! - `POST /_arkret/gate/account/session-grants/revoke` — spec
 //!   `ak.gate.account.command.revoke_session`
 //! - `POST /_arkret/gate/account/logout` — spec `ak.gate.account.command.logout`: revoke the
-//!   presented session credential + the bound device session record + queued to-device
+//!   presented session credential + queued to-device while preserving device authorization
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
 //! - `auth_or_render` — the standard "extract session or 401" wrapper used by nearly every
@@ -91,9 +91,9 @@ pub(super) fn protocol_account_router() -> Router {
                 .push(Router::with_path("revoke").post(session_revoke)),
         )
         // Spec `ak.gate.account.command.logout` — Principal Server device
-        // logout (account-lifecycle §4.1): revoke this session credential, mark
-        // its local device session record revoked, and drop the device's queued
-        // to-device. Canonical `/_arkret/gate/account/logout`; deployment
+        // logout (account-lifecycle §4.1): revoke this session credential and
+        // drop the device's queued to-device while preserving its durable
+        // authorization. Canonical `/_arkret/gate/account/logout`; deployment
         // gateways route this longer prefix to soland even though `/_arkret/gate/`
         // otherwise goes to the Auth Server.
         .push(Router::with_path("logout").post(logout::logout))

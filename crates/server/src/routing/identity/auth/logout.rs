@@ -22,9 +22,9 @@ use super::*;
 ///  - **Auth-side (first):** call the Auth Server S2S `auth-sessions/logout` sub-operation so the
 ///    grant rotation chain + browser session are terminated (§4.1 step 2).
 ///  - **Principal-side (after Auth-side success):** revoke the principal's local bearer sessions
-///    for the grant's device, mark the device session record revoked, remove push registrations,
-///    and drop queued to-device messages. It does NOT write `ak.account.status`, does NOT emit
-///    `ak.device.revoke`, and does NOT erase durable device authorization.
+///    for the grant's device, remove push registrations, and drop queued to-device messages. It
+///    does NOT write `ak.account.status`, emit `ak.device.revoke`, or mark the durable device
+///    inventory record revoked; a later login restores a session for the same authorized device.
 #[endpoint(
     operation_id = "ak.gate.account.command.logout",
     tags("auth"),
@@ -77,15 +77,13 @@ pub(super) async fn logout(
     // introspection so the next `/_arkret/self/*` request re-introspects against
     // coauth and observes `active=false` once the Auth-side chain is terminated
     // below. There is NO local bearer to revoke (② removed the exchange); the
-    // device session-record revoke + to-device drop + this cache invalidation
-    // together fail-close the device's subsequent requests.
+    // local session revoke + to-device drop + this cache invalidation together
+    // fail-close the device's subsequent requests without revoking its durable
+    // Event-signing authorization.
     super::super::auth_grant_dpop::invalidate_cached_grant(state, &grant_jwt);
 
     let revoked_count =
         revoke_sessions_for_actor_device(state, &session.actor, &session.device_id).await?;
-    revoke_device_record(state, &session.actor, &session.device_id)
-        .await
-        .map_err(AppError::internal)?;
     let delivery_purge =
         purge_device_delivery_state(state, &session.actor, &session.device_id).await;
     let revoked = revoked_count > 0;
@@ -129,10 +127,10 @@ fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> A
 /// Development-mode hard logout: with no Auth Server introspection wired,
 /// `dev_login` mints plain soland session bearers (not DPoP-bound grants), so
 /// the Authorization bearer IS the local session bearer. Perform the
-/// principal-side termination directly (revoke the bearer session + mark the
-/// device session record revoked + remove push registrations + drop
-/// to-device), mirroring the production principal-side effects without an Auth
-/// Server round-trip.
+/// principal-side termination directly (revoke the bearer session + remove
+/// push registrations + drop to-device), mirroring the production
+/// principal-side effects without an Auth Server round-trip. The durable
+/// device authorization remains active across logout and re-login.
 async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOutcome, AppError> {
     let token_hash = session_credential_hash(token, &state.service_id);
     let revoked_session = match state
@@ -156,9 +154,6 @@ async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOu
     };
     let revoked = revoked_session.is_some();
     if let Some(session) = revoked_session {
-        revoke_device_record(state, &session.actor, &session.device_id)
-            .await
-            .map_err(AppError::internal)?;
         let delivery_purge =
             purge_device_delivery_state(state, &session.actor, &session.device_id).await;
         append_audit_log(

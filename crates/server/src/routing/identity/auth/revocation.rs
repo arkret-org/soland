@@ -176,8 +176,8 @@ pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<u
     Ok(count)
 }
 
-/// Persist that the device is revoked. Used by `logout` and by the
-/// device-management handlers in mod.rs.
+/// Persist that the device is revoked. Used only by explicit device-management
+/// and account-lifecycle revocation flows; session logout must not call this.
 pub async fn revoke_device_record(
     state: &AppState,
     actor: &str,

@@ -992,7 +992,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .await
         .unwrap();
     assert_eq!(logout["revoked"], true);
-    {
+    let bob_device_id = {
         let sessions = state.persistence.sessions().snapshot_all().await.unwrap();
         assert!(!sessions.iter().any(|session| session.token_hash == bob));
         let bob_session = sessions
@@ -1005,7 +1005,19 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
         );
         assert!(bob_session.revoked_at.is_some());
-    }
+        bob_session.device_id.clone()
+    };
+    let bob_device = state
+        .persistence
+        .devices()
+        .get("did:web:bob.example", &bob_device_id)
+        .await
+        .unwrap()
+        .expect("hard logout preserves the durable device record");
+    assert!(
+        bob_device.revoked_at.is_none(),
+        "hard logout must not revoke durable device authorization"
+    );
     let revoked_me = TestClient::get("http://server/_soland/self/account/me")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
