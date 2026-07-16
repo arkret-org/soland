@@ -97,7 +97,7 @@ pub(super) fn actor_private_read_cursor_matches_origin(
     source_device_id: &str,
     operation: &Operation,
 ) -> bool {
-    if kinds::canonical_kind_string(operation) != arkret_sdk::events::kinds::READ_CURSOR_ADVANCE
+    if kinds::canonical_kind_string(operation) != arkret_sdk::events::EventKind::READ_CURSOR_ADVANCE
         || source_device_id.is_empty()
     {
         return true;

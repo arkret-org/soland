@@ -47,7 +47,7 @@ fn grant_op(grant_id: &str) -> Operation {
 
 fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> Operation {
     op(
-        arkret_sdk::events::kinds::CAPABILITY_GRANT,
+        arkret_sdk::events::EventKind::CAPABILITY_GRANT,
         REALM,
         json!({
             "grant_id": grant_id,
@@ -66,7 +66,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
 
 fn revoke_op(grant_id: &str) -> Operation {
     op(
-        arkret_sdk::events::kinds::CAPABILITY_REVOKE,
+        arkret_sdk::events::EventKind::CAPABILITY_REVOKE,
         REALM,
         json!({ "grant_id": grant_id }),
     )
@@ -156,7 +156,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
     let hlc = ServerHlc::new("test");
     let effect = state.apply(
         &op(
-            arkret_sdk::events::kinds::CAPABILITY_GRANT,
+            arkret_sdk::events::EventKind::CAPABILITY_GRANT,
             REALM,
             json!({
                 "grant_id": GRANT_ID,

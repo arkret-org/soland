@@ -339,10 +339,10 @@ fn stage_identity_anchor_events(
             }
             return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
         }
-        if record.kind == arkret_sdk::events::kinds::REALM_CREATE
+        if record.kind == arkret_sdk::events::EventKind::REALM_CREATE
             && record.realm_id.is_some()
             && staged.values().any(|existing| {
-                existing.kind == arkret_sdk::events::kinds::REALM_CREATE
+                existing.kind == arkret_sdk::events::EventKind::REALM_CREATE
                     && existing.realm_id == record.realm_id
             })
         {
@@ -441,7 +441,7 @@ fn peer_page_record_matches(
 fn record_is_peer_authz_state_record(record: &CanonicalEventRecord) -> bool {
     matches!(
         record.kind.as_str(),
-        arkret_sdk::events::kinds::MEMBER_STATE | arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE
+        arkret_sdk::events::EventKind::MEMBER_STATE | arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
     ) || event_payload_field(&record.envelope, "sync_endpoints").is_some()
 }
 

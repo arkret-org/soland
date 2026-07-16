@@ -1,7 +1,7 @@
 //! Contract tests for the D14 production admin query endpoints
 //! (`GET /_soland/admin/{actors,audit,capabilities,devices}`).
 //!
-//! Locks the typed wire shape (`arkret_core::models::admin`), the
+//! Locks the typed wire shape (`arkret_sdk::models::admin`), the
 //! resume-by-id cursor semantics, server-side filtering with filter echo,
 //! and the auth gates (401 unauthenticated; the 403 admin-principal
 //! decision is unit-tested next to the handler where a production-mode

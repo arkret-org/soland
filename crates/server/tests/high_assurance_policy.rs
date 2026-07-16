@@ -34,7 +34,7 @@ fn high_assurance_rejects_open_federation_at_create() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let bad = op(
-        arkret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::EventKind::REALM_CREATE,
         REALM_HA,
         json!({
             "object": {
@@ -63,7 +63,7 @@ fn high_assurance_accepts_closed_restricted_and_quarantine() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
         let good = op(
-            arkret_sdk::events::kinds::REALM_CREATE,
+            arkret_sdk::events::EventKind::REALM_CREATE,
             REALM_HA,
             json!({
                 "object": {
@@ -97,7 +97,7 @@ fn high_assurance_rejects_post_create_open_federation_update() {
 
     // First: create as high_assurance + restricted.
     let create = op(
-        arkret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::EventKind::REALM_CREATE,
         REALM_HA,
         json!({
             "object": {
@@ -119,7 +119,7 @@ fn high_assurance_rejects_post_create_open_federation_update() {
     // update to install both fields into the cas-register cell so the
     // R3.4 guard has a projected value to look up.
     let update_to_restricted = op(
-        arkret_sdk::events::kinds::REALM_UPDATE,
+        arkret_sdk::events::EventKind::REALM_UPDATE,
         REALM_HA,
         json!({
             "owner": "did:web:alice",
@@ -137,7 +137,7 @@ fn high_assurance_rejects_post_create_open_federation_update() {
     // security_class. The reducer MUST consult the projected
     // security_class and reject.
     let bad_update = op(
-        arkret_sdk::events::kinds::REALM_UPDATE,
+        arkret_sdk::events::EventKind::REALM_UPDATE,
         REALM_HA,
         json!({
             "federation_policy": "open",
@@ -158,7 +158,7 @@ fn realm_update_rejects_encryption_profile_patch() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let create = op(
-        arkret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::EventKind::REALM_CREATE,
         REALM_STANDARD,
         json!({
             "object": {
@@ -178,7 +178,7 @@ fn realm_update_rejects_encryption_profile_patch() {
     );
 
     let downgrade = op(
-        arkret_sdk::events::kinds::REALM_UPDATE,
+        arkret_sdk::events::EventKind::REALM_UPDATE,
         REALM_STANDARD,
         json!({
             "patch": {
@@ -205,7 +205,7 @@ fn standard_realm_accepts_open_federation_policy() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let good = op(
-        arkret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::EventKind::REALM_CREATE,
         REALM_STANDARD,
         json!({
             "object": {
@@ -232,7 +232,7 @@ fn high_assurance_rejects_simultaneous_open_in_same_payload() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let bad = op(
-        arkret_sdk::events::kinds::REALM_UPDATE,
+        arkret_sdk::events::EventKind::REALM_UPDATE,
         REALM_HA,
         json!({
             "security_class": "high_assurance",

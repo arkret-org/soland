@@ -12,98 +12,102 @@ pub mod reasons {
 
     // S3 — `did:web` → `did:webvh` upgrade evidence.
     pub const INCEPTION_UPGRADE_FINGERPRINT_MISMATCH: &str =
-        core_error::REASON_INCEPTION_UPGRADE_FINGERPRINT_MISMATCH;
+        core_error::ReasonCode::INCEPTION_UPGRADE_FINGERPRINT_MISMATCH;
     pub const INCEPTION_UPGRADE_SIGNATURE_CHAIN_INVALID: &str =
-        core_error::REASON_INCEPTION_UPGRADE_SIGNATURE_CHAIN_INVALID;
+        core_error::ReasonCode::INCEPTION_UPGRADE_SIGNATURE_CHAIN_INVALID;
     pub const INCEPTION_UPGRADE_OLD_DOCUMENT_HASH_MISMATCH: &str =
-        core_error::REASON_INCEPTION_UPGRADE_OLD_DOCUMENT_HASH_MISMATCH;
+        core_error::ReasonCode::INCEPTION_UPGRADE_OLD_DOCUMENT_HASH_MISMATCH;
     pub const INCEPTION_UPGRADE_EVIDENCE_INSUFFICIENT: &str =
-        core_error::REASON_INCEPTION_UPGRADE_EVIDENCE_INSUFFICIENT;
+        core_error::ReasonCode::INCEPTION_UPGRADE_EVIDENCE_INSUFFICIENT;
 
     // S6 — `attested_hardware` Audit Agent removal pairing.
     pub const AUDIT_AGENT_KEY_DESTRUCTION_ATTESTATION_MISSING: &str =
-        core_error::REASON_AUDIT_AGENT_KEY_DESTRUCTION_ATTESTATION_MISSING;
+        core_error::ReasonCode::AUDIT_AGENT_KEY_DESTRUCTION_ATTESTATION_MISSING;
     pub const AUDIT_AGENT_REMOVE_REQUIRES_PAIRED_DESTRUCTION_ATTESTATION: &str =
-        core_error::REASON_AUDIT_AGENT_REMOVE_REQUIRES_PAIRED_DESTRUCTION_ATTESTATION;
+        core_error::ReasonCode::AUDIT_AGENT_REMOVE_REQUIRES_PAIRED_DESTRUCTION_ATTESTATION;
     pub const AUDIT_AGENT_DESTRUCTION_NOT_PAIRED_WITH_REMOVE: &str =
-        core_error::REASON_AUDIT_AGENT_DESTRUCTION_NOT_PAIRED_WITH_REMOVE;
+        core_error::ReasonCode::AUDIT_AGENT_DESTRUCTION_NOT_PAIRED_WITH_REMOVE;
     pub const AUDIT_AGENT_DESTRUCTION_PROOF_NOT_ENCLAVE_SIGNED: &str =
-        core_error::REASON_AUDIT_AGENT_DESTRUCTION_PROOF_NOT_ENCLAVE_SIGNED;
+        core_error::ReasonCode::AUDIT_AGENT_DESTRUCTION_PROOF_NOT_ENCLAVE_SIGNED;
     pub const AUDIT_AGENT_EPOCH_RANGE_INCOMPLETE: &str =
-        core_error::REASON_AUDIT_AGENT_EPOCH_RANGE_INCOMPLETE;
+        core_error::ReasonCode::AUDIT_AGENT_EPOCH_RANGE_INCOMPLETE;
     pub const AUDIT_AGENT_ATTESTATION_MISMATCH: &str =
-        core_error::REASON_AUDIT_AGENT_ATTESTATION_MISMATCH;
+        core_error::ReasonCode::AUDIT_AGENT_ATTESTATION_MISMATCH;
 
     // Spec 2026-07-10 — minimal-metadata content authorship trust anchor
     // (encryption-and-audit.md §2.10.3).
     pub const MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID: &str =
-        core_error::REASON_MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID;
+        core_error::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID;
 
     // Profile interactions.
     pub const MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE: &str =
-        core_error::REASON_MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE;
-    pub const CONFLICTING_E2EE_PROFILES: &str = core_error::REASON_CONFLICTING_E2EE_PROFILES;
+        core_error::ReasonCode::MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE;
+    pub const CONFLICTING_E2EE_PROFILES: &str = core_error::ReasonCode::CONFLICTING_E2EE_PROFILES;
     pub const LITE_PROFILE_WRITES_DISALLOWED_EVENT_KIND: &str =
-        core_error::REASON_LITE_PROFILE_WRITES_DISALLOWED_EVENT_KIND;
+        core_error::ReasonCode::LITE_PROFILE_WRITES_DISALLOWED_EVENT_KIND;
 
     // ── Round C45 (2026-05-18 main; spec 5ed365c) — lifecycle / patch /
     // nonce / accountability_grant / delegation / recovery / sender
     // commitment / range completeness / deprecation reason codes. Surfaced
     // by re-export so soland call sites can use the `reasons::` namespace.
-    pub const STRAND_NOT_ACTIVE: &str = core_error::REASON_STRAND_NOT_ACTIVE;
-    pub const STRAND_NOT_ARCHIVED: &str = core_error::REASON_STRAND_NOT_ARCHIVED;
-    pub const STRAND_ALREADY_TERMINAL: &str = core_error::REASON_STRAND_ALREADY_TERMINAL;
-    pub const SPACE_NOT_ACTIVE: &str = core_error::REASON_SPACE_NOT_ACTIVE;
-    pub const SPACE_NOT_ARCHIVED: &str = core_error::REASON_SPACE_NOT_ARCHIVED;
-    pub const SPACE_ALREADY_TERMINAL: &str = core_error::REASON_SPACE_ALREADY_TERMINAL;
-    pub const SPACE_PARENT_CYCLE: &str = core_error::REASON_SPACE_PARENT_CYCLE;
-    pub const SPACE_HAS_LIVE_DEPENDENTS: &str = core_error::REASON_SPACE_HAS_LIVE_DEPENDENTS;
-    pub const MORPH_NOT_ACTIVE: &str = core_error::REASON_MORPH_NOT_ACTIVE;
-    pub const MORPH_NOT_ARCHIVED: &str = core_error::REASON_MORPH_NOT_ARCHIVED;
-    pub const MORPH_ALREADY_TERMINAL: &str = core_error::REASON_MORPH_ALREADY_TERMINAL;
-    pub const MESSAGE_ALREADY_TERMINAL: &str = core_error::REASON_MESSAGE_ALREADY_TERMINAL;
-    pub const RELATION_ALREADY_TERMINAL: &str = core_error::REASON_RELATION_ALREADY_TERMINAL;
+    pub const STRAND_NOT_ACTIVE: &str = core_error::ReasonCode::STRAND_NOT_ACTIVE;
+    pub const STRAND_NOT_ARCHIVED: &str = core_error::ReasonCode::STRAND_NOT_ARCHIVED;
+    pub const STRAND_ALREADY_TERMINAL: &str = core_error::ReasonCode::STRAND_ALREADY_TERMINAL;
+    pub const SPACE_NOT_ACTIVE: &str = core_error::ReasonCode::SPACE_NOT_ACTIVE;
+    pub const SPACE_NOT_ARCHIVED: &str = core_error::ReasonCode::SPACE_NOT_ARCHIVED;
+    pub const SPACE_ALREADY_TERMINAL: &str = core_error::ReasonCode::SPACE_ALREADY_TERMINAL;
+    pub const SPACE_PARENT_CYCLE: &str = core_error::ReasonCode::SPACE_PARENT_CYCLE;
+    pub const SPACE_HAS_LIVE_DEPENDENTS: &str = core_error::ReasonCode::SPACE_HAS_LIVE_DEPENDENTS;
+    pub const MORPH_NOT_ACTIVE: &str = core_error::ReasonCode::MORPH_NOT_ACTIVE;
+    pub const MORPH_NOT_ARCHIVED: &str = core_error::ReasonCode::MORPH_NOT_ARCHIVED;
+    pub const MORPH_ALREADY_TERMINAL: &str = core_error::ReasonCode::MORPH_ALREADY_TERMINAL;
+    pub const MESSAGE_ALREADY_TERMINAL: &str = core_error::ReasonCode::MESSAGE_ALREADY_TERMINAL;
+    pub const RELATION_ALREADY_TERMINAL: &str = core_error::ReasonCode::RELATION_ALREADY_TERMINAL;
 
-    pub const HATE_SPEECH: &str = core_error::REASON_HATE_SPEECH;
-    pub const NSFW: &str = core_error::REASON_NSFW;
-    pub const ILLEGAL: &str = core_error::REASON_ILLEGAL;
-    pub const MISINFORMATION: &str = core_error::REASON_MISINFORMATION;
-    pub const OTHER: &str = core_error::REASON_OTHER;
+    pub const HATE_SPEECH: &str = core_error::ReasonCode::HATE_SPEECH;
+    pub const NSFW: &str = core_error::ReasonCode::NSFW;
+    pub const ILLEGAL: &str = core_error::ReasonCode::ILLEGAL;
+    pub const MISINFORMATION: &str = core_error::ReasonCode::MISINFORMATION;
+    pub const OTHER: &str = core_error::ReasonCode::OTHER;
 
-    pub const CURSOR_INTEGRITY_INVALID: &str = core_error::REASON_CURSOR_INTEGRITY_INVALID;
-    pub const CLAIM_RATE_LIMITED: &str = core_error::REASON_CLAIM_RATE_LIMITED;
-    pub const NAMING_CONVENTION_VIOLATION: &str = core_error::REASON_NAMING_CONVENTION_VIOLATION;
-    pub const APPROVAL_NONCE_REUSED: &str = core_error::REASON_APPROVAL_NONCE_REUSED;
-    pub const EXECUTED_BY_MISSING: &str = core_error::REASON_EXECUTED_BY_MISSING;
+    pub const CURSOR_INTEGRITY_INVALID: &str = core_error::ReasonCode::CURSOR_INTEGRITY_INVALID;
+    pub const CLAIM_RATE_LIMITED: &str = core_error::ReasonCode::CLAIM_RATE_LIMITED;
+    pub const NAMING_CONVENTION_VIOLATION: &str =
+        core_error::ReasonCode::NAMING_CONVENTION_VIOLATION;
+    pub const APPROVAL_NONCE_REUSED: &str = core_error::ReasonCode::APPROVAL_NONCE_REUSED;
+    pub const EXECUTED_BY_MISSING: &str = core_error::ReasonCode::EXECUTED_BY_MISSING;
     pub const THIRD_PARTY_INVITE_TOKEN_IN_QUERY: &str =
-        core_error::REASON_THIRD_PARTY_INVITE_TOKEN_IN_QUERY;
+        core_error::ReasonCode::THIRD_PARTY_INVITE_TOKEN_IN_QUERY;
 
-    pub const PATCH_PATH_INVALID: &str = core_error::REASON_PATCH_PATH_INVALID;
-    pub const PATCH_PATH_REDUCER_MANAGED: &str = core_error::REASON_PATCH_PATH_REDUCER_MANAGED;
-    pub const PATCH_UNSET_REDACTABLE_FIELD: &str = core_error::REASON_PATCH_UNSET_REDACTABLE_FIELD;
-    pub const PATCH_SELECTOR_NO_MATCH: &str = core_error::REASON_PATCH_SELECTOR_NO_MATCH;
-    pub const PATCH_SELECTOR_AMBIGUOUS: &str = core_error::REASON_PATCH_SELECTOR_AMBIGUOUS;
+    pub const PATCH_PATH_INVALID: &str = core_error::ReasonCode::PATCH_PATH_INVALID;
+    pub const PATCH_PATH_REDUCER_MANAGED: &str = core_error::ReasonCode::PATCH_PATH_REDUCER_MANAGED;
+    pub const PATCH_UNSET_REDACTABLE_FIELD: &str =
+        core_error::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD;
+    pub const PATCH_SELECTOR_NO_MATCH: &str = core_error::ReasonCode::PATCH_SELECTOR_NO_MATCH;
+    pub const PATCH_SELECTOR_AMBIGUOUS: &str = core_error::ReasonCode::PATCH_SELECTOR_AMBIGUOUS;
 
-    pub const AEAD_NONCE_COUNTER_REPLAY: &str = core_error::REASON_AEAD_NONCE_COUNTER_REPLAY;
+    pub const AEAD_NONCE_COUNTER_REPLAY: &str = core_error::ReasonCode::AEAD_NONCE_COUNTER_REPLAY;
     pub const AEAD_NONCE_DERIVATION_INVALID: &str =
-        core_error::REASON_AEAD_NONCE_DERIVATION_INVALID;
+        core_error::ReasonCode::AEAD_NONCE_DERIVATION_INVALID;
 
-    pub const ACCOUNTABILITY_GRANT_MISSING: &str = core_error::REASON_ACCOUNTABILITY_GRANT_MISSING;
+    pub const ACCOUNTABILITY_GRANT_MISSING: &str =
+        core_error::ReasonCode::ACCOUNTABILITY_GRANT_MISSING;
     pub const KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH: &str =
-        core_error::REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH;
+        core_error::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH;
 
-    pub const DELEGATION_CYCLE: &str = core_error::REASON_DELEGATION_CYCLE;
-    pub const DELEGATION_EXPIRY_WIDENING: &str = core_error::REASON_DELEGATION_EXPIRY_WIDENING;
+    pub const DELEGATION_CYCLE: &str = core_error::ReasonCode::DELEGATION_CYCLE;
+    pub const DELEGATION_EXPIRY_WIDENING: &str = core_error::ReasonCode::DELEGATION_EXPIRY_WIDENING;
 
-    pub const RECOVERY_WITNESS_MISSING: &str = core_error::REASON_RECOVERY_WITNESS_MISSING;
-    pub const RECOVERY_WITNESS_INVALID: &str = core_error::REASON_RECOVERY_WITNESS_INVALID;
+    pub const RECOVERY_WITNESS_MISSING: &str = core_error::ReasonCode::RECOVERY_WITNESS_MISSING;
+    pub const RECOVERY_WITNESS_INVALID: &str = core_error::ReasonCode::RECOVERY_WITNESS_INVALID;
     pub const RECOVERY_WITNESS_POST_CONFLICT: &str =
-        core_error::REASON_RECOVERY_WITNESS_POST_CONFLICT;
+        core_error::ReasonCode::RECOVERY_WITNESS_POST_CONFLICT;
     pub const RECOVERY_CAPABILITY_NOT_SEALED: &str =
-        core_error::REASON_RECOVERY_CAPABILITY_NOT_SEALED;
+        core_error::ReasonCode::RECOVERY_CAPABILITY_NOT_SEALED;
 
-    pub const CHALLENGE_PROOF_INVALID: &str = core_error::REASON_CHALLENGE_PROOF_INVALID;
-    pub const INVALID_TASK_FSM_TRANSITION: &str = core_error::REASON_INVALID_TASK_FSM_TRANSITION;
+    pub const CHALLENGE_PROOF_INVALID: &str = core_error::ReasonCode::CHALLENGE_PROOF_INVALID;
+    pub const INVALID_TASK_FSM_TRANSITION: &str =
+        core_error::ReasonCode::INVALID_TASK_FSM_TRANSITION;
 
     // `mixed_secret_storage_disallowed_by_profile` was dropped from the
     // spec registry in round C47 (spec e10b6ad); soland no longer surfaces
@@ -111,32 +115,33 @@ pub mod reasons {
     // management decode path now rejects mixed storage as
     // `schema_violation`.
 
-    pub const AUDIT_CAPABILITY_INCOMPLETE: &str = core_error::REASON_AUDIT_CAPABILITY_INCOMPLETE;
-    pub const WATCH_MUST_BE_SELF: &str = core_error::REASON_WATCH_MUST_BE_SELF;
-    pub const WATCH_MUTED_MUST_BE_SELF: &str = core_error::REASON_WATCH_MUTED_MUST_BE_SELF;
+    pub const AUDIT_CAPABILITY_INCOMPLETE: &str =
+        core_error::ReasonCode::AUDIT_CAPABILITY_INCOMPLETE;
+    pub const WATCH_MUST_BE_SELF: &str = core_error::ReasonCode::WATCH_MUST_BE_SELF;
+    pub const WATCH_MUTED_MUST_BE_SELF: &str = core_error::ReasonCode::WATCH_MUTED_MUST_BE_SELF;
     pub const WATCH_LEVEL_PUBLIC_MUST_BE_SELF: &str =
-        core_error::REASON_WATCH_LEVEL_PUBLIC_MUST_BE_SELF;
+        core_error::ReasonCode::WATCH_LEVEL_PUBLIC_MUST_BE_SELF;
     pub const WATCH_SET_OTHERS_AUDIT_MISSING: &str =
-        core_error::REASON_WATCH_SET_OTHERS_AUDIT_MISSING;
+        core_error::ReasonCode::WATCH_SET_OTHERS_AUDIT_MISSING;
     pub const CROSS_SPACE_STRUCTURAL_RELATION: &str =
-        core_error::REASON_CROSS_SPACE_STRUCTURAL_RELATION;
-    pub const JOIN_AUTHORISATION_INVALID: &str = core_error::REASON_JOIN_AUTHORISATION_INVALID;
-    pub const JOIN_RULE_POLICY_MISMATCH: &str = core_error::REASON_JOIN_RULE_POLICY_MISMATCH;
-    pub const CROSS_SIGNING_RESET: &str = core_error::REASON_CROSS_SIGNING_RESET;
-    pub const TTL_EXPIRED: &str = core_error::REASON_TTL_EXPIRED;
-    pub const NOT_PROVISIONED: &str = core_error::REASON_NOT_PROVISIONED;
+        core_error::ReasonCode::CROSS_SPACE_STRUCTURAL_RELATION;
+    pub const JOIN_AUTHORISATION_INVALID: &str = core_error::ReasonCode::JOIN_AUTHORISATION_INVALID;
+    pub const JOIN_RULE_POLICY_MISMATCH: &str = core_error::ReasonCode::JOIN_RULE_POLICY_MISMATCH;
+    pub const CROSS_SIGNING_RESET: &str = core_error::ReasonCode::CROSS_SIGNING_RESET;
+    pub const TTL_EXPIRED: &str = core_error::ReasonCode::TTL_EXPIRED;
+    pub const NOT_PROVISIONED: &str = core_error::ReasonCode::NOT_PROVISIONED;
 
     pub const MORPH_SCHEMA_REFS_EVOLUTION_UNAUTHORIZED: &str =
-        core_error::REASON_MORPH_SCHEMA_REFS_EVOLUTION_UNAUTHORIZED;
+        core_error::ReasonCode::MORPH_SCHEMA_REFS_EVOLUTION_UNAUTHORIZED;
     pub const MORPH_SCHEMA_REFS_TRANSFORMATION_UNSUPPORTED: &str =
-        core_error::REASON_MORPH_SCHEMA_REFS_TRANSFORMATION_UNSUPPORTED;
+        core_error::ReasonCode::MORPH_SCHEMA_REFS_TRANSFORMATION_UNSUPPORTED;
     pub const MORPH_SCHEMA_VERSION_BINDING_MISSING: &str =
-        core_error::REASON_MORPH_SCHEMA_VERSION_BINDING_MISSING;
+        core_error::ReasonCode::MORPH_SCHEMA_VERSION_BINDING_MISSING;
 
     pub const RANGE_COMPLETENESS_ROOT_MISMATCH: &str =
-        core_error::REASON_RANGE_COMPLETENESS_ROOT_MISMATCH;
+        core_error::ReasonCode::RANGE_COMPLETENESS_ROOT_MISMATCH;
     pub const RANGE_COMPLETENESS_ACTOR_SEQ_GAP: &str =
-        core_error::REASON_RANGE_COMPLETENESS_ACTOR_SEQ_GAP;
+        core_error::ReasonCode::RANGE_COMPLETENESS_ACTOR_SEQ_GAP;
 
     // ── AKP-0007 (spec b7d35be / floor 2b0d70d) — Circle reason codes.
     //
@@ -145,63 +150,67 @@ pub mod reasons {
     // `zh/models/circle.md`. The sixth top-level Circle code is the
     // existing `delivery_binding_handed_over`, which is already
     // surfaced via the round-4 ErrorCode variant.
-    pub const CIRCLE_REALM_MISMATCH: &str = core_error::REASON_CIRCLE_REALM_MISMATCH;
-    pub const CIRCLE_NOT_ACTIVE: &str = core_error::REASON_CIRCLE_NOT_ACTIVE;
+    pub const CIRCLE_REALM_MISMATCH: &str = core_error::ReasonCode::CIRCLE_REALM_MISMATCH;
+    pub const CIRCLE_NOT_ACTIVE: &str = core_error::ReasonCode::CIRCLE_NOT_ACTIVE;
     pub const CIRCLE_MEMBER_MUST_BE_REALM_MEMBER: &str =
-        core_error::REASON_CIRCLE_MEMBER_MUST_BE_REALM_MEMBER;
+        core_error::ReasonCode::CIRCLE_MEMBER_MUST_BE_REALM_MEMBER;
     pub const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str =
-        core_error::REASON_CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR;
+        core_error::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR;
     pub const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str =
-        core_error::REASON_CONTENT_ENCRYPTION_FLOOR_VIOLATION;
-    pub const SCOPE_REBIND_FORBIDDEN: &str = core_error::REASON_SCOPE_REBIND_FORBIDDEN;
+        core_error::ReasonCode::CONTENT_ENCRYPTION_FLOOR_VIOLATION;
+    pub const SCOPE_REBIND_FORBIDDEN: &str = core_error::ReasonCode::SCOPE_REBIND_FORBIDDEN;
     pub const METADATA_ENCRYPTION_FLOOR_VIOLATION: &str =
-        core_error::REASON_METADATA_ENCRYPTION_FLOOR_VIOLATION;
+        core_error::ReasonCode::METADATA_ENCRYPTION_FLOOR_VIOLATION;
 
     // ── Reaction model (spec strand-and-message.md §9.8, commit 4d9438f) —
     // v1 Reaction target-scope sub-reasons. `reaction_target_unsupported`
     // sits under `schema_violation`; `reaction_scope_mismatch` under
     // `failed_precondition`.
-    pub const REACTION_TARGET_UNSUPPORTED: &str = core_error::REASON_REACTION_TARGET_UNSUPPORTED;
-    pub const REACTION_SCOPE_MISMATCH: &str = core_error::REASON_REACTION_SCOPE_MISMATCH;
+    pub const REACTION_TARGET_UNSUPPORTED: &str =
+        core_error::ReasonCode::REACTION_TARGET_UNSUPPORTED;
+    pub const REACTION_SCOPE_MISMATCH: &str = core_error::ReasonCode::REACTION_SCOPE_MISMATCH;
     pub const DIRECT_CONVERSATION_UNAVAILABLE: &str =
-        core_error::ERROR_CODE_DIRECT_CONVERSATION_UNAVAILABLE;
-    pub const PEER_UNRESOLVABLE: &str = core_error::ERROR_CODE_PEER_UNRESOLVABLE;
-    pub const KEYPACKAGE_UNKNOWN: &str = core_error::ERROR_CODE_KEYPACKAGE_UNKNOWN;
+        core_error::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE;
+    pub const PEER_UNRESOLVABLE: &str = core_error::ErrorCode::PEER_UNRESOLVABLE;
+    pub const KEYPACKAGE_UNKNOWN: &str = core_error::ErrorCode::KEYPACKAGE_UNKNOWN;
 
     // Agent / pairing / session-grant reason codes.
-    pub const PROOF_INVALID: &str = core_error::REASON_PROOF_INVALID;
-    pub const ACTOR_KIND_REDUCER_MANAGED: &str = core_error::REASON_ACTOR_KIND_REDUCER_MANAGED;
+    pub const PROOF_INVALID: &str = core_error::ReasonCode::PROOF_INVALID;
+    pub const ACTOR_KIND_REDUCER_MANAGED: &str = core_error::ReasonCode::ACTOR_KIND_REDUCER_MANAGED;
     pub const EFFECTIVE_SCOPE_REDUCER_MANAGED: &str =
-        core_error::REASON_EFFECTIVE_SCOPE_REDUCER_MANAGED;
+        core_error::ReasonCode::EFFECTIVE_SCOPE_REDUCER_MANAGED;
 
     // Media binding reason codes.
-    pub const UNKNOWN_FOCUS_TYPE: &str = core_error::REASON_UNKNOWN_FOCUS_TYPE;
-    pub const FOCUS_MISMATCH: &str = core_error::REASON_FOCUS_MISMATCH;
-    pub const TOKEN_ISSUER_UNAUTHORISED: &str = core_error::REASON_TOKEN_ISSUER_UNAUTHORISED;
-    pub const PARTICIPANT_BINDING_INVALID: &str = core_error::REASON_PARTICIPANT_BINDING_INVALID;
+    pub const UNKNOWN_FOCUS_TYPE: &str = core_error::ReasonCode::UNKNOWN_FOCUS_TYPE;
+    pub const FOCUS_MISMATCH: &str = core_error::ReasonCode::FOCUS_MISMATCH;
+    pub const TOKEN_ISSUER_UNAUTHORISED: &str = core_error::ReasonCode::TOKEN_ISSUER_UNAUTHORISED;
+    pub const PARTICIPANT_BINDING_INVALID: &str =
+        core_error::ReasonCode::PARTICIPANT_BINDING_INVALID;
     pub const PARTICIPANT_IDENTITY_UNRECOGNISED: &str =
-        core_error::REASON_PARTICIPANT_IDENTITY_UNRECOGNISED;
+        core_error::ReasonCode::PARTICIPANT_IDENTITY_UNRECOGNISED;
     pub const SESSION_FOCUS_ALREADY_COMMITTED: &str =
-        core_error::REASON_SESSION_FOCUS_ALREADY_COMMITTED;
-    pub const E2EE_KEY_SOURCE_UNAUTHORISED: &str = core_error::REASON_E2EE_KEY_SOURCE_UNAUTHORISED;
-    pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str = core_error::REASON_FOCUS_UNAVAILABLE_FOR_CLIENT;
+        core_error::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED;
+    pub const E2EE_KEY_SOURCE_UNAUTHORISED: &str =
+        core_error::ReasonCode::E2EE_KEY_SOURCE_UNAUTHORISED;
+    pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str =
+        core_error::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT;
 
     // Call moderation reason codes (webrtc-signaling.md §3a).
     pub const CALL_MODERATION_UNAUTHORISED: &str = "call_moderation_unauthorised";
     pub const CALL_PARTICIPANT_REMOVED: &str = "call_participant_removed";
 
     // Call capability gating reason codes (webrtc-signaling.md §3 / §8).
-    pub const MEDIA_PERMISSION_DENIED: &str = core_error::ERROR_CODE_MEDIA_PERMISSION_DENIED;
-    pub const RECORDING_DENIED: &str = core_error::ERROR_CODE_RECORDING_DENIED;
+    pub const MEDIA_PERMISSION_DENIED: &str = core_error::ErrorCode::MEDIA_PERMISSION_DENIED;
+    pub const RECORDING_DENIED: &str = core_error::ErrorCode::RECORDING_DENIED;
 
     // Call recording / transcription lifecycle reason codes
     // (call-state.md §5 / §5.1 / §5.2 / §7).
-    pub const RECORDING_CONSENT_REQUIRED: &str = core_error::REASON_RECORDING_CONSENT_REQUIRED;
-    pub const TRANSCRIPTION_DENIED: &str = core_error::REASON_TRANSCRIPTION_DENIED;
+    pub const RECORDING_CONSENT_REQUIRED: &str = core_error::ReasonCode::RECORDING_CONSENT_REQUIRED;
+    pub const TRANSCRIPTION_DENIED: &str = core_error::ReasonCode::TRANSCRIPTION_DENIED;
     pub const TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED: &str =
-        core_error::REASON_TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED;
+        core_error::ReasonCode::TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED;
     pub const CALL_SUMMARY_INVALID: &str = "call_summary_invalid";
-    pub const LEGAL_HOLD_ACTIVE: &str = core_error::REASON_LEGAL_HOLD_ACTIVE;
+    pub const LEGAL_HOLD_ACTIVE: &str = core_error::ReasonCode::LEGAL_HOLD_ACTIVE;
 
     // Recovery reason codes.
     pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str = "recovery_witness_revoke_lagging";
@@ -210,16 +219,17 @@ pub mod reasons {
     // the SDK's NON-REGISTRY member-identity rejection reasons (pending
     // registration in error-code-registry.json#reason_codes).
     pub const MEMBER_IDENTITY_UNKNOWN_SEGMENT: &str =
-        core_error::REASON_MEMBER_IDENTITY_UNKNOWN_SEGMENT;
+        core_error::ReasonCode::MEMBER_IDENTITY_UNKNOWN_SEGMENT;
 
     // Federation / admission reason codes that are not top-level SDK variants.
-    pub const CROSS_DOMAIN_REPLAY_REJECTED: &str = core_error::REASON_CROSS_DOMAIN_REPLAY_REJECTED;
-    pub const RESET_EVENT_ID_MISMATCH: &str = core_error::REASON_RESET_EVENT_ID_MISMATCH;
+    pub const CROSS_DOMAIN_REPLAY_REJECTED: &str =
+        core_error::ReasonCode::CROSS_DOMAIN_REPLAY_REJECTED;
+    pub const RESET_EVENT_ID_MISMATCH: &str = core_error::ReasonCode::RESET_EVENT_ID_MISMATCH;
     pub const E2EE_RELAXED_DISALLOWED_IN_COMPLIANCE_PROFILE: &str =
-        core_error::REASON_E2EE_RELAXED_DISALLOWED_IN_COMPLIANCE_PROFILE;
+        core_error::ReasonCode::E2EE_RELAXED_DISALLOWED_IN_COMPLIANCE_PROFILE;
     pub const MEDIA_PLAINTEXT_SERVICE_NOT_AUTHORISED: &str =
-        core_error::REASON_MEDIA_PLAINTEXT_SERVICE_NOT_AUTHORISED;
-    pub const BLOB_REDACTED: &str = core_error::REASON_BLOB_REDACTED;
+        core_error::ReasonCode::MEDIA_PLAINTEXT_SERVICE_NOT_AUTHORISED;
+    pub const BLOB_REDACTED: &str = core_error::ReasonCode::BLOB_REDACTED;
 
     // MemberIdentity / handle-claim wire-shape reason codes.
     pub const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =

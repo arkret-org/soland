@@ -41,7 +41,6 @@ pub const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str = "mls_keypackage_already_clai
 pub const REASON_KEYPACKAGE_NOT_FOUND: &str = "mls_keypackage_not_found";
 /// Reason code emitted when a published KeyPackage's lifetime window
 /// is already past `not_after`. Mirrors RFC 9420 §10.
-pub const REASON_KEYPACKAGE_EXPIRED: &str = "mls_keypackage_expired";
 /// Reason code emitted when a KeyPackage publish/claim is missing the
 /// accepted cross-signing generation or attempts to consume an older one.
 pub const REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH: &str = "claim_generation_mismatch";
@@ -54,8 +53,6 @@ pub const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
 pub const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
 /// Reject code for MLS Welcome payloads whose KeyPackage claim transcript
 /// is missing or does not bind the Welcome bytes to the recipient realm.
-pub const REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH: &str =
-    arkret_sdk::error::REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH;
 /// Reject code for commits whose governance binding does not name an
 /// attested governance Seal set to add into the covered_seals accumulator.
 pub const REASON_COMMIT_COVERED_SEALS_MISSING: &str = "mls_covered_seals_missing";
@@ -65,12 +62,9 @@ pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 /// match the policy root the MLS group's epoch chain was genesis-locked to
 /// (encryption-and-audit.md §2.5.1). On a federation push the ingest pipeline
 /// maps it to a 412 whole-batch reject.
-pub const REASON_GOVERNANCE_BINDING_MISMATCH: &str =
-    arkret_sdk::error::REASON_GOVERNANCE_BINDING_MISMATCH;
 /// Reject code emitted while a group's `covered_frontier_cell` is `⊥`
 /// (concurrent commits, encryption-and-audit.md §2.5.2). Sends / decrypts on
 /// the contested epoch stay fail-closed until a resolving commit advances it.
-pub const REASON_DECRYPTION_PENDING: &str = arkret_sdk::error::REASON_DECRYPTION_PENDING;
 /// Reject code for a Remove commit whose governance binding does not cover the
 /// event frontier that created the pending remove obligation.
 pub const REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER: &str =
@@ -245,7 +239,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
     }
     // Lifetime check — RFC 9420 §10. Stale KeyPackages can't be claimed.
     if consumed_at >= row.lifetime.not_after {
-        return reject(REASON_KEYPACKAGE_EXPIRED);
+        return reject(arkret_sdk::ReasonCode::KEYPACKAGE_EXPIRED);
     }
     let trust_binding = match keypackage_claim_trust_binding(payload) {
         Ok(binding) => binding,
@@ -628,7 +622,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     if !locked_policy_root.is_empty() {
         let commit_policy_root = binding_policy_root(payload).unwrap_or_default();
         if commit_policy_root != locked_policy_root {
-            return reject(REASON_GOVERNANCE_BINDING_MISMATCH);
+            return reject(arkret_sdk::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
         }
     }
 
@@ -659,7 +653,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
             // `decryption_pending` reject until a resolving commit advances the
             // epoch. (A reject never reaches persistence, so it does not need a
             // mirror.)
-            return reject(REASON_DECRYPTION_PENDING);
+            return reject(arkret_sdk::ReasonCode::DECRYPTION_PENDING);
         }
         // First racing commit at this base: drive `covered_frontier_cell` to
         // `⊥`. The accepted `CommitFrontierContested` effect flips the marker on
@@ -1046,25 +1040,25 @@ fn validate_welcome_trust_binding(
         .get("claim_id")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let keypackage_ref = payload
         .get("keypackage_ref")
         .and_then(Value::as_str)
         .unwrap_or(key_package_id);
     if keypackage_ref != key_package_id {
-        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let keypackage_digest = payload
         .get("keypackage_digest")
         .and_then(Value::as_str)
         .filter(|value| is_sha256_digest(value))
-        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let claim_ref = payload
         .get("claim_ref")
         .and_then(Value::as_object)
-        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let claim_trust_binding = keypackage_claim_trust_binding_object(claim_ref)
-        .map_err(|_| REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if claim_ref.get("claim_id").and_then(Value::as_str) != Some(claim_id)
         || claim_ref.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
         || claim_ref.get("keypackage_digest").and_then(Value::as_str) != Some(keypackage_digest)
@@ -1073,13 +1067,13 @@ fn validate_welcome_trust_binding(
             .and_then(Value::as_str)
             .is_none_or(|value| !is_sha256_digest(value))
     {
-        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
 
     let envelope = payload
         .get("claim_envelope")
         .and_then(Value::as_object)
-        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let expected_welcome_digest = arkret_sdk::canonical::sha256_digest(welcome_bytes);
     if envelope.get("claim_id").and_then(Value::as_str) != Some(claim_id)
         || envelope.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
@@ -1100,7 +1094,7 @@ fn validate_welcome_trust_binding(
             .and_then(Value::as_str)
             .is_none_or(str::is_empty)
     {
-        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let envelope_signing_binding = welcome_requester_signature_binding(envelope)?;
     if envelope_signing_binding.ssk_generation.is_some() {
@@ -1115,7 +1109,7 @@ fn validate_welcome_trust_binding(
             .filter(|value| !value.is_empty())
         && sender_device_id != requester_device_id
     {
-        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     if claim_ref.get("ssk_generation").and_then(Value::as_u64) != claim_trust_binding.ssk_generation
         || claim_ref
@@ -1123,7 +1117,7 @@ fn validate_welcome_trust_binding(
             .and_then(Value::as_str)
             != claim_trust_binding.device_authorize_event_id.as_deref()
     {
-        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     validate_welcome_claim_signature(envelope)?;
     validate_welcome_recipient_binding(payload, recipient_actor_id)
@@ -1159,18 +1153,18 @@ fn validate_welcome_claim_signature(envelope: &Map<String, Value>) -> Result<(),
     let signature = envelope
         .get("signature")
         .and_then(Value::as_object)
-        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let kid = signature
         .get("kid")
         .and_then(Value::as_str)
-        .ok_or(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if kid.is_empty()
         || signature
             .get("sig")
             .and_then(Value::as_str)
             .is_none_or(str::is_empty)
     {
-        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     Ok(())
 }
@@ -1184,12 +1178,12 @@ fn validate_welcome_recipient_binding(
         .or_else(|| payload.get("recipient_actor_id"))
         .and_then(Value::as_str)
     else {
-        return Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     };
     if bound_recipient == recipient_actor_id {
         Ok(())
     } else {
-        Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)
+        Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)
     }
 }
 
@@ -1315,7 +1309,7 @@ fn welcome_requester_signature_binding(
             ssk_generation: None,
             requester_device_id: Some(requester_device_id),
         }),
-        _ => Err(REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH),
+        _ => Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH),
     }
 }
 

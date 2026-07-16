@@ -226,7 +226,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
     let invite = Operation::create(
         arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000052").unwrap(),
         realm_id.clone(),
-        arkret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::EventKind::MEMBER_STATE,
         json!({
             "actor_id": "did:web:bob.example",
             "member": "did:web:bob.example",
@@ -236,7 +236,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
     let invite_create = Operation::create(
         arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000055").unwrap(),
         realm_id.clone(),
-        arkret_sdk::events::kinds::INVITE_CREATE,
+        arkret_sdk::events::EventKind::INVITE_CREATE,
         json!({
             "invite_id": "ak:invite:01904100-0000-7000-8000-000000000056",
             "invitee": "did:web:carol.example",
@@ -252,7 +252,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
     let message = Operation::create(
         arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000053").unwrap(),
         realm_id,
-        arkret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::EventKind::MESSAGE_CREATE,
         json!({
             "event_id": "ak:event:01904100-0000-7000-8000-000000000054",
             "sender": "did:web:alice.example",
@@ -303,13 +303,13 @@ async fn operation_frontier_tracks_persisted_operation_ids() {
     let first = Operation::create(
         arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000062").unwrap(),
         realm_id.clone(),
-        arkret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::EventKind::MESSAGE_CREATE,
         json!({"content": {"kind": "ak.content.text", "body": "one"}}),
     );
     let second = Operation::create(
         arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000063").unwrap(),
         realm_id,
-        arkret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::EventKind::MESSAGE_CREATE,
         json!({"content": {"kind": "ak.content.text", "body": "two"}}),
     );
     state

@@ -94,7 +94,7 @@ async fn materialize_governance_proof(
     let principal_control_actor = realm_records
         .iter()
         .find(|record| {
-            record.kind == arkret_sdk::events::kinds::REALM_CREATE
+            record.kind == arkret_sdk::events::EventKind::REALM_CREATE
                 && record
                     .envelope
                     .pointer("/payload/object/fields/purpose")
@@ -192,7 +192,7 @@ async fn materialize_governance_proof(
         })
         .collect::<BTreeSet<_>>();
     for bootstrap in realm_records.iter().filter(|record| {
-        record.kind == arkret_sdk::events::kinds::REALM_CREATE
+        record.kind == arkret_sdk::events::EventKind::REALM_CREATE
             && record
                 .envelope
                 .pointer("/payload/object/fields/purpose")
@@ -204,7 +204,7 @@ async fn materialize_governance_proof(
             realm_records
                 .iter()
                 .filter(|record| {
-                    record.kind == arkret_sdk::events::kinds::DEVICE_AUTHORIZE
+                    record.kind == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
                         && record
                             .envelope
                             .get("prev_refs")
@@ -551,7 +551,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
             .iter()
             .find(|record| {
                 record.event_id == payload.replacement_authorize_event_id.as_str()
-                    && record.kind == arkret_sdk::events::kinds::DEVICE_AUTHORIZE
+                    && record.kind == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
                     && record.canonical_digest == payload.replacement_authorize_digest.as_str()
                     && record
                         .envelope
@@ -669,7 +669,7 @@ pub(crate) fn canonical_event_ops(
     event: &Event,
     move_id: &MoveId,
 ) -> Result<Vec<(CellRef, SealedOp)>, AppError> {
-    if event.kind.as_str() != arkret_sdk::events::kinds::REALM_CREATE {
+    if event.kind.as_str() != arkret_sdk::events::EventKind::REALM_CREATE {
         return Ok(event
             .effects
             .iter()

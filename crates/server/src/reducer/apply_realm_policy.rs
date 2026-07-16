@@ -601,7 +601,7 @@ impl ProjectionState {
             .and_then(|link| arkret_sdk::RealmLinkStatus::parse(&link.status));
         if current_status.is_some_and(|current| !current.can_transition_to(next_status)) {
             return ProjectionEffect::Rejected {
-                reason: arkret_sdk::REASON_REALM_LINK_INVALID_TRANSITION.to_owned(),
+                reason: arkret_sdk::ReasonCode::REALM_LINK_INVALID_TRANSITION.to_owned(),
             };
         }
         let label = operation
@@ -1139,6 +1139,6 @@ fn validate_transcript_result_storage(
     if has_start_event_id {
         None
     } else {
-        Some(arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION)
+        Some(arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
     }
 }

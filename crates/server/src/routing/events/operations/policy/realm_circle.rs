@@ -4,10 +4,10 @@ pub(super) fn realm_frozen_operation_exempt(kind: &str) -> bool {
     arkret_sdk::events::kinds::is_audit_kind(kind)
         || matches!(
             kind,
-            arkret_sdk::events::kinds::REALM_ARCHIVE
-                | arkret_sdk::events::kinds::REALM_FREEZE
-                | arkret_sdk::events::kinds::REALM_TOMBSTONE
-                | arkret_sdk::events::kinds::REALM_DESTROY
+            arkret_sdk::events::EventKind::REALM_ARCHIVE
+                | arkret_sdk::events::EventKind::REALM_FREEZE
+                | arkret_sdk::events::EventKind::REALM_TOMBSTONE
+                | arkret_sdk::events::EventKind::REALM_DESTROY
         )
 }
 
@@ -26,7 +26,7 @@ pub(super) fn validate_realm_lifecycle_write_gate(
     if projection.realm_is_frozen_at(realm_id, chrono::Utc::now())
         && !realm_frozen_operation_exempt(&kind)
     {
-        return Err(arkret_sdk::ERROR_CODE_REALM_FROZEN);
+        return Err(arkret_sdk::ErrorCode::REALM_FROZEN);
     }
     Ok(())
 }
@@ -53,7 +53,7 @@ pub(super) async fn validate_morph_schema_migrate_authz(
         .authz
         .check(
             actor,
-            arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE,
+            arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE,
             realm_id,
             realm_id,
             owner.as_deref(),
@@ -72,7 +72,7 @@ pub(super) async fn validate_circle_create_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_sdk::events::kinds::CIRCLE_CREATE)
+        != Some(arkret_sdk::events::EventKind::CIRCLE_CREATE)
     {
         return Ok(());
     }
@@ -133,13 +133,13 @@ pub(super) async fn validate_circle_management_policy(
         return Ok(());
     };
     let (action, reason) = match kind {
-        arkret_sdk::events::kinds::CIRCLE_UPDATE
-        | arkret_sdk::events::kinds::CIRCLE_ARCHIVE
-        | arkret_sdk::events::kinds::CIRCLE_RESTORE
-        | arkret_sdk::events::kinds::CIRCLE_TOMBSTONE => {
+        arkret_sdk::events::EventKind::CIRCLE_UPDATE
+        | arkret_sdk::events::EventKind::CIRCLE_ARCHIVE
+        | arkret_sdk::events::EventKind::CIRCLE_RESTORE
+        | arkret_sdk::events::EventKind::CIRCLE_TOMBSTONE => {
             ("ak.circle.manage", "circle_manage_capability_required")
         }
-        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE
+        arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
             if circle_member_manage_required(state, operation) =>
         {
             (
@@ -233,7 +233,7 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
 ///
 /// Unlike [`Operation::actor`], which probes `actor_id` before `sender`, the
 /// policy layer must resolve the *executing* principal. For membership events
-/// (e.g. CIRCLE_MEMBER_STATE) the `actor_id` field names the *target* member,
+/// (e.g. arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE) the `actor_id` field names the *target* member,
 /// not the executor, so preferring it would let a forged verdict pass its own
 /// authorization gate. This accessor therefore resolves the executor as
 /// `sender` → `actor_id` → `created_by`, matching the historical soland

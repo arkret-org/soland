@@ -51,14 +51,14 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("direct_conversation_")
         || message.starts_with("cross_signing_reset_")
         || message == "cross_signing_model_mismatch"
-        || message == arkret_sdk::error::REASON_REACTION_SCOPE_MISMATCH
+        || message == arkret_sdk::error::ReasonCode::REACTION_SCOPE_MISMATCH
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
         )
     } else if message
-        == arkret_sdk::error::REASON_HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        == arkret_sdk::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
@@ -82,10 +82,10 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING,
         )
-    } else if message == arkret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
+    } else if message == arkret_sdk::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
         (
             salvo::http::StatusCode::UNPROCESSABLE_ENTITY,
-            arkret_sdk::ERROR_CODE_READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
+            arkret_sdk::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
         )
     } else if matches!(
         message,
@@ -118,10 +118,10 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         )
     } else if message == "realm_terminal_state" {
         (salvo::http::StatusCode::FORBIDDEN, "realm_terminal_state")
-    } else if message == arkret_sdk::ERROR_CODE_REALM_FROZEN {
+    } else if message == arkret_sdk::ErrorCode::REALM_FROZEN {
         (
             salvo::http::StatusCode::FORBIDDEN,
-            arkret_sdk::ERROR_CODE_REALM_FROZEN,
+            arkret_sdk::ErrorCode::REALM_FROZEN,
         )
     } else if matches!(
         message,
@@ -167,7 +167,7 @@ pub async fn validate_operation_policy(
             );
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE)
+            == Some(arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE)
         {
             validate_morph_schema_migrate_capability(operation)?;
             validate_morph_schema_migrate_authz(state, operation).await?;
@@ -232,7 +232,7 @@ mod tests {
             arkret_sdk::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
                 .unwrap(),
             arkret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
-            arkret_sdk::events::kinds::CIRCLE_CREATE,
+            arkret_sdk::events::EventKind::CIRCLE_CREATE,
             payload,
         )
     }
@@ -296,7 +296,7 @@ async fn validate_managed_agent_grant_ceiling(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_sdk::events::kinds::CAPABILITY_GRANT)
+        != Some(arkret_sdk::events::EventKind::CAPABILITY_GRANT)
     {
         return Ok(());
     }

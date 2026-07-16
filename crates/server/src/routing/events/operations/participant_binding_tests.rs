@@ -99,7 +99,7 @@ fn call_state_op(binding: Value) -> Operation {
     let mut op = Operation::create(
         arkret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         arkret_sdk::RealmId::new(REALM_ID.to_owned()).unwrap(),
-        arkret_sdk::events::kinds::CALL_STATE,
+        arkret_sdk::events::EventKind::CALL_STATE,
         json!({
             "call_id": CALL_ID,
             "state": "active",

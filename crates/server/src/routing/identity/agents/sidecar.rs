@@ -385,7 +385,7 @@ pub(super) async fn ensure_sidecar_circle(
         "actor_capability": sidecar_actor_capability(None),
     });
     let operation =
-        new_sidecar_operation(realm_id, arkret_sdk::events::kinds::CIRCLE_CREATE, payload)?;
+        new_sidecar_operation(realm_id, arkret_sdk::events::EventKind::CIRCLE_CREATE, payload)?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;
@@ -423,7 +423,7 @@ pub(super) async fn ensure_sidecar_member(
     });
     let operation = new_sidecar_operation(
         realm_id,
-        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
         payload,
     )?;
     crate::routing::events::projection::accept_trusted_sidecar_member_operation(
@@ -501,7 +501,7 @@ pub(super) async fn ensure_sidecar_strand(
         "object": object,
     });
     let operation =
-        new_sidecar_operation(realm_id, arkret_sdk::events::kinds::STRAND_CREATE, payload)?;
+        new_sidecar_operation(realm_id, arkret_sdk::events::EventKind::STRAND_CREATE, payload)?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;
@@ -584,7 +584,7 @@ pub(super) async fn ensure_sidecar_relation(
     });
     let operation = new_sidecar_operation(
         realm_id,
-        arkret_sdk::events::kinds::RELATION_CREATE,
+        arkret_sdk::events::EventKind::RELATION_CREATE,
         payload,
     )?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))

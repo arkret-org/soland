@@ -22,7 +22,7 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
 
     arkret_sdk::schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(arkret_sdk::events::kinds::REALM_CREATE, &payload)
+        .validate_payload(arkret_sdk::events::EventKind::REALM_CREATE, &payload)
         .unwrap();
     assert!(payload.get("plaintext_visible_services").is_none());
 
@@ -52,7 +52,7 @@ fn direct_member_join_payload_is_sdk_schema_valid() {
 
     arkret_sdk::schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(arkret_sdk::events::kinds::MEMBER_STATE, &payload)
+        .validate_payload(arkret_sdk::events::EventKind::MEMBER_STATE, &payload)
         .unwrap();
     assert_eq!(
         payload.get("membership").and_then(Value::as_str),
@@ -86,7 +86,7 @@ fn direct_strand_create_payload_is_sdk_schema_valid() {
 
     arkret_sdk::schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(arkret_sdk::events::kinds::STRAND_CREATE, &payload)
+        .validate_payload(arkret_sdk::events::EventKind::STRAND_CREATE, &payload)
         .unwrap();
 
     let object = payload
@@ -171,7 +171,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
     let mut message_op = arkret_sdk::Operation::create(
         direct_operation_id().unwrap(),
         arkret_sdk::RealmId::new(realm_id.clone()).unwrap(),
-        arkret_sdk::events::kinds::MESSAGE_CREATE,
+        arkret_sdk::events::EventKind::MESSAGE_CREATE,
         message_payload,
     );
     let event_id = message_op.operation_id.to_string();

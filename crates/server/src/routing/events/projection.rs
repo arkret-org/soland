@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn realm_projection_metadata_reads_canonical_object_fields() {
         let operation = op(
-            arkret_sdk::events::kinds::REALM_CREATE,
+            arkret_sdk::events::EventKind::REALM_CREATE,
             json!({
                 "object": {
                     "id": REALM_ID,
@@ -105,7 +105,7 @@ mod tests {
         let event = crate::state::ProjectionEventRecord {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000f1".to_owned(),
             realm_id: REALM_ID.to_owned(),
-            event_kind: arkret_sdk::events::kinds::STRAND_UPDATE.to_owned(),
+            event_kind: arkret_sdk::events::EventKind::STRAND_UPDATE.to_owned(),
             operation_type: "state".to_owned(),
             operation_id: Some(OPERATION_ID.to_owned()),
             sender: Some("did:web:bob.example".to_owned()),
@@ -129,7 +129,7 @@ mod tests {
         let service =
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let operation = op(
-            arkret_sdk::events::kinds::REALM_CREATE,
+            arkret_sdk::events::EventKind::REALM_CREATE,
             json!({
                 "object": {
                     "id": REALM_ID,
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn retention_policy_ttl_reads_canonical_object_fields() {
         let operation = op(
-            arkret_sdk::events::kinds::REALM_CREATE,
+            arkret_sdk::events::EventKind::REALM_CREATE,
             json!({
                 "object": {
                     "id": REALM_ID,
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn member_state_without_title_does_not_project_realm_title() {
         let operation = op(
-            arkret_sdk::events::kinds::MEMBER_STATE,
+            arkret_sdk::events::EventKind::MEMBER_STATE,
             json!({
                 "actor_id": "did:web:alice.example",
                 "membership": "join"
@@ -188,7 +188,7 @@ mod tests {
     fn invite_acceptance_ref_reads_canonical_invite_ref() {
         let invite_id = "ak:invite:01904100-0000-7000-8000-000000000003";
         let operation = op(
-            arkret_sdk::events::kinds::MEMBER_STATE,
+            arkret_sdk::events::EventKind::MEMBER_STATE,
             json!({
                 "actor_id": "did:web:bob.example",
                 "membership": "join",
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn realm_update_reads_patch_title_without_realm_id_fallback() {
         let operation = op(
-            arkret_sdk::events::kinds::REALM_UPDATE,
+            arkret_sdk::events::EventKind::REALM_UPDATE,
             json!({
                 "action": "update",
                 "patch": {

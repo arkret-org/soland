@@ -13,7 +13,7 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::kinds::INVITE_THIRD_PARTY)
+            != Some(arkret_sdk::events::EventKind::INVITE_THIRD_PARTY)
         {
             return ProjectionEffect::Ignored;
         }
@@ -122,7 +122,7 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::kinds::INVITE_CLAIM)
+            != Some(arkret_sdk::events::EventKind::INVITE_CLAIM)
         {
             return ProjectionEffect::Ignored;
         }

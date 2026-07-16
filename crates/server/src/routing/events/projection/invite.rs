@@ -190,7 +190,7 @@ pub(super) async fn project_invite_cancel_operation(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_string(operation) != arkret_sdk::events::kinds::INVITE_CANCEL {
+    if kinds::canonical_kind_string(operation) != arkret_sdk::events::EventKind::INVITE_CANCEL {
         return;
     }
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Cancel).await;
@@ -201,7 +201,7 @@ pub(super) async fn project_invite_revoke_operation(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_string(operation) != arkret_sdk::events::kinds::INVITE_REVOKE {
+    if kinds::canonical_kind_string(operation) != arkret_sdk::events::EventKind::INVITE_REVOKE {
         return;
     }
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Revoke).await;

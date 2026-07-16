@@ -57,7 +57,7 @@ pub(super) fn invite_create_actor_is_inviter(
 /// `check_membership_join_admission` / `check_membership_application_admission`
 /// later in the submit pipeline, not here.
 pub(super) fn member_self_knock(object: &serde_json::Map<String, Value>, actor: &str) -> bool {
-    if object.get("kind").and_then(Value::as_str) != Some(arkret_sdk::events::kinds::MEMBER_STATE) {
+    if object.get("kind").and_then(Value::as_str) != Some(arkret_sdk::events::EventKind::MEMBER_STATE) {
         return false;
     }
     let Some(payload) = object.get("payload") else {
@@ -96,7 +96,7 @@ pub(super) async fn member_join_accepts_pending_invite(
     // invitee can close their own invite through either path without first
     // being a realm member. Previously only (1) was exempt, so a spec-correct
     // `ak.invite.accept` from the invitee was rejected with `capability_denied`.
-    let is_member_state_join = kind == Some(arkret_sdk::events::kinds::MEMBER_STATE);
+    let is_member_state_join = kind == Some(arkret_sdk::events::EventKind::MEMBER_STATE);
     let is_invite_accept = kind == Some("ak.invite.accept");
     if !is_member_state_join && !is_invite_accept {
         return false;
@@ -147,7 +147,7 @@ pub(super) async fn invitee_cancels_pending_invite(
     actor: &str,
     realm_id: &str,
 ) -> bool {
-    if object.get("kind").and_then(Value::as_str) != Some(arkret_sdk::events::kinds::INVITE_CANCEL)
+    if object.get("kind").and_then(Value::as_str) != Some(arkret_sdk::events::EventKind::INVITE_CANCEL)
     {
         return false;
     }

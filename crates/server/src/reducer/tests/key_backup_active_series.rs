@@ -51,7 +51,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             active_series_payload(),
         ),
@@ -107,7 +107,7 @@ fn key_backup_active_series_requires_complete_signed_fields() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             payload,
         ),
@@ -130,7 +130,7 @@ fn key_backup_active_series_rejects_active_series_in_previous_set() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             payload,
         ),
@@ -153,7 +153,7 @@ fn key_backup_active_series_rejects_frontier_ssk_mismatch() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             payload,
         ),
@@ -176,7 +176,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
 
     let initial_gap = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             gap,
         ),
@@ -190,7 +190,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
 
     let accepted = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             active_series_payload(),
         ),
@@ -203,7 +203,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
 
     let rollback = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             active_series_payload(),
         ),

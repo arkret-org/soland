@@ -11,7 +11,7 @@
 //! These replace the dev-only `admin/{resource}` snapshot collection for
 //! those resources (the collection keeps serving the surfaces that have not
 //! been productionised yet). Wire contract lives in
-//! `arkret_core::models::admin` — see that module for the frozen rules.
+//! `arkret_sdk::models::admin` — see that module for the frozen rules.
 //!
 //! Pagination: rows are sorted by a stable key (actors: DID; capabilities:
 //! grant id; devices: device id; audit: newest first, audit id as tiebreak).

@@ -312,9 +312,9 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
         project_invite_claim_operation(state, operation).await;
     } else if kinds::canonical_kind_string(operation) == "ak.invite.accept" {
         project_invite_accept_operation(state, origin, operation).await;
-    } else if kinds::canonical_kind_string(operation) == arkret_sdk::events::kinds::INVITE_CANCEL {
+    } else if kinds::canonical_kind_string(operation) == arkret_sdk::events::EventKind::INVITE_CANCEL {
         project_invite_cancel_operation(state, origin, operation).await;
-    } else if kinds::canonical_kind_string(operation) == arkret_sdk::events::kinds::INVITE_REVOKE {
+    } else if kinds::canonical_kind_string(operation) == arkret_sdk::events::EventKind::INVITE_REVOKE {
         project_invite_revoke_operation(state, origin, operation).await;
     } else if kinds::operation_is_membership(operation)
         || kinds::operation_is_realm_lifecycle(operation)

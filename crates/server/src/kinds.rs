@@ -17,7 +17,7 @@ pub const MLS_REDUCER_PROFILE_V1: &str = "ak.reducer.v1";
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
 // COT-06-004: Realm default-Strand pointer event. The canonical event kind
-// constant is exposed as `arkret_sdk::events::kinds::REALM_SET_DEFAULT_STRAND`.
+// constant is exposed as `arkret_sdk::events::EventKind::REALM_SET_DEFAULT_STRAND`.
 
 // Morph lifecycle (round 13). Same shape as Strand — no dedicated tombstone.
 // `ak.field.position.move` and `ak.field.position.reorder` were removed in
@@ -266,7 +266,7 @@ pub fn canonical_kind_string(operation: &Operation) -> String {
 }
 
 pub fn operation_is_message_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::kinds::MESSAGE_CREATE)
+    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::EventKind::MESSAGE_CREATE)
 }
 
 pub fn operation_is_redaction(operation: &Operation) -> bool {
@@ -284,15 +284,15 @@ pub fn operation_is_invite(operation: &Operation) -> bool {
 }
 
 pub fn operation_is_invite_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::kinds::INVITE_CREATE)
+    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::EventKind::INVITE_CREATE)
 }
 
 pub fn operation_is_invite_claim(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::kinds::INVITE_CLAIM)
+    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::EventKind::INVITE_CLAIM)
 }
 
 pub fn operation_is_invite_third_party(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::kinds::INVITE_THIRD_PARTY)
+    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::EventKind::INVITE_THIRD_PARTY)
 }
 
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {

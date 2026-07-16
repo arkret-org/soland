@@ -144,7 +144,7 @@ async fn device_generation_event_seal_context(
     let bootstrap = records
         .iter()
         .filter(|record| {
-            record.kind == arkret_sdk::events::kinds::REALM_CREATE
+            record.kind == arkret_sdk::events::EventKind::REALM_CREATE
                 && record
                     .envelope
                     .pointer("/payload/object/fields/purpose")
@@ -195,7 +195,7 @@ async fn device_generation_event_seal_context(
         .iter()
         .filter(|record| {
             record.actor_id == principal_id
-                && record.kind == arkret_sdk::events::kinds::DEVICE_AUTHORIZE
+                && record.kind == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
                 && record
                     .envelope
                     .get("prev_refs")

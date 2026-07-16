@@ -62,7 +62,7 @@ impl ProjectionState {
                 Ok(payload) => payload,
                 Err(_) => {
                     return ProjectionEffect::Rejected {
-                        reason: arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                        reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                     };
                 }
             };
@@ -92,8 +92,9 @@ impl ProjectionState {
             // other failure (bad proof, unresolved delegation, status mismatch)
             // fails closed and is not stored.
             let reason = organization_rejection_reason(&error.to_string());
-            let window_only = (reason == arkret_sdk::REASON_TTL_EXPIRED && payload.is_expired(now))
-                || (reason == arkret_sdk::ERROR_CODE_FAILED_PRECONDITION
+            let window_only = (reason == arkret_sdk::ReasonCode::TTL_EXPIRED
+                && payload.is_expired(now))
+                || (reason == arkret_sdk::ErrorCode::FAILED_PRECONDITION
                     && payload.is_not_yet_valid(now));
             if !window_only {
                 tracing::warn!(
@@ -270,7 +271,7 @@ fn organization_rejection_reason(message: &str) -> String {
             return code.to_owned();
         }
     }
-    arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned()
+    arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned()
 }
 
 /// Audit-only digest of the proof material — never the raw signature bytes.
@@ -354,7 +355,7 @@ mod tests {
         Operation::create(
             OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
-            arkret_sdk::events::kinds::REALM_ORGANIZATION,
+            arkret_sdk::events::EventKind::REALM_ORGANIZATION,
             payload,
         )
     }
@@ -592,7 +593,7 @@ mod tests {
         assert!(matches!(
             effect,
             ProjectionEffect::Rejected { ref reason }
-                if reason == arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION
+                if reason == arkret_sdk::ErrorCode::SCHEMA_VIOLATION
         ));
     }
 

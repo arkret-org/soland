@@ -164,7 +164,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let description = ServiceDescribe {
         service_id,
         trust_domain,
-        service_type: "directory_service".to_owned(),
+        service_type: arkret_sdk::ServiceType::DirectoryService,
         protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),
         supported_profiles: supported_profiles.clone(),
         supported_operations: DIRECTORY_SUPPORTED_OPERATIONS

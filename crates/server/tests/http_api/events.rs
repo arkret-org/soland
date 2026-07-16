@@ -631,7 +631,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     let typed_realm = RealmId::new(realm_id.clone()).unwrap();
     let actor = Did::new("did:web:alice.example").unwrap();
     let mut event = arkret_sdk::Event::new(
-        arkret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::EventKind::MEMBER_STATE,
         typed_realm.clone(),
         actor,
         1,

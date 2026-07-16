@@ -61,7 +61,7 @@ pub(super) async fn set_read_cursor(
         OperationId::new(operation_id.clone())
             .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?,
         realm_id.clone(),
-        arkret_sdk::events::kinds::READ_CURSOR_ADVANCE,
+        arkret_sdk::events::EventKind::READ_CURSOR_ADVANCE,
         payload,
     );
     operation.created_at = read_at;

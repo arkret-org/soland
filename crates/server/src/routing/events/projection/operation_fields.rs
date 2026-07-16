@@ -67,10 +67,10 @@ pub(super) fn operation_realm_history_visibility(operation: &Operation) -> Optio
 
 pub(super) fn operation_realm_history_sharing_policy(operation: &Operation) -> Option<Value> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY) => {
+        Some(arkret_sdk::events::EventKind::REALM_HISTORY_SHARING_POLICY) => {
             operation.payload.get("value").cloned()
         }
-        Some(arkret_sdk::events::kinds::REALM_CREATE) => operation
+        Some(arkret_sdk::events::EventKind::REALM_CREATE) => operation
             .payload
             .get("object")
             .and_then(|object| object.get("history_sharing_policy"))
@@ -81,10 +81,10 @@ pub(super) fn operation_realm_history_sharing_policy(operation: &Operation) -> O
 
 pub(super) fn operation_realm_preview_policy(operation: &Operation) -> Option<Value> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_sdk::events::kinds::REALM_PREVIEW_POLICY) => {
+        Some(arkret_sdk::events::EventKind::REALM_PREVIEW_POLICY) => {
             operation.payload.get("value").cloned()
         }
-        Some(arkret_sdk::events::kinds::REALM_CREATE) => operation
+        Some(arkret_sdk::events::EventKind::REALM_CREATE) => operation
             .payload
             .get("object")
             .and_then(|object| object.get("preview_policy"))
@@ -95,10 +95,10 @@ pub(super) fn operation_realm_preview_policy(operation: &Operation) -> Option<Va
 
 pub(super) fn operation_realm_asset_privacy_policy(operation: &Operation) -> Option<Value> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_sdk::events::kinds::REALM_ASSET_PRIVACY_POLICY) => {
+        Some(arkret_sdk::events::EventKind::REALM_ASSET_PRIVACY_POLICY) => {
             operation.payload.get("value").cloned()
         }
-        Some(arkret_sdk::events::kinds::REALM_CREATE) => operation
+        Some(arkret_sdk::events::EventKind::REALM_CREATE) => operation
             .payload
             .get("object")
             .and_then(|object| object.get("asset_privacy_policy"))

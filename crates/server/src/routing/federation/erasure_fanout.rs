@@ -93,7 +93,7 @@ pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
     let operation = Operation::create(
         operation_id,
         realm_id,
-        arkret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT,
+        arkret_sdk::events::EventKind::AUDIT_ERASURE_RECEIPT,
         receipt.payload,
     );
     fanout_erasure_receipt_operation(state, &operation).await;
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(body["destination"], "did:web:peer1.example");
         assert_eq!(
             body["operations"][0]["object_type"],
-            arkret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT
+            arkret_sdk::events::EventKind::AUDIT_ERASURE_RECEIPT
         );
     }
 

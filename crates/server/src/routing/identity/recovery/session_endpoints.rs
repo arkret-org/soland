@@ -1161,7 +1161,7 @@ pub(super) async fn recovery_session_complete(
             AppError::conflict("recovery authorization Event is not accepted")
                 .with_wire_code("recovery_control_event_not_found")
         })?;
-    if authorization_record.kind != arkret_sdk::events::kinds::DEVICE_AUTHORIZE {
+    if authorization_record.kind != arkret_sdk::events::EventKind::DEVICE_AUTHORIZE {
         return Err(
             AppError::conflict("recovery authorization Event has the wrong kind")
                 .with_wire_code("recovery_control_event_kind_mismatch"),

@@ -48,7 +48,7 @@ fn realm_key_share_dispatch_projects_effect() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::REALM_KEY_SHARE,
+            arkret_sdk::events::EventKind::REALM_KEY_SHARE,
             REALM,
             realm_key_share_payload(realm_scope(REALM)),
         ),
@@ -77,7 +77,7 @@ fn realm_key_share_dispatch_accepts_projection_metadata() {
     payload["hlc"] = json!("2026-07-05T00:00:00Z/node/1");
 
     let effect = state.apply(
-        &make_operation(arkret_sdk::events::kinds::REALM_KEY_SHARE, REALM, payload),
+        &make_operation(arkret_sdk::events::EventKind::REALM_KEY_SHARE, REALM, payload),
         &hlc,
     );
 
@@ -108,7 +108,7 @@ fn realm_key_share_requires_material() {
         .remove("encrypted_key_ref");
 
     let effect = state.apply(
-        &make_operation(arkret_sdk::events::kinds::REALM_KEY_SHARE, REALM, payload),
+        &make_operation(arkret_sdk::events::EventKind::REALM_KEY_SHARE, REALM, payload),
         &hlc,
     );
 
@@ -126,7 +126,7 @@ fn realm_key_share_rejects_scope_mismatch() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::REALM_KEY_SHARE,
+            arkret_sdk::events::EventKind::REALM_KEY_SHARE,
             REALM,
             realm_key_share_payload(realm_scope(OTHER_REALM)),
         ),
@@ -149,7 +149,7 @@ fn realm_key_share_rejects_inverted_epoch_range() {
     payload["key_scope"]["to_epoch"] = json!(3);
 
     let effect = state.apply(
-        &make_operation(arkret_sdk::events::kinds::REALM_KEY_SHARE, REALM, payload),
+        &make_operation(arkret_sdk::events::EventKind::REALM_KEY_SHARE, REALM, payload),
         &hlc,
     );
 
@@ -163,7 +163,7 @@ fn realm_key_share_rejects_inverted_epoch_range() {
 #[test]
 fn realm_key_share_is_registered_in_default_apply_registry() {
     assert!(
-        default_apply_registry().contains_key(arkret_sdk::events::kinds::REALM_KEY_SHARE),
+        default_apply_registry().contains_key(arkret_sdk::events::EventKind::REALM_KEY_SHARE),
         "ak.realm_key.share should dispatch through the reducer registry"
     );
 }

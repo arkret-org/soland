@@ -46,8 +46,8 @@ fn terminal_realm_blocks_non_audit_kind() {
 #[test]
 fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
     assert!(frozen_realm_check(true, "ak.message.create").is_some());
-    assert!(frozen_realm_check(true, arkret_sdk::events::kinds::REALM_FREEZE).is_none());
-    assert!(frozen_realm_check(true, arkret_sdk::events::kinds::REALM_DESTROY).is_none());
+    assert!(frozen_realm_check(true, arkret_sdk::events::EventKind::REALM_FREEZE).is_none());
+    assert!(frozen_realm_check(true, arkret_sdk::events::EventKind::REALM_DESTROY).is_none());
     assert!(frozen_realm_check(true, "ak.audit.accessed").is_none());
     assert!(frozen_realm_check(false, "ak.message.create").is_none());
 }
@@ -240,7 +240,7 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
         &req.service_binding_ref,
     )
     .unwrap_err();
-    assert_eq!(err.0, arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    assert_eq!(err.0, arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
 }
 
 #[test]
@@ -266,7 +266,7 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
         &req.service_binding_ref,
     )
     .unwrap_err();
-    assert_eq!(err.0, arkret_sdk::REASON_REDUCER_PROFILE_MISMATCH);
+    assert_eq!(err.0, arkret_sdk::ReasonCode::REDUCER_PROFILE_MISMATCH);
 }
 
 #[test]

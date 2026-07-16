@@ -11,7 +11,7 @@ fn consent_revoke_empty_observed_dots_rejected() {
         "observed_dots": [],
     }))
     .unwrap_err();
-    assert_eq!(err.0, arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    assert_eq!(err.0, arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
 }
 
 #[test]

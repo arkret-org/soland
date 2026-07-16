@@ -73,7 +73,7 @@ pub(super) fn agent_participation_ceiling_change(
             .map(ToOwned::to_owned)
     };
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS) => {
+        Some(arkret_sdk::events::EventKind::REALM_POLICY_COMPONENTS) => {
             let value = find(true)?;
             Some((
                 "realm",
@@ -82,8 +82,8 @@ pub(super) fn agent_participation_ceiling_change(
                 Vec::new(),
             ))
         }
-        Some(arkret_sdk::events::kinds::CIRCLE_CREATE)
-        | Some(arkret_sdk::events::kinds::CIRCLE_UPDATE) => {
+        Some(arkret_sdk::events::EventKind::CIRCLE_CREATE)
+        | Some(arkret_sdk::events::EventKind::CIRCLE_UPDATE) => {
             let value = find(false)?;
             let circle_uuid = ap_uuid_part(&id_of("circle_id")?).to_owned();
             Some((
@@ -93,8 +93,8 @@ pub(super) fn agent_participation_ceiling_change(
                 vec![format!("realm:{realm_uuid}")],
             ))
         }
-        Some(arkret_sdk::events::kinds::STRAND_CREATE)
-        | Some(arkret_sdk::events::kinds::STRAND_UPDATE) => {
+        Some(arkret_sdk::events::EventKind::STRAND_CREATE)
+        | Some(arkret_sdk::events::EventKind::STRAND_UPDATE) => {
             let value = find(false)?;
             let strand_uuid = ap_uuid_part(&id_of("strand_id")?).to_owned();
             Some((
@@ -420,7 +420,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
         approval_nonce,
         expires_at,
     ) {
-        return Err(arkret_sdk::error::REASON_APPROVAL_NONCE_REUSED);
+        return Err(arkret_sdk::error::ReasonCode::APPROVAL_NONCE_REUSED);
     }
     Ok(())
 }

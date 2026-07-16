@@ -364,7 +364,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::kinds::MEMBER_STATE)
+            != Some(arkret_sdk::events::EventKind::MEMBER_STATE)
             || operation.payload.get("membership").and_then(Value::as_str) != Some("join")
         {
             return Ok(());

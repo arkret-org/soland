@@ -781,7 +781,7 @@ async fn state_events_for_realm(
     let mut newest_position = after_position;
     let mut state_entries = Vec::new();
     for event in events {
-        if event.event_kind == arkret_sdk::events::kinds::MESSAGE_CREATE {
+        if event.event_kind == arkret_sdk::events::EventKind::MESSAGE_CREATE {
             continue;
         }
         let position = projection_event_position(&event);
@@ -935,7 +935,7 @@ async fn account_data_events(
         .unwrap_or_default()
     {
         if record.actor_id != session.actor
-            || record.kind != arkret_sdk::events::kinds::ACCOUNT_DATA_SET
+            || record.kind != arkret_sdk::events::EventKind::ACCOUNT_DATA_SET
         {
             continue;
         }
@@ -1202,7 +1202,7 @@ fn projection_event_scope_circle_id(
     projection: &ProjectionState,
     event: &ProjectionEventRecord,
 ) -> Option<String> {
-    if event.event_kind == arkret_sdk::events::kinds::MESSAGE_CREATE {
+    if event.event_kind == arkret_sdk::events::EventKind::MESSAGE_CREATE {
         return event
             .payload
             .get("strand_id")

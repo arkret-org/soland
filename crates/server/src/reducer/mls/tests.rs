@@ -538,7 +538,7 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { reason }
-            if reason == REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
+            if reason == arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
     ));
 }
 
@@ -594,7 +594,7 @@ fn welcome_enqueue_rejects_missing_claim_envelope() {
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { reason }
-            if reason == REASON_KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
+            if reason == arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
     ));
     assert!(state.mls_welcomes.is_empty());
 }
@@ -1049,7 +1049,7 @@ fn commit_rejects_policy_root_mismatch() {
     );
     match effect {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, REASON_GOVERNANCE_BINDING_MISMATCH);
+            assert_eq!(reason, arkret_sdk::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
         }
         other => panic!("expected governance_binding_mismatch, got {other:?}"),
     }
@@ -1108,7 +1108,7 @@ fn concurrent_commits_contend_then_resolve() {
     );
     assert!(matches!(
         pending,
-        ProjectionEffect::Rejected { reason } if reason == REASON_DECRYPTION_PENDING
+        ProjectionEffect::Rejected { reason } if reason == arkret_sdk::ReasonCode::DECRYPTION_PENDING
     ));
 
     // A resolving commit at the current epoch advances and clears ⊥. The

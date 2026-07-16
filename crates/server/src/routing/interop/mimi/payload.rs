@@ -26,7 +26,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         + 1;
     let mut envelope = json!({
         "event_id": event_id,
-        "kind": arkret_sdk::events::kinds::MESSAGE_CREATE,
+        "kind": arkret_sdk::events::EventKind::MESSAGE_CREATE,
         "realm_id": realm_id,
         "actor_id": actor_id,
         "actor_seq": actor_seq,
@@ -51,7 +51,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         actor_id: actor_id.to_owned(),
         actor_seq,
         realm_id: Some(realm_id.to_owned()),
-        kind: arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
+        kind: arkret_sdk::events::EventKind::MESSAGE_CREATE.to_owned(),
         schema_id: EVENT_SCHEMA_ID.to_owned(),
         canonical_digest,
         canonical_bytes,

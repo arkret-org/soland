@@ -8,7 +8,7 @@ pub(super) fn validate_control_move_seal_basis(
         .get("effects")
         .and_then(Value::as_array)
         .is_some_and(|effects| !effects.is_empty());
-    if object.get("kind").and_then(Value::as_str) == Some(arkret_sdk::events::kinds::REALM_CREATE) {
+    if object.get("kind").and_then(Value::as_str) == Some(arkret_sdk::events::EventKind::REALM_CREATE) {
         if object.contains_key("seal_ref")
             || object.contains_key("auth_context")
             || object.contains_key("seal_basis")
@@ -177,17 +177,17 @@ fn cba_cell_family_plane(family: &str) -> Result<CbaEffectPlane, EventValidation
 pub(super) fn is_realm_bootstrap_followup_kind(kind: &str) -> bool {
     matches!(
         kind,
-        arkret_sdk::events::kinds::MEMBER_STATE
-            | arkret_sdk::events::kinds::REALM_HISTORY_VISIBILITY
+        arkret_sdk::events::EventKind::MEMBER_STATE
+            | arkret_sdk::events::EventKind::REALM_HISTORY_VISIBILITY
             // `restricted` history_visibility bootstraps MUST carry a
             // ak.realm.history_sharing_policy in the same ordered batch
             // (payload_shape.rs `history_sharing_policy_missing`); it is a
             // genesis-time policy Control Move exactly like the siblings here.
-            | arkret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY
-            | arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS
-            | arkret_sdk::events::kinds::REALM_DISCOVERY
-            | arkret_sdk::events::kinds::REALM_JOIN_RULE
-            | arkret_sdk::events::kinds::REALM_PLAINTEXT_VISIBLE_SERVICES
+            | arkret_sdk::events::EventKind::REALM_HISTORY_SHARING_POLICY
+            | arkret_sdk::events::EventKind::REALM_POLICY_COMPONENTS
+            | arkret_sdk::events::EventKind::REALM_DISCOVERY
+            | arkret_sdk::events::EventKind::REALM_JOIN_RULE
+            | arkret_sdk::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
     )
 }
 

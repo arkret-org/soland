@@ -26,7 +26,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
     let effect = state.apply(
         &op(
-            arkret_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY,
+            arkret_sdk::events::EventKind::REALM_DELIVERY_BINDING_POLICY,
             REALM_A,
             payload,
         ),
@@ -40,7 +40,7 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
 
 fn join_op(member: &str, binding: Value) -> Operation {
     op(
-        arkret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::EventKind::MEMBER_STATE,
         REALM_A,
         json!({
             "actor_id": member,

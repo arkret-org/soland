@@ -9,7 +9,7 @@ pub(super) fn validate_pre_schema_wire_shape(
     kind: &str,
     payload: &Value,
 ) -> Result<(), EventValidationError> {
-    if kind == arkret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE {
+    if kind == arkret_sdk::events::EventKind::MEMBER_IDENTITY_UPDATE {
         crate::wire_validators::member_identity::validate_member_identity_update_payload(payload)
             .map_err(wire_rejection_to_validation_error)?;
     }
@@ -108,7 +108,7 @@ pub(super) fn validate_realm_create_policy_constraints(
     payload: &Value,
     is_self_principal_pcr_bootstrap_create: bool,
 ) -> Result<(), EventValidationError> {
-    if kind != arkret_sdk::events::kinds::REALM_CREATE {
+    if kind != arkret_sdk::events::EventKind::REALM_CREATE {
         return Ok(());
     }
     let Some(object) = payload.get("object").and_then(Value::as_object) else {
@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn ordinary_restricted_realm_still_requires_history_sharing_policy() {
         let error = validate_realm_create_policy_constraints(
-            arkret_sdk::events::kinds::REALM_CREATE,
+            arkret_sdk::events::EventKind::REALM_CREATE,
             &restricted_realm_create_payload(),
             false,
         )
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn recognized_self_principal_pcr_does_not_require_a_third_bootstrap_slot() {
         validate_realm_create_policy_constraints(
-            arkret_sdk::events::kinds::REALM_CREATE,
+            arkret_sdk::events::EventKind::REALM_CREATE,
             &restricted_realm_create_payload(),
             true,
         )

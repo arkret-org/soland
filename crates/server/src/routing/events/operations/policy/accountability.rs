@@ -226,9 +226,9 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
     let is_message_or_reaction = matches!(
         kind,
         Some(
-            arkret_sdk::events::kinds::MESSAGE_CREATE
-                | arkret_sdk::events::kinds::REACTION_ADD
-                | arkret_sdk::events::kinds::REACTION_REMOVE
+            arkret_sdk::events::EventKind::MESSAGE_CREATE
+                | arkret_sdk::events::EventKind::REACTION_ADD
+                | arkret_sdk::events::EventKind::REACTION_REMOVE
         )
     );
     if !is_message_or_reaction {

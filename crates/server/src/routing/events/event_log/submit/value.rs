@@ -112,9 +112,9 @@ pub(super) async fn submit_event_value_with_context(
             format!("events store unavailable: {error}"),
         )
     })?;
-    if parsed.kind == arkret_sdk::events::kinds::REALM_CREATE
+    if parsed.kind == arkret_sdk::events::EventKind::REALM_CREATE
         && existing_records.iter().any(|record| {
-            record.kind == arkret_sdk::events::kinds::REALM_CREATE
+            record.kind == arkret_sdk::events::EventKind::REALM_CREATE
                 && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
         })
     {
@@ -555,7 +555,7 @@ pub(super) async fn submit_event_value_with_context(
     // MUST emit a `schema_migration_breaking` audit record carrying issuer,
     // from/to schema sets, compatibility class, the capability action used, and
     // the opt-in profile ref. (additive migrations need no audit-grade record.)
-    if parsed.kind == arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE {
+    if parsed.kind == arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE {
         let migrate_payload = envelope.get("payload");
         let compatibility_class = migrate_payload
             .and_then(|payload| payload.get("compatibility_class"))
@@ -603,14 +603,14 @@ pub(super) async fn submit_event_value_with_context(
     let scope_strand_id: Option<String> = envelope
         .get("payload")
         .and_then(|payload| match parsed.kind.as_str() {
-            arkret_sdk::events::kinds::MESSAGE_CREATE
-            | arkret_sdk::events::kinds::STRAND_MOVE
-            | arkret_sdk::events::kinds::STRAND_REORDER => {
+            arkret_sdk::events::EventKind::MESSAGE_CREATE
+            | arkret_sdk::events::EventKind::STRAND_MOVE
+            | arkret_sdk::events::EventKind::STRAND_REORDER => {
                 payload.get("strand_id").and_then(Value::as_str)
             }
-            arkret_sdk::events::kinds::STRAND_UPDATE
-            | arkret_sdk::events::kinds::STRAND_ARCHIVE
-            | arkret_sdk::events::kinds::STRAND_RESTORE => {
+            arkret_sdk::events::EventKind::STRAND_UPDATE
+            | arkret_sdk::events::EventKind::STRAND_ARCHIVE
+            | arkret_sdk::events::EventKind::STRAND_RESTORE => {
                 payload.get("target_ref").and_then(Value::as_str)
             }
             _ => None,
@@ -655,7 +655,7 @@ pub(super) async fn submit_event_value_with_context(
         })
         .await
     {
-        if parsed.kind == arkret_sdk::events::kinds::REALM_CREATE
+        if parsed.kind == arkret_sdk::events::EventKind::REALM_CREATE
             && persistence_error_is_realm_already_exists(&error)
         {
             return Err(realm_already_exists_error());

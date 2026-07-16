@@ -41,7 +41,7 @@ fn stamp_projection_operation_received_at(
 ) {
     if !matches!(
         operation.object_type.as_str(),
-        arkret_sdk::events::kinds::MEMBER_STATE | arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE
+        arkret_sdk::events::EventKind::MEMBER_STATE | arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
     ) {
         return;
     }
@@ -291,7 +291,7 @@ pub(super) async fn submit_event_batch_outcome(
                     duplicate.push(response.event_id);
                 }
                 if !response.duplicate
-                    && kind.as_deref() == Some(arkret_sdk::events::kinds::REALM_CREATE)
+                    && kind.as_deref() == Some(arkret_sdk::events::EventKind::REALM_CREATE)
                     && let (Some(realm_id), Some(actor_id)) = (realm_id, actor_id)
                 {
                     realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
@@ -778,9 +778,9 @@ mod received_at_stamp_tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut device_authorize = operation_for_kind("ak.device.authorize", 1);
-        let mut member_state = operation_for_kind(arkret_sdk::events::kinds::MEMBER_STATE, 2);
+        let mut member_state = operation_for_kind(arkret_sdk::events::EventKind::MEMBER_STATE, 2);
         let mut circle_member_state =
-            operation_for_kind(arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE, 3);
+            operation_for_kind(arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE, 3);
 
         stamp_projection_operation_received_at(&mut device_authorize, received_at);
         stamp_projection_operation_received_at(&mut member_state, received_at);

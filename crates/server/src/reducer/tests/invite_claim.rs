@@ -79,7 +79,7 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value
 fn seed_invite(state: &mut ProjectionState, hlc: &ServerHlc, expires_at: &str) {
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::INVITE_THIRD_PARTY,
+            arkret_sdk::events::EventKind::INVITE_THIRD_PARTY,
             REALM,
             third_party_invite(expires_at),
         ),
@@ -94,7 +94,7 @@ fn seed_invite(state: &mut ProjectionState, hlc: &ServerHlc, expires_at: &str) {
 fn seed_realm_policy_allowlist(state: &mut ProjectionState, hlc: &ServerHlc, services: Vec<&str>) {
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::REALM_POLICY_COMPONENTS,
+            arkret_sdk::events::EventKind::REALM_POLICY_COMPONENTS,
             REALM,
             json!({
                 "third_party_invite_verification_services": services
@@ -117,7 +117,7 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::INVITE_CLAIM,
+            arkret_sdk::events::EventKind::INVITE_CLAIM,
             REALM,
             claim_payload("nonce-0000000001", TOKEN_COMMITMENT, SERVICE),
         ),
@@ -166,7 +166,7 @@ fn invite_claim_rejects_reused_claim_nonce() {
     assert!(!matches!(
         state.apply(
             &make_operation(
-                arkret_sdk::events::kinds::INVITE_CLAIM,
+                arkret_sdk::events::EventKind::INVITE_CLAIM,
                 REALM,
                 claim_payload("nonce-0000000001", TOKEN_COMMITMENT, SERVICE),
             ),
@@ -177,7 +177,7 @@ fn invite_claim_rejects_reused_claim_nonce() {
 
     let replay = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::INVITE_CLAIM,
+            arkret_sdk::events::EventKind::INVITE_CLAIM,
             REALM,
             claim_payload("nonce-0000000001", TOKEN_COMMITMENT, SERVICE),
         ),
@@ -197,7 +197,7 @@ fn invite_claim_records_nonce_before_rejecting_bad_commitment() {
 
     let rejected = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::INVITE_CLAIM,
+            arkret_sdk::events::EventKind::INVITE_CLAIM,
             REALM,
             claim_payload(
                 "nonce-bad-commitment",
@@ -225,7 +225,7 @@ fn invite_claim_rechecks_verification_service_authorization() {
 
     let rejected = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::INVITE_CLAIM,
+            arkret_sdk::events::EventKind::INVITE_CLAIM,
             REALM,
             claim_payload(
                 "nonce-service-0001",
@@ -249,7 +249,7 @@ fn invite_claim_rejects_invite_bound_service_without_current_policy_allowlist() 
 
     let rejected = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::INVITE_CLAIM,
+            arkret_sdk::events::EventKind::INVITE_CLAIM,
             REALM,
             claim_payload("nonce-no-policy-01", TOKEN_COMMITMENT, SERVICE),
         ),
@@ -274,7 +274,7 @@ fn invite_claim_rejects_when_current_policy_no_longer_allows_bound_service() {
 
     let rejected = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::INVITE_CLAIM,
+            arkret_sdk::events::EventKind::INVITE_CLAIM,
             REALM,
             claim_payload("nonce-policy-rotated", TOKEN_COMMITMENT, SERVICE),
         ),
@@ -292,7 +292,7 @@ fn expired_invite_claim_cleans_active_token_material() {
     let hlc = ServerHlc::new("invite-claim-expiry");
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::INVITE_THIRD_PARTY,
+            arkret_sdk::events::EventKind::INVITE_THIRD_PARTY,
             REALM,
             third_party_invite("2000-01-01T00:00:00Z"),
         ),
@@ -309,7 +309,7 @@ fn expired_invite_claim_cleans_active_token_material() {
 
     let rejected = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::INVITE_CLAIM,
+            arkret_sdk::events::EventKind::INVITE_CLAIM,
             REALM,
             claim_payload("nonce-expired-001", TOKEN_COMMITMENT, SERVICE),
         ),

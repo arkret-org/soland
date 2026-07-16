@@ -472,7 +472,7 @@ async fn post_circle(
     let mut operation = Operation::create(
         op_id,
         realm_scope,
-        arkret_sdk::events::kinds::CIRCLE_CREATE,
+        arkret_sdk::events::EventKind::CIRCLE_CREATE,
         payload,
     );
     operation.created_at = created_at;
@@ -587,7 +587,7 @@ async fn post_circle_member(
     let operation = Operation::create(
         op_id,
         realm_scope,
-        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
@@ -642,7 +642,7 @@ async fn delete_circle_member(
     let operation = Operation::create(
         op_id,
         realm_scope,
-        arkret_sdk::events::kinds::CIRCLE_MEMBER_STATE,
+        arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
@@ -759,7 +759,7 @@ async fn post_circle_archive(
         req,
         aa,
         circle_id.into_inner(),
-        arkret_sdk::events::kinds::CIRCLE_ARCHIVE,
+        arkret_sdk::events::EventKind::CIRCLE_ARCHIVE,
     )
     .await
 }
@@ -781,7 +781,7 @@ async fn post_circle_restore(
         req,
         aa,
         circle_id.into_inner(),
-        arkret_sdk::events::kinds::CIRCLE_RESTORE,
+        arkret_sdk::events::EventKind::CIRCLE_RESTORE,
     )
     .await
 }
@@ -803,7 +803,7 @@ async fn post_circle_tombstone(
         req,
         aa,
         circle_id.into_inner(),
-        arkret_sdk::events::kinds::CIRCLE_TOMBSTONE,
+        arkret_sdk::events::EventKind::CIRCLE_TOMBSTONE,
     )
     .await
 }
@@ -861,19 +861,19 @@ fn preflight_circle_lifecycle(
         .get(circle_id)
         .ok_or_else(|| AppError::not_found("circle not found"))?;
     let reason = match kind {
-        arkret_sdk::events::kinds::CIRCLE_ARCHIVE
+        arkret_sdk::events::EventKind::CIRCLE_ARCHIVE
             if circle.state == CircleLifecycleState::Active =>
         {
             None
         }
-        arkret_sdk::events::kinds::CIRCLE_ARCHIVE => Some("circle_not_active"),
-        arkret_sdk::events::kinds::CIRCLE_RESTORE
+        arkret_sdk::events::EventKind::CIRCLE_ARCHIVE => Some("circle_not_active"),
+        arkret_sdk::events::EventKind::CIRCLE_RESTORE
             if circle.state == CircleLifecycleState::Archived =>
         {
             None
         }
-        arkret_sdk::events::kinds::CIRCLE_RESTORE => Some("circle_not_archived"),
-        arkret_sdk::events::kinds::CIRCLE_TOMBSTONE
+        arkret_sdk::events::EventKind::CIRCLE_RESTORE => Some("circle_not_archived"),
+        arkret_sdk::events::EventKind::CIRCLE_TOMBSTONE
             if matches!(
                 circle.state,
                 CircleLifecycleState::Active | CircleLifecycleState::Archived
@@ -881,7 +881,7 @@ fn preflight_circle_lifecycle(
         {
             None
         }
-        arkret_sdk::events::kinds::CIRCLE_TOMBSTONE => Some("circle_already_terminal"),
+        arkret_sdk::events::EventKind::CIRCLE_TOMBSTONE => Some("circle_already_terminal"),
         _ => None,
     };
     match reason {
@@ -1029,7 +1029,7 @@ mod tests {
 
         arkret_sdk::schema::event_payload_validator_catalog()
             .unwrap()
-            .validate_payload(arkret_sdk::events::kinds::CIRCLE_CREATE, &payload)
+            .validate_payload(arkret_sdk::events::EventKind::CIRCLE_CREATE, &payload)
             .unwrap();
         assert!(payload.get("sender").is_none());
 

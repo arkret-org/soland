@@ -174,14 +174,14 @@ pub(in crate::routing) fn projection_operation_from_event(
     // lives on the envelope, not the payload, so surface it on the projection
     // operation for this kind (scoped to avoid changing other reducers' payload
     // shape).
-    if parsed.kind == arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE
+    if parsed.kind == arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE
         && let Some(requirements) = envelope.get("requirements")
     {
         payload_object
             .entry("requirements".to_owned())
             .or_insert_with(|| requirements.clone());
     }
-    if parsed.kind == arkret_sdk::events::kinds::RELATION_CREATE {
+    if parsed.kind == arkret_sdk::events::EventKind::RELATION_CREATE {
         normalize_relation_create_payload(payload_object, parsed);
     }
     if let Some(target_ref) = payload_object
@@ -224,7 +224,7 @@ pub(in crate::routing) fn projection_operation_from_event(
             .entry("actor_seq".to_owned())
             .or_insert_with(|| Value::from(parsed.actor_seq));
     }
-    if parsed.kind == arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE {
+    if parsed.kind == arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE {
         if let Some(authorization_ref) = parsed.authorized_refs.first() {
             payload_object
                 .entry("authorization_ref".to_owned())
@@ -254,7 +254,7 @@ pub(in crate::routing) fn projection_operation_from_event(
             .entry("effects".to_owned())
             .or_insert_with(|| effects.clone());
     }
-    if parsed.kind == arkret_sdk::events::kinds::AGENT_KEY_AUTHORIZE {
+    if parsed.kind == arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE {
         payload_object.insert(
             "accepted_event_id".to_owned(),
             Value::String(parsed.event_id.clone()),
@@ -376,7 +376,7 @@ mod accepted_event_id_projection_tests {
     #[test]
     fn accepted_event_id_is_only_projected_for_agent_key_authorize() {
         let agent_key = projection_operation_from_event(
-            &parsed(arkret_sdk::events::kinds::AGENT_KEY_AUTHORIZE),
+            &parsed(arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE),
             &json!({ "payload": { "agent_id": "did:web:agent.example", "key_id": "ak:agent_key:test" } }),
         )
         .unwrap();
@@ -389,14 +389,14 @@ mod accepted_event_id_projection_tests {
         );
 
         let device_authorize = projection_operation_from_event(
-            &parsed(arkret_sdk::events::kinds::DEVICE_AUTHORIZE),
+            &parsed(arkret_sdk::events::EventKind::DEVICE_AUTHORIZE),
             &json!({ "payload": {} }),
         )
         .unwrap();
         assert!(device_authorize.payload.get("accepted_event_id").is_none());
 
         let agent_key_revoke = projection_operation_from_event(
-            &parsed(arkret_sdk::events::kinds::AGENT_KEY_REVOKE),
+            &parsed(arkret_sdk::events::EventKind::AGENT_KEY_REVOKE),
             &json!({ "payload": {} }),
         )
         .unwrap();
@@ -430,7 +430,7 @@ pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     // server-stamped `effective_scope` above, derived from its Strand at ingest.
     // There is deliberately no client-supplied fallback, so a message cannot
     // spoof its own visibility scope.
-    if object.get("kind").and_then(Value::as_str) == Some(arkret_sdk::events::kinds::MESSAGE_CREATE)
+    if object.get("kind").and_then(Value::as_str) == Some(arkret_sdk::events::EventKind::MESSAGE_CREATE)
     {
         return None;
     }

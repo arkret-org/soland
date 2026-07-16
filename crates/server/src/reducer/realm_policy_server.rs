@@ -188,7 +188,7 @@ mod tests {
         Operation::create(
             OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
-            arkret_sdk::events::kinds::REALM_POLICY_SERVER,
+            arkret_sdk::events::EventKind::REALM_POLICY_SERVER,
             payload,
         )
     }

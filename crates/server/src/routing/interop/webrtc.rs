@@ -1023,7 +1023,7 @@ async fn call_state_from_event_log(
         .map_err(|error| AppError::internal(format!("events store unavailable: {error}")))?
         .into_iter()
         .filter(|record| {
-            record.kind == arkret_sdk::events::kinds::CALL_STATE
+            record.kind == arkret_sdk::events::EventKind::CALL_STATE
                 && record_call_id(record) == Some(call_id)
         })
         .collect::<Vec<_>>();
@@ -1087,7 +1087,7 @@ fn call_state_operation_from_record(
     let mut operation = Operation::create(
         operation_id,
         realm_id,
-        arkret_sdk::events::kinds::CALL_STATE,
+        arkret_sdk::events::EventKind::CALL_STATE,
         payload,
     );
     operation.canonical_event_digest = Some(record.canonical_digest.clone());

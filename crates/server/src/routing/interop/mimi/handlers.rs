@@ -334,7 +334,7 @@ pub(super) async fn mimi_room_message(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
-        event_kind: arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
+        event_kind: arkret_sdk::events::EventKind::MESSAGE_CREATE.to_owned(),
         operation_type: "mimi_facade_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
         sender: Some(sender.clone()),

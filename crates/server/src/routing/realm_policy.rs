@@ -140,7 +140,7 @@ async fn put_realm_policy_server(
     let operation = Operation::create(
         op_id,
         realm_scope,
-        arkret_sdk::events::kinds::REALM_POLICY_SERVER,
+        arkret_sdk::events::EventKind::REALM_POLICY_SERVER,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))

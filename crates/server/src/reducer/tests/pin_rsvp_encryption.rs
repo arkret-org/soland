@@ -32,7 +32,7 @@ fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str
 fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
     state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::REALM_CREATE,
+            arkret_sdk::events::EventKind::REALM_CREATE,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -48,7 +48,7 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::STRAND_CREATE,
+            arkret_sdk::events::EventKind::STRAND_CREATE,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -103,7 +103,7 @@ fn pin_note_rejects_plaintext_projection_payload() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::PIN_ADD,
+            arkret_sdk::events::EventKind::PIN_ADD,
             REALM_ID,
             pin_payload(serde_json::json!("visible note")),
         ),
@@ -123,11 +123,11 @@ fn pin_note_accepts_encrypted_projection_payload() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
-    let note = encrypted_payload(arkret_sdk::events::kinds::PIN_ADD);
+    let note = encrypted_payload(arkret_sdk::events::EventKind::PIN_ADD);
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::PIN_ADD,
+            arkret_sdk::events::EventKind::PIN_ADD,
             REALM_ID,
             pin_payload(note.clone()),
         ),
@@ -148,14 +148,14 @@ fn pin_note_accepts_exporter_aead_encrypted_projection_payload() {
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
     let note = encrypted_payload_with_scheme(
-        arkret_sdk::events::kinds::PIN_ADD,
+        arkret_sdk::events::EventKind::PIN_ADD,
         "mls-exporter-aead-v1",
         "MLS-EXPORTER-AEAD",
     );
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::PIN_ADD,
+            arkret_sdk::events::EventKind::PIN_ADD,
             REALM_ID,
             pin_payload(note.clone()),
         ),
@@ -176,14 +176,14 @@ fn pin_note_rejects_exporter_aead_with_mls_key_algorithm() {
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
     let note = encrypted_payload_with_scheme(
-        arkret_sdk::events::kinds::PIN_ADD,
+        arkret_sdk::events::EventKind::PIN_ADD,
         "mls-exporter-aead-v1",
         "MLS",
     );
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::PIN_ADD,
+            arkret_sdk::events::EventKind::PIN_ADD,
             REALM_ID,
             pin_payload(note),
         ),
@@ -205,7 +205,7 @@ fn rsvp_comment_rejects_plaintext_projection_payload() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::RSVP_SET,
+            arkret_sdk::events::EventKind::RSVP_SET,
             REALM_ID,
             rsvp_payload(serde_json::json!({"body": "see you there"})),
         ),
@@ -225,11 +225,11 @@ fn rsvp_comment_accepts_encrypted_projection_payload() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
-    let comment = encrypted_payload(arkret_sdk::events::kinds::RSVP_SET);
+    let comment = encrypted_payload(arkret_sdk::events::EventKind::RSVP_SET);
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::kinds::RSVP_SET,
+            arkret_sdk::events::EventKind::RSVP_SET,
             REALM_ID,
             rsvp_payload(comment.clone()),
         ),
@@ -246,10 +246,10 @@ fn rsvp_occurrence_is_canonicalized_and_lww_by_hlc() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
-    let comment = encrypted_payload(arkret_sdk::events::kinds::RSVP_SET);
+    let comment = encrypted_payload(arkret_sdk::events::EventKind::RSVP_SET);
 
     let mut newer = make_operation(
-        arkret_sdk::events::kinds::RSVP_SET,
+        arkret_sdk::events::EventKind::RSVP_SET,
         REALM_ID,
         rsvp_payload_for(
             "accepted",
@@ -268,7 +268,7 @@ fn rsvp_occurrence_is_canonicalized_and_lww_by_hlc() {
     assert_eq!(rsvp.updated_hlc, "01970e589d21-0002-a13f9c2e");
 
     let mut stale = make_operation(
-        arkret_sdk::events::kinds::RSVP_SET,
+        arkret_sdk::events::EventKind::RSVP_SET,
         REALM_ID,
         rsvp_payload_for(
             "declined",

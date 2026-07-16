@@ -85,7 +85,6 @@ const RESOURCE_SELECTOR_KINDS: &[&str] = &[
     "blob",
     "*",
 ];
-pub(crate) const REASON_GRANT_REVOKED_UPSTREAM: &str = "grant_revoked_upstream";
 pub(crate) const REASON_CAPABILITY_ACTION_UNKNOWN: &str = "capability_action_unknown";
 pub(crate) const REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE: &str =
     "capability_action_registry_unavailable";
@@ -483,7 +482,7 @@ impl SolandAuthzEngine {
             if has_revoked_upstream_grant {
                 return AuthzResult {
                     allowed: false,
-                    reason: REASON_GRANT_REVOKED_UPSTREAM.to_owned(),
+                    reason: arkret_sdk::ReasonCode::GRANT_REVOKED_UPSTREAM.to_owned(),
                     reason_detail: None,
                     grants: Vec::new(),
                 };
@@ -506,7 +505,7 @@ impl SolandAuthzEngine {
         if has_revoked_upstream_grant {
             return AuthzResult {
                 allowed: false,
-                reason: REASON_GRANT_REVOKED_UPSTREAM.to_owned(),
+                reason: arkret_sdk::ReasonCode::GRANT_REVOKED_UPSTREAM.to_owned(),
                 reason_detail: None,
                 grants: Vec::new(),
             };
@@ -1629,7 +1628,10 @@ mod tests {
             &[],
         );
         assert!(!result.allowed);
-        assert_eq!(result.reason, REASON_GRANT_REVOKED_UPSTREAM);
+        assert_eq!(
+            result.reason,
+            arkret_sdk::ReasonCode::GRANT_REVOKED_UPSTREAM
+        );
         assert!(
             engine
                 .get_grant(&child.grant_id)

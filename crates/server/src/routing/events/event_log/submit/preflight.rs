@@ -5,7 +5,7 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
     actor_id: &str,
     operation: &Operation,
 ) -> Option<String> {
-    if kinds::canonical_kind_string(operation) != arkret_sdk::events::kinds::MLS_WELCOME {
+    if kinds::canonical_kind_string(operation) != arkret_sdk::events::EventKind::MLS_WELCOME {
         return None;
     }
     let envelope_value = match operation.payload.get("claim_envelope") {
@@ -46,7 +46,7 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
     state: &AppState,
     operation: &Operation,
 ) -> Option<String> {
-    if kinds::canonical_kind_string(operation) != arkret_sdk::events::kinds::MLS_WELCOME {
+    if kinds::canonical_kind_string(operation) != arkret_sdk::events::EventKind::MLS_WELCOME {
         return None;
     }
     let Some(recipient_actor_id) = operation

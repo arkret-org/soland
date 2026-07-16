@@ -235,7 +235,7 @@ impl ProjectionState {
             );
         }
         ProjectionEffect::AgentPrivateEventAccepted {
-            kind: arkret_sdk::events::kinds::AGENT_ACTION_REQUEST,
+            kind: arkret_sdk::events::EventKind::AGENT_ACTION_REQUEST,
             event_id: operation.operation_id.to_string(),
         }
     }
@@ -337,10 +337,10 @@ impl ProjectionState {
             request.approval = approval;
         }
         let kind = match status {
-            AgentActionRequestStatus::Approved => arkret_sdk::events::kinds::AGENT_ACTION_APPROVE,
-            AgentActionRequestStatus::Rejected => arkret_sdk::events::kinds::AGENT_ACTION_REJECT,
+            AgentActionRequestStatus::Approved => arkret_sdk::events::EventKind::AGENT_ACTION_APPROVE,
+            AgentActionRequestStatus::Rejected => arkret_sdk::events::EventKind::AGENT_ACTION_REJECT,
             AgentActionRequestStatus::Pending | AgentActionRequestStatus::Cancelled => {
-                arkret_sdk::events::kinds::AGENT_ACTION_REQUEST
+                arkret_sdk::events::EventKind::AGENT_ACTION_REQUEST
             }
         };
         ProjectionEffect::AgentPrivateEventAccepted {

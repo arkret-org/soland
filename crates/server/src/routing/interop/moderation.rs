@@ -479,12 +479,10 @@ fn encrypted_event_payload_digest(record: &crate::state::CanonicalEventRecord) -
 }
 
 // Wire code for an invalid franking proof. `proof_invalid` is a registered
-// `reason_code`, so it is sourced from the SDK as `REASON_PROOF_INVALID`
+// `reason_code`, so it is sourced from the SDK as `arkret_sdk::error::ReasonCode::PROOF_INVALID`
 // rather than a local literal.
-use arkret_sdk::error::REASON_PROOF_INVALID;
-
 fn franking_proof_invalid(message: impl Into<String>) -> AppError {
-    AppError::invalid_param(message).with_wire_code(REASON_PROOF_INVALID)
+    AppError::invalid_param(message).with_wire_code(arkret_sdk::error::ReasonCode::PROOF_INVALID)
 }
 
 fn validate_franking_sender_claim(object: &serde_json::Map<String, Value>) -> Result<(), AppError> {
@@ -1188,7 +1186,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
         if record.realm_id.as_deref() != Some(realm_id) {
             continue;
         }
-        if record.kind == arkret_sdk::events::kinds::REALM_CREATE {
+        if record.kind == arkret_sdk::events::EventKind::REALM_CREATE {
             if let Some(found) = record
                 .envelope
                 .pointer("/payload/object/audit_disclosure_policy")
@@ -1197,7 +1195,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
             {
                 policy = Some(found);
             }
-        } else if record.kind == arkret_sdk::events::kinds::REALM_UPDATE {
+        } else if record.kind == arkret_sdk::events::EventKind::REALM_UPDATE {
             if let Some(found) = record
                 .envelope
                 .pointer("/payload/patch/audit_disclosure_policy")
@@ -1319,7 +1317,7 @@ async fn moderation_appeal_submit(
         "evidence_refs": body.evidence_refs,
         "evidence_visibility": evidence_visibility,
         "created_at": Utc::now().to_rfc3339(),
-        "event_kind": arkret_sdk::events::MODERATION_APPEAL_SUBMIT,
+        "event_kind": arkret_sdk::events::EventKind::MODERATION_APPEAL_SUBMIT,
         "appeal_state": "submitted",
     });
     if let Err(error) = state.persistence.moderation().append_appeal(event).await {
@@ -1544,7 +1542,10 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(error.wire_code(), arkret_sdk::error::REASON_PROOF_INVALID);
+        assert_eq!(
+            error.wire_code(),
+            arkret_sdk::error::ReasonCode::PROOF_INVALID
+        );
     }
 
     #[tokio::test]
@@ -1555,7 +1556,10 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(error.wire_code(), arkret_sdk::error::REASON_PROOF_INVALID);
+        assert_eq!(
+            error.wire_code(),
+            arkret_sdk::error::ReasonCode::PROOF_INVALID
+        );
     }
 
     #[test]

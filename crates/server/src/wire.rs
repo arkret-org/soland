@@ -876,7 +876,7 @@ pub fn describe(
         trust_domain: trust_domain
             .parse()
             .expect("trust_domain must be ak:trust_domain:<scope>"),
-        service_type: "principal_server".to_owned(),
+        service_type: arkret_sdk::ServiceType::PrincipalServer,
         protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![

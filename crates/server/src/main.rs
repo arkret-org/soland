@@ -636,8 +636,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                 };
                 match client.describe().await {
                     Ok(description)
-                        if description.service_type
-                            == arkret_sdk::ServiceType::PrincipalServer.as_str()
+                        if description.service_type == arkret_sdk::ServiceType::PrincipalServer
                             && description.service_id.as_str() != state.service_id =>
                     {
                         let document_view = match client

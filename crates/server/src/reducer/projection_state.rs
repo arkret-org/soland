@@ -940,22 +940,22 @@ impl ProjectionState {
         // `ak.strand.archive` requires Active source.
         // `ak.strand.restore` requires Archived source.
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            arkret_sdk::events::kinds::STRAND_CREATE => return Ok(()),
-            arkret_sdk::events::kinds::STRAND_UPDATE => {
+            arkret_sdk::events::EventKind::STRAND_CREATE => return Ok(()),
+            arkret_sdk::events::EventKind::STRAND_UPDATE => {
                 (&[ObjectLifecycleState::Active], "strand_not_active")
             }
-            arkret_sdk::events::kinds::STRAND_ARCHIVE => {
+            arkret_sdk::events::EventKind::STRAND_ARCHIVE => {
                 (&[ObjectLifecycleState::Active], "strand_not_active")
             }
-            arkret_sdk::events::kinds::STRAND_RESTORE => {
+            arkret_sdk::events::EventKind::STRAND_RESTORE => {
                 (&[ObjectLifecycleState::Archived], "strand_not_archived")
             }
             _ => return Ok(()),
         };
         let strand_id = match kind {
-            arkret_sdk::events::kinds::STRAND_UPDATE => strand_id_from_payload(&operation.payload),
-            arkret_sdk::events::kinds::STRAND_ARCHIVE
-            | arkret_sdk::events::kinds::STRAND_RESTORE => operation
+            arkret_sdk::events::EventKind::STRAND_UPDATE => strand_id_from_payload(&operation.payload),
+            arkret_sdk::events::EventKind::STRAND_ARCHIVE
+            | arkret_sdk::events::EventKind::STRAND_RESTORE => operation
                 .payload
                 .get("target_ref")
                 .and_then(Value::as_str)
@@ -985,7 +985,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::kinds::STRAND_UPDATE)
+            != Some(arkret_sdk::events::EventKind::STRAND_UPDATE)
         {
             return Ok(());
         }
@@ -1007,7 +1007,7 @@ impl ProjectionState {
         actor_id: &str,
     ) -> Option<Value> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::kinds::STRAND_UPDATE)
+            != Some(arkret_sdk::events::EventKind::STRAND_UPDATE)
         {
             return None;
         }
@@ -1044,7 +1044,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::kinds::REDACTION)
+            != Some(arkret_sdk::events::EventKind::REDACTION)
         {
             return Ok(());
         }
@@ -1077,14 +1077,14 @@ impl ProjectionState {
             None => return Ok(()),
         };
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            arkret_sdk::events::kinds::MORPH_CREATE => return Ok(()),
-            arkret_sdk::events::kinds::MORPH_UPDATE => {
+            arkret_sdk::events::EventKind::MORPH_CREATE => return Ok(()),
+            arkret_sdk::events::EventKind::MORPH_UPDATE => {
                 (&[ObjectLifecycleState::Active], "morph_not_active")
             }
-            arkret_sdk::events::kinds::MORPH_ARCHIVE => {
+            arkret_sdk::events::EventKind::MORPH_ARCHIVE => {
                 (&[ObjectLifecycleState::Active], "morph_not_active")
             }
-            arkret_sdk::events::kinds::MORPH_RESTORE => {
+            arkret_sdk::events::EventKind::MORPH_RESTORE => {
                 (&[ObjectLifecycleState::Archived], "morph_not_archived")
             }
             _ => return Ok(()),
@@ -1120,7 +1120,7 @@ impl ProjectionState {
     ///   `morph_schema_refs_precondition_mismatch`.
     pub fn check_morph_schema_migrate(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE)
+            != Some(arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE)
         {
             return Ok(());
         }

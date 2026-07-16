@@ -456,7 +456,7 @@ async fn upload_keypackage(
             "key_package_bytes_b64": key_package_bytes_b64,
         });
         trust_binding.insert_into(&mut publish_payload);
-        let op = build_op(arkret_sdk::events::kinds::MLS_KEYPACKAGE, publish_payload);
+        let op = build_op(arkret_sdk::events::EventKind::MLS_KEYPACKAGE, publish_payload);
         let effect = reducer::mls::apply_keypackage_publish(&mut state.projection.lock(), &op);
         match effect {
             ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { .. }) => {}
@@ -660,7 +660,7 @@ pub(crate) async fn claim_keypackages_for_request(
         "intended_realm_id": intended_realm_id.clone()
     });
     claim_binding.insert_into(&mut payload);
-    let op = build_op(arkret_sdk::events::kinds::MLS_KEYPACKAGE, payload);
+    let op = build_op(arkret_sdk::events::EventKind::MLS_KEYPACKAGE, payload);
     let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock(), &op);
     let (consumed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
         ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed {
@@ -684,7 +684,7 @@ pub(crate) async fn claim_keypackages_for_request(
                 reducer::mls::REASON_KEYPACKAGE_NOT_FOUND => {
                     AppError::not_found("KeyPackage not found").with_wire_code(reason)
                 }
-                reducer::mls::REASON_KEYPACKAGE_EXPIRED => {
+                arkret_sdk::ReasonCode::KEYPACKAGE_EXPIRED => {
                     AppError::new(ErrorCode::FailedPrecondition, "KeyPackage lifetime expired")
                         .with_wire_code(reason)
                 }

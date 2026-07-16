@@ -401,7 +401,7 @@ pub fn check_realm_link_admissible(
         })
         .and_then(|link| arkret_sdk::RealmLinkStatus::parse(&link.status));
     if current_status.is_some_and(|current| !current.can_transition_to(next_status)) {
-        return Err(arkret_sdk::REASON_REALM_LINK_INVALID_TRANSITION);
+        return Err(arkret_sdk::ReasonCode::REALM_LINK_INVALID_TRANSITION);
     }
     Ok(())
 }
@@ -430,7 +430,7 @@ mod tests {
 
     fn link_op(source: &str, target: &str, link_kind: &str, status: &str) -> Operation {
         op(
-            arkret_sdk::events::kinds::REALM_LINK,
+            arkret_sdk::events::EventKind::REALM_LINK,
             source,
             json!({
                 "target_realm_id": target,
@@ -442,7 +442,7 @@ mod tests {
 
     fn inherit_op(child: &str, parent: &str, allowed_policies: &[&str]) -> Operation {
         op(
-            arkret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
+            arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY,
             child,
             json!({
                 "source_realm_id": parent,
@@ -454,7 +454,7 @@ mod tests {
 
     fn inherit_op_spec_payload(child: &str, parent: &str, policy_rules: &[&str]) -> Operation {
         op(
-            arkret_sdk::events::kinds::REALM_INHERITANCE_POLICY,
+            arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY,
             child,
             json!({
                 "source_realm_id": parent,
@@ -553,7 +553,7 @@ mod tests {
         assert!(matches!(
             effect,
             crate::reducer::ProjectionEffect::Rejected { reason }
-                if reason == arkret_sdk::REASON_REALM_LINK_INVALID_TRANSITION
+                if reason == arkret_sdk::ReasonCode::REALM_LINK_INVALID_TRANSITION
         ));
     }
 

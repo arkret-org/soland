@@ -102,7 +102,7 @@ pub fn tombstone_projection_event_for_erased_actor(
     projection: &crate::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
 ) {
-    if event.event_kind == arkret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT {
+    if event.event_kind == arkret_sdk::events::EventKind::AUDIT_ERASURE_RECEIPT {
         return;
     }
     let Some(actor) = projection_event_actor(event) else {
@@ -121,7 +121,7 @@ pub fn tombstone_projection_event_for_message_redaction(
 ) {
     if !matches!(
         event.event_kind.as_str(),
-        arkret_sdk::events::kinds::MESSAGE_CREATE | arkret_sdk::events::kinds::MESSAGE_REVISE
+        arkret_sdk::events::EventKind::MESSAGE_CREATE | arkret_sdk::events::EventKind::MESSAGE_REVISE
     ) {
         return;
     }
@@ -150,7 +150,7 @@ pub fn stub_projection_event_for_message_expiry(
     event: &mut ProjectionEventRecord,
     now: DateTime<Utc>,
 ) {
-    if event.event_kind != arkret_sdk::events::kinds::MESSAGE_CREATE {
+    if event.event_kind != arkret_sdk::events::EventKind::MESSAGE_CREATE {
         return;
     }
     let expiry = projection
@@ -547,7 +547,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: event_id.to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: arkret_sdk::events::kinds::MESSAGE_CREATE.to_owned(),
+            event_kind: arkret_sdk::events::EventKind::MESSAGE_CREATE.to_owned(),
             operation_type: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
@@ -693,7 +693,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: "ak:operation:01904100-0000-7000-8000-0000000000a3".to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: arkret_sdk::events::kinds::PIN_ADD.to_owned(),
+            event_kind: arkret_sdk::events::EventKind::PIN_ADD.to_owned(),
             operation_type: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
@@ -727,7 +727,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: "ak:operation:01904100-0000-7000-8000-0000000000d3".to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: arkret_sdk::events::kinds::PIN_ADD.to_owned(),
+            event_kind: arkret_sdk::events::EventKind::PIN_ADD.to_owned(),
             operation_type: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),

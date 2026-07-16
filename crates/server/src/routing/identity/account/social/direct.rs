@@ -542,7 +542,7 @@ pub(super) async fn submit_direct_mls_genesis(
         "governance_binding": governance_binding,
         "created_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
     });
-    let op = direct_mls_operation(realm_id, arkret_sdk::events::kinds::MLS_GENESIS, payload)?;
+    let op = direct_mls_operation(realm_id, arkret_sdk::events::EventKind::MLS_GENESIS, payload)?;
     let effect = crate::reducer::mls::apply_group_genesis(&mut state.projection.lock(), &op);
     match &effect {
         crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::GroupGenesis {
@@ -649,7 +649,7 @@ pub(super) async fn submit_direct_mls_welcome(
         "expires_at": (created_at + chrono::Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
         "governance_binding": governance_binding,
     });
-    let op = direct_mls_operation(realm_id, arkret_sdk::events::kinds::MLS_WELCOME, payload)?;
+    let op = direct_mls_operation(realm_id, arkret_sdk::events::EventKind::MLS_WELCOME, payload)?;
     let effect = crate::reducer::mls::apply_welcome_enqueue(&mut state.projection.lock(), &op);
     match &effect {
         crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::WelcomeEnqueued {
@@ -803,7 +803,7 @@ pub(super) fn direct_realm_create_operation(
     let mut operation = arkret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        arkret_sdk::events::kinds::REALM_CREATE,
+        arkret_sdk::events::EventKind::REALM_CREATE,
         payload,
     );
     operation.created_at = created_at;
@@ -819,7 +819,7 @@ pub(super) fn direct_member_join_operation(
     let mut operation = arkret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        arkret_sdk::events::kinds::MEMBER_STATE,
+        arkret_sdk::events::EventKind::MEMBER_STATE,
         payload,
     );
     operation.created_at = created_at;
@@ -877,7 +877,7 @@ pub(super) fn direct_strand_create_operation(
     let mut operation = arkret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        arkret_sdk::events::kinds::STRAND_CREATE,
+        arkret_sdk::events::EventKind::STRAND_CREATE,
         payload,
     );
     operation.created_at = created_at;

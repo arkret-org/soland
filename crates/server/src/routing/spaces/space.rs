@@ -181,7 +181,7 @@ async fn archive_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        arkret_sdk::events::kinds::REALM_ARCHIVE,
+        arkret_sdk::events::EventKind::REALM_ARCHIVE,
         payload,
     )
     .await
@@ -211,7 +211,7 @@ async fn freeze_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        arkret_sdk::events::kinds::REALM_FREEZE,
+        arkret_sdk::events::EventKind::REALM_FREEZE,
         payload,
     )
     .await
@@ -241,7 +241,7 @@ async fn tombstone_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        arkret_sdk::events::kinds::REALM_TOMBSTONE,
+        arkret_sdk::events::EventKind::REALM_TOMBSTONE,
         payload,
     )
     .await
@@ -271,7 +271,7 @@ async fn destroy_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        arkret_sdk::events::kinds::REALM_DESTROY,
+        arkret_sdk::events::EventKind::REALM_DESTROY,
         payload,
     )
     .await
@@ -954,7 +954,7 @@ pub fn realm_recovery_event_visible(
     recipient_principal_id: Option<&str>,
     actor: &str,
 ) -> bool {
-    event_kind == arkret_sdk::events::kinds::REALM_KEY_SHARE
+    event_kind == arkret_sdk::events::EventKind::REALM_KEY_SHARE
         && recipient_principal_id == Some(actor)
 }
 

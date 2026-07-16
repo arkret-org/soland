@@ -27,18 +27,18 @@ impl ProjectionState {
         // `ak.space.restore` requires Archived.
         // `ak.space.tombstone` requires {Active, Archived}.
         let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
-            arkret_sdk::events::kinds::SPACE_CREATE => return Ok(()),
-            arkret_sdk::events::kinds::SPACE_UPDATE | arkret_sdk::events::kinds::SPACE_PARENT => {
+            arkret_sdk::events::EventKind::SPACE_CREATE => return Ok(()),
+            arkret_sdk::events::EventKind::SPACE_UPDATE | arkret_sdk::events::EventKind::SPACE_PARENT => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
-            arkret_sdk::events::kinds::SPACE_ARCHIVE => {
+            arkret_sdk::events::EventKind::SPACE_ARCHIVE => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
-            arkret_sdk::events::kinds::SPACE_RESTORE => (
+            arkret_sdk::events::EventKind::SPACE_RESTORE => (
                 &[SpaceContainerLifecycleState::Archived],
                 "space_not_archived",
             ),
-            arkret_sdk::events::kinds::SPACE_TOMBSTONE => (
+            arkret_sdk::events::EventKind::SPACE_TOMBSTONE => (
                 &[
                     SpaceContainerLifecycleState::Active,
                     SpaceContainerLifecycleState::Archived,
@@ -521,7 +521,7 @@ impl ProjectionState {
             None => return Ok(()),
         };
         match kind {
-            arkret_sdk::events::kinds::STRAND_CREATE => {
+            arkret_sdk::events::EventKind::STRAND_CREATE => {
                 let Some(object) = operation.payload.get("object").and_then(Value::as_object)
                 else {
                     return Ok(());
@@ -548,7 +548,7 @@ impl ProjectionState {
                 }
                 Ok(())
             }
-            arkret_sdk::events::kinds::STRAND_MOVE | arkret_sdk::events::kinds::STRAND_REORDER => {
+            arkret_sdk::events::EventKind::STRAND_MOVE | arkret_sdk::events::EventKind::STRAND_REORDER => {
                 let Some((_, list_space_id, _)) =
                     strand_position_from_lifecycle_payload(&operation.payload)
                 else {
@@ -572,7 +572,7 @@ impl ProjectionState {
                     false,
                 )
             }
-            arkret_sdk::events::kinds::SPACE_PARENT => {
+            arkret_sdk::events::EventKind::SPACE_PARENT => {
                 let Some(container_space_id) = space_container_id_from_payload(&operation.payload)
                 else {
                     return Ok(());
@@ -596,8 +596,8 @@ impl ProjectionState {
                     false,
                 )
             }
-            arkret_sdk::events::kinds::CONTAINER_MOVE_ITEM
-            | arkret_sdk::events::kinds::CONTAINER_REBALANCE => {
+            arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM
+            | arkret_sdk::events::EventKind::CONTAINER_REBALANCE => {
                 let Some(container_space_id) = operation
                     .payload
                     .get("to_container_id")
@@ -658,24 +658,24 @@ impl ProjectionState {
                 if parent.scope_circle_id.as_deref() == child_scope_circle_id {
                     Ok(())
                 } else {
-                    Err(arkret_sdk::ERROR_CODE_POLICY_VIOLATION)
+                    Err(arkret_sdk::ErrorCode::POLICY_VIOLATION)
                 }
             }
             "require_scope_circle_id" => {
                 if policy.scope_circle_id.as_deref() == child_scope_circle_id {
                     Ok(())
                 } else {
-                    Err(arkret_sdk::ERROR_CODE_POLICY_VIOLATION)
+                    Err(arkret_sdk::ErrorCode::POLICY_VIOLATION)
                 }
             }
             "require_e2ee" => {
                 if self.child_scope_is_e2ee(child_scope_circle_id, child_realm_id) {
                     Ok(())
                 } else {
-                    Err(arkret_sdk::ERROR_CODE_POLICY_VIOLATION)
+                    Err(arkret_sdk::ErrorCode::POLICY_VIOLATION)
                 }
             }
-            _ => Err(arkret_sdk::ERROR_CODE_POLICY_VIOLATION),
+            _ => Err(arkret_sdk::ErrorCode::POLICY_VIOLATION),
         }
     }
 
@@ -725,16 +725,16 @@ fn child_scope_policy_from_object(
         return Ok(None);
     };
     let Some(policy) = policy.as_object() else {
-        return Err(arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
     };
     let Some(kind) = policy.get("kind").and_then(Value::as_str) else {
-        return Err(arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
     };
     if !matches!(
         kind,
         "allow_any" | "require_e2ee" | "require_same_scope" | "require_scope_circle_id"
     ) {
-        return Err(arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
     }
     let scope_circle_id = policy
         .get("scope_circle_id")
@@ -742,14 +742,14 @@ fn child_scope_policy_from_object(
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned);
     if kind == "require_scope_circle_id" && scope_circle_id.is_none() {
-        return Err(arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
     }
     let metadata_encryption_floor = match policy.get("metadata_encryption_floor").map(Value::as_str)
     {
         Some(Some(value)) if matches!(value, "allow_plaintext" | "e2ee_required") => {
             Some(value.to_owned())
         }
-        Some(_) => return Err(arkret_sdk::ERROR_CODE_SCHEMA_VIOLATION),
+        Some(_) => return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION),
         None => None,
     };
     Ok(Some(ChildScopePolicy {
