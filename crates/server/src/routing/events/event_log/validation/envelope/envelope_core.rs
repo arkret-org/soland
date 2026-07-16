@@ -533,12 +533,11 @@ async fn enforce_device_generation_fence(
                 "B-model Event signer device is not authorized",
             )
         })?;
-    if device
+    let authorized_generation_ref = device
         .payload
         .get("authorized_generation_ref")
-        .and_then(Value::as_str)
-        != Some(generation.current_ref.as_str())
-    {
+        .and_then(Value::as_str);
+    if authorized_generation_ref != Some(generation.current_ref.as_str()) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "device_generation_fenced",

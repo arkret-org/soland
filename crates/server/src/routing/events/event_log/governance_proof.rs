@@ -71,10 +71,17 @@ fn scope_visible_to_session(
     }
 }
 
-async fn materialize_governance_proof(
+struct MaterializedRealmControl {
+    events: Vec<Event>,
+    joined: BTreeMap<CellRef, CellState>,
+    seal_view: crate::notary::MaterializedEventSealView,
+    covered_event_digests: Vec<MoveId>,
+}
+
+async fn materialize_realm_control(
     state: &AppState,
-    request: MlsGovernanceProofRequest,
-) -> Result<MlsGovernanceProofBundle, AppError> {
+    realm_id: &RealmId,
+) -> Result<MaterializedRealmControl, AppError> {
     let records = state
         .persistence
         .events()
@@ -88,7 +95,7 @@ async fn materialize_governance_proof(
         })?;
     let realm_records = records
         .into_iter()
-        .filter(|record| record.realm_id.as_deref() == Some(request.realm_id.as_str()))
+        .filter(|record| record.realm_id.as_deref() == Some(realm_id.as_str()))
         .collect::<Vec<_>>();
     let generation_fence = first_generation_event_seal_requirement(state, &realm_records).await?;
     let principal_control_actor = realm_records
@@ -266,7 +273,7 @@ async fn materialize_governance_proof(
         }
         if event.effective_scope.is_none() {
             event.effective_scope = Some(GovernanceScope::Realm {
-                realm_id: request.realm_id.clone(),
+                realm_id: realm_id.clone(),
             });
         }
         let digest = event.event_digest().map_err(|error| {
@@ -322,7 +329,7 @@ async fn materialize_governance_proof(
         ops.sort_by(|left, right| right.move_id.as_str().cmp(left.move_id.as_str()));
         let binding = state
             .cell_registry
-            .resolve(&request.realm_id, &cell)
+            .resolve(realm_id, &cell)
             .map_err(|error| {
                 AppError::new(
                     ErrorCode::ProfileUnsupported,
@@ -347,7 +354,7 @@ async fn materialize_governance_proof(
     let covered_event_digests = covered.iter().cloned().collect::<Vec<_>>();
     let seal_view = crate::notary::ensure_materialized_event_seal(
         state,
-        &request.realm_id,
+        realm_id,
         &covered_event_digests,
         &state_root,
         &event_ops,
@@ -361,6 +368,31 @@ async fn materialize_governance_proof(
         )
     })?;
 
+    Ok(MaterializedRealmControl {
+        events,
+        joined,
+        seal_view,
+        covered_event_digests,
+    })
+}
+
+pub(crate) async fn materialize_realm_event_seal(
+    state: &AppState,
+    realm_id: &RealmId,
+) -> Result<crate::notary::MaterializedEventSealView, AppError> {
+    Ok(materialize_realm_control(state, realm_id).await?.seal_view)
+}
+
+async fn materialize_governance_proof(
+    state: &AppState,
+    request: MlsGovernanceProofRequest,
+) -> Result<MlsGovernanceProofBundle, AppError> {
+    let MaterializedRealmControl {
+        events,
+        joined,
+        seal_view,
+        covered_event_digests,
+    } = materialize_realm_control(state, &request.realm_id).await?;
     let control_state = joined
         .iter()
         .filter_map(|(cell, state)| match state {

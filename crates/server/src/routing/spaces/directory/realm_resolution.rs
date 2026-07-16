@@ -126,7 +126,8 @@ pub(super) async fn resolve_realm(
                     state,
                     realm.realm_id.as_str(),
                     discoverability.as_str(),
-                ),
+                )
+                .await,
             })
         }
         None => Err(AppError::not_found("not found")),
@@ -235,6 +236,7 @@ pub(super) async fn resolve_target(
             realm_entry.realm_id.as_str(),
             discoverability.as_str(),
         )
+        .await
     } else {
         Vec::new()
     };
@@ -677,7 +679,7 @@ pub(super) fn member_count_bucket_label(count: usize) -> RealmMemberCountBucketL
     }
 }
 
-pub(super) fn join_candidates_for_resolved_realm(
+pub(super) async fn join_candidates_for_resolved_realm(
     state: &AppState,
     realm_id: &str,
     discoverability: &str,
@@ -703,12 +705,16 @@ pub(super) fn join_candidates_for_resolved_realm(
     // this deployment holds no accepted Seal for the Realm (e.g. it does not
     // host it / cannot notarize), it must not advertise itself as a submit
     // candidate.
-    let Some(seal) = crate::notary::ensure_realm_seal_head(state, &realm_id_typed)
-        .ok()
-        .flatten()
+    let Ok(seal_view) =
+        crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
+            state,
+            &realm_id_typed,
+        )
+        .await
     else {
         return Vec::new();
     };
+    let seal = seal_view.accepted_seal;
     let seal_basis = arkret_sdk::SealBasis {
         leaves: vec![seal.id.clone()],
         control_event_set_root: seal.control_event_set_root.clone(),

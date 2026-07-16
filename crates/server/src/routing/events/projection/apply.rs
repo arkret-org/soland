@@ -1001,9 +1001,10 @@ fn realm_key_share_device_message_content(
 /// `keys/query` signing-key directory (`device-lifecycle.md` §8.2) can resolve
 /// a device that was authorized but never opened a session. Idempotent and
 /// non-destructive: an existing row keeps its `created_at`, `display_name`,
-/// revocation, and any already-recorded `device_public_key`; a verified state
-/// is never downgraded. The `cross_signing_binding` was already verified at
-/// ingest (`validate_device_authorize_binding`).
+/// revocation, any already-recorded `device_public_key`, and an atomically
+/// projected B-model generation binding; a verified state is never downgraded.
+/// The `cross_signing_binding` was already verified at ingest
+/// (`validate_device_authorize_binding`).
 async fn project_device_authorize(state: &crate::state::AppState, operation: &Operation) {
     use crate::state::DeviceInventoryRecord;
     let payload = &operation.payload;
@@ -1102,8 +1103,6 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
                 "authorized_generation_ref".to_owned(),
                 Value::String(generation_ref),
             );
-        } else {
-            map.remove("authorized_generation_ref");
         }
         // Tier-2 (device-lifecycle.md §5.2 / §8.2): persist the authoritative
         // `cross_signing_binding` verbatim so keys/query can echo it for

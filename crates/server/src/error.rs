@@ -77,10 +77,11 @@ mod tests {
     #[test]
     fn sdk_error_codes_are_soland_source_of_truth() {
         assert!(
-            ErrorCode::ALL
-                .iter()
-                .all(|code| ErrorCode::from_wire(code.as_str()) == Some(*code)),
-            "every SDK error code must round-trip through its wire token",
+            !ErrorCode::ALL.is_empty()
+                && ErrorCode::ALL
+                    .iter()
+                    .all(|code| ErrorCode::from_wire(code.as_str()) == Some(*code)),
+            "every SDK registry entry must round-trip through its wire code",
         );
         assert_eq!(ErrorCode::from_wire("bad_json"), Some(ErrorCode::BadJson));
         assert_eq!(

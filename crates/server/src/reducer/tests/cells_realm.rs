@@ -163,6 +163,60 @@ fn ban_then_invite_round_trips_through_fsm_states() {
     );
 }
 
+#[test]
+fn member_state_precondition_is_scoped_to_the_target_realm() {
+    const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-cfc039892037";
+    const ACTOR: &str = "did:web:bob.example";
+
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    state.apply(
+        &make_operation(
+            arkret_sdk::events::EventKind::MEMBER_STATE,
+            REALM_A,
+            serde_json::json!({
+                "actor_id": ACTOR,
+                "membership": "join",
+                "delivery_status": "unroutable"
+            }),
+        ),
+        &hlc,
+    );
+
+    let member_cell = format!("ak:cell:ak.component.member.state.v1:{ACTOR}");
+    let invite_in_new_realm = make_operation(
+        arkret_sdk::events::EventKind::MEMBER_STATE,
+        REALM_B,
+        serde_json::json!({
+            "actor_id": ACTOR,
+            "membership": "invite",
+            "preconditions": [{
+                "cell": member_cell,
+                "predicate": { "op": "head_eq", "value": null }
+            }]
+        }),
+    );
+    assert_eq!(state.check_move_preconditions(&invite_in_new_realm), Ok(()));
+
+    let duplicate_genesis_in_same_realm = make_operation(
+        arkret_sdk::events::EventKind::MEMBER_STATE,
+        REALM_A,
+        serde_json::json!({
+            "actor_id": ACTOR,
+            "membership": "invite",
+            "preconditions": [{
+                "cell": format!("ak:cell:ak.component.member.state.v1:{ACTOR}"),
+                "predicate": { "op": "head_eq", "value": null }
+            }]
+        }),
+    );
+    assert_eq!(
+        state.check_move_preconditions(&duplicate_genesis_in_same_realm),
+        Err("failed_precondition")
+    );
+}
+
 // ── Realm lifecycle cache + cell tests ──
 
 #[test]

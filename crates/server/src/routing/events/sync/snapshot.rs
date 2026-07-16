@@ -952,7 +952,7 @@ async fn account_data_events(
             latest.insert(key.to_owned(), (record.received_at, event));
         }
     }
-    latest
+    let mut events = latest
         .into_values()
         .filter_map(|(_, event)| {
             (!event
@@ -962,7 +962,84 @@ async fn account_data_events(
                 .unwrap_or(false))
             .then_some(event)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    events.extend(notification_account_data_events(state, session).await);
+    events
+}
+
+/// Ordinary notification projections use the closed
+/// `ak.schema.notification.v1` object shape. The typed `notifications` sync
+/// container is reserved for account-level Agent approval deltas, so Realm
+/// Event notifications ride as derived account-data payloads. This keeps the
+/// durable source Event authoritative while making the rebuildable projection
+/// available to every device of the recipient principal.
+async fn notification_account_data_events(
+    state: &AppState,
+    session: &SessionRecord,
+) -> Vec<arkret_sdk::Event> {
+    let rows = state
+        .persistence
+        .notifications()
+        .list_for_recipient(&session.actor)
+        .await
+        .unwrap_or_default();
+    let mut events = Vec::new();
+    for row in rows {
+        let Some(source_event_id) = row.get("source_event_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(mut event) = accepted_event(state, source_event_id).await else {
+            continue;
+        };
+        let Some(payload) = notification_projection_payload(&row, &session.actor) else {
+            continue;
+        };
+        let Value::Object(payload) = payload else {
+            continue;
+        };
+        event.actor_id = match arkret_sdk::Did::new(session.actor.clone()) {
+            Ok(actor_id) => actor_id,
+            Err(_) => continue,
+        };
+        event.payload = payload.into_iter().collect();
+        events.push(event);
+    }
+    events
+}
+
+fn notification_projection_payload(row: &Value, actor_id: &str) -> Option<Value> {
+    let notification_id = row.get("notification_id")?.as_str()?;
+    let notification_type = row.get("notification_type")?.as_str()?;
+    let priority = row.get("priority")?.as_str()?;
+    let state = row.get("state")?.as_str()?;
+    let created_at = row
+        .get("created_at")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    let mut payload = json!({
+        "id": notification_id,
+        "schema": "ak.schema.notification.v1",
+        "actor_id": actor_id,
+        "notification_type": notification_type,
+        "priority": priority,
+        "state": state,
+        "created_at": created_at,
+    });
+    for field in [
+        "realm_id",
+        "source_event_id",
+        "source_ref",
+        "strand_id",
+        "track_name",
+        "preview",
+        "updated_at",
+    ] {
+        if let Some(value) = row.get(field).filter(|value| !value.is_null()) {
+            payload[field] = value.clone();
+        }
+    }
+    Some(payload)
 }
 
 async fn deliver_ephemeral_events_for_subscriber(

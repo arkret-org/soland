@@ -820,9 +820,6 @@ pub fn ensure_materialized_event_seal(
 ) -> Result<MaterializedEventSealView, NotaryError> {
     let _guard = EVENT_SEAL_MATERIALIZE_LOCK.lock();
     let worker = NotaryWorker::for_service(state.service_id.clone());
-    if !device_generation_seal_required && !worker.is_authorized_for(state, realm_id)? {
-        return Err(NotaryError::NotAuthorized(realm_id.to_string()));
-    }
     let mut leaves = state.seal_store.list_leaves(realm_id)?;
     if let Some(requirement) = generation_fence {
         leaves = requirement.accepted_frontier_refs.clone();
@@ -831,6 +828,9 @@ pub fn ensure_materialized_event_seal(
         && leaves.is_empty()
         && generation_fence.is_none_or(|requirement| !requirement.predecessor_refs.is_empty())
     {
+        if !worker.is_authorized_for(state, realm_id)? {
+            return Err(NotaryError::NotAuthorized(realm_id.to_string()));
+        }
         leaves = materialize_genesis_if_empty(&worker, state, realm_id)?;
     }
     leaves.sort();
@@ -894,6 +894,9 @@ pub fn ensure_materialized_event_seal(
             "device-generation Event Seal must be signed and submitted by a current-generation device"
                 .to_owned(),
         ));
+    }
+    if !worker.is_authorized_for(state, realm_id)? {
+        return Err(NotaryError::NotAuthorized(realm_id.to_string()));
     }
 
     let delta = target.difference(&current).cloned().collect::<Vec<_>>();

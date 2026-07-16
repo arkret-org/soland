@@ -188,6 +188,7 @@ async fn put_notification(
     source_actor_id: Option<&str>,
     preview: Option<Value>,
 ) {
+    let created_at = crate::routing::events::now();
     let mut record = serde_json::json!({
         "notification_id": crate::ids::generate_notification_id(),
         "recipient_id": recipient_id,
@@ -197,6 +198,8 @@ async fn put_notification(
         "event_kind": event_kind,
         "priority": "normal",
         "state": "unread",
+        "created_at": created_at,
+        "updated_at": created_at,
     });
     if let Some(source_ref) = source_ref {
         record["source_ref"] = serde_json::json!(source_ref);
@@ -226,6 +229,9 @@ async fn put_message_notification(
     notification_type: &str,
     strand_id: Option<&str>,
     source_actor_id: Option<&str>,
+    source_ref: Option<&str>,
+    track_name: Option<&str>,
+    preview: Option<Value>,
 ) {
     put_notification(
         state,
@@ -234,11 +240,11 @@ async fn put_message_notification(
         source_event_id,
         notification_type,
         arkret_sdk::events::EventKind::MESSAGE_CREATE,
-        None,
+        source_ref,
         strand_id,
-        None,
+        track_name,
         source_actor_id,
-        None,
+        preview,
     )
     .await;
 }
@@ -262,6 +268,18 @@ pub(crate) async fn dispatch_message_notifications(
         .and_then(Value::as_str)
         .or_else(|| payload.get("thread_id").and_then(Value::as_str))
         .map(ToOwned::to_owned);
+    let source_ref = payload
+        .get("message_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let track_name = payload
+        .get("track_name")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let preview = payload
+        .pointer("/content/body")
+        .and_then(Value::as_str)
+        .map(|body| serde_json::json!({ "body": body }));
     // SOL-SEC-06 — if the message is scoped to a Circle, a mention notification
     // MUST NOT be delivered to a subject who cannot see that Circle; otherwise
     // the notification leaks the metadata "a message in this Circle mentions
@@ -318,6 +336,9 @@ pub(crate) async fn dispatch_message_notifications(
                 "message",
                 Some(strand_id),
                 Some(&sender),
+                source_ref.as_deref(),
+                track_name.as_deref(),
+                preview.clone(),
             )
             .await;
         }
@@ -358,6 +379,9 @@ pub(crate) async fn dispatch_message_notifications(
             "mention",
             strand_id.as_deref(),
             Some(&sender),
+            source_ref.as_deref(),
+            track_name.as_deref(),
+            preview.clone(),
         )
         .await;
     }

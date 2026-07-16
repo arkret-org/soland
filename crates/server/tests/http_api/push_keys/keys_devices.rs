@@ -748,6 +748,68 @@ async fn device_authorize_projects_public_key_into_devices_table() {
 }
 
 #[tokio::test]
+async fn device_authorize_projection_preserves_atomic_generation_binding() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = "did:web:managed-alice.example";
+    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000003";
+    let generation_ref = "1-QmBootstrapGeneration";
+    let now = chrono::Utc::now();
+    state
+        .persistence
+        .devices()
+        .put(&soland::state::DeviceInventoryRecord {
+            actor: alice.to_owned(),
+            device_id: alice_device.to_owned(),
+            display_name: None,
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({
+                "device_id": alice_device,
+                "authorized_generation_ref": generation_ref
+            }),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+
+    let device_key = SigningKey::from_bytes(&[203u8; 32]);
+    let operation = Operation::create(
+        OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
+        RealmId::new(soland::test_support::principal_control_realm_for_did(alice)).unwrap(),
+        "ak.device.authorize",
+        serde_json::json!({
+            "principal_id": alice,
+            "device_id": alice_device,
+            "device_public_key": test_ed25519_multibase_public(&device_key),
+            "hpke_key": "z6LSTestPhase1HpkeKey",
+            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
+            "authorized_by": alice,
+            "not_before": "2026-05-08T10:00:00Z",
+            "enrollment_authority_binding": {
+                "kind": "service_attested",
+                "authority_did": alice,
+                "authorization_ref": format!("{alice}#device-enrollment")
+            }
+        }),
+    );
+
+    soland::test_support::project_accepted_operations(&state, alice, &[operation]).await;
+
+    let projected = state
+        .persistence
+        .devices()
+        .get(alice, alice_device)
+        .await
+        .unwrap()
+        .expect("device remains projected");
+    assert_eq!(
+        projected.payload["authorized_generation_ref"].as_str(),
+        Some(generation_ref)
+    );
+}
+
+#[tokio::test]
 async fn keys_query_exposes_service_attested_device_anchor() {
     let state = AppState::new(test_config(), Db { pool: None });
 

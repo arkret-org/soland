@@ -196,7 +196,7 @@ pub(super) async fn submit_identity_anchor_batch(
                 .to_string(),
         )
     } else {
-        bootstrap_b_model_generation_ref(state, &first.actor_id).await?
+        bootstrap_b_model_generation_ref(&envelopes[0], &envelopes[1])?
     };
     let device_projection = if reanchor_conflict {
         None
@@ -1055,47 +1055,31 @@ fn canonical_record(
     }
 }
 
-async fn bootstrap_b_model_generation_ref(
-    state: &AppState,
-    principal_id: &str,
+fn bootstrap_b_model_generation_ref(
+    create_envelope: &Value,
+    authorize_envelope: &Value,
 ) -> Result<Option<String>, SubmitOneError> {
-    let mut entries = state
-        .persistence
-        .webvh()
-        .list_log_events(principal_id)
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("DID history lookup failed: {error}"),
-            )
-        })?;
-    entries.sort_by_key(|entry| entry.seq);
-    let Some(entry) = entries.first() else {
+    let authorize = typed_device_authorize_payload(authorize_envelope)?;
+    let Some(binding) = authorize.enrollment_authority_binding.as_ref() else {
         return Ok(None);
     };
-    let document = entry
-        .operation
-        .get("state")
-        .or_else(|| entry.operation.get("did_document"));
-    let external = document
-        .and_then(|document| document.get("service"))
+    if binding.authority_did.as_str() == authorize.principal_id.as_str() {
+        return Ok(None);
+    }
+    create_envelope
+        .get("refs")
         .and_then(Value::as_array)
-        .is_some_and(|services| {
-            services.iter().any(|service| {
-                service.get("type").and_then(Value::as_str)
-                    == Some(arkret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY)
-                    && service
-                        .get("serviceEndpoint")
-                        .and_then(Value::as_str)
-                        .is_some_and(|authority| authority != principal_id)
+        .and_then(|references| {
+            references.iter().find(|reference| {
+                reference.get("role").and_then(Value::as_str)
+                    == Some(arkret_sdk::identity::DID_INCEPTION_REF_ROLE)
             })
-        });
-    Ok(external
-        .then(|| entry.operation.get("versionId").and_then(Value::as_str))
-        .flatten()
-        .map(ToOwned::to_owned))
+        })
+        .and_then(|reference| reference.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .map(Some)
+        .ok_or_else(|| unit_error("PCR bootstrap is missing its validated DID inception ref"))
 }
 
 async fn identity_anchor_device_projection(
@@ -1546,6 +1530,19 @@ mod tests {
         assert_eq!(
             context.identity_anchor_event_id.as_deref(),
             envelopes[0].get("event_id").and_then(Value::as_str)
+        );
+    }
+
+    #[test]
+    fn external_bootstrap_generation_comes_from_closed_unit_inception_ref() {
+        let envelopes = sdk_canonical_self_principal_bootstrap_unit();
+        let expected = envelopes[0]["refs"][0]["id"].as_str().unwrap();
+
+        assert_eq!(
+            bootstrap_b_model_generation_ref(&envelopes[0], &envelopes[1])
+                .unwrap()
+                .as_deref(),
+            Some(expected)
         );
     }
 

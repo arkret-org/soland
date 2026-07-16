@@ -589,6 +589,28 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             .is_some_and(|member| member.state == "join")
     );
 
+    let mut resolve_response =
+        TestClient::post("http://server/_arkret/find/directory/resolve-realm")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({"realm_id": realm_id}))
+            .send(&app_from_state(state.clone()))
+            .await;
+    let resolve_status = resolve_response.status_code.expect("resolve status");
+    let resolve_body: Value = resolve_response
+        .take_json()
+        .await
+        .expect("resolve json body");
+    assert_eq!(
+        resolve_status,
+        StatusCode::OK,
+        "Realm resolution failed: {resolve_body}"
+    );
+    assert_eq!(
+        resolve_body["join_candidates"].as_array().map(Vec::len),
+        Some(1),
+        "authorized resolution must materialize a join candidate Seal: {resolve_body}"
+    );
+
     let proof_request = serde_json::json!({
         "realm_id": realm_id,
         "effective_scope": {"kind": "realm", "realm_id": realm_id},

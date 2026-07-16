@@ -206,24 +206,13 @@ pub(super) async fn dev_login(
         .list_for_actor(actor_str)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let verification_state =
-        initial_session_device_verification_state(&existing_devices, device_id_str);
-    let device_payload = json!({
-        "device_id": device_id_str,
-        "display_name": body.display_name.clone(),
-        "verification": verification_state,
-        "last_seen_at": seen_at
-    });
-    let device = DeviceInventoryRecord {
-        actor: actor_str.to_owned(),
-        device_id: device_id_str.to_owned(),
-        display_name: body.display_name.clone(),
-        verification_state: verification_state.to_owned(),
-        payload: device_payload,
-        created_at: seen_at,
-        updated_at: seen_at,
-        revoked_at: None,
-    };
+    let device = session_device_inventory_record(
+        &existing_devices,
+        actor_str,
+        device_id_str,
+        body.display_name.clone(),
+        seen_at,
+    );
     state
         .persistence
         .devices()
@@ -247,4 +236,107 @@ pub(super) async fn dev_login(
         device_id: device_id.clone(),
         expires_at,
     })
+}
+
+/// Refresh the session metadata for a device without replacing identity
+/// material projected from `ak.device.authorize`. Development login is also
+/// used by integration clients to obtain a bearer for an already-authorized
+/// device, so it must not erase keys, authority bindings, or generation fences.
+fn session_device_inventory_record(
+    existing_devices: &[DeviceInventoryRecord],
+    actor: &str,
+    device_id: &str,
+    display_name: Option<String>,
+    seen_at: chrono::DateTime<chrono::Utc>,
+) -> DeviceInventoryRecord {
+    let existing = existing_devices
+        .iter()
+        .find(|device| device.device_id == device_id);
+    let verification_state =
+        initial_session_device_verification_state(existing_devices, device_id).to_owned();
+    let mut payload = existing
+        .map(|device| device.payload.clone())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    let object = payload
+        .as_object_mut()
+        .expect("session device payload is an object");
+    object.insert(
+        "device_id".to_owned(),
+        serde_json::Value::String(device_id.to_owned()),
+    );
+    if let Some(name) = display_name.as_ref() {
+        object.insert(
+            "display_name".to_owned(),
+            serde_json::Value::String(name.clone()),
+        );
+    }
+    object.insert(
+        "verification".to_owned(),
+        serde_json::Value::String(verification_state.clone()),
+    );
+    object.insert("last_seen_at".to_owned(), json!(seen_at));
+
+    DeviceInventoryRecord {
+        actor: actor.to_owned(),
+        device_id: device_id.to_owned(),
+        display_name: display_name
+            .or_else(|| existing.and_then(|device| device.display_name.clone())),
+        verification_state,
+        payload,
+        created_at: existing.map_or(seen_at, |device| device.created_at),
+        updated_at: seen_at,
+        revoked_at: existing.and_then(|device| device.revoked_at),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_refresh_preserves_authorized_device_identity_material() {
+        let created_at = now() - Duration::hours(1);
+        let seen_at = now();
+        let existing = DeviceInventoryRecord {
+            actor: "did:example:alice".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+            display_name: Some("Original".to_owned()),
+            verification_state: "verified".to_owned(),
+            payload: json!({
+                "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
+                "device_public_key": "z6Mkexample",
+                "authorized_generation_ref": "1-QmGeneration"
+            }),
+            created_at,
+            updated_at: created_at,
+            revoked_at: None,
+        };
+
+        let refreshed = session_device_inventory_record(
+            std::slice::from_ref(&existing),
+            &existing.actor,
+            &existing.device_id,
+            Some("Refreshed".to_owned()),
+            seen_at,
+        );
+
+        assert_eq!(refreshed.created_at, created_at);
+        assert_eq!(refreshed.verification_state, "verified");
+        assert_eq!(refreshed.display_name.as_deref(), Some("Refreshed"));
+        assert_eq!(
+            refreshed
+                .payload
+                .get("authorized_generation_ref")
+                .and_then(serde_json::Value::as_str),
+            Some("1-QmGeneration")
+        );
+        assert_eq!(
+            refreshed
+                .payload
+                .get("device_public_key")
+                .and_then(serde_json::Value::as_str),
+            Some("z6Mkexample")
+        );
+    }
 }
