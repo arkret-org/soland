@@ -8,7 +8,7 @@
 //!
 //! These tests drive the reducer directly so they stay focused on the
 //! policy guard; the HTTP path that submits these events runs through
-//! the standard event-log ingestion in `tests/http_api.rs`.
+//! the standard event-log ingestion in `tests/http_api/`.
 
 use arkret_sdk::Operation;
 use serde_json::{Value, json};

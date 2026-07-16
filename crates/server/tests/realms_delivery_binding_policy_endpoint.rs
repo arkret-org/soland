@@ -18,7 +18,7 @@ use soland::state::AppState;
 use soland_data::Db;
 
 /// Build a minimal dev-mode `AppConfig`. Identical posture to the
-/// helper in `tests/http_api.rs` (kept in-line so this test file
+/// helper in `tests/http_api/common.rs` (kept in-line so this test file
 /// stands alone and does not depend on the other test module).
 fn test_config() -> AppConfig {
     AppConfig {
@@ -35,7 +35,7 @@ fn app() -> salvo::Service {
 }
 
 /// Acquire a dev-mode bearer token for an arbitrary actor. Mirrors the
-/// helper in `tests/http_api.rs`; admin handlers in `development_mode`
+/// helper in `tests/http_api/common.rs`; admin handlers in `development_mode`
 /// accept any authenticated session per `require_admin_principal`.
 async fn dev_token(svc: &salvo::Service) -> String {
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")

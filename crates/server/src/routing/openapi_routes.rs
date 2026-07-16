@@ -306,7 +306,7 @@ pub(crate) async fn wait_for_sync_token(
 /// specifically [`pattern_matches_path`] and the supporting helpers.
 /// Salvo wiring (the actual HTTP shape returned by the catch-all router)
 /// is covered by the integration test
-/// `framework_errors_use_arkret_error_envelope` in `tests/http_api.rs`.
+/// `framework_errors_use_arkret_error_envelope` in `tests/http_api/auth.rs`.
 #[cfg(test)]
 #[path = "routing_framework_error_routing_tests.rs"]
 mod framework_error_routing_tests;

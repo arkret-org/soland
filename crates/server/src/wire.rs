@@ -364,7 +364,7 @@ pub use arkret_sdk::models::{
     AuthzCheckOutcome, AuthzCheckRequestBody, PushRegisterDeviceRequestBody,
     PushUnregisterDeviceRequestBody,
 };
-// Moderation report request/outcome are the SDK DTOs (`model/api.rs` carries
+// Moderation report request/outcome are the SDK DTOs (`arkret_sdk::models` carries
 // `service-operation-dtos.schema.json#/$defs/ModerationReportOutcome`:
 // `status` enum `submitted|resolved`, `routed_to` is an array of bare DIDs);
 // no soland mirrors.
@@ -432,7 +432,7 @@ pub struct SolandAccountRegisterOutcome {
     pub created_at: DateTime<Utc>,
 }
 
-// Identity log / receipts outcomes are the SDK DTOs (`model/api.rs` is the
+// Identity log / receipts outcomes are the SDK DTOs (`arkret_sdk::models` is the
 // authoritative carrier for identity operation shapes); no soland mirrors.
 // AKP-0008 / AKP-0009 — Personal Agent operations. Every request/response
 // DTO is the SDK-authoritative `arkret_sdk::models::Agent*` shape (spec
@@ -986,7 +986,7 @@ pub fn describe(
             // `ak.realm_key.request` / `ak.realm_key.share` retrieval modes the
             // server relays history keys through: backup-derived retrieval,
             // device-to-device peer relay (the ephemeral `ak.realm_key.request`
-            // relay implemented in `routing::events::realm_key_request`), and
+            // accepted by `routing::events::sync::ephemeral`), and
             // archive retrieval.
             "ak.feature.realm_key.backup_retrieval.v1".to_owned(),
             "ak.feature.realm_key.peer_relay.v1".to_owned(),

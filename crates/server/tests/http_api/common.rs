@@ -1,8 +1,8 @@
 //! Shared helpers, fixtures, and imports for the soland HTTP-API integration test binary.
 //!
-//! Originally lived inline at the top of `tests/http_api.rs` before the
+//! Originally lived inline at the top of the monolithic `http_api` test before the
 //! file was split into per-domain submodules. All items are reachable
-//! to siblings via `super::common::*` (re-exported by `http_api.rs`).
+//! to siblings via `super::common::*` from the `main.rs` integration-test root.
 
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;

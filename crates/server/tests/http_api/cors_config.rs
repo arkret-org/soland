@@ -118,7 +118,8 @@ async fn configured_cors_allows_blob_upload_headers() {
 async fn seed_member_invite_event_surfaces_via_authz_invites() {
     // The Realm bootstrap strand in inkson emits a
     // `ak.member.state{membership="invite"}` event for each seed member
-    // (see arkret-rust-sdk + inkson/src/api.rs `build_realm_bootstrap_events`).
+    // (see arkret-rust-sdk + inkson/src/event_builders.rs
+    // `build_realm_bootstrap_events`).
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6 then
     // expect the invitee to see that invite via `GET /authz/invites`.
     // This test pins that contract on the event path.

@@ -794,7 +794,7 @@ async fn push_bridge_drift_result_label_is_stable_for_audit() {
 //
 // Pg parity is enforced by the trait surface itself (Memory + Pg
 // implement the same trait methods); the integration tests in
-// `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
+// `tests/http_api/` exercise the Pg path when `DATABASE_URL` is set.
 // Here we only assert the Memory path because pure-unit tests run
 // without Pg.
 
@@ -1026,7 +1026,7 @@ async fn memory_multisig_pending_lease_acquire_release_round_trip() {
 // ── Memory parity tests for the wire-facing sub-stores
 // (moderation / presence / webvh / invites). Pg parity is enforced
 // by the trait surface itself; the integration tests in
-// `tests/http_api.rs` exercise the Pg path when `DATABASE_URL` is set.
+// `tests/http_api/` exercise the Pg path when `DATABASE_URL` is set.
 
 #[tokio::test]
 async fn memory_moderation_store_append_and_list_matches_trait() {
@@ -1355,7 +1355,7 @@ async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
 
 // ── Memory parity tests for the recovery / realtime sub-stores
 // (key_backup / policy / restore). Pg parity is enforced by the shared
-// trait surface; the integration tests in `tests/http_api.rs` exercise the
+// trait surface; the integration tests in `tests/http_api/` exercise the
 // Pg path when `DATABASE_URL` is set.
 
 #[tokio::test]

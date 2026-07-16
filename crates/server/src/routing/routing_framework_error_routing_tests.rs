@@ -80,7 +80,7 @@ fn known_routes_map_resolves_known_path() {
 
 /// End-to-end check that `/_arkret/*` unrecognized paths return
 /// the canonical 404 + `unrecognized_endpoint` JSON envelope (see
-/// `tests/http_api.rs::framework_errors_use_arkret_error_envelope`).
+/// `tests/http_api/auth.rs::framework_errors_use_arkret_error_envelope`).
 #[tokio::test]
 async fn arkret_v1_unknown_path_returns_unrecognized_endpoint() {
     use salvo::test::{ResponseExt, TestClient};

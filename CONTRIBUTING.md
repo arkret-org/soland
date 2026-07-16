@@ -80,8 +80,8 @@ editing `Cargo.toml`.
 ## Tests
 
 - Unit tests live next to the code (`src/<module>.rs::tests`).
-- HTTP integration tests live in `tests/http_api.rs`; the file is large and
-  scheduled for split (`_todos.md` Q7).
+- HTTP integration tests live in the `tests/http_api/` integration-test
+  binary, split into per-domain modules with `main.rs` as the entry point.
 - The OpenAPI doc test (`arkret_openapi_spec_contains_facet_projection_contracts`)
   is load-bearing — adding or removing routes that the test enumerates needs
   a corresponding update.
