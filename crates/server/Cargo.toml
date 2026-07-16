@@ -106,7 +106,7 @@ salvo = {workspace = true,features = ["test"]}
 # Dev-dependency self-reference: activates the `test-util` feature when
 # compiling the tests/ integration binaries, which link the library without
 # `cfg(test)` and would otherwise not see `AppConfig::test_default()`.
-soland = {path = ".", features = ["test-util"]}
+soland = {version = "0.3.0", path = ".", features = ["test-util"]}
 # `test-util` enables the paused-clock test runtime
 # (`#[tokio::test(start_paused = true)]`) used to assert the federation
 # auth-failure timing-bucket pad deterministically without a real sleep.

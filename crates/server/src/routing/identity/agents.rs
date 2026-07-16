@@ -30,8 +30,8 @@ use std::collections::BTreeSet;
 
 use arkret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
-    AgentLifecycleState, AgentList, AgentPairingBootstrap, AgentPairingMode,
+    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentKeyScope,
+    AgentLifecycleOutcome, AgentLifecycleState, AgentList, AgentPairingBootstrap, AgentPairingMode,
     AgentPairingResolveRequestBody, AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome, AgentParticipationReplaceRequestBody, AgentParticipationScope,
     AgentPauseRequestBody, AgentProjection, AgentProvisionOutcome, AgentProvisionPcrRecovery,
@@ -308,6 +308,34 @@ mod tests {
                 .canonical_bytes()
                 .expect("pop signing canonical bytes"),
         );
+        let controller_id = Did::new("did:web:controller.example".to_owned()).unwrap();
+        let requested_scope: AgentKeyScope =
+            serde_json::from_value(requested_agent_scope()).unwrap();
+        let requested_scope_digest =
+            arkret_sdk::agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
+                .unwrap();
+        let requested_scope_disclosure = serde_json::from_value(json!({
+            "schema": "ak.schema.agent_requested_scope_disclosure.v1",
+            "request_id": "ak:request:01999999-0000-7000-8000-000000000099",
+            "agent_id": agent_id.as_str(),
+            "controller_id": controller_id.as_str(),
+            "requested_scope": requested_scope,
+            "requested_scope_digest": requested_scope_digest.as_str(),
+            "verifier_did": service_id,
+            "audience": "ak.gate.account.command.pair_agent_key",
+            "challenge": "pairing-challenge-0001",
+            "issued_at": "2026-07-06T00:00:00Z",
+            "expires_at": "2026-07-06T00:05:00Z",
+            "proofs": [{
+                "kind": "detached_jws",
+                "alg": "EdDSA",
+                "verification_method": "did:web:controller.example#key-1",
+                "event_digest": format!("sha256:{}", "0".repeat(64)),
+                "created_at": "2026-07-06T00:00:00Z",
+                "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+            }]
+        }))
+        .unwrap();
         AgentKeyPairRequestBody {
             pairing_request_id: arkret_sdk::NonEmptyString::new(pairing_request_id).unwrap(),
             agent_id,
@@ -335,6 +363,7 @@ mod tests {
                 ]),
             )
             .unwrap(),
+            requested_scope_disclosure,
             runtime_attestation: None,
             authorize_event: arkret_sdk::Event::new(
                 "ak.agent.key.authorize",
@@ -1064,7 +1093,10 @@ mod tests {
         let err = ensure_sidecar_controller_request(&body, &session)
             .expect_err("sidecar body controller must match session actor");
 
-        assert_eq!(err.wire_code(), SIDECAR_CREATE_DENIED);
+        assert_eq!(
+            err.wire_code(),
+            arkret_sdk::ReasonCode::SIDECAR_CREATE_DENIED
+        );
     }
 
     #[test]

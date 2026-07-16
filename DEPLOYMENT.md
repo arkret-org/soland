@@ -88,16 +88,24 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_ADMIN_PRINCIPAL_DIDS` | empty | Comma-separated principal DID allowlist for production admin APIs. An empty value closes the admin API outside development mode; browser sessions additionally require `SOLAND_SESSION_GRANT_INTROSPECTION_URL`. |
 | `SOLAND_ADMIN_PAGE_LIMIT` | `100` | Default admin API page size. |
 | `SOLAND_ADMIN_MAX_PAGE_LIMIT` | `1000` | Maximum admin API page size; clamped above the default. |
-| `SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED` | ephemeral seed | Optional base64 ed25519 seed for agent audit-binding signatures; store and rotate like other signing keys. |
-| `SOLAND_COMPACTION_MIN_ANCHOR_AGE_SECS` | `604800` | Minimum seal age before compaction pruning may consider it. |
+| `SOLAND_ADMIN_BEARER` | unset | Bearer accepted only by the `soland-rotate-drill` helper; prefer its CLI flag or a secret injection mechanism. |
+| `SOLAND_COMPACTION_MIN_SEAL_AGE_SECS` | `604800` | Minimum seal age before compaction pruning may consider it. |
 | `SOLAND_COMPACTION_MIN_WITNESSES` | `1` | Minimum compaction witnesses required before pruning. |
 | `SOLAND_COMPACTION_PRESERVE_GENESIS` | `true` | Preserve genesis seals during compaction pruning. |
 | `SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS` | `true` | Restrict pruning to singleton-successor seal chains. |
 | `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` | `50` | Maximum pruning candidates examined per realm walk. |
+| `SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS` | deadpool default | Positive database-pool acquisition timeout; unset means no explicit wait timeout. |
+| `SOLAND_DB_POOL_MAX_SIZE` | CPU count × 4 | Positive database-pool size override. |
 | `SOLAND_DID_RESOLVER_ALLOW_METHODS` | `web,key,uuid` | Comma-separated DID methods accepted by outbound DID resolution. |
+| `SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS` | development mode | Authoritative override for private/link-local outbound destinations. Keep `false` in production unless the network path has been explicitly reviewed. |
+| `SOLAND_EGRESS_ALLOWED_HOSTS` | empty | Optional comma-separated exact/wildcard outbound host allowlist. |
+| `SOLAND_EGRESS_DENYLIST` | empty | Comma-separated outbound host denylist; evaluated in addition to the private-network guard. |
 | `SOLAND_ERASURE_PROPAGATION_WINDOW_MS` | `604800000` | Erasure receipt propagation window. |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN` | derived trust domain | Expected trust domain for the external webvh provider probe. |
-| `SOLAND_FEDERATION_POLICY` | `mesh` | Federation policy mode (`mesh` or `hub`). |
+| `SOLAND_FEDERATION_DENYLIST` | empty | Comma-separated federation host/service denylist. |
+| `SOLAND_FEDERATION_FANOUT_TOPOLOGY` | `mesh` | Federation fanout topology (`mesh` or `hub`). |
+| `SOLAND_FEDERATION_PEER_DENYLIST` | empty | Additional comma-separated peer denylist. |
+| `SOLAND_FEDERATION_REPLICA_OBSERVER` | `false` | Admit inbound pushes as pure replication when this deployment has no locally bound member. |
 | `SOLAND_HEALTHCHECK_URL` | derived from `SOLAND_BIND` | URL used by the built-in healthcheck command. |
 | `SOLAND_ICE_STUN_URLS` | `stun:stun.l.google.com:19302` | Comma-separated STUN URLs advertised in signed ICE configs. |
 | `SOLAND_ICE_TTL_SECONDS` | `300` | Lifetime of an issued ICE config / TURN credential before refresh; non-positive falls back to default. |
@@ -108,7 +116,12 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE` | `false` | Skip S3 request signing for test-only object stores; do not enable for production S3. |
 | `SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS` | `900` | TTL for push bridge trust/cache entries. |
 | `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS` | empty | Comma-separated service DIDs trusted for push bridge elevation. |
+| `SOLAND_RECEIVE_POLICY_*` | unset | Optional ServiceDescribe receive-policy constraints. See `.env.example` for exact names and accepted values. |
 | `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR` | `false` | Trust `X-Forwarded-For` for rate limiting when behind a trusted proxy. |
+| `SOLAND_SEED_DEMO_DATA` | `false` | Seed deterministic demo data. Test/development only; never enable in production. |
+| `SOLAND_SERVICE_IDENTITY_BUNDLE` | unset | Identity-bundle input used only by `soland-rotate-drill`; the server uses `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR`. |
+| `SOLAND_SHUTDOWN_GRACE_SECS` | `0` | Graceful-drain bound in seconds; `0` waits indefinitely. |
+| `SOLAND_TO_DEVICE_QUEUE_CAPACITY` | `10000` | Per-device in-memory to-device queue capacity. Overflow advances the lost watermark. |
 | `SOLAND_TRUST_X_FORWARDED_FOR` | `false` | Backward-compatible alias for `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR`. |
 | `SOLAND_TURN_URLS` | `turn:turn.soland.local:3478?transport=udp` | Comma-separated TURN URLs advertised in signed ICE configs. |
 | `SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS` | `86400` | Rotation window for the TURN shared secret used in credential derivation. |
@@ -120,6 +133,7 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_SOVEREIGN_ENCLAVE` | `false` | Enables the sovereign-enclave profile and startup invariant checks. |
 | `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS` | empty | Comma-separated outbound host allow-list for sovereign-enclave deployments. |
 | `SOLAND_VERIFIED_PROFILES_ARTIFACT` | unset | Path to a cotest `verified-profiles.json` artifact to advertise verified profiles. |
+| `SOLAND_WEBVH_DEGRADED_NO_WITNESS_MAX_SECS` | `86400` | Tightens the degraded-no-witness WebVH window; values cannot exceed the protocol ceiling. |
 
 Validate the env block on the target host once:
 

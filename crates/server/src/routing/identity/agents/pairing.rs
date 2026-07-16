@@ -99,8 +99,7 @@ pub(super) async fn submit_agent_runtime_key_request(
     .await?;
     ensure_pairing_request_open(&agent_record)?;
     ensure_pairing_request_id_matches(&agent_record, &body.pairing_request_id)?;
-    let key_pair_body = agent_key_pair_body_from_runtime_approval(&body);
-    verify_runtime_key_pair_proof_of_possession(&key_pair_body, agent_id, &state.service_id)?;
+    verify_runtime_approval_proof_of_possession(&body, agent_id, &state.service_id)?;
     let agent_did = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
     let public_key_digest = arkret_sdk::agent_runtime_public_key_digest(&body.public_key)
@@ -562,6 +561,7 @@ pub(super) async fn agent_key_pair(
         ));
     }
     let agent_record = require_agent_controller(state, &session, agent_id).await?;
+    validate_requested_scope_disclosure(&body, &agent_record, state).await?;
     let paired_request_digest = agent_key_pair_request_digest(&body)?;
     if agent_record.authorized_event_ref.as_deref() == Some(event_id) {
         let same_request = agent_record.paired_pairing_request_id.as_deref()
@@ -666,6 +666,122 @@ pub(super) async fn agent_key_pair(
         ok: true,
         authorized_event_ref,
     })
+}
+
+async fn validate_requested_scope_disclosure(
+    body: &AgentKeyPairRequestBody,
+    agent_record: &AgentPrincipalRecord,
+    state: &AppState,
+) -> Result<(), AppError> {
+    let disclosure = &body.requested_scope_disclosure;
+    disclosure.validate().map_err(|error| {
+        AppError::invalid_param(format!("requested_scope_disclosure invalid: {error}"))
+    })?;
+    if disclosure.agent_id.as_str() != agent_record.id
+        || disclosure.controller_id.as_str() != agent_record.controller_id
+    {
+        return Err(AppError::invalid_param(
+            "requested_scope_disclosure principal binding does not match the Agent record",
+        ));
+    }
+    if disclosure.verifier_did.as_str() != state.service_id
+        || disclosure.audience.as_str()
+            != arkret_sdk::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY
+    {
+        return Err(AppError::invalid_param(
+            "requested_scope_disclosure verifier or audience does not match this operation",
+        ));
+    }
+    let pairing_request_id = required_pairing_request_id(agent_record)?;
+    let pairing_request_uuid = pairing_request_id
+        .strip_prefix("agent_pairing_request:")
+        .ok_or_else(|| incomplete_pairing_metadata("pairing_request_id"))?;
+    if disclosure.request_id.as_str() != format!("ak:request:{pairing_request_uuid}")
+        || disclosure.challenge.as_str() != pairing_request_id
+    {
+        return Err(AppError::invalid_param(
+            "requested_scope_disclosure request or challenge does not match the open pairing request",
+        ));
+    }
+    let now = chrono::Utc::now();
+    if now < disclosure.issued_at || now > disclosure.expires_at {
+        return Err(AppError::invalid_param(
+            "requested_scope_disclosure presentation window is not active",
+        ));
+    }
+    let stored_scope = agent_record.requested_scope.as_ref().ok_or_else(|| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Agent record is missing its immutable requested_scope",
+        )
+    })?;
+    let stored_scope: AgentKeyScope =
+        serde_json::from_value(stored_scope.clone()).map_err(|error| {
+            AppError::internal(format!("stored Agent requested_scope is invalid: {error}"))
+        })?;
+    let agent_id = Did::new(agent_record.id.clone())
+        .map_err(|error| AppError::internal(format!("stored Agent DID is invalid: {error}")))?;
+    let controller_id = Did::new(agent_record.controller_id.clone()).map_err(|error| {
+        AppError::internal(format!("stored Agent controller DID is invalid: {error}"))
+    })?;
+    let stored_digest =
+        arkret_sdk::agent_requested_scope_digest(&agent_id, &controller_id, &stored_scope)
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "stored Agent requested_scope digest failed: {error}"
+                ))
+            })?;
+    if disclosure.requested_scope_digest != stored_digest {
+        return Err(AppError::invalid_param(
+            "requested_scope_disclosure does not match the provisioned Agent ceiling",
+        ));
+    }
+    let mut proof_errors = Vec::new();
+    for proof in &disclosure.proofs {
+        if proof.created_at < disclosure.issued_at || proof.created_at > disclosure.expires_at {
+            proof_errors.push("proof created_at is outside the disclosure window".to_owned());
+            continue;
+        }
+        if let Err(error) = crate::jws_verify::validate_verification_method_controller(
+            disclosure.controller_id.as_str(),
+            &proof.verification_method,
+        ) {
+            proof_errors.push(error);
+            continue;
+        }
+        let binding_bytes = match disclosure.canonical_proof_binding_bytes(proof) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                proof_errors.push(error.to_string());
+                continue;
+            }
+        };
+        let verification = if state.config.development_mode {
+            crate::jws_verify::verify_jws_shape(
+                &binding_bytes,
+                &proof.jws,
+                &proof.verification_method,
+                disclosure.controller_id.as_str(),
+            )
+        } else {
+            crate::jws_verify::verify_jws_ed25519_async(
+                &binding_bytes,
+                &proof.jws,
+                &proof.verification_method,
+                disclosure.controller_id.as_str(),
+                state,
+            )
+            .await
+        };
+        if verification.is_ok() {
+            return Ok(());
+        }
+        proof_errors.push(verification.unwrap_err());
+    }
+    Err(AppError::invalid_param(format!(
+        "requested_scope_disclosure has no valid controller proof: {}",
+        proof_errors.join("; ")
+    )))
 }
 
 fn ensure_current_runtime_key_request_matches(
@@ -1095,28 +1211,6 @@ pub(super) fn ensure_pairing_request_id_matches(
     Ok(())
 }
 
-pub(super) fn agent_key_pair_body_from_runtime_approval(
-    body: &AgentRuntimeApprovalRequestBody,
-) -> AgentKeyPairRequestBody {
-    AgentKeyPairRequestBody {
-        pairing_request_id: body.pairing_request_id.clone(),
-        agent_id: body.agent_id.clone(),
-        verification_method: body.verification_method.clone(),
-        public_key: body.public_key.clone(),
-        proof_of_possession: body.proof_of_possession.clone(),
-        runtime_attestation: body.runtime_attestation.clone(),
-        authorize_event: arkret_sdk::Event::new(
-            "ak.agent.key.authorize",
-            arkret_sdk::RealmId::new("ak:realm:01999999-0000-7000-8000-00000000feed").unwrap(),
-            arkret_sdk::Did::new("did:web:agent.example").unwrap(),
-            1,
-            arkret_sdk::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
-            json!({}),
-        )
-        .unwrap(),
-    }
-}
-
 pub(super) fn runtime_key_request_for_controller(body: &AgentRuntimeApprovalRequestBody) -> Value {
     json!({
         "pairing_request_id": body.pairing_request_id.clone(),
@@ -1176,15 +1270,52 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
     agent_id: &str,
     service_id: &str,
 ) -> Result<(), AppError> {
+    verify_runtime_key_proof_of_possession(
+        &body.pairing_request_id,
+        &body.verification_method,
+        &body.public_key,
+        &body.proof_of_possession,
+        body.runtime_attestation.as_ref(),
+        agent_id,
+        service_id,
+    )
+}
+
+fn verify_runtime_approval_proof_of_possession(
+    body: &AgentRuntimeApprovalRequestBody,
+    agent_id: &str,
+    service_id: &str,
+) -> Result<(), AppError> {
+    verify_runtime_key_proof_of_possession(
+        &body.pairing_request_id,
+        &body.verification_method,
+        &body.public_key,
+        &body.proof_of_possession,
+        body.runtime_attestation.as_ref(),
+        agent_id,
+        service_id,
+    )
+}
+
+fn verify_runtime_key_proof_of_possession(
+    pairing_request_id: &str,
+    verification_method: &str,
+    public_key: &PublicKey,
+    proof_of_possession: &arkret_sdk::NonEmptyJsonObject,
+    runtime_attestation: Option<&arkret_sdk::AgentKeyAuthorizePayloadRuntimeAttestation>,
+    agent_id: &str,
+    service_id: &str,
+) -> Result<(), AppError> {
     let agent_id = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
-    let public_key_bytes = runtime_ed25519_public_key(&body.public_key, &body.verification_method)?;
-    let proof: AgentKeyPairProofOfPossession = serde_json::from_value(
-        serde_json::to_value(&body.proof_of_possession).map_err(|error| {
+    let public_key_bytes = runtime_ed25519_public_key(public_key, verification_method)?;
+    let proof: AgentKeyPairProofOfPossession =
+        serde_json::from_value(serde_json::to_value(proof_of_possession).map_err(|error| {
             AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
-        })?,
-    )
-    .map_err(|error| AppError::invalid_param(format!("proof_of_possession invalid: {error}")))?;
+        })?)
+        .map_err(|error| {
+            AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
+        })?;
     if proof.audience != service_id {
         return Err(AppError::invalid_param(
             "proof_of_possession.audience must match this principal server",
@@ -1196,12 +1327,12 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
         ));
     }
     let expected_digest = arkret_sdk::agent_key_pair_proof_request_binding_digest(
-        &body.pairing_request_id,
+        pairing_request_id,
         &agent_id,
-        &body.verification_method,
-        &serde_json::to_value(&body.public_key)
+        verification_method,
+        &serde_json::to_value(public_key)
             .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?,
-        runtime_attestation_value(body.runtime_attestation.as_ref())?.as_ref(),
+        runtime_attestation_value(runtime_attestation)?.as_ref(),
     )
     .map_err(|error| {
         AppError::invalid_param(format!(
@@ -1216,7 +1347,7 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
     let request_digest = Hash::new(proof.request_canonical_digest.clone())
         .map_err(|_| AppError::invalid_param("proof_of_possession digest is invalid"))?;
     let signing_input = arkret_sdk::agent::agent_key_pair_proof_signing_input(
-        body.verification_method.to_string(),
+        verification_method.to_owned(),
         proof.challenge,
         proof.audience,
         proof.expires_at,

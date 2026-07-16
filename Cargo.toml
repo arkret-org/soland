@@ -39,7 +39,7 @@ hex = "0.4.3"
 hmac = "0.13"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
-object_store = "0.13.2"
+object_store = "0.14.1"
 opentelemetry = { version = "0.32.0", default-features = false }
 opentelemetry-otlp = { version = "0.32.0", default-features = false }
 opentelemetry_sdk = { version = "0.32.1", default-features = false }
@@ -52,7 +52,7 @@ salvo-oapi = { version = "0.94", default-features = false }
 serde = "1.0.228"
 serde_json = "1.0.150"
 sha2 = "0.11.0"
-soland-core = { path = "crates/core" }
+soland-core = { version = "0.3.0", path = "crates/core" }
 soland-data = { version = "0.3.0", path = "crates/data" }
 subtle = "2.6.1"
 thiserror = "2"

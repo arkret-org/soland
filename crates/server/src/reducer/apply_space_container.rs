@@ -127,14 +127,8 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        // AKP-0007 rename batch 2026-05-25: wire field is `parent_space_id`.
-        // The reducer keeps a transitional fallback to `parent_ref` so
-        // soland's own internal reducer tests (which build payloads
-        // directly without going through the wire validator) keep
-        // passing; real wire traffic uses `parent_space_id`.
         let parent_ref = object
             .get("parent_space_id")
-            .or_else(|| object.get("parent_ref"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         let rank = object
@@ -253,19 +247,11 @@ impl ProjectionState {
                 reason: "space_parent_missing_space_id".to_owned(),
             };
         };
-        let parent_ref = if operation.payload.get("parent_space_id").is_some() {
-            operation
-                .payload
-                .get("parent_space_id")
-                .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned)
-        } else {
-            operation
-                .payload
-                .get("parent_ref")
-                .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned)
-        };
+        let parent_ref = operation
+            .payload
+            .get("parent_space_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
         if let Some(parent_space_id) = parent_ref.as_deref() {
             let Some(space_container) = self.space_containers.get(&container_space_id) else {
                 return self.queue_pending_replay(
@@ -582,7 +568,6 @@ impl ProjectionState {
                 let Some(parent_space_id) = operation
                     .payload
                     .get("parent_space_id")
-                    .or_else(|| operation.payload.get("parent_ref"))
                     .and_then(Value::as_str)
                     .filter(|value| !value.trim().is_empty())
                 else {
