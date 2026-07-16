@@ -2,7 +2,6 @@
 //!
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
-#![allow(unused_imports)]
 use arkret_sdk::CellRef;
 use arkret_sdk::lattice::CellState;
 

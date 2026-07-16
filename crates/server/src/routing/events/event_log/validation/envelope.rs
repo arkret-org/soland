@@ -256,8 +256,6 @@ pub(crate) use features_schema::{
     event_requirements_schema_id, validate_event_critical_features,
     validate_event_schema_and_payload, validate_event_time_fields, validate_member_identity_proof,
 };
-#[allow(unused_imports)]
-pub(crate) use minimal_metadata_author::admit_minimal_metadata_author_claim;
 pub(crate) use proofs::validate_event_proofs;
 
 #[cfg(test)]

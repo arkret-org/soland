@@ -736,15 +736,6 @@ pub struct LiveKitConfig {
     pub api_secret: Option<String>,
 }
 
-impl LiveKitConfig {
-    /// Whether both API Key and Secret are configured so a LiveKit JWT can
-    /// be minted.
-    #[inline]
-    pub fn is_configured(&self) -> bool {
-        self.api_key.is_some() && self.api_secret.is_some()
-    }
-}
-
 /// Load LiveKit API credentials. The secret accepts the `_FILE` indirection
 /// so operators can mount it via Kubernetes / Docker / systemd secrets.
 fn load_livekit_config() -> anyhow::Result<LiveKitConfig> {

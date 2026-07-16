@@ -6,7 +6,6 @@
 //! module. AppState is built minimally with `development_mode=false` so
 //! the DID resolver is identical to production-deploy behaviour.
 
-#![allow(unused_imports)]
 use ed25519_dalek::{Signer, SigningKey};
 
 use super::common::*;

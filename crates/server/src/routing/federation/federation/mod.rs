@@ -87,7 +87,7 @@ pub(crate) use outbound::configured_peer_targets;
 #[cfg(test)]
 pub(crate) use outbound::test_app_state_with_peers;
 #[cfg(test)]
-use outbound::{OutboundFanoutRetryReport, next_retry_at, run_outbound_fanout_retry_pass_at};
+use outbound::{next_retry_at, run_outbound_fanout_retry_pass_at};
 pub(crate) use profile_intersection::federation_profile_intersection_for_peer;
 #[cfg(test)]
 use salvo::http::StatusCode;
@@ -103,8 +103,6 @@ pub(crate) use wire::{
     FederationTrustHeaders, delivery_binding_handed_over_response, delivery_binding_stale_response,
 };
 
-#[cfg(test)]
-use crate::kinds;
 
 #[cfg(test)]
 #[path = "../federation_tests.rs"]

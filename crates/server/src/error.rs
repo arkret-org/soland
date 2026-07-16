@@ -168,18 +168,6 @@ pub mod reasons {
     pub const PEER_UNRESOLVABLE: &str = core_error::ERROR_CODE_PEER_UNRESOLVABLE;
     pub const KEYPACKAGE_UNKNOWN: &str = core_error::ERROR_CODE_KEYPACKAGE_UNKNOWN;
 
-    /// AKP-0007 reason codes registered in this round. Test scaffolding
-    /// uses this slice to assert the full set is surfaced through
-    /// `crate::error::reasons`.
-    pub const CKP_0007: &[&str] = &[
-        CIRCLE_REALM_MISMATCH,
-        CIRCLE_NOT_ACTIVE,
-        CIRCLE_MEMBER_MUST_BE_REALM_MEMBER,
-        CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR,
-        CONTENT_ENCRYPTION_FLOOR_VIOLATION,
-        SCOPE_REBIND_FORBIDDEN,
-        METADATA_ENCRYPTION_FLOOR_VIOLATION,
-    ];
 
     // Agent / pairing / session-grant reason codes.
     pub const PROOF_INVALID: &str = core_error::REASON_PROOF_INVALID;

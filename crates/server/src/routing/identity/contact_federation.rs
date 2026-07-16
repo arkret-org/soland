@@ -850,14 +850,14 @@ fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> 
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-    use std::str::FromStr;
+    
+    
 
     use soland_data::Db;
 
     use super::*;
     use crate::config::{
-        AppConfig, IceServersConfig, LiveKitConfig, LogFormat, ObjectStorageConfig,
+        AppConfig, ObjectStorageConfig,
     };
 
     fn test_config() -> AppConfig {

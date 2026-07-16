@@ -1,5 +1,4 @@
 use super::*;
-use crate::reducer::*;
 
 // ── AKP-0007 §8 — Circle member one-way add authorization ───────────
 //

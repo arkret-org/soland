@@ -331,7 +331,7 @@ fn valid_trust_domain(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::net::SocketAddr;
+    
     use std::sync::Arc;
 
     use arkret_sdk::Did;
@@ -339,7 +339,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::{IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+    use crate::config::ObjectStorageConfig;
     use crate::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
     use crate::state::WebvhDocumentRecord;
 

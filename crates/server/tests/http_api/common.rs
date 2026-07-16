@@ -4,7 +4,6 @@
 //! file was split into per-domain submodules. All items are reachable
 //! to siblings via `super::common::*` (re-exported by `http_api.rs`).
 
-#![allow(dead_code)]
 
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
@@ -109,15 +108,6 @@ pub(crate) fn signed_federation_push_headers(
     body: &Value,
 ) -> Vec<(&'static str, String)> {
     signed_federation_request_headers("POST", origin, destination, target_uri, body)
-}
-
-pub(crate) fn signed_federation_transaction_headers(
-    origin: &str,
-    destination: &str,
-    target_uri: &str,
-    body: &Value,
-) -> Vec<(&'static str, String)> {
-    signed_federation_request_headers("PUT", origin, destination, target_uri, body)
 }
 
 pub(crate) fn signed_federation_get_headers(

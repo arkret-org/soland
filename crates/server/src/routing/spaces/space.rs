@@ -399,7 +399,9 @@ async fn get_space_cell(
         cell_family: CHILD_ORDER_CELL_FAMILY.to_owned(),
         space_id,
         state: "value".to_owned(),
-        lattice: "ordered-log".to_owned(),
+        lattice: arkret_sdk::lattice::LatticeKind::OrderedLog
+            .as_wire_str()
+            .to_owned(),
         value,
         total,
     })

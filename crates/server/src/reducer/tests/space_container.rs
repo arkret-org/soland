@@ -1,5 +1,4 @@
 use super::*;
-use crate::reducer::*;
 
 /// Stream-F (Wave 2C) — spec `realm-and-space.md` §2.5.1 ¶6.
 /// `ak.realm.destroy` on Realm A must mark cross-Realm child

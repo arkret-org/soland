@@ -1084,17 +1084,6 @@ impl ProjectionState {
         ProjectionEffect::AgentKeyRevokeProjected { agent_id, key_id }
     }
 
-    /// AKP-0008 §4.11 — every grant id whose subject is `subject_did`
-    /// (across all capability grant cells, including revoked ones so the
-    /// deactivate fan-out can idempotently re-revoke). Used by the lifecycle
-    /// deactivate path to fan-out `ak.capability.revoke`.
-    pub fn grant_ids_for_subject(&self, subject_did: &str) -> Vec<String> {
-        self.grant_locations_for_subject(subject_did)
-            .into_iter()
-            .map(|(grant_id, _)| grant_id)
-            .collect()
-    }
-
     /// Every persisted capability grant for `subject_did`, paired with the
     /// Realm that governs its grant cell. Revocation must be submitted in
     /// this Realm; a controller PCR is not a cross-Realm revocation surface.

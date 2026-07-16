@@ -94,8 +94,9 @@ fn author_credential_invalid(detail: impl std::fmt::Display) -> EventValidationE
 }
 
 /// Pure §2.10.3 admission: validate an author claim against an
-/// already-resolved group-state view. Takes no resolver / directory handle —
-/// cotest's conformance runner and the unit tests drive this directly.
+/// already-resolved group-state view. Takes no resolver / directory handle;
+/// `validate_minimal_metadata_author_proof` and this module's unit tests are
+/// its only callers.
 pub(crate) fn admit_minimal_metadata_author_claim(
     view: &AuthorGroupStateView,
     claim: &MinimalMetadataAuthorClaim<'_>,

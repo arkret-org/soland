@@ -1,7 +1,6 @@
 //! Integration tests — `push_keys` domain: keys upload/query/claim,
 //! device-authorize projection, and revocation directory behaviour.
 
-#![allow(unused_imports)]
 use super::helpers::*;
 use crate::common::*;
 

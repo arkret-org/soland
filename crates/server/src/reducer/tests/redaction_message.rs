@@ -1,5 +1,4 @@
 use super::*;
-use crate::reducer::*;
 
 #[test]
 fn redaction_human_reason_prefers_explicit_field() {

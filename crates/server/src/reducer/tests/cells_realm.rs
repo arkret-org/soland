@@ -1,5 +1,4 @@
 use super::*;
-use crate::reducer::*;
 
 // ── Cells map tests ──
 

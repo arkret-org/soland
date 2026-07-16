@@ -1,6 +1,5 @@
 //! Integration tests — federation peer API.
 
-#![allow(unused_imports)]
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};

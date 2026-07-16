@@ -1,6 +1,5 @@
 //! Integration tests — `events.subscribe` streaming NDJSON surface.
 
-#![allow(unused_imports)]
 use super::common::*;
 
 /// Demo realm pre-seeded by AppState::new. Public/discoverable so the

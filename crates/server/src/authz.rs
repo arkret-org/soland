@@ -359,23 +359,6 @@ impl SolandAuthzEngine {
             .collect()
     }
 
-    /// Get all valid, non-revoked, non-expired, chain-intact grants in a space.
-    pub fn grants_in_realm(&self, realm_id: &str) -> Vec<Grant> {
-        let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
-        let now = chrono::Utc::now();
-        snapshot
-            .iter()
-            .filter(|g| {
-                g.realm_id == realm_id
-                    && grant_scope_valid(g).is_ok()
-                    && !g.revoked
-                    && !is_grant_expired(g, now)
-                    && delegation_chain_intact(&snapshot, &g.grant_id, now)
-            })
-            .cloned()
-            .collect()
-    }
-
     pub(crate) fn grants_snapshot(&self) -> Vec<Grant> {
         self.grants.lock().values().cloned().collect()
     }

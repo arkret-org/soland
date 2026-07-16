@@ -2,7 +2,6 @@
 //!
 //! Reached from sibling cluster files via `use super::helpers::*;`.
 
-#![allow(unused_imports)]
 use crate::common::*;
 
 pub(crate) fn presence_event<'a>(sync: &'a Value, actor: &str) -> &'a Value {

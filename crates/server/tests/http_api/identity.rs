@@ -2,7 +2,6 @@
 //!
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
-#![allow(unused_imports)]
 use super::common::*;
 
 #[tokio::test(flavor = "multi_thread")]

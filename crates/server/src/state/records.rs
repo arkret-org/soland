@@ -576,11 +576,6 @@ impl RealmMetaRecord {
             .is_some_and(|classes| classes.contains(&data_class))
     }
 
-    pub fn allows_any_plaintext_data_class(&self, service_id: &str) -> bool {
-        self.plaintext_visible_service_classes
-            .get(service_id)
-            .is_some_and(|classes| !classes.is_empty())
-    }
 }
 
 #[derive(Clone, Debug)]

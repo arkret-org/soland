@@ -196,36 +196,6 @@ impl ProjectionState {
         self.polls.get(poll_id)
     }
 
-    /// Get relations for a Realm, optionally filtered by kind.
-    pub fn relations_for_realm(
-        &self,
-        realm_id: &str,
-        kind: Option<&str>,
-    ) -> Vec<&SolandRelationState> {
-        self.relations
-            .values()
-            .filter(|r| {
-                r.realm_id == realm_id && r.is_active() && kind.is_none_or(|k| r.relation_kind == k)
-            })
-            .collect()
-    }
-
-    /// AKP-0007 — list the Strands that point AT `strand_id` via a
-    /// `confidential_discussion_of` Relation. Useful for the discovery
-    /// surface that resolves the "narrow discussion" companion of a
-    /// "wide synthesis" Strand. Returns the `from_ref` side of each live
-    /// matching relation.
-    pub fn confidential_discussions_of(&self, strand_id: &str) -> Vec<&SolandRelationState> {
-        self.relations
-            .values()
-            .filter(|r| {
-                r.is_active()
-                    && r.relation_kind == crate::kinds::RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF
-                    && r.to_ref.as_deref() == Some(strand_id)
-            })
-            .collect()
-    }
-
     /// Get members of a Realm currently in `state="join"`.
     /// For state-specific queries use [`members_in_state`].
     pub fn members_of_realm(&self, realm_id: &str) -> Vec<&SolandMembershipState> {

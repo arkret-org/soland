@@ -1,6 +1,5 @@
 //! Integration tests for sodmin-driven admin B-track endpoints.
 
-#![allow(unused_imports)]
 use soland::state::BlobRecord;
 
 use super::common::*;

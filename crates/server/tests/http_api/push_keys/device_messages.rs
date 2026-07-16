@@ -1,7 +1,6 @@
 //! Integration tests — `push_keys` domain: to-device message delivery,
 //! opaque-payload preservation, ack-token consumption, and logout eviction.
 
-#![allow(unused_imports)]
 use super::helpers::*;
 use crate::common::*;
 

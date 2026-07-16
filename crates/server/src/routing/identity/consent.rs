@@ -1636,14 +1636,14 @@ impl ConsentRevokeInvalidationChannel {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-    use std::str::FromStr;
+    
+    
 
     use soland_data::Db;
 
     use super::*;
     use crate::config::{
-        AppConfig, IceServersConfig, LiveKitConfig, LogFormat, ObjectStorageConfig,
+        AppConfig, ObjectStorageConfig,
     };
 
     #[test]

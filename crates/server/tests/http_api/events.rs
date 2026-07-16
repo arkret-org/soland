@@ -2,7 +2,6 @@
 //!
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
-#![allow(unused_imports)]
 use super::common::*;
 
 fn test_session_credential_hash(token: &str, audience: &str) -> String {

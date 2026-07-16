@@ -352,68 +352,6 @@ pub struct OutboundPushBridgeCacheInvalidateOutcome {
 // `sync::SyncRequestBody` under the same name.
 pub use arkret_sdk::SyncRequestBody;
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexDescribeOutcome {
-    pub service_id: String,
-    pub reducer_profiles: Vec<String>,
-    pub schema_profiles: Vec<String>,
-    pub query_features: Vec<String>,
-    pub frontier: Value,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct IndexSearchRequestBody {
-    pub query: String,
-    #[serde(default)]
-    pub realm_ids: Vec<String>,
-    /// Filter by typed-id kinds drawn from the spec id-kind-registry. Replaces
-    /// the round-5 `entity_types[]` alias.
-    #[serde(default)]
-    pub object_kinds: Vec<String>,
-    #[serde(default)]
-    pub facets: Vec<String>,
-    pub renderer: Option<String>,
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexSearchOutcome {
-    pub results: Vec<Value>,
-    pub next_cursor: Option<String>,
-    pub frontier: Value,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexThreadOutcome {
-    pub thread: Value,
-    pub events: Vec<Value>,
-    pub next_cursor: Option<String>,
-    pub frontier: Value,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexNotificationsOutcome {
-    pub notifications: Vec<Value>,
-    pub next_cursor: Option<String>,
-    pub unread_count: usize,
-    pub frontier: Value,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexInboxOutcome {
-    pub strands: Vec<Value>,
-    pub next_cursor: Option<String>,
-    pub frontier: Value,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexSpaceHierarchyOutcome {
-    pub root_space_id: String,
-    pub spaces: Vec<Value>,
-    pub edges: Vec<Value>,
-    pub frontier: Value,
-}
-
 // Snapshot head operations return the full signed `ak.schema.snapshot.v1`
 // manifest. soland answers both operations with `not_implemented` until it can
 // produce a real Snapshot detached proof.
@@ -493,18 +431,6 @@ pub struct SolandAccountRegisterOutcome {
     pub display_name: Option<String>,
     pub state: String,
     pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SendMessageRequestBody {
-    pub realm_id: String,
-    /// Message-layer discussion grouping inside the projected Strand; this is
-    /// not the Strand object's `strand_id`.
-    #[serde(default)]
-    pub thread_id: Option<String>,
-    pub content: Value,
-    #[serde(default)]
-    pub encrypted: bool,
 }
 
 // Identity log / receipts outcomes are the SDK DTOs (`model/api.rs` is the
@@ -1346,39 +1272,9 @@ pub fn now() -> DateTime<Utc> {
 
 // ── Conversation Model DTOs ──
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ReviseMessageRequestBody {
-    pub event_id: String,
-    pub content: Value,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ReviseMessageOutcome {
-    pub event_id: String,
-    pub revision_of: String,
-    pub operation_id: String,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RedactMessageRequestBody {
-    pub event_id: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RedactMessageOutcome {
-    pub redacted: bool,
-    pub event_id: String,
-}
-
-pub type SetReadMarkerRequestBody = arkret_sdk::ReadCursorAdvanceRequestBody;
 pub type ReadScopeWire = arkret_sdk::ReadCursorScope;
 pub type ReadCursorPositionWire = arkret_sdk::ReadCursorPosition;
 pub type ReadMarkerOutcome = arkret_sdk::ReadMarkerOutcome;
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct GetReadMarkersRequestBody {
-    pub realm_id: String,
-}
 
 #[cfg(test)]
 mod tests {

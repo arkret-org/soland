@@ -373,8 +373,8 @@ fn verify_ed25519_partial(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::net::SocketAddr;
-    use std::str::FromStr;
+    
+    
 
     use soland_data::Db;
 

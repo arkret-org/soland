@@ -870,15 +870,6 @@ impl ProjectionState {
         effect
     }
 
-    /// Apply a batch of operations.
-    pub fn apply_batch(
-        &mut self,
-        operations: &[Operation],
-        hlc: &ServerHlc,
-    ) -> Vec<ProjectionEffect> {
-        operations.iter().map(|op| self.apply(op, hlc)).collect()
-    }
-
     /// Probe the supplied [`LatticeRegistry`] for a `cell_family` that
     /// handles this Operation's canonical kind via `event_kinds()`.
     ///

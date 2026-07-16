@@ -1247,7 +1247,7 @@ fn store_forward_json(record: &SovereignStoreForwardRecord) -> StoreForwardOpera
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+    use crate::config::ObjectStorageConfig;
 
     fn base_config() -> AppConfig {
         AppConfig {

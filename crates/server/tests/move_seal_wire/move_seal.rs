@@ -8,7 +8,6 @@
 //! the canonical Merkle `state_root`, and returns the post-Seal
 //! state root.
 
-#![allow(unused_imports)]
 use super::common::*;
 
 #[tokio::test]

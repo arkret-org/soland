@@ -288,13 +288,13 @@ fn eligibility_wire(eligibility: &PruneEligibility) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::net::SocketAddr;
-    use std::str::FromStr;
+    
+    
 
     use soland_data::Db;
 
     use super::*;
-    use crate::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
+    use crate::config::{AppConfig, ObjectStorageConfig};
 
     fn test_config() -> AppConfig {
         AppConfig {

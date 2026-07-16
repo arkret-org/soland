@@ -1,6 +1,5 @@
 //! Integration tests — HLC replay-window protection on `submit_move`.
 
-#![allow(unused_imports)]
 use super::common::*;
 
 /// Build a Move whose `hlc` is set to the given physical-ms timestamp

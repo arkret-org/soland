@@ -1,7 +1,6 @@
 //! Integration tests — `push_keys` domain: push / profile / blob / presence /
 //! call-signal contracts.
 
-#![allow(unused_imports)]
 use soland::state::EventNotificationKind;
 
 use super::helpers::*;

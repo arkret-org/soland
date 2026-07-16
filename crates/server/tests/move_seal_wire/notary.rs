@@ -1,6 +1,5 @@
 //! Integration tests — notary signing worker + admin notary endpoints.
 
-#![allow(unused_imports)]
 use super::common::*;
 
 /// The notary worker takes one or more

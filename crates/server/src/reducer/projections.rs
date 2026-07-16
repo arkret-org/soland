@@ -967,10 +967,6 @@ impl MessageState {
         message_expiry_projection_from_value(self.expiry.as_ref(), self.created_at, now)
     }
 
-    pub fn requires_expiry_stub_at(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
-        self.expiry_projection_at(now)
-            .is_some_and(|projection| projection.is_stub())
-    }
 }
 
 pub fn message_expiry_projection_from_value(

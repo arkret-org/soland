@@ -1,5 +1,4 @@
 use super::*;
-use crate::reducer::*;
 
 // ── P2 moderation control-plane projection (apply_moderation.rs) ──────
 //

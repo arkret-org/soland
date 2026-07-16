@@ -1,6 +1,5 @@
 //! Integration tests — REC-1 recovery receipt verification + read APIs.
 
-#![allow(unused_imports)]
 
 use std::sync::Arc;
 

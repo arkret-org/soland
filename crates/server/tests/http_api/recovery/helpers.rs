@@ -4,7 +4,6 @@
 //! `use super::helpers::*;`. Shared common-module fixtures arrive through
 //! `use crate::common::*;`.
 
-#![allow(unused_imports)]
 
 use std::sync::Arc;
 
@@ -12,7 +11,7 @@ use arkret_sdk::{
     KeyBackupDeleteDevelopmentProof, KeyBackupDeleteProof, KeysBackupsDeleteRequestBody,
 };
 use serde_json::{Map, Value};
-use soland::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
+use soland::persistence::PersistenceStore;
 use soland::state::{
     CanonicalEventRecord, DeviceInventoryRecord, RecoveryPolicyRecord, SessionRecord,
     WebvhDocumentRecord,

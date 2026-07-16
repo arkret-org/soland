@@ -18,7 +18,6 @@
 //! transition, so the Move passes verify and the post-state is
 //! `Value("join")`.
 
-#![allow(dead_code)]
 
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 

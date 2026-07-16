@@ -9,7 +9,6 @@
 //! - GET /_soland/admin/cells with prefix filter → only matching cells
 //! - Auth-required: omit Bearer token → 401 / canonical envelope
 
-#![allow(unused_imports)]
 use super::common::*;
 
 /// Submit a Move + trigger notary signing pass so the member cell

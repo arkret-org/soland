@@ -1,6 +1,5 @@
 //! Integration tests for the MIMI facade.
 
-#![allow(unused_imports)]
 use serde_json::json;
 
 use super::common::*;

@@ -1,7 +1,6 @@
 //! Integration tests — C-P5 did_recovery backup ↔ active policy binding,
 //! plus key-backup delete retirement rules for did_recovery backups.
 
-#![allow(unused_imports)]
 
 use std::sync::Arc;
 

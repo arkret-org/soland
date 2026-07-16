@@ -300,21 +300,6 @@ pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
         .is_some_and(arkret_sdk::events::kinds::is_realm_lifecycle_kind)
 }
 
-// G3.S9: extensions (applet/bot/tsp) — stub event kinds. Wire-accept +
-// reducer no-op projection (we keep the structured caches in
-// `routing::extensions::{bot_actor, tsp}`). Full state-machine semantics
-// land with the protocol implementations themselves; the constants are
-// here so the reducer registry can dispatch.
-//
-// Spec seals:
-//   - `extensions/applet-integration.md` §3–§5 (bot / ghost actor accountability model)
-//   - `identity/tsp-integration.md` §3–§5 (transport declaration, route, audit chain)
-pub const EXTENSIONS_BOT_REGISTER: &str = "ak.extensions.bot_actor.register";
-pub const EXTENSIONS_BOT_REVOKE: &str = "ak.extensions.bot_actor.revoke";
-pub const EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "ak.extensions.tsp.transport_declare";
-pub const EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "ak.extensions.tsp.route_establish";
-pub const EXTENSIONS_TSP_AUDIT_APPEND: &str = "ak.extensions.tsp.audit_append";
-
 // ────────────────────────────────────────────────────────────────────────
 // Audit-compliance profiles + Realm terminal-state classifier (spec T07/T09/T23).
 // ────────────────────────────────────────────────────────────────────────
@@ -324,12 +309,6 @@ pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = &[
     "ak.profile.attested_audit.e2ee.v1",
     "ak.profile.disclosed_audit.e2ee.v1",
 ];
-
-/// Spec T07 — Realm lifecycle state classifier; mirror of the SDK
-/// [`arkret_sdk::events::RealmLifecycleState`] terminal predicate.
-pub fn realm_state_is_terminal(state: arkret_sdk::events::RealmLifecycleState) -> bool {
-    arkret_sdk::events::is_terminal_realm_state(state)
-}
 
 /// Spec T23 — true when `ak.audit.ryw_receipt` may be accepted as a durable
 /// Event. Requires `ak.profile.attested_audit.e2ee.v1` to be in the Realm's
