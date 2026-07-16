@@ -618,7 +618,7 @@ fn device_binding_reason_to_app_error(reason: &'static str) -> AppError {
             "cross_signing_binding signature does not verify against accepted SSK",
         )
         .with_status(salvo::http::StatusCode::UNAUTHORIZED)
-        .with_wire_code(crate::error::reasons::PROOF_INVALID),
+        .with_wire_code(arkret_sdk::ReasonCode::PROOF_INVALID),
         other
             if other.starts_with("cross_signing_binding_missing")
                 || other.starts_with("device_authorize_") =>
@@ -790,7 +790,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     if let Some(alg) = envelope.signature.alg.as_deref()
         && !matches!(alg, "EdDSA" | "Ed25519")
     {
-        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     match &envelope.trust_binding {
         MlsRequesterTrustBinding::SskGeneration(generation) => {
@@ -817,7 +817,7 @@ fn verify_mls_welcome_claim_envelope_ssk_signature(
         let mgr = state.cross_signing.lock();
         let publish = mgr
             .current_cross_signing(&envelope.requester_did)
-            .ok_or(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+            .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
         (
             publish.generation.get(),
             publish.self_signing_key.kid.clone(),
@@ -828,15 +828,15 @@ fn verify_mls_welcome_claim_envelope_ssk_signature(
     if envelope_generation != accepted_generation
         || envelope.signature.kid.as_str() != ssk_kid.as_str()
     {
-        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let ssk = decode_ed25519_key(ssk_public_key.as_str(), ssk_key_format.as_str())
-        .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let signing_bytes = envelope
         .canonical_signing_bytes()
-        .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if !ed25519_verify(&ssk, &signing_bytes, &envelope.signature.sig) {
-        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     Ok(())
 }
@@ -850,17 +850,17 @@ async fn verify_mls_welcome_claim_envelope_device_signature(
     if let Some(sender_device_id) = sender_device_id
         && sender_device_id != requester_device_id
     {
-        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let record = state
         .persistence
         .devices()
         .get(envelope.requester_did.as_str(), requester_device_id)
         .await
-        .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
-        .ok_or(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
+        .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if record.revoked_at.is_some() || record.verification_state != "verified" {
-        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let device_public_key = record
         .payload
@@ -868,21 +868,21 @@ async fn verify_mls_welcome_claim_envelope_device_signature(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if !device_signature_kid_points_to_device_key(
         &envelope.signature.kid,
         envelope.requester_did.as_str(),
         device_public_key,
     ) {
-        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let device_key = decode_ed25519_key(device_public_key, "multibase")
-        .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let signing_bytes = envelope
         .canonical_signing_bytes()
-        .map_err(|_| crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if !ed25519_verify(&device_key, &signing_bytes, &envelope.signature.sig) {
-        return Err(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     Ok(())
 }

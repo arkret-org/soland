@@ -28,7 +28,8 @@ impl ProjectionState {
         // `ak.space.tombstone` requires {Active, Archived}.
         let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
             arkret_sdk::events::EventKind::SPACE_CREATE => return Ok(()),
-            arkret_sdk::events::EventKind::SPACE_UPDATE | arkret_sdk::events::EventKind::SPACE_PARENT => {
+            arkret_sdk::events::EventKind::SPACE_UPDATE
+            | arkret_sdk::events::EventKind::SPACE_PARENT => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
             arkret_sdk::events::EventKind::SPACE_ARCHIVE => {
@@ -548,7 +549,8 @@ impl ProjectionState {
                 }
                 Ok(())
             }
-            arkret_sdk::events::EventKind::STRAND_MOVE | arkret_sdk::events::EventKind::STRAND_REORDER => {
+            arkret_sdk::events::EventKind::STRAND_MOVE
+            | arkret_sdk::events::EventKind::STRAND_REORDER => {
                 let Some((_, list_space_id, _)) =
                     strand_position_from_lifecycle_payload(&operation.payload)
                 else {
@@ -650,7 +652,7 @@ impl ProjectionState {
         if policy.metadata_encryption_floor.as_deref() == Some("e2ee_required")
             && child_has_plaintext_metadata
         {
-            return Err(crate::error::reasons::METADATA_ENCRYPTION_FLOOR_VIOLATION);
+            return Err(arkret_sdk::ReasonCode::METADATA_ENCRYPTION_FLOOR_VIOLATION);
         }
         match policy.kind.as_str() {
             "allow_any" => Ok(()),

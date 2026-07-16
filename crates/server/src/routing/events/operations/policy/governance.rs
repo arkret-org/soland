@@ -395,7 +395,9 @@ pub(super) async fn validate_moderation_event_policy(
             "ak.policy.manage",
             "ak.moderation.decision.lift",
         ][..],
-        arkret_sdk::events::EventKind::MODERATION_APPEAL_SUBMIT => &["ak.moderation.appeal.submit"][..],
+        arkret_sdk::events::EventKind::MODERATION_APPEAL_SUBMIT => {
+            &["ak.moderation.appeal.submit"][..]
+        }
         arkret_sdk::events::EventKind::MODERATION_APPEAL_REVIEW
         | arkret_sdk::events::EventKind::MODERATION_APPEAL_DECISION
         | arkret_sdk::events::EventKind::MODERATION_APPEAL_CLOSE => {
@@ -452,7 +454,9 @@ pub(super) async fn validate_call_recording_start_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_string(operation) != arkret_sdk::events::EventKind::CALL_RECORDING_START {
+    if kinds::canonical_kind_string(operation)
+        != arkret_sdk::events::EventKind::CALL_RECORDING_START
+    {
         return Ok(());
     }
     let action = call_recording_start_required_action(operation);
@@ -477,8 +481,8 @@ pub(super) async fn validate_call_recording_start_policy(
     {
         return Ok(());
     }
-    if action == arkret_sdk::CAP_ACTION_CALL_TRANSCRIBE {
-        Err(crate::error::reasons::TRANSCRIPTION_DENIED)
+    if action == arkret_sdk::CapabilityActionId::CALL_TRANSCRIBE {
+        Err(arkret_sdk::ReasonCode::TRANSCRIPTION_DENIED)
     } else {
         Err("missing_capability")
     }
@@ -491,8 +495,8 @@ pub(super) fn call_recording_start_required_action(operation: &Operation) -> &'s
         .and_then(Value::as_str)
         .unwrap_or("recording")
     {
-        "transcript" => arkret_sdk::CAP_ACTION_CALL_TRANSCRIBE,
-        _ => arkret_sdk::CAP_ACTION_CALL_RECORD,
+        "transcript" => arkret_sdk::CapabilityActionId::CALL_TRANSCRIBE,
+        _ => arkret_sdk::CapabilityActionId::CALL_RECORD,
     }
 }
 

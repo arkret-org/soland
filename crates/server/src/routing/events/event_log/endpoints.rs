@@ -154,7 +154,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     };
     if let Err(error) = super::super::require_agent_session_scope(
         &session,
-        super::super::AGENT_SCOPE_EVENTS_COMMAND_SUBMIT,
+        arkret_sdk::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
     ) {
         render_error(res, error.http_status(), error.wire_code(), &error.message);
         return;

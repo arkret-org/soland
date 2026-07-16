@@ -35,29 +35,28 @@ use super::{
 /// Reason code emitted when a `ak.mls.keypackage` event with
 /// `payload.action == "claim"` targets a KeyPackage that has already
 /// been claimed. Routing layer maps to HTTP 409 `cas_conflict`.
-pub const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str = "mls_keypackage_already_claimed";
+pub(crate) const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str = "mls_keypackage_already_claimed";
 /// Reason code emitted when a `ak.mls.keypackage` event with
 /// `payload.action == "claim"` targets an unknown KeyPackage id.
-pub const REASON_KEYPACKAGE_NOT_FOUND: &str = "mls_keypackage_not_found";
+pub(crate) const REASON_KEYPACKAGE_NOT_FOUND: &str = "mls_keypackage_not_found";
 /// Reason code emitted when a published KeyPackage's lifetime window
 /// is already past `not_after`. Mirrors RFC 9420 §10.
 /// Reason code emitted when a KeyPackage publish/claim is missing the
 /// accepted cross-signing generation or attempts to consume an older one.
-pub const REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH: &str = "claim_generation_mismatch";
-pub const REASON_KEYPACKAGE_REALM_MISMATCH: &str = "mls_keypackage_realm_mismatch";
+pub(crate) const REASON_KEYPACKAGE_REALM_MISMATCH: &str = "mls_keypackage_realm_mismatch";
 /// Reason code emitted when a commit's `expected_prev_epoch` does not
 /// match the group's stored epoch (out-of-order / stale / replay).
-pub const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
+const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
 /// Reject code for Welcome payloads that try to carry plaintext sender,
 /// profile, relationship, or device metadata outside the opaque MLS bytes.
-pub const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
+const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
 /// Reject code for MLS Welcome payloads whose KeyPackage claim transcript
 /// is missing or does not bind the Welcome bytes to the recipient realm.
 /// Reject code for commits whose governance binding does not name an
 /// attested governance Seal set to add into the covered_seals accumulator.
-pub const REASON_COMMIT_COVERED_SEALS_MISSING: &str = "mls_covered_seals_missing";
+const REASON_COMMIT_COVERED_SEALS_MISSING: &str = "mls_covered_seals_missing";
 /// Reject code for a second genesis against an already initialized group.
-pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
+const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 /// Reject code for a commit whose `governance_binding.policy_root` does not
 /// match the policy root the MLS group's epoch chain was genesis-locked to
 /// (encryption-and-audit.md §2.5.1). On a federation push the ingest pipeline
@@ -67,11 +66,10 @@ pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 /// the contested epoch stay fail-closed until a resolving commit advances it.
 /// Reject code for a Remove commit whose governance binding does not cover the
 /// event frontier that created the pending remove obligation.
-pub const REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER: &str =
-    "mls_remove_missing_governance_frontier";
+const REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER: &str = "mls_remove_missing_governance_frontier";
 /// Reject code for a commit that advances while a remove obligation is pending
 /// but does not reference a matching `ak.mls.proposal{proposal_type="remove"}`.
-pub const REASON_REMOVE_PROPOSAL_MISSING: &str = "mls_remove_proposal_missing";
+const REASON_REMOVE_PROPOSAL_MISSING: &str = "mls_remove_proposal_missing";
 
 /// G3.S1 — project a `ak.mls.keypackage` event with
 /// `payload.action == "publish"`.
@@ -248,7 +246,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
     if row.ssk_generation != trust_binding.ssk_generation
         || row.device_authorize_event_id != trust_binding.device_authorize_event_id
     {
-        return reject(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH);
+        return reject(arkret_sdk::ReasonCode::CLAIM_GENERATION_MISMATCH);
     }
     let intended_realm_id = payload
         .get("intended_realm_id")
@@ -1257,7 +1255,7 @@ struct WelcomeRequesterSignatureBinding {
 fn keypackage_claim_trust_binding(payload: &Value) -> Result<KeyPackageTrustBinding, &'static str> {
     let object = payload
         .as_object()
-        .ok_or(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH)?;
+        .ok_or(arkret_sdk::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
     keypackage_claim_trust_binding_object(object)
 }
 
@@ -1283,7 +1281,7 @@ fn keypackage_claim_trust_binding_object(
             ssk_generation: None,
             device_authorize_event_id: Some(device_authorize_event_id),
         }),
-        _ => Err(REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH),
+        _ => Err(arkret_sdk::ReasonCode::CLAIM_GENERATION_MISMATCH),
     }
 }
 

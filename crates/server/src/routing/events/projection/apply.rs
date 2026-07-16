@@ -653,7 +653,9 @@ async fn project_accepted_operations_inner(
         // `keys/query` signing-key directory resolves devices that were
         // authorized but never opened a session (previously the key only
         // landed via the session-grant exchange path).
-        if kinds::canonical_kind_string(operation) == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE {
+        if kinds::canonical_kind_string(operation)
+            == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
+        {
             project_device_authorize(state, operation).await;
         }
         // Also apply to the deterministic reducer.
@@ -693,7 +695,8 @@ async fn project_accepted_operations_inner(
         // Mirrors the canonical wire kinds the reducer dispatches into
         // `ProjectionState::{space_containers,strands,morphs}`.
         write_through_projection(state, operation).await;
-        if kinds::canonical_kind_string(operation) == arkret_sdk::events::EventKind::RELATION_CREATE {
+        if kinds::canonical_kind_string(operation) == arkret_sdk::events::EventKind::RELATION_CREATE
+        {
             crate::routing::events::notify::dispatch_assignment_notifications(state, operation)
                 .await;
         }

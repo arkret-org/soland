@@ -11,7 +11,7 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
     let envelope_value = match operation.payload.get("claim_envelope") {
         Some(value) => value.clone(),
         None => {
-            return Some(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
+            return Some(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
         }
     };
     let envelope =
@@ -19,12 +19,12 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
             Ok(envelope) => envelope,
             Err(_) => {
                 return Some(
-                    crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned(),
+                    arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned(),
                 );
             }
         };
     if envelope.requester_did.as_str() != actor_id {
-        return Some(crate::error::reasons::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
+        return Some(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
     }
     let sender_device_id = operation
         .payload

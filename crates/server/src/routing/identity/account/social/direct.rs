@@ -12,13 +12,13 @@ pub(crate) async fn ensure_direct_peer_resolvable(
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
         return Err(direct_resolve_precondition(
-            crate::error::reasons::PEER_UNRESOLVABLE,
+            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation peer is not resolvable on this Principal Server",
         ));
     }
     let peer_did = Did::new(peer.to_owned()).map_err(|_| {
         direct_resolve_precondition(
-            crate::error::reasons::PEER_UNRESOLVABLE,
+            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation peer DID is invalid",
         )
     })?;
@@ -29,7 +29,7 @@ pub(crate) async fn ensure_direct_peer_resolvable(
         .is_some();
     if !has_cross_signing_control {
         return Err(direct_resolve_precondition(
-            crate::error::reasons::PEER_UNRESOLVABLE,
+            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation peer has no accepted cross-signing control state",
         ));
     }
@@ -65,7 +65,7 @@ pub(super) fn direct_pair_key_participant(
         .any(|prefix| did_str.starts_with(prefix))
     {
         return Err(direct_resolve_precondition(
-            crate::error::reasons::PEER_UNRESOLVABLE,
+            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation pairwise DID requires a verified stable-subject identity link",
         ));
     }
@@ -469,13 +469,13 @@ pub(super) async fn claim_direct_keypackage(
 ) -> Result<arkret_sdk::KeyPackageClaimRecord, AppError> {
     let target_principal_id = Did::new(peer.to_owned()).map_err(|_| {
         direct_resolve_precondition(
-            crate::error::reasons::PEER_UNRESOLVABLE,
+            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation peer DID is invalid",
         )
     })?;
     let requester = Did::new(actor.to_owned()).map_err(|_| {
         direct_resolve_precondition(
-            crate::error::reasons::PEER_UNRESOLVABLE,
+            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation requester DID is invalid",
         )
     })?;
@@ -500,7 +500,7 @@ pub(super) async fn claim_direct_keypackage(
         .await
         .map_err(|error| match error.wire_code_override.as_deref() {
             Some("claim_generation_mismatch") => direct_resolve_precondition(
-                crate::error::reasons::PEER_UNRESOLVABLE,
+                arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
                 "direct conversation peer has no accepted cross-signing control state",
             ),
             _ => error,
@@ -514,7 +514,7 @@ pub(super) async fn claim_direct_keypackage(
 
 pub(super) fn direct_keypackage_unknown() -> AppError {
     direct_resolve_precondition(
-        crate::error::reasons::KEYPACKAGE_UNKNOWN,
+        arkret_sdk::ErrorCode::KEYPACKAGE_UNKNOWN,
         "direct conversation peer has no claimable KeyPackage",
     )
 }
@@ -542,7 +542,11 @@ pub(super) async fn submit_direct_mls_genesis(
         "governance_binding": governance_binding,
         "created_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
     });
-    let op = direct_mls_operation(realm_id, arkret_sdk::events::EventKind::MLS_GENESIS, payload)?;
+    let op = direct_mls_operation(
+        realm_id,
+        arkret_sdk::events::EventKind::MLS_GENESIS,
+        payload,
+    )?;
     let effect = crate::reducer::mls::apply_group_genesis(&mut state.projection.lock(), &op);
     match &effect {
         crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::GroupGenesis {
@@ -649,7 +653,11 @@ pub(super) async fn submit_direct_mls_welcome(
         "expires_at": (created_at + chrono::Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
         "governance_binding": governance_binding,
     });
-    let op = direct_mls_operation(realm_id, arkret_sdk::events::EventKind::MLS_WELCOME, payload)?;
+    let op = direct_mls_operation(
+        realm_id,
+        arkret_sdk::events::EventKind::MLS_WELCOME,
+        payload,
+    )?;
     let effect = crate::reducer::mls::apply_welcome_enqueue(&mut state.projection.lock(), &op);
     match &effect {
         crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::WelcomeEnqueued {

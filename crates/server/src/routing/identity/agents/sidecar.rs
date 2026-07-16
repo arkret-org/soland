@@ -1,11 +1,11 @@
 use super::*;
 
-pub(super) const SIDECAR_CREATE_DENIED: &str = "sidecar_create_denied";
 pub(super) const ADDRESSED_AGENT_NOT_ELIGIBLE: &str = "addressed_agent_not_eligible";
 pub(super) const CONTROLLER_IN_ADDRESSED_AGENTS: &str = "controller_in_addressed_agents";
 
 pub(super) fn sidecar_create_denied(message: impl Into<String>) -> AppError {
-    AppError::capability_denied(message).with_wire_code(SIDECAR_CREATE_DENIED)
+    AppError::capability_denied(message)
+        .with_wire_code(arkret_sdk::ReasonCode::SIDECAR_CREATE_DENIED)
 }
 
 pub(super) fn sidecar_failed_precondition(
@@ -42,7 +42,7 @@ pub(super) async fn authorize_sidecar_ensure(
     let members = realm_members_for_authz(state, realm_id);
     let verdict = state.authz.check(
         controller,
-        arkret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
+        arkret_sdk::CapabilityActionId::SELF_AGENT_SIDECAR_THREAD_COMMAND_ENSURE,
         realm_id,
         realm_id,
         owner.as_deref(),
@@ -315,7 +315,7 @@ pub(super) fn find_sidecar_circle(
 
 pub(super) fn sidecar_actor_capability(circle_id: Option<&str>) -> Value {
     let mut value = json!({
-        "action": arkret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
+        "action": arkret_sdk::CapabilityActionId::SELF_AGENT_SIDECAR_THREAD_COMMAND_ENSURE,
         "allowed": true,
     });
     if let Some(circle_id) = circle_id
@@ -384,8 +384,11 @@ pub(super) async fn ensure_sidecar_circle(
         "sidecar_ensure_capability_verified": true,
         "actor_capability": sidecar_actor_capability(None),
     });
-    let operation =
-        new_sidecar_operation(realm_id, arkret_sdk::events::EventKind::CIRCLE_CREATE, payload)?;
+    let operation = new_sidecar_operation(
+        realm_id,
+        arkret_sdk::events::EventKind::CIRCLE_CREATE,
+        payload,
+    )?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;
@@ -500,8 +503,11 @@ pub(super) async fn ensure_sidecar_strand(
     let payload = json!({
         "object": object,
     });
-    let operation =
-        new_sidecar_operation(realm_id, arkret_sdk::events::EventKind::STRAND_CREATE, payload)?;
+    let operation = new_sidecar_operation(
+        realm_id,
+        arkret_sdk::events::EventKind::STRAND_CREATE,
+        payload,
+    )?;
     accept_local_operations(state, controller, std::slice::from_ref(&operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;

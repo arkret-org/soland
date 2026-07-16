@@ -953,7 +953,9 @@ impl ProjectionState {
             _ => return Ok(()),
         };
         let strand_id = match kind {
-            arkret_sdk::events::EventKind::STRAND_UPDATE => strand_id_from_payload(&operation.payload),
+            arkret_sdk::events::EventKind::STRAND_UPDATE => {
+                strand_id_from_payload(&operation.payload)
+            }
             arkret_sdk::events::EventKind::STRAND_ARCHIVE
             | arkret_sdk::events::EventKind::STRAND_RESTORE => operation
                 .payload

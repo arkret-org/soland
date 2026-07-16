@@ -120,7 +120,8 @@ mod reaction_and_window_policy_tests {
             json!({ "target_ref": "ak:strand:01904100-0000-7000-8000-000000000001" }),
         );
         assert!(
-            validate_reaction_target_kind(arkret_sdk::events::EventKind::MESSAGE_CREATE, &op).is_ok()
+            validate_reaction_target_kind(arkret_sdk::events::EventKind::MESSAGE_CREATE, &op)
+                .is_ok()
         );
     }
 

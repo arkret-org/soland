@@ -1261,7 +1261,7 @@ async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_dev
         &state,
         DEMO_REALM_ID,
         alice,
-        arkret_sdk::CAP_CALL_SIGNAL_SEND,
+        arkret_sdk::CapabilityActionId::CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca11";
@@ -1319,7 +1319,7 @@ async fn ephemeral_call_signal_reaches_same_actor_other_device() {
         &state,
         DEMO_REALM_ID,
         alice,
-        arkret_sdk::CAP_CALL_SIGNAL_SEND,
+        arkret_sdk::CapabilityActionId::CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca12";
@@ -1356,7 +1356,7 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
         &state,
         DEMO_REALM_ID,
         alice,
-        arkret_sdk::CAP_CALL_SIGNAL_SEND,
+        arkret_sdk::CapabilityActionId::CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca13";
@@ -1468,7 +1468,7 @@ async fn ephemeral_call_signal_incremental_resubscribe_does_not_redeliver() {
         &state,
         DEMO_REALM_ID,
         alice,
-        arkret_sdk::CAP_CALL_SIGNAL_SEND,
+        arkret_sdk::CapabilityActionId::CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca20";

@@ -337,8 +337,12 @@ impl ProjectionState {
             request.approval = approval;
         }
         let kind = match status {
-            AgentActionRequestStatus::Approved => arkret_sdk::events::EventKind::AGENT_ACTION_APPROVE,
-            AgentActionRequestStatus::Rejected => arkret_sdk::events::EventKind::AGENT_ACTION_REJECT,
+            AgentActionRequestStatus::Approved => {
+                arkret_sdk::events::EventKind::AGENT_ACTION_APPROVE
+            }
+            AgentActionRequestStatus::Rejected => {
+                arkret_sdk::events::EventKind::AGENT_ACTION_REJECT
+            }
             AgentActionRequestStatus::Pending | AgentActionRequestStatus::Cancelled => {
                 arkret_sdk::events::EventKind::AGENT_ACTION_REQUEST
             }

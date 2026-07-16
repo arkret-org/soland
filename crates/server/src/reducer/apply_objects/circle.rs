@@ -111,7 +111,7 @@ impl ProjectionState {
             && self.realm_requires_content_encryption(&realm_id)
         {
             return ProjectionEffect::Rejected {
-                reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
+                reason: arkret_sdk::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
             };
         }
         // circle.md §7: a Circle content floor MUST NOT be below the effective
@@ -121,14 +121,14 @@ impl ProjectionState {
             < content_floor_rank(self.realm_content_encryption_floor(&realm_id).as_deref())
         {
             return ProjectionEffect::Rejected {
-                reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
+                reason: arkret_sdk::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
             };
         }
         if content_floor_rank(content_encryption_floor.as_deref()) >= 1
             && !encryption_profile_requires_content_encryption(Some(encryption_profile.as_str()))
         {
             return ProjectionEffect::Rejected {
-                reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
+                reason: arkret_sdk::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
             };
         }
         let created_by = object
@@ -212,12 +212,14 @@ impl ProjectionState {
                 let new_rank = content_floor_rank(new_floor.as_deref());
                 if new_rank < content_floor_rank(realm_content_floor.as_deref()) {
                     return ProjectionEffect::Rejected {
-                        reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
+                        reason: arkret_sdk::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR
+                            .to_owned(),
                     };
                 }
                 if new_rank < content_floor_rank(current_content_floor.as_deref()) {
                     return ProjectionEffect::Rejected {
-                        reason: CONTENT_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+                        reason: arkret_sdk::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
+                            .to_owned(),
                     };
                 }
                 if new_rank >= 1
@@ -226,7 +228,8 @@ impl ProjectionState {
                     ))
                 {
                     return ProjectionEffect::Rejected {
-                        reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
+                        reason: arkret_sdk::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR
+                            .to_owned(),
                     };
                 }
             }
@@ -237,7 +240,7 @@ impl ProjectionState {
                     < metadata_floor_rank(current_metadata_floor.as_deref())
             {
                 return ProjectionEffect::Rejected {
-                    reason: METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+                    reason: arkret_sdk::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
                 };
             }
         }

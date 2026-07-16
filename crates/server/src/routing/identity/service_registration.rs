@@ -65,7 +65,7 @@ pub(crate) async fn ensure(
         seq: 1,
         method_evidence: json!({
             "mode": "service_registration_provider",
-            "operation": arkret_sdk::SERVICE_REGISTRATION_ENSURE_OPERATION,
+            "operation": arkret_sdk::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
             "service_type": key.service_type().as_str(),
             "public_base": key.public_base().as_str(),
             "version_id": outcome.version_id,

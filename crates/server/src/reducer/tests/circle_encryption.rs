@@ -235,12 +235,12 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
     // downgrade e2ee_required -> allow_plaintext is rejected
     assert!(matches!(
         apply_floor(&mut state, Some("allow_plaintext")),
-        ProjectionEffect::Rejected { reason } if reason == CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
+        ProjectionEffect::Rejected { reason } if reason == arkret_sdk::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
     ));
     // dropping the floor by omission is also a downgrade
     assert!(matches!(
         apply_floor(&mut state, None),
-        ProjectionEffect::Rejected { reason } if reason == CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
+        ProjectionEffect::Rejected { reason } if reason == arkret_sdk::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
     ));
 }
 
@@ -266,7 +266,7 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     // tightening to the same level is fine; lowering is rejected
     assert!(matches!(
         apply_meta(&mut state, "allow_plaintext"),
-        ProjectionEffect::Rejected { reason } if reason == METADATA_ENCRYPTION_FLOOR_DOWNGRADE
+        ProjectionEffect::Rejected { reason } if reason == arkret_sdk::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE
     ));
 }
 
@@ -484,7 +484,7 @@ fn durability_policy_requires_exporter_aead_scheme() {
     );
     assert!(matches!(
         effect,
-        ProjectionEffect::Rejected { reason } if reason == DURABILITY_SCHEME_INCOMPATIBLE
+        ProjectionEffect::Rejected { reason } if reason == arkret_sdk::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE
     ));
 }
 

@@ -29,7 +29,7 @@ pub(super) async fn validate_accountability_profile_policy(
         return Ok(());
     }
     let Some(principal_id) = profile_principal_id(operation) else {
-        return Err(crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING);
+        return Err(arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
     };
     let now = chrono::Utc::now();
     let accepted_events = state
@@ -62,7 +62,7 @@ pub(super) async fn validate_accountability_profile_policy(
             accountability_grant_value_active_for(payload, &issuer, &principal_id, now)
         });
         if !in_batch && !accepted {
-            return Err(crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING);
+            return Err(arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
         }
     }
     Ok(())

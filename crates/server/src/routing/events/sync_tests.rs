@@ -1565,10 +1565,10 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         .as_array()
         .expect("state events array");
     assert!(
-        state_events
-            .iter()
-            .any(|event| event["kind"] == arkret_sdk::events::EventKind::PIN_ADD
-                && event["payload"]["target_ref"] == message_id),
+        state_events.iter().any(
+            |event| event["kind"] == arkret_sdk::events::EventKind::PIN_ADD
+                && event["payload"]["target_ref"] == message_id
+        ),
         "joined members must receive shared pin state events through account sync"
     );
 }

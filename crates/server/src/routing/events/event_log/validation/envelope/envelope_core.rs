@@ -109,14 +109,14 @@ pub(crate) async fn validate_event_envelope_with_context(
     if object.get("actor_kind").is_some() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            crate::error::reasons::ACTOR_KIND_REDUCER_MANAGED,
+            arkret_sdk::ReasonCode::ACTOR_KIND_REDUCER_MANAGED,
             "envelope.actor_kind is reducer-managed; clients MUST NOT supply it",
         ));
     }
     if object.get("effective_scope").is_some() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            crate::error::reasons::EFFECTIVE_SCOPE_REDUCER_MANAGED,
+            arkret_sdk::ReasonCode::EFFECTIVE_SCOPE_REDUCER_MANAGED,
             "envelope.effective_scope is reducer-managed; clients MUST NOT supply it",
         ));
     }
@@ -288,7 +288,8 @@ pub(crate) async fn validate_event_envelope_with_context(
         ));
     }
     require_object_field(object, "payload")?;
-    let is_self_principal_pcr_bootstrap_create = kind == arkret_sdk::events::EventKind::REALM_CREATE
+    let is_self_principal_pcr_bootstrap_create = kind
+        == arkret_sdk::events::EventKind::REALM_CREATE
         && realm_bootstrap_contexts.iter().any(|context| {
             context.self_principal_pcr_bootstrap
                 && context.realm_id == realm_id

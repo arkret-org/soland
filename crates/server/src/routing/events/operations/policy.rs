@@ -43,7 +43,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "agent_pcr_recovery_not_ready",
         )
-    } else if message == arkret_sdk::REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL {
+    } else if message == arkret_sdk::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
         (salvo::http::StatusCode::CONFLICT, "failed_precondition")
     } else if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
@@ -72,15 +72,15 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             "applet_registration_unauthorized",
         )
-    } else if message == crate::error::reasons::TRANSCRIPTION_DENIED {
+    } else if message == arkret_sdk::ReasonCode::TRANSCRIPTION_DENIED {
         (
             salvo::http::StatusCode::FORBIDDEN,
-            crate::error::reasons::TRANSCRIPTION_DENIED,
+            arkret_sdk::ReasonCode::TRANSCRIPTION_DENIED,
         )
-    } else if message == crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING {
+    } else if message == arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
-            crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING,
+            arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
         )
     } else if message == arkret_sdk::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
         (

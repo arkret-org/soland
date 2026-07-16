@@ -1177,7 +1177,8 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 
 fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        arkret_sdk::events::EventKind::SPACE_ARCHIVE | arkret_sdk::events::EventKind::SPACE_RESTORE => {
+        arkret_sdk::events::EventKind::SPACE_ARCHIVE
+        | arkret_sdk::events::EventKind::SPACE_RESTORE => {
             serde_json::to_value(arkret_sdk::SpaceStateTransitionPayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),

@@ -1405,13 +1405,13 @@ async fn direct_conversation_resolve(
     let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, &scope).await?
     else {
         return Err(direct_resolve_precondition(
-            crate::error::reasons::DIRECT_CONVERSATION_UNAVAILABLE,
+            arkret_sdk::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation is unavailable",
         ));
     };
     if !has_active_consent_for_scope(state, &peer, &session.actor, &scope, now()) {
         return Err(direct_resolve_precondition(
-            crate::error::reasons::DIRECT_CONVERSATION_UNAVAILABLE,
+            arkret_sdk::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation is unavailable",
         ));
     }

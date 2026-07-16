@@ -47,14 +47,14 @@ impl ProjectionState {
             < content_floor_rank(self.realm_content_encryption_floor(&realm_id).as_deref())
         {
             return ProjectionEffect::Rejected {
-                reason: CONTENT_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+                reason: arkret_sdk::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
             };
         }
         if metadata_floor_rank(policy_floor_field(&value, "metadata_encryption_floor"))
             < metadata_floor_rank(self.realm_metadata_encryption_floor(&realm_id).as_deref())
         {
             return ProjectionEffect::Rejected {
-                reason: METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+                reason: arkret_sdk::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
             };
         }
         // One-way `content_scheme` ratchet (realm-and-space.md history-sharing):
@@ -242,7 +242,7 @@ impl ProjectionState {
             match self.call_session_focus.get(&call_id) {
                 Some(committed) if committed != session_focus => {
                     return ProjectionEffect::Rejected {
-                        reason: crate::error::reasons::SESSION_FOCUS_ALREADY_COMMITTED.to_owned(),
+                        reason: arkret_sdk::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED.to_owned(),
                     };
                 }
                 Some(_) => {}
@@ -307,7 +307,7 @@ impl ProjectionState {
                     .is_some_and(|reference| !reference.starts_with("ak:blob:"));
             if bypassed {
                 return ProjectionEffect::Rejected {
-                    reason: crate::error::reasons::TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED
+                    reason: arkret_sdk::ReasonCode::TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED
                         .to_owned(),
                 };
             }
@@ -402,7 +402,7 @@ impl ProjectionState {
         let value = state_payload_value(&operation.payload).clone();
         let Some(call_id) = value.get("call_id").and_then(Value::as_str) else {
             return ProjectionEffect::Rejected {
-                reason: crate::error::reasons::CALL_SUMMARY_INVALID.to_owned(),
+                reason: arkret_sdk::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
             };
         };
         let call_id = call_id.to_owned();
@@ -414,7 +414,7 @@ impl ProjectionState {
             .is_some_and(is_terminal_call_state);
         if !final_state_terminal {
             return ProjectionEffect::Rejected {
-                reason: crate::error::reasons::CALL_SUMMARY_INVALID.to_owned(),
+                reason: arkret_sdk::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
             };
         }
 
@@ -432,7 +432,7 @@ impl ProjectionState {
                 .is_some_and(|state| is_terminal_call_state(&state));
         if !call_state_terminal {
             return ProjectionEffect::Rejected {
-                reason: crate::error::reasons::CALL_SUMMARY_INVALID.to_owned(),
+                reason: arkret_sdk::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
             };
         }
 
@@ -444,7 +444,7 @@ impl ProjectionState {
             if let Some(existing) = self.cell_value(&cell_id) {
                 if existing != &value {
                     return ProjectionEffect::Rejected {
-                        reason: crate::error::reasons::CALL_SUMMARY_INVALID.to_owned(),
+                        reason: arkret_sdk::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
                     };
                 }
                 return ProjectionEffect::CallSummaryProjected { call_id };
@@ -1119,7 +1119,7 @@ fn validate_capture_state(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if !consent_confirmed {
-        return Some(crate::error::reasons::RECORDING_CONSENT_REQUIRED);
+        return Some(arkret_sdk::ReasonCode::RECORDING_CONSENT_REQUIRED);
     }
     None
 }

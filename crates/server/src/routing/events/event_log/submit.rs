@@ -41,7 +41,8 @@ fn stamp_projection_operation_received_at(
 ) {
     if !matches!(
         operation.object_type.as_str(),
-        arkret_sdk::events::EventKind::MEMBER_STATE | arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
+        arkret_sdk::events::EventKind::MEMBER_STATE
+            | arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
     ) {
         return;
     }

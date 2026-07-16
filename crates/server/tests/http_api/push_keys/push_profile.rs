@@ -1155,7 +1155,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
         "did:web:alice.example".to_owned(),
         "did:web:alice.example".to_owned(),
         DEMO_REALM_ID.to_owned(),
-        vec![arkret_sdk::CAP_CALL_SIGNAL_SEND.to_owned()],
+        vec![arkret_sdk::CapabilityActionId::CALL_SIGNAL_SEND.to_owned()],
         vec![],
     );
     let call_id = "ak:call:01904100-0000-7000-8000-ca110000001a";

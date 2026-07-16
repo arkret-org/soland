@@ -206,28 +206,44 @@ fn apply_realm_create_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_sdk::events::EventKind::REALM_CREATE)
+    s.apply_realm_lifecycle(
+        op,
+        op.created_at,
+        arkret_sdk::events::EventKind::REALM_CREATE,
+    )
 }
 fn apply_realm_update_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_sdk::events::EventKind::REALM_UPDATE)
+    s.apply_realm_lifecycle(
+        op,
+        op.created_at,
+        arkret_sdk::events::EventKind::REALM_UPDATE,
+    )
 }
 fn apply_realm_archive_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_sdk::events::EventKind::REALM_ARCHIVE)
+    s.apply_realm_lifecycle(
+        op,
+        op.created_at,
+        arkret_sdk::events::EventKind::REALM_ARCHIVE,
+    )
 }
 fn apply_realm_freeze_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_sdk::events::EventKind::REALM_FREEZE)
+    s.apply_realm_lifecycle(
+        op,
+        op.created_at,
+        arkret_sdk::events::EventKind::REALM_FREEZE,
+    )
 }
 fn apply_realm_tombstone_dispatch(
     s: &mut ProjectionState,
@@ -245,7 +261,11 @@ fn apply_realm_destroy_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_sdk::events::EventKind::REALM_DESTROY)
+    s.apply_realm_lifecycle(
+        op,
+        op.created_at,
+        arkret_sdk::events::EventKind::REALM_DESTROY,
+    )
 }
 fn apply_realm_set_default_strand_dispatch(
     s: &mut ProjectionState,
@@ -584,7 +604,7 @@ fn apply_member_identity_update_dispatch(
     }
     if segment != "member_identity" {
         return ProjectionEffect::Rejected {
-            reason: crate::error::reasons::MEMBER_IDENTITY_UNKNOWN_SEGMENT.to_owned(),
+            reason: arkret_sdk::ReasonCode::MEMBER_IDENTITY_UNKNOWN_SEGMENT.to_owned(),
         };
     }
     ProjectionEffect::MemberIdentityProjected {
@@ -899,10 +919,19 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         arkret_sdk::events::EventKind::REACTION_REMOVE,
         apply_reaction_remove_dispatch,
     );
-    m.insert(arkret_sdk::events::EventKind::RSVP_SET, apply_rsvp_set_dispatch);
+    m.insert(
+        arkret_sdk::events::EventKind::RSVP_SET,
+        apply_rsvp_set_dispatch,
+    );
     m.insert(arkret_sdk::events::EventKind::PIN_ADD, apply_pin_dispatch);
-    m.insert(arkret_sdk::events::EventKind::PIN_REMOVE, apply_pin_dispatch);
-    m.insert(arkret_sdk::events::EventKind::PIN_REORDER, apply_pin_dispatch);
+    m.insert(
+        arkret_sdk::events::EventKind::PIN_REMOVE,
+        apply_pin_dispatch,
+    );
+    m.insert(
+        arkret_sdk::events::EventKind::PIN_REORDER,
+        apply_pin_dispatch,
+    );
     m.insert(
         arkret_sdk::events::EventKind::READ_CURSOR_ADVANCE,
         apply_read_cursor_dispatch,

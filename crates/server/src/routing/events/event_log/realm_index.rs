@@ -57,7 +57,9 @@ pub(super) fn invite_create_actor_is_inviter(
 /// `check_membership_join_admission` / `check_membership_application_admission`
 /// later in the submit pipeline, not here.
 pub(super) fn member_self_knock(object: &serde_json::Map<String, Value>, actor: &str) -> bool {
-    if object.get("kind").and_then(Value::as_str) != Some(arkret_sdk::events::EventKind::MEMBER_STATE) {
+    if object.get("kind").and_then(Value::as_str)
+        != Some(arkret_sdk::events::EventKind::MEMBER_STATE)
+    {
         return false;
     }
     let Some(payload) = object.get("payload") else {
@@ -147,7 +149,8 @@ pub(super) async fn invitee_cancels_pending_invite(
     actor: &str,
     realm_id: &str,
 ) -> bool {
-    if object.get("kind").and_then(Value::as_str) != Some(arkret_sdk::events::EventKind::INVITE_CANCEL)
+    if object.get("kind").and_then(Value::as_str)
+        != Some(arkret_sdk::events::EventKind::INVITE_CANCEL)
     {
         return false;
     }

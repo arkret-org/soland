@@ -30,7 +30,8 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_accepts_directed_v1_payload() {
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
         let operation = op(invite_payload());
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
@@ -38,7 +39,8 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_accepts_projection_internal_fields() {
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["event_id"] = json!("ak:event:01904100-0000-7000-8000-000000000701");
         payload["sender"] = json!("did:web:alice.example");
@@ -53,7 +55,8 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_accepts_spec_reason_field() {
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["reason"] = json!("review_accept");
         let operation = op(payload);
@@ -63,7 +66,8 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_rejects_removed_inviter_payload_field() {
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["inviter"] = json!("did:web:alice.example");
         let operation = op(payload);
@@ -76,7 +80,8 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_requires_invite_id() {
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload.as_object_mut().unwrap().remove("invite_id");
         let operation = op(payload);
@@ -89,7 +94,8 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_requires_expires_at() {
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload.as_object_mut().unwrap().remove("expires_at");
         let operation = op(payload);
@@ -102,7 +108,8 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_rejects_invalid_invite_id() {
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["invite_id"] = json!("ak:invite:01");
         let operation = op(payload);
@@ -115,7 +122,8 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_rejects_non_canonical_expires_at() {
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["expires_at"] = json!("2026-06-14T10:00:00+00:00");
         let operation = op(payload);
@@ -178,8 +186,9 @@ mod key_backup_active_series_schema_tests {
             }),
         );
 
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
-            .expect("active-series projection schema");
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+                .expect("active-series projection schema");
         assert!(validate_operation_schema(&operation, schema).is_ok());
     }
 }
@@ -359,9 +368,10 @@ mod realm_plaintext_visible_services_schema_tests {
                 }]
             }),
         );
-        let schema =
-            operation_schema_for_kind(arkret_sdk::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES)
-                .expect("plaintext_visible_services event kind must build a projection Operation");
+        let schema = operation_schema_for_kind(
+            arkret_sdk::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
+        )
+        .expect("plaintext_visible_services event kind must build a projection Operation");
 
         validate_operation_schema(&operation, schema).unwrap();
     }
@@ -387,8 +397,9 @@ mod realm_plaintext_visible_services_schema_tests {
                 "hlc": "2026-07-06T00:00:00Z/node/1"
             }),
         );
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY)
-            .expect("inheritance_policy event kind must build a projection Operation");
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY)
+                .expect("inheritance_policy event kind must build a projection Operation");
 
         validate_operation_schema(&operation, schema).unwrap();
         validate_operation_payload_schema(
@@ -527,7 +538,8 @@ mod message_projection_schema_tests {
                 "content": {"kind": "ak.content.text", "body": "edited"}
             }),
         );
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::MESSAGE_REVISE).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::MESSAGE_REVISE).unwrap();
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
     }
@@ -542,7 +554,8 @@ mod message_projection_schema_tests {
                 "key": "+1"
             }),
         );
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::REACTION_ADD).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::REACTION_ADD).unwrap();
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
         assert!(operation.payload.get("event_id").is_none());
@@ -646,7 +659,8 @@ mod spec_sync_validator_tests {
 
     #[test]
     fn morph_create_accepts_metadata_and_rejects_content_conflict() {
-        let schema = operation_schema_for_kind(arkret_sdk::events::EventKind::MORPH_CREATE).unwrap();
+        let schema =
+            operation_schema_for_kind(arkret_sdk::events::EventKind::MORPH_CREATE).unwrap();
         let valid = op(
             arkret_sdk::events::EventKind::MORPH_CREATE,
             json!({
@@ -1246,7 +1260,7 @@ mod derived_relation_and_morph_immutability_tests {
         );
         assert_eq!(
             validate_operation_patch_semantics(&operation),
-            Err(crate::error::reasons::PATCH_PATH_REDUCER_MANAGED)
+            Err(arkret_sdk::ReasonCode::PATCH_PATH_REDUCER_MANAGED)
         );
     }
 
@@ -1261,7 +1275,7 @@ mod derived_relation_and_morph_immutability_tests {
         );
         assert_eq!(
             validate_operation_patch_semantics(&operation),
-            Err(crate::error::reasons::PATCH_UNSET_REDACTABLE_FIELD)
+            Err(arkret_sdk::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD)
         );
     }
 

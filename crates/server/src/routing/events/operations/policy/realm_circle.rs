@@ -87,7 +87,7 @@ pub(super) async fn validate_circle_create_policy(
         let (owner, members) = realm_owner_and_members(state, realm_id).await;
         let verdict = state.authz.check(
             actor,
-            arkret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE,
+            arkret_sdk::CapabilityActionId::SELF_AGENT_SIDECAR_THREAD_COMMAND_ENSURE,
             realm_id,
             realm_id,
             owner.as_deref(),
@@ -111,7 +111,7 @@ pub(super) async fn validate_circle_create_policy(
         .authz
         .check(
             actor,
-            arkret_sdk::CAP_ACTION_CIRCLE_CREATE,
+            arkret_sdk::CapabilityActionId::CIRCLE_CREATE,
             realm_id,
             realm_id,
             owner.as_deref(),
@@ -233,8 +233,8 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
 ///
 /// Unlike [`Operation::actor`], which probes `actor_id` before `sender`, the
 /// policy layer must resolve the *executing* principal. For membership events
-/// (e.g. arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE) the `actor_id` field names the *target* member,
-/// not the executor, so preferring it would let a forged verdict pass its own
+/// (e.g. arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE) the `actor_id` field names the
+/// *target* member, not the executor, so preferring it would let a forged verdict pass its own
 /// authorization gate. This accessor therefore resolves the executor as
 /// `sender` → `actor_id` → `created_by`, matching the historical soland
 /// contract.
@@ -334,7 +334,7 @@ pub(super) fn payload_asserts_agent_sidecar_ensure(payload: &Value) -> bool {
         .and_then(Value::as_object)
         .is_some_and(|cap| {
             cap.get("action").and_then(Value::as_str)
-                == Some(arkret_sdk::CAP_ACTION_AGENT_SIDECAR_THREAD_ENSURE)
+                == Some(arkret_sdk::CapabilityActionId::SELF_AGENT_SIDECAR_THREAD_COMMAND_ENSURE)
                 && cap.get("allowed").and_then(Value::as_bool) == Some(true)
         })
 }

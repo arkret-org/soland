@@ -78,7 +78,7 @@ pub(super) async fn submit_ephemeral(
                 state,
                 realm_id_str,
                 &session.actor,
-                arkret_sdk::CAP_CALL_SIGNAL_SEND,
+                arkret_sdk::CapabilityActionId::CALL_SIGNAL_SEND,
             )
             .await
             {
@@ -589,7 +589,7 @@ async fn verify_ephemeral_device_proof(
 
 fn ephemeral_proof_invalid(message: impl Into<String>) -> crate::error::AppError {
     crate::error::AppError::invalid_param(message)
-        .with_reason_code(crate::error::reasons::PROOF_INVALID)
+        .with_reason_code(arkret_sdk::ReasonCode::PROOF_INVALID)
 }
 
 #[cfg(test)]

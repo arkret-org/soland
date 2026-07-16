@@ -14,7 +14,6 @@ pub(crate) const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str =
     "realm_encryption_profile_create_locked";
 pub(crate) const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str =
     "circle_encryption_profile_create_locked";
-pub(crate) const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str = "circle_encryption_below_realm_floor";
 /// AKP-0007 §8 — pulling *another* actor into a Circle (none/left → active by
 /// an actor other than the target) requires the requester to hold
 /// `ak.circle.member.manage` (narrowed by `allowed_circle_ids`) on this Circle.
@@ -30,10 +29,8 @@ pub(crate) const CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED: &str =
 pub(crate) const CIRCLE_JOIN_NOT_OPEN: &str = "circle_join_not_open";
 /// One-way ratchet: effective `content_encryption_floor` MUST be monotonically
 /// non-decreasing. Lowering `e2ee_required` back to `allow_plaintext` is rejected.
-pub(crate) const CONTENT_ENCRYPTION_FLOOR_DOWNGRADE: &str = "content_encryption_floor_downgrade";
 /// One-way ratchet: effective metadata encryption floor MUST be monotonically
 /// non-decreasing (`allow_plaintext < e2ee_required`).
-pub(crate) const METADATA_ENCRYPTION_FLOOR_DOWNGRADE: &str = "metadata_encryption_floor_downgrade";
 /// One-way ratchet: effective Realm `content_scheme` MUST NOT downgrade from the
 /// exporter-derived AEAD scheme (`mls-exporter-aead-v1`) back to the application
 /// message scheme (`mls-rfc9420`). Lowering the negotiated scheme would let a
@@ -45,7 +42,6 @@ pub(crate) const CONTENT_SCHEME_DOWNGRADE: &str = "content_scheme_downgrade";
 /// `content_scheme=mls-exporter-aead-v1` Realm, because `mls-rfc9420`
 /// (PrivateMessage) has no deliverable `history_secret` to seal to recovery
 /// recipients. Declaring `mode != none` on an incompatible Realm is rejected.
-pub(crate) const DURABILITY_SCHEME_INCOMPATIBLE: &str = "durability_scheme_incompatible";
 /// realm-and-space.md §2.3.1 — `durability_policy` invariants: `recovery_recipients`
 /// MUST be non-empty when `mode != none`, and `threshold` (`1 <= k <= n ==
 /// len(recovery_recipients)`) is required when `mode=threshold`.
@@ -1018,7 +1014,7 @@ pub(crate) fn validate_durability_policy(
         .ok_or(DURABILITY_POLICY_INVALID)?;
     // scheme gate: organizational recovery requires a deliverable history_secret.
     if content_scheme_rank(effective_scheme) < content_scheme_rank(Some("mls-exporter-aead-v1")) {
-        return Err(DURABILITY_SCHEME_INCOMPATIBLE);
+        return Err(arkret_sdk::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE);
     }
     if mode == "threshold" {
         let threshold = policy

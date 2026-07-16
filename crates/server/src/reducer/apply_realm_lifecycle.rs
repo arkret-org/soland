@@ -925,7 +925,7 @@ impl ProjectionState {
                 && locked_td != new_td.as_str()
             {
                 return ProjectionEffect::Rejected {
-                    reason: crate::error::reasons::CROSS_DOMAIN_REPLAY_REJECTED.to_owned(),
+                    reason: arkret_sdk::ReasonCode::CROSS_DOMAIN_REPLAY_REJECTED.to_owned(),
                 };
             }
         }
@@ -1000,7 +1000,8 @@ impl ProjectionState {
             }
         }
         // ak.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
-        if kind == arkret_sdk::events::EventKind::REALM_DESTROY && payload_successor_realm_id.is_some()
+        if kind == arkret_sdk::events::EventKind::REALM_DESTROY
+            && payload_successor_realm_id.is_some()
         {
             return ProjectionEffect::Rejected {
                 reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),

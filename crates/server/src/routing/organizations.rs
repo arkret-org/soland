@@ -10,7 +10,6 @@ use std::collections::BTreeSet;
 use arkret_sdk::{
     REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY,
     REALM_MODERATION_POLICY_MERGE_STRATEGY_MOST_RESTRICTIVE,
-    REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL,
 };
 use chrono::Utc;
 use salvo::http::StatusCode;
@@ -1137,7 +1136,7 @@ pub(crate) fn requires_organization_approval_error() -> AppError {
         "realm moderation policy override requires organization approval",
     )
     .with_status(StatusCode::CONFLICT)
-    .with_reason_code(REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL)
+    .with_reason_code(arkret_sdk::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
 }
 
 #[cfg(test)]
@@ -1153,7 +1152,7 @@ mod tests {
         assert_eq!(error.wire_code(), "failed_precondition");
         assert_eq!(
             error.reason_code.as_deref(),
-            Some(REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL)
+            Some(arkret_sdk::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
         );
     }
 }

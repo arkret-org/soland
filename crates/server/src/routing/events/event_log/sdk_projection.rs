@@ -430,7 +430,8 @@ pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     // server-stamped `effective_scope` above, derived from its Strand at ingest.
     // There is deliberately no client-supplied fallback, so a message cannot
     // spoof its own visibility scope.
-    if object.get("kind").and_then(Value::as_str) == Some(arkret_sdk::events::EventKind::MESSAGE_CREATE)
+    if object.get("kind").and_then(Value::as_str)
+        == Some(arkret_sdk::events::EventKind::MESSAGE_CREATE)
     {
         return None;
     }

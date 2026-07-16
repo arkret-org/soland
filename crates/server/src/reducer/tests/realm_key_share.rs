@@ -77,7 +77,11 @@ fn realm_key_share_dispatch_accepts_projection_metadata() {
     payload["hlc"] = json!("2026-07-05T00:00:00Z/node/1");
 
     let effect = state.apply(
-        &make_operation(arkret_sdk::events::EventKind::REALM_KEY_SHARE, REALM, payload),
+        &make_operation(
+            arkret_sdk::events::EventKind::REALM_KEY_SHARE,
+            REALM,
+            payload,
+        ),
         &hlc,
     );
 
@@ -108,7 +112,11 @@ fn realm_key_share_requires_material() {
         .remove("encrypted_key_ref");
 
     let effect = state.apply(
-        &make_operation(arkret_sdk::events::EventKind::REALM_KEY_SHARE, REALM, payload),
+        &make_operation(
+            arkret_sdk::events::EventKind::REALM_KEY_SHARE,
+            REALM,
+            payload,
+        ),
         &hlc,
     );
 
@@ -149,7 +157,11 @@ fn realm_key_share_rejects_inverted_epoch_range() {
     payload["key_scope"]["to_epoch"] = json!(3);
 
     let effect = state.apply(
-        &make_operation(arkret_sdk::events::EventKind::REALM_KEY_SHARE, REALM, payload),
+        &make_operation(
+            arkret_sdk::events::EventKind::REALM_KEY_SHARE,
+            REALM,
+            payload,
+        ),
         &hlc,
     );
 

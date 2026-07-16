@@ -8,7 +8,9 @@ pub(super) fn validate_control_move_seal_basis(
         .get("effects")
         .and_then(Value::as_array)
         .is_some_and(|effects| !effects.is_empty());
-    if object.get("kind").and_then(Value::as_str) == Some(arkret_sdk::events::EventKind::REALM_CREATE) {
+    if object.get("kind").and_then(Value::as_str)
+        == Some(arkret_sdk::events::EventKind::REALM_CREATE)
+    {
         if object.contains_key("seal_ref")
             || object.contains_key("auth_context")
             || object.contains_key("seal_basis")

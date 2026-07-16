@@ -65,7 +65,8 @@ pub(crate) fn validate_reaction_target_kind(
 ) -> Result<(), &'static str> {
     if !matches!(
         kind,
-        arkret_sdk::events::EventKind::REACTION_ADD | arkret_sdk::events::EventKind::REACTION_REMOVE
+        arkret_sdk::events::EventKind::REACTION_ADD
+            | arkret_sdk::events::EventKind::REACTION_REMOVE
     ) {
         return Ok(());
     }
@@ -215,9 +216,9 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             // here pins them to `crate::error::reasons::*` so a rename
             // would break compilation rather than silently diverge.
             const _SESSION_FOCUS_REASON: &str =
-                crate::error::reasons::SESSION_FOCUS_ALREADY_COMMITTED;
+                arkret_sdk::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED;
             const _PARTICIPANT_BINDING_REASON: &str =
-                crate::error::reasons::PARTICIPANT_BINDING_INVALID;
+                arkret_sdk::ReasonCode::PARTICIPANT_BINDING_INVALID;
             if let Some(revision) = operation
                 .payload
                 .get("session_focus_revision")
@@ -354,9 +355,8 @@ pub(crate) fn validate_operation_payload_against_sdk_artifact(
 
 fn operation_extra_validator_for_kind(kind: &str) -> Option<OperationValidator> {
     match kind {
-        arkret_sdk::events::EventKind::MESSAGE_CREATE | arkret_sdk::events::EventKind::MESSAGE_REVISE => {
-            Some(validate_message_operation_payload)
-        }
+        arkret_sdk::events::EventKind::MESSAGE_CREATE
+        | arkret_sdk::events::EventKind::MESSAGE_REVISE => Some(validate_message_operation_payload),
         arkret_sdk::events::EventKind::RELATION_CREATE
         | arkret_sdk::events::EventKind::RELATION_UPDATE
         | arkret_sdk::events::EventKind::RELATION_TOMBSTONE => {
@@ -366,11 +366,12 @@ fn operation_extra_validator_for_kind(kind: &str) -> Option<OperationValidator> 
         arkret_sdk::events::EventKind::ACCOUNT_DATA_SET => Some(validate_account_data_set_payload),
         arkret_sdk::events::EventKind::CONSENT_REVOKE => Some(validate_observed_dots_payload),
         arkret_sdk::events::EventKind::INVITE_CREATE => Some(validate_invite_create_payload),
-        arkret_sdk::events::EventKind::INVITE_THIRD_PARTY => Some(validate_invite_third_party_payload),
-        arkret_sdk::events::EventKind::INVITE_CLAIM => Some(validate_invite_claim_payload),
-        arkret_sdk::events::EventKind::INVITE_CANCEL | arkret_sdk::events::EventKind::INVITE_REVOKE => {
-            Some(validate_invite_ref_payload)
+        arkret_sdk::events::EventKind::INVITE_THIRD_PARTY => {
+            Some(validate_invite_third_party_payload)
         }
+        arkret_sdk::events::EventKind::INVITE_CLAIM => Some(validate_invite_claim_payload),
+        arkret_sdk::events::EventKind::INVITE_CANCEL
+        | arkret_sdk::events::EventKind::INVITE_REVOKE => Some(validate_invite_ref_payload),
         arkret_sdk::events::EventKind::REALM_HISTORY_VISIBILITY => {
             Some(validate_history_visibility_payload)
         }
@@ -395,440 +396,436 @@ fn operation_extra_validator_for_kind(kind: &str) -> Option<OperationValidator> 
 }
 
 pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
-    let schema =
-        match kind {
-            arkret_sdk::events::EventKind::MESSAGE_CREATE => OperationPayloadSchema {
-                requirements: MESSAGE_CREATE_REQUIREMENTS,
-                validate: Some(validate_message_operation_payload),
-            },
-            arkret_sdk::events::EventKind::MESSAGE_REVISE => OperationPayloadSchema {
-                requirements: MESSAGE_REVISE_REQUIREMENTS,
-                validate: Some(validate_message_operation_payload),
-            },
-            arkret_sdk::events::EventKind::MESSAGE_REDACT | arkret_sdk::events::EventKind::REDACTION => {
-                OperationPayloadSchema {
-                    requirements: REDACTION_REQUIREMENTS,
-                    validate: None,
-                }
+    let schema = match kind {
+        arkret_sdk::events::EventKind::MESSAGE_CREATE => OperationPayloadSchema {
+            requirements: MESSAGE_CREATE_REQUIREMENTS,
+            validate: Some(validate_message_operation_payload),
+        },
+        arkret_sdk::events::EventKind::MESSAGE_REVISE => OperationPayloadSchema {
+            requirements: MESSAGE_REVISE_REQUIREMENTS,
+            validate: Some(validate_message_operation_payload),
+        },
+        arkret_sdk::events::EventKind::MESSAGE_REDACT
+        | arkret_sdk::events::EventKind::REDACTION => OperationPayloadSchema {
+            requirements: REDACTION_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REACTION_ADD
+        | arkret_sdk::events::EventKind::REACTION_REMOVE => OperationPayloadSchema {
+            requirements: REACTION_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::RELATION_CREATE => OperationPayloadSchema {
+            requirements: RELATION_CREATE_REQUIREMENTS,
+            validate: Some(validate_relation_operation_payload),
+        },
+        arkret_sdk::events::EventKind::RELATION_UPDATE
+        | arkret_sdk::events::EventKind::RELATION_TOMBSTONE => OperationPayloadSchema {
+            requirements: RELATION_ID_REQUIREMENTS,
+            validate: Some(validate_relation_operation_payload),
+        },
+        // G3.S5 — `ak.realm.link`. Permissive schema (target_realm_id,
+        // link_kind, and materialized status required; the reducer's `apply_realm_link`
+        // enforces the rest including the canonical FSM). We register
+        // here so `accept_local_operations` doesn't fall through to
+        // the SDK artifact validator (whose `realm_id` pattern is
+        // stricter than the in-tree fixtures need for testing —
+        // existing reducer-level tests use `ak:space:` prefixes).
+        arkret_sdk::events::EventKind::REALM_LINK => OperationPayloadSchema {
+            requirements: REALM_LINK_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::CAPABILITY_GRANT
+        | arkret_sdk::events::EventKind::CAPABILITY_REVOKE
+        | arkret_sdk::events::EventKind::CAPABILITY_DELEGATE => OperationPayloadSchema {
+            requirements: CAPABILITY_GRANT_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::MLS_COMMIT => OperationPayloadSchema {
+            requirements: MLS_COMMIT_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::MLS_GENESIS => OperationPayloadSchema {
+            requirements: MLS_GENESIS_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::MLS_PROPOSAL => OperationPayloadSchema {
+            requirements: MLS_PROPOSAL_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::MLS_WELCOME => OperationPayloadSchema {
+            requirements: MLS_WELCOME_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::MLS_KEYPACKAGE => OperationPayloadSchema {
+            requirements: MLS_KEYPACKAGE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES => OperationPayloadSchema {
+            requirements: &[],
+            validate: Some(validate_key_backup_active_series_payload),
+        },
+        arkret_sdk::events::EventKind::VIEW_CREATE
+        | arkret_sdk::events::EventKind::VIEW_UPDATE
+        | arkret_sdk::events::EventKind::VIEW_RECONCILE => {
+            // `ak.view.*` events route through the `ak.component.view.*.v1`
+            // cell families in the lattice registry (see
+            // `reducer::lattice_kinds::ViewCreate / ViewUpdate / ViewReconcile`).
+            // The validator just enforces a `view_id` payload key — the
+            // reducer / cell-family pipeline owns mv-register semantics.
+            OperationPayloadSchema {
+                requirements: VIEW_CREATE_REQUIREMENTS,
+                validate: None,
             }
-            arkret_sdk::events::EventKind::REACTION_ADD
-            | arkret_sdk::events::EventKind::REACTION_REMOVE => OperationPayloadSchema {
-                requirements: REACTION_REQUIREMENTS,
+        }
+        arkret_sdk::events::EventKind::READ_CURSOR_ADVANCE => OperationPayloadSchema {
+            requirements: READ_MARKER_REQUIREMENTS,
+            validate: Some(validate_read_marker_payload),
+        },
+        arkret_sdk::events::EventKind::ACCOUNT_DATA_SET => OperationPayloadSchema {
+            requirements: ACCOUNT_DATA_SET_REQUIREMENTS,
+            validate: Some(validate_account_data_set_payload),
+        },
+        arkret_sdk::events::EventKind::RSVP_SET => OperationPayloadSchema {
+            requirements: RSVP_SET_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        arkret_sdk::events::EventKind::PIN_ADD => OperationPayloadSchema {
+            requirements: PIN_ADD_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        arkret_sdk::events::EventKind::PIN_REMOVE => OperationPayloadSchema {
+            requirements: PIN_REMOVE_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        arkret_sdk::events::EventKind::PIN_REORDER => OperationPayloadSchema {
+            requirements: PIN_REORDER_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        arkret_sdk::events::EventKind::CONSENT_GRANT => OperationPayloadSchema {
+            requirements: CONSENT_GRANT_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::CONSENT_REVOKE => OperationPayloadSchema {
+            requirements: CONSENT_REVOKE_REQUIREMENTS,
+            validate: Some(validate_observed_dots_payload),
+        },
+        arkret_sdk::events::EventKind::INVITE_CREATE => OperationPayloadSchema {
+            requirements: INVITE_CREATE_REQUIREMENTS,
+            validate: Some(validate_invite_create_payload),
+        },
+        arkret_sdk::events::EventKind::INVITE_THIRD_PARTY => OperationPayloadSchema {
+            requirements: INVITE_THIRD_PARTY_REQUIREMENTS,
+            validate: Some(validate_invite_third_party_payload),
+        },
+        arkret_sdk::events::EventKind::INVITE_CLAIM => OperationPayloadSchema {
+            requirements: INVITE_CLAIM_REQUIREMENTS,
+            validate: Some(validate_invite_claim_payload),
+        },
+        arkret_sdk::events::EventKind::INVITE_CANCEL
+        | arkret_sdk::events::EventKind::INVITE_REVOKE => OperationPayloadSchema {
+            requirements: INVITE_REF_REQUIREMENTS,
+            validate: Some(validate_invite_ref_payload),
+        },
+        arkret_sdk::events::EventKind::AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
+            requirements: ERASURE_RECEIPT_REQUIREMENTS,
+            validate: None,
+        },
+        kind if arkret_sdk::events::kinds::is_invite_kind(kind) => OperationPayloadSchema {
+            requirements: INVITE_STATE_REQUIREMENTS,
+            validate: None,
+        },
+        kind if arkret_sdk::events::kinds::is_membership_kind(kind) => OperationPayloadSchema {
+            requirements: MEMBERSHIP_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_CREATE => OperationPayloadSchema {
+            // `ak.realm.create` is technically lifecycle but carries the
+            // full Realm `object` rather than a facet payload.
+            requirements: REALM_CREATE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_UPDATE => OperationPayloadSchema {
+            requirements: REALM_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_ARCHIVE => OperationPayloadSchema {
+            requirements: REALM_ARCHIVE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_FREEZE => OperationPayloadSchema {
+            requirements: REALM_FREEZE_REQUIREMENTS,
+            validate: None,
+        },
+        // Circle lifecycle. Structure is owned by the registered
+        // `ak.schema.circle.v1` payload schema (applied via validate_payload);
+        // registering here only builds the projection Operation so the
+        // submit-time invariant gate runs — notably the encryption_profile
+        // create-lock and circle-below-realm-floor checks in
+        // `validate_content_encryption_floor` (previously dead for circles
+        // because no Operation was built, so the lock was only caught at
+        // projection and the client saw a misleading 200).
+        arkret_sdk::events::EventKind::CIRCLE_CREATE
+        | arkret_sdk::events::EventKind::CIRCLE_UPDATE => OperationPayloadSchema {
+            requirements: &[],
+            validate: None,
+        },
+        // Circle membership + lifecycle convenience ops (built by the
+        // `/_soland/self/circles/*` admin surface). Their payload structure and
+        // every authorization / subset invariant
+        // (`circle_member_must_be_realm_member`,
+        // `circle_member_manage_capability_required`, the lifecycle transition
+        // matrix) are owned by the reducer (`apply_circle_member_state` /
+        // `apply_circle_lifecycle`). They have no registered SDK artifact
+        // payload validator, so register them here with no extra requirements —
+        // otherwise the SDK-artifact fallback rejects them with
+        // "operation payload violates SDK artifact schema" before the reducer
+        // can run, making Circle membership/archive/tombstone unreachable.
+        arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
+        | arkret_sdk::events::EventKind::CIRCLE_ARCHIVE
+        | arkret_sdk::events::EventKind::CIRCLE_RESTORE
+        | arkret_sdk::events::EventKind::CIRCLE_TOMBSTONE => OperationPayloadSchema {
+            requirements: &[],
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_DESTROY
+        | arkret_sdk::events::EventKind::REALM_TOMBSTONE => OperationPayloadSchema {
+            requirements: REALM_TERMINAL_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_MODERATION_POLICY => OperationPayloadSchema {
+            requirements: REALM_MODERATION_POLICY_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_DISAPPEARING_POLICY => OperationPayloadSchema {
+            requirements: REALM_DISAPPEARING_POLICY_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        arkret_sdk::events::EventKind::REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
+            requirements: REALM_POLICY_VALUE_REQUIREMENTS,
+            validate: Some(validate_history_visibility_payload),
+        },
+        arkret_sdk::events::EventKind::REALM_READ_RECEIPT_POLICY => OperationPayloadSchema {
+            requirements: &[],
+            validate: Some(validate_read_receipt_policy_payload),
+        },
+        arkret_sdk::events::EventKind::REALM_POLICY_COMPONENTS => OperationPayloadSchema {
+            requirements: REALM_POLICY_VALUE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_SEARCH_POLICY => OperationPayloadSchema {
+            requirements: REALM_SEARCH_POLICY_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        arkret_sdk::events::EventKind::MODERATION_DECISION => OperationPayloadSchema {
+            requirements: MODERATION_DECISION_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::MODERATION_DECISION_LIFT => OperationPayloadSchema {
+            requirements: MODERATION_DECISION_LIFT_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::MODERATION_APPEAL_SUBMIT => OperationPayloadSchema {
+            requirements: MODERATION_APPEAL_SUBMIT_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::MODERATION_APPEAL_REVIEW => OperationPayloadSchema {
+            requirements: MODERATION_APPEAL_REVIEW_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::MODERATION_APPEAL_DECISION => OperationPayloadSchema {
+            requirements: MODERATION_APPEAL_DECISION_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::MODERATION_APPEAL_CLOSE => OperationPayloadSchema {
+            requirements: MODERATION_APPEAL_CLOSE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_MEDIA_SERVICE => OperationPayloadSchema {
+            requirements: &[],
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES => OperationPayloadSchema {
+            requirements: &[],
+            validate: None,
+        },
+        // R1.2 — `ak.realm.delivery_binding_policy` (member-delivery-binding.md
+        // §4). The reducer dispatch (`apply_delivery_binding_policy`) projects
+        // the whole payload into the `ak.component.realm.delivery_binding_policy.v1`
+        // cell; without a projection-operation schema entry the event is never
+        // turned into an Operation, the policy cell is never set, and every
+        // routable member join fails closed with `delivery_binding_policy_unset`.
+        arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY => OperationPayloadSchema {
+            requirements: REALM_INHERITANCE_POLICY_REQUIREMENTS,
+            validate: Some(validate_realm_inheritance_policy_payload),
+        },
+        arkret_sdk::events::EventKind::REALM_DELIVERY_BINDING_POLICY => OperationPayloadSchema {
+            requirements: &[],
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_HISTORY_SHARING_POLICY
+        | arkret_sdk::events::EventKind::REALM_PREVIEW_POLICY => OperationPayloadSchema {
+            requirements: REALM_POLICY_VALUE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::REALM_KEY_SHARE => OperationPayloadSchema {
+            requirements: REALM_KEY_SHARE_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        kinds::CONFLICT_REPAIR => OperationPayloadSchema {
+            requirements: CONFLICT_REPAIR_REQUIREMENTS,
+            validate: Some(validate_conflict_repair_payload),
+        },
+        kind if arkret_sdk::events::kinds::is_space_lifecycle_kind(kind) => {
+            OperationPayloadSchema {
+                requirements: SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS,
                 validate: None,
-            },
-            arkret_sdk::events::EventKind::RELATION_CREATE => OperationPayloadSchema {
-                requirements: RELATION_CREATE_REQUIREMENTS,
-                validate: Some(validate_relation_operation_payload),
-            },
-            arkret_sdk::events::EventKind::RELATION_UPDATE
-            | arkret_sdk::events::EventKind::RELATION_TOMBSTONE => OperationPayloadSchema {
-                requirements: RELATION_ID_REQUIREMENTS,
-                validate: Some(validate_relation_operation_payload),
-            },
-            // G3.S5 — `ak.realm.link`. Permissive schema (target_realm_id,
-            // link_kind, and materialized status required; the reducer's `apply_realm_link`
-            // enforces the rest including the canonical FSM). We register
-            // here so `accept_local_operations` doesn't fall through to
-            // the SDK artifact validator (whose `realm_id` pattern is
-            // stricter than the in-tree fixtures need for testing —
-            // existing reducer-level tests use `ak:space:` prefixes).
-            arkret_sdk::events::EventKind::REALM_LINK => OperationPayloadSchema {
-                requirements: REALM_LINK_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::CAPABILITY_GRANT
-            | arkret_sdk::events::EventKind::CAPABILITY_REVOKE
-            | arkret_sdk::events::EventKind::CAPABILITY_DELEGATE => OperationPayloadSchema {
-                requirements: CAPABILITY_GRANT_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::MLS_COMMIT => OperationPayloadSchema {
-                requirements: MLS_COMMIT_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::MLS_GENESIS => OperationPayloadSchema {
-                requirements: MLS_GENESIS_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::MLS_PROPOSAL => OperationPayloadSchema {
-                requirements: MLS_PROPOSAL_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::MLS_WELCOME => OperationPayloadSchema {
-                requirements: MLS_WELCOME_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::MLS_KEYPACKAGE => OperationPayloadSchema {
-                requirements: MLS_KEYPACKAGE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES => OperationPayloadSchema {
-                requirements: &[],
-                validate: Some(validate_key_backup_active_series_payload),
-            },
-            arkret_sdk::events::EventKind::VIEW_CREATE
-            | arkret_sdk::events::EventKind::VIEW_UPDATE
-            | arkret_sdk::events::EventKind::VIEW_RECONCILE => {
-                // `ak.view.*` events route through the `ak.component.view.*.v1`
-                // cell families in the lattice registry (see
-                // `reducer::lattice_kinds::ViewCreate / ViewUpdate / ViewReconcile`).
-                // The validator just enforces a `view_id` payload key — the
-                // reducer / cell-family pipeline owns mv-register semantics.
-                OperationPayloadSchema {
-                    requirements: VIEW_CREATE_REQUIREMENTS,
-                    validate: None,
-                }
             }
-            arkret_sdk::events::EventKind::READ_CURSOR_ADVANCE => OperationPayloadSchema {
-                requirements: READ_MARKER_REQUIREMENTS,
-                validate: Some(validate_read_marker_payload),
-            },
-            arkret_sdk::events::EventKind::ACCOUNT_DATA_SET => OperationPayloadSchema {
-                requirements: ACCOUNT_DATA_SET_REQUIREMENTS,
-                validate: Some(validate_account_data_set_payload),
-            },
-            arkret_sdk::events::EventKind::RSVP_SET => OperationPayloadSchema {
-                requirements: RSVP_SET_REQUIREMENTS,
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            arkret_sdk::events::EventKind::PIN_ADD => OperationPayloadSchema {
-                requirements: PIN_ADD_REQUIREMENTS,
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            arkret_sdk::events::EventKind::PIN_REMOVE => OperationPayloadSchema {
-                requirements: PIN_REMOVE_REQUIREMENTS,
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            arkret_sdk::events::EventKind::PIN_REORDER => OperationPayloadSchema {
-                requirements: PIN_REORDER_REQUIREMENTS,
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            arkret_sdk::events::EventKind::CONSENT_GRANT => OperationPayloadSchema {
-                requirements: CONSENT_GRANT_REQUIREMENTS,
+        }
+        arkret_sdk::events::EventKind::SPACE_CREATE => OperationPayloadSchema {
+            requirements: SPACE_CONTAINER_CREATE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::SPACE_UPDATE => OperationPayloadSchema {
+            requirements: SPACE_CONTAINER_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::SPACE_PARENT => OperationPayloadSchema {
+            requirements: SPACE_CONTAINER_PARENT_REQUIREMENTS,
+            validate: None,
+        },
+        kind if arkret_sdk::events::kinds::is_strand_lifecycle_kind(kind) => {
+            OperationPayloadSchema {
+                requirements: STRAND_LIFECYCLE_REQUIREMENTS,
                 validate: None,
-            },
-            arkret_sdk::events::EventKind::CONSENT_REVOKE => OperationPayloadSchema {
-                requirements: CONSENT_REVOKE_REQUIREMENTS,
-                validate: Some(validate_observed_dots_payload),
-            },
-            arkret_sdk::events::EventKind::INVITE_CREATE => OperationPayloadSchema {
-                requirements: INVITE_CREATE_REQUIREMENTS,
-                validate: Some(validate_invite_create_payload),
-            },
-            arkret_sdk::events::EventKind::INVITE_THIRD_PARTY => OperationPayloadSchema {
-                requirements: INVITE_THIRD_PARTY_REQUIREMENTS,
-                validate: Some(validate_invite_third_party_payload),
-            },
-            arkret_sdk::events::EventKind::INVITE_CLAIM => OperationPayloadSchema {
-                requirements: INVITE_CLAIM_REQUIREMENTS,
-                validate: Some(validate_invite_claim_payload),
-            },
-            arkret_sdk::events::EventKind::INVITE_CANCEL | arkret_sdk::events::EventKind::INVITE_REVOKE => {
-                OperationPayloadSchema {
-                    requirements: INVITE_REF_REQUIREMENTS,
-                    validate: Some(validate_invite_ref_payload),
-                }
             }
-            arkret_sdk::events::EventKind::AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
-                requirements: ERASURE_RECEIPT_REQUIREMENTS,
+        }
+        arkret_sdk::events::EventKind::STRAND_CREATE => OperationPayloadSchema {
+            requirements: STRAND_CREATE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::STRAND_UPDATE => OperationPayloadSchema {
+            requirements: STRAND_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::STRAND_MOVE => OperationPayloadSchema {
+            requirements: STRAND_MOVE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::STRAND_REORDER => OperationPayloadSchema {
+            requirements: STRAND_REORDER_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::STRAND_WATCH_SET => OperationPayloadSchema {
+            requirements: STRAND_WATCH_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::STRAND_TRACKS_UPDATE => OperationPayloadSchema {
+            requirements: STRAND_TRACKS_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        kind if arkret_sdk::events::kinds::is_morph_lifecycle_kind(kind) => {
+            OperationPayloadSchema {
+                requirements: MORPH_LIFECYCLE_REQUIREMENTS,
                 validate: None,
-            },
-            kind if arkret_sdk::events::kinds::is_invite_kind(kind) => OperationPayloadSchema {
-                requirements: INVITE_STATE_REQUIREMENTS,
-                validate: None,
-            },
-            kind if arkret_sdk::events::kinds::is_membership_kind(kind) => OperationPayloadSchema {
-                requirements: MEMBERSHIP_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_CREATE => OperationPayloadSchema {
-                // `ak.realm.create` is technically lifecycle but carries the
-                // full Realm `object` rather than a facet payload.
-                requirements: REALM_CREATE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_UPDATE => OperationPayloadSchema {
-                requirements: REALM_UPDATE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_ARCHIVE => OperationPayloadSchema {
-                requirements: REALM_ARCHIVE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_FREEZE => OperationPayloadSchema {
-                requirements: REALM_FREEZE_REQUIREMENTS,
-                validate: None,
-            },
-            // Circle lifecycle. Structure is owned by the registered
-            // `ak.schema.circle.v1` payload schema (applied via validate_payload);
-            // registering here only builds the projection Operation so the
-            // submit-time invariant gate runs — notably the encryption_profile
-            // create-lock and circle-below-realm-floor checks in
-            // `validate_content_encryption_floor` (previously dead for circles
-            // because no Operation was built, so the lock was only caught at
-            // projection and the client saw a misleading 200).
-            arkret_sdk::events::EventKind::CIRCLE_CREATE | arkret_sdk::events::EventKind::CIRCLE_UPDATE => {
-                OperationPayloadSchema {
-                    requirements: &[],
-                    validate: None,
-                }
             }
-            // Circle membership + lifecycle convenience ops (built by the
-            // `/_soland/self/circles/*` admin surface). Their payload structure and
-            // every authorization / subset invariant
-            // (`circle_member_must_be_realm_member`,
-            // `circle_member_manage_capability_required`, the lifecycle transition
-            // matrix) are owned by the reducer (`apply_circle_member_state` /
-            // `apply_circle_lifecycle`). They have no registered SDK artifact
-            // payload validator, so register them here with no extra requirements —
-            // otherwise the SDK-artifact fallback rejects them with
-            // "operation payload violates SDK artifact schema" before the reducer
-            // can run, making Circle membership/archive/tombstone unreachable.
-            arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
-            | arkret_sdk::events::EventKind::CIRCLE_ARCHIVE
-            | arkret_sdk::events::EventKind::CIRCLE_RESTORE
-            | arkret_sdk::events::EventKind::CIRCLE_TOMBSTONE => OperationPayloadSchema {
-                requirements: &[],
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_DESTROY
-            | arkret_sdk::events::EventKind::REALM_TOMBSTONE => OperationPayloadSchema {
-                requirements: REALM_TERMINAL_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_MODERATION_POLICY => OperationPayloadSchema {
-                requirements: REALM_MODERATION_POLICY_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_DISAPPEARING_POLICY => OperationPayloadSchema {
-                requirements: REALM_DISAPPEARING_POLICY_REQUIREMENTS,
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            arkret_sdk::events::EventKind::REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
-                requirements: REALM_POLICY_VALUE_REQUIREMENTS,
-                validate: Some(validate_history_visibility_payload),
-            },
-            arkret_sdk::events::EventKind::REALM_READ_RECEIPT_POLICY => OperationPayloadSchema {
-                requirements: &[],
-                validate: Some(validate_read_receipt_policy_payload),
-            },
-            arkret_sdk::events::EventKind::REALM_POLICY_COMPONENTS => OperationPayloadSchema {
-                requirements: REALM_POLICY_VALUE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_SEARCH_POLICY => OperationPayloadSchema {
-                requirements: REALM_SEARCH_POLICY_REQUIREMENTS,
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            arkret_sdk::events::EventKind::MODERATION_DECISION => OperationPayloadSchema {
-                requirements: MODERATION_DECISION_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::MODERATION_DECISION_LIFT => OperationPayloadSchema {
-                requirements: MODERATION_DECISION_LIFT_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::MODERATION_APPEAL_SUBMIT => OperationPayloadSchema {
-                requirements: MODERATION_APPEAL_SUBMIT_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::MODERATION_APPEAL_REVIEW => OperationPayloadSchema {
-                requirements: MODERATION_APPEAL_REVIEW_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::MODERATION_APPEAL_DECISION => OperationPayloadSchema {
-                requirements: MODERATION_APPEAL_DECISION_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::MODERATION_APPEAL_CLOSE => OperationPayloadSchema {
-                requirements: MODERATION_APPEAL_CLOSE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_MEDIA_SERVICE => OperationPayloadSchema {
-                requirements: &[],
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES => OperationPayloadSchema {
-                requirements: &[],
-                validate: None,
-            },
-            // R1.2 — `ak.realm.delivery_binding_policy` (member-delivery-binding.md
-            // §4). The reducer dispatch (`apply_delivery_binding_policy`) projects
-            // the whole payload into the `ak.component.realm.delivery_binding_policy.v1`
-            // cell; without a projection-operation schema entry the event is never
-            // turned into an Operation, the policy cell is never set, and every
-            // routable member join fails closed with `delivery_binding_policy_unset`.
-            arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY => OperationPayloadSchema {
-                requirements: REALM_INHERITANCE_POLICY_REQUIREMENTS,
-                validate: Some(validate_realm_inheritance_policy_payload),
-            },
-            arkret_sdk::events::EventKind::REALM_DELIVERY_BINDING_POLICY => OperationPayloadSchema {
-                requirements: &[],
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_HISTORY_SHARING_POLICY
-            | arkret_sdk::events::EventKind::REALM_PREVIEW_POLICY => OperationPayloadSchema {
-                requirements: REALM_POLICY_VALUE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::REALM_KEY_SHARE => OperationPayloadSchema {
-                requirements: REALM_KEY_SHARE_REQUIREMENTS,
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            kinds::CONFLICT_REPAIR => OperationPayloadSchema {
-                requirements: CONFLICT_REPAIR_REQUIREMENTS,
-                validate: Some(validate_conflict_repair_payload),
-            },
-            kind if arkret_sdk::events::kinds::is_space_lifecycle_kind(kind) => {
-                OperationPayloadSchema {
-                    requirements: SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS,
-                    validate: None,
-                }
-            }
-            arkret_sdk::events::EventKind::SPACE_CREATE => OperationPayloadSchema {
-                requirements: SPACE_CONTAINER_CREATE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::SPACE_UPDATE => OperationPayloadSchema {
-                requirements: SPACE_CONTAINER_UPDATE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::SPACE_PARENT => OperationPayloadSchema {
-                requirements: SPACE_CONTAINER_PARENT_REQUIREMENTS,
-                validate: None,
-            },
-            kind if arkret_sdk::events::kinds::is_strand_lifecycle_kind(kind) => {
-                OperationPayloadSchema {
-                    requirements: STRAND_LIFECYCLE_REQUIREMENTS,
-                    validate: None,
-                }
-            }
-            arkret_sdk::events::EventKind::STRAND_CREATE => OperationPayloadSchema {
-                requirements: STRAND_CREATE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::STRAND_UPDATE => OperationPayloadSchema {
-                requirements: STRAND_UPDATE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::STRAND_MOVE => OperationPayloadSchema {
-                requirements: STRAND_MOVE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::STRAND_REORDER => OperationPayloadSchema {
-                requirements: STRAND_REORDER_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::STRAND_WATCH_SET => OperationPayloadSchema {
-                requirements: STRAND_WATCH_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::STRAND_TRACKS_UPDATE => OperationPayloadSchema {
-                requirements: STRAND_TRACKS_UPDATE_REQUIREMENTS,
-                validate: None,
-            },
-            kind if arkret_sdk::events::kinds::is_morph_lifecycle_kind(kind) => {
-                OperationPayloadSchema {
-                    requirements: MORPH_LIFECYCLE_REQUIREMENTS,
-                    validate: None,
-                }
-            }
-            arkret_sdk::events::EventKind::MORPH_CREATE => OperationPayloadSchema {
-                requirements: MORPH_CREATE_REQUIREMENTS,
-                validate: Some(validate_morph_create_payload),
-            },
-            arkret_sdk::events::EventKind::MORPH_UPDATE => OperationPayloadSchema {
-                requirements: MORPH_UPDATE_REQUIREMENTS,
-                validate: Some(validate_morph_update_payload),
-            },
-            arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE => OperationPayloadSchema {
-                requirements: MORPH_SCHEMA_MIGRATE_REQUIREMENTS,
-                validate: Some(validate_morph_schema_migrate_payload),
-            },
-            // `ak.field.position.move` / `ak.field.position.reorder` were removed
-            // in revision 0a5ab85 (see arkret-spec
-            // `artifacts/registry/removed-event-kinds.json`). The generic
-            // unknown-event-kind path in `event_log::submit_event` already
-            // hard-rejects these kinds; no operation schema branch is needed.
-            arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM
-            | arkret_sdk::events::EventKind::CONTAINER_REBALANCE => OperationPayloadSchema {
-                requirements: RELATION_ID_REQUIREMENTS,
-                validate: None,
-            },
-            // Applet protocol family.
-            arkret_sdk::events::EventKind::APPLET_REGISTRATION => OperationPayloadSchema {
-                requirements: APPLET_REGISTRATION_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::APPLET_DISCOVERY => OperationPayloadSchema {
-                requirements: APPLET_DISCOVERY_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::APPLET_BRIDGE_ERROR => OperationPayloadSchema {
-                requirements: APPLET_BRIDGE_ERROR_REQUIREMENTS,
-                validate: None,
-            },
-            // R3 spec-sync — agent lifecycle FSM kinds.
-            arkret_sdk::events::EventKind::SELF_AGENT_PAUSE => OperationPayloadSchema {
-                requirements: AGENT_PAUSE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::SELF_AGENT_RESUME => OperationPayloadSchema {
-                requirements: AGENT_RESUME_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::SELF_AGENT_DEACTIVATE => OperationPayloadSchema {
-                requirements: AGENT_DEACTIVATE_REQUIREMENTS,
-                validate: None,
-            },
-            // Agent runtime keys are reducer inputs backed by the SDK payload
-            // schemas. Register both kinds here so accepted Events are converted
-            // into Operations and reach the reducer dispatch table.
-            arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE
-            | arkret_sdk::events::EventKind::AGENT_KEY_REVOKE => OperationPayloadSchema {
-                requirements: &[],
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            // R3 spec-sync — actor_private_event kinds (reducer_input=false).
-            arkret_sdk::events::EventKind::AGENT_DRAFT_PROPOSE => OperationPayloadSchema {
-                requirements: AGENT_DRAFT_PROPOSE_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::AGENT_ACTION_REQUEST => OperationPayloadSchema {
-                requirements: AGENT_ACTION_REQUEST_REQUIREMENTS,
-                validate: None,
-            },
-            arkret_sdk::events::EventKind::AGENT_ACTION_APPROVE => OperationPayloadSchema {
-                requirements: AGENT_ACTION_APPROVE_REQUIREMENTS,
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            arkret_sdk::events::EventKind::AGENT_ACTION_REJECT => OperationPayloadSchema {
-                requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            arkret_sdk::events::EventKind::CROSS_SIGNING_PUBLISH => OperationPayloadSchema {
-                requirements: CROSS_SIGNING_PUBLISH_REQUIREMENTS,
-                validate: Some(validate_operation_payload_against_sdk_artifact),
-            },
-            arkret_sdk::events::EventKind::CROSS_SIGNING_RESET => OperationPayloadSchema {
-                requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
-                validate: Some(validate_cross_signing_reset_payload),
-            },
-            // Device-identity — `ak.device.authorize` maps to the
-            // `ak.component.device.authorization.v1` lattice cell. Registering an
-            // Operation here is what lets `project_accepted_operations` run
-            // `project_device_authorize`, which persists the authoritative
-            // `device_public_key` + verified state into the devices inventory
-            // (without it the device row stays `unverified` with no key and the
-            // client falsely shows the "existing device approval" gate). The SDK
-            // validator owns payload shape and binding oneOf; policy validation then
-            // verifies any cross_signing_binding at ingest.
-            arkret_sdk::events::EventKind::DEVICE_AUTHORIZE => OperationPayloadSchema {
-                requirements: DEVICE_AUTHORIZE_REQUIREMENTS,
-                validate: Some(validate_device_authorize_payload),
-            },
-            _ => return None,
-        };
+        }
+        arkret_sdk::events::EventKind::MORPH_CREATE => OperationPayloadSchema {
+            requirements: MORPH_CREATE_REQUIREMENTS,
+            validate: Some(validate_morph_create_payload),
+        },
+        arkret_sdk::events::EventKind::MORPH_UPDATE => OperationPayloadSchema {
+            requirements: MORPH_UPDATE_REQUIREMENTS,
+            validate: Some(validate_morph_update_payload),
+        },
+        arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE => OperationPayloadSchema {
+            requirements: MORPH_SCHEMA_MIGRATE_REQUIREMENTS,
+            validate: Some(validate_morph_schema_migrate_payload),
+        },
+        // `ak.field.position.move` / `ak.field.position.reorder` were removed
+        // in revision 0a5ab85 (see arkret-spec
+        // `artifacts/registry/removed-event-kinds.json`). The generic
+        // unknown-event-kind path in `event_log::submit_event` already
+        // hard-rejects these kinds; no operation schema branch is needed.
+        arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM
+        | arkret_sdk::events::EventKind::CONTAINER_REBALANCE => OperationPayloadSchema {
+            requirements: RELATION_ID_REQUIREMENTS,
+            validate: None,
+        },
+        // Applet protocol family.
+        arkret_sdk::events::EventKind::APPLET_REGISTRATION => OperationPayloadSchema {
+            requirements: APPLET_REGISTRATION_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::APPLET_DISCOVERY => OperationPayloadSchema {
+            requirements: APPLET_DISCOVERY_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::APPLET_BRIDGE_ERROR => OperationPayloadSchema {
+            requirements: APPLET_BRIDGE_ERROR_REQUIREMENTS,
+            validate: None,
+        },
+        // R3 spec-sync — agent lifecycle FSM kinds.
+        arkret_sdk::events::EventKind::SELF_AGENT_PAUSE => OperationPayloadSchema {
+            requirements: AGENT_PAUSE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::SELF_AGENT_RESUME => OperationPayloadSchema {
+            requirements: AGENT_RESUME_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::SELF_AGENT_DEACTIVATE => OperationPayloadSchema {
+            requirements: AGENT_DEACTIVATE_REQUIREMENTS,
+            validate: None,
+        },
+        // Agent runtime keys are reducer inputs backed by the SDK payload
+        // schemas. Register both kinds here so accepted Events are converted
+        // into Operations and reach the reducer dispatch table.
+        arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE
+        | arkret_sdk::events::EventKind::AGENT_KEY_REVOKE => OperationPayloadSchema {
+            requirements: &[],
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        // R3 spec-sync — actor_private_event kinds (reducer_input=false).
+        arkret_sdk::events::EventKind::AGENT_DRAFT_PROPOSE => OperationPayloadSchema {
+            requirements: AGENT_DRAFT_PROPOSE_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::AGENT_ACTION_REQUEST => OperationPayloadSchema {
+            requirements: AGENT_ACTION_REQUEST_REQUIREMENTS,
+            validate: None,
+        },
+        arkret_sdk::events::EventKind::AGENT_ACTION_APPROVE => OperationPayloadSchema {
+            requirements: AGENT_ACTION_APPROVE_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        arkret_sdk::events::EventKind::AGENT_ACTION_REJECT => OperationPayloadSchema {
+            requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        arkret_sdk::events::EventKind::CROSS_SIGNING_PUBLISH => OperationPayloadSchema {
+            requirements: CROSS_SIGNING_PUBLISH_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        arkret_sdk::events::EventKind::CROSS_SIGNING_RESET => OperationPayloadSchema {
+            requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
+            validate: Some(validate_cross_signing_reset_payload),
+        },
+        // Device-identity — `ak.device.authorize` maps to the
+        // `ak.component.device.authorization.v1` lattice cell. Registering an
+        // Operation here is what lets `project_accepted_operations` run
+        // `project_device_authorize`, which persists the authoritative
+        // `device_public_key` + verified state into the devices inventory
+        // (without it the device row stays `unverified` with no key and the
+        // client falsely shows the "existing device approval" gate). The SDK
+        // validator owns payload shape and binding oneOf; policy validation then
+        // verifies any cross_signing_binding at ingest.
+        arkret_sdk::events::EventKind::DEVICE_AUTHORIZE => OperationPayloadSchema {
+            requirements: DEVICE_AUTHORIZE_REQUIREMENTS,
+            validate: Some(validate_device_authorize_payload),
+        },
+        _ => return None,
+    };
     Some(schema)
 }
 

@@ -1,7 +1,4 @@
-use arkret_sdk::{
-    Operation, REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL, ReadReceiptPolicy,
-    ReadReceiptPolicyChildViolation,
-};
+use arkret_sdk::{Operation, ReadReceiptPolicy, ReadReceiptPolicyChildViolation};
 use serde_json::Value;
 
 use super::*;
@@ -700,7 +697,7 @@ pub(crate) async fn validate_realm_moderation_policy(
     )
     .await;
     if requires_approval && !has_approval {
-        return Err(REALM_MODERATION_POLICY_REASON_REQUIRES_ORGANIZATION_APPROVAL);
+        return Err(arkret_sdk::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL);
     }
     Ok(())
 }
@@ -746,7 +743,10 @@ pub(crate) async fn validate_audience_mention_operation_policy(
 ) -> Result<(), &'static str> {
     if !matches!(
         kinds::canonical_kind_for_operation(operation),
-        Some(arkret_sdk::events::EventKind::MESSAGE_CREATE | arkret_sdk::events::EventKind::MESSAGE_REVISE)
+        Some(
+            arkret_sdk::events::EventKind::MESSAGE_CREATE
+                | arkret_sdk::events::EventKind::MESSAGE_REVISE
+        )
     ) {
         return Ok(());
     }
@@ -766,7 +766,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     let authz = state.authz.check(
         actor,
-        CAP_ACTION_MESSAGE_MENTION_BROADCAST,
+        arkret_sdk::CapabilityActionId::MESSAGE_MENTION_BROADCAST,
         resource,
         realm_id,
         owner.as_deref(),

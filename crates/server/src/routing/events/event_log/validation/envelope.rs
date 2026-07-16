@@ -165,7 +165,8 @@ pub(crate) fn preflight_invite_projection_reject(
     let kind = kinds::canonical_kind_string(operation);
     if !matches!(
         kind.as_str(),
-        arkret_sdk::events::EventKind::INVITE_THIRD_PARTY | arkret_sdk::events::EventKind::INVITE_CLAIM
+        arkret_sdk::events::EventKind::INVITE_THIRD_PARTY
+            | arkret_sdk::events::EventKind::INVITE_CLAIM
     ) {
         return None;
     }

@@ -292,7 +292,8 @@ pub fn operation_is_invite_claim(operation: &Operation) -> bool {
 }
 
 pub fn operation_is_invite_third_party(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_sdk::events::EventKind::INVITE_THIRD_PARTY)
+    canonical_kind_for_operation(operation)
+        == Some(arkret_sdk::events::EventKind::INVITE_THIRD_PARTY)
 }
 
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {

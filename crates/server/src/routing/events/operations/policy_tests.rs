@@ -1143,7 +1143,7 @@ async fn profile_accountable_principal_requires_active_grant() {
         validate_operation_policy(&state, &[profile])
             .await
             .unwrap_err(),
-        crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING
+        arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
     );
 }
 
@@ -1182,7 +1182,7 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
         validate_operation_policy(&state, &[fake_grant, profile])
             .await
             .unwrap_err(),
-        crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING
+        arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
     );
 }
 
@@ -1236,7 +1236,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
         validate_operation_policy(&state, &[profile])
             .await
             .unwrap_err(),
-        crate::error::reasons::ACCOUNTABILITY_GRANT_MISSING
+        arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
     );
 }
 
@@ -1642,7 +1642,7 @@ async fn call_recording_start_defaults_to_record_capability() {
         &state,
         &realm_id,
         "did:web:recorder.example",
-        arkret_sdk::CAP_ACTION_CALL_RECORD,
+        arkret_sdk::CapabilityActionId::CALL_RECORD,
     );
     let start = op(
         realm_id,
@@ -1670,7 +1670,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
         &state,
         &realm_id,
         "did:web:recorder.example",
-        arkret_sdk::CAP_ACTION_CALL_RECORD,
+        arkret_sdk::CapabilityActionId::CALL_RECORD,
     );
     let start = op(
         realm_id,
@@ -1688,13 +1688,13 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
         validate_operation_policy(&state, &[start])
             .await
             .unwrap_err(),
-        crate::error::reasons::TRANSCRIPTION_DENIED
+        arkret_sdk::ReasonCode::TRANSCRIPTION_DENIED
     );
     assert_eq!(
-        operation_policy_reason_code(crate::error::reasons::TRANSCRIPTION_DENIED),
+        operation_policy_reason_code(arkret_sdk::ReasonCode::TRANSCRIPTION_DENIED),
         (
             salvo::http::StatusCode::FORBIDDEN,
-            crate::error::reasons::TRANSCRIPTION_DENIED
+            arkret_sdk::ReasonCode::TRANSCRIPTION_DENIED
         )
     );
 }
@@ -1709,7 +1709,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
         &state,
         &realm_id,
         "did:web:recorder.example",
-        arkret_sdk::CAP_ACTION_CALL_TRANSCRIBE,
+        arkret_sdk::CapabilityActionId::CALL_TRANSCRIBE,
     );
     let start = op(
         realm_id,

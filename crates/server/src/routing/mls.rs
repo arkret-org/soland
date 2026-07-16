@@ -456,7 +456,10 @@ async fn upload_keypackage(
             "key_package_bytes_b64": key_package_bytes_b64,
         });
         trust_binding.insert_into(&mut publish_payload);
-        let op = build_op(arkret_sdk::events::EventKind::MLS_KEYPACKAGE, publish_payload);
+        let op = build_op(
+            arkret_sdk::events::EventKind::MLS_KEYPACKAGE,
+            publish_payload,
+        );
         let effect = reducer::mls::apply_keypackage_publish(&mut state.projection.lock(), &op);
         match effect {
             ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { .. }) => {}
@@ -688,7 +691,7 @@ pub(crate) async fn claim_keypackages_for_request(
                     AppError::new(ErrorCode::FailedPrecondition, "KeyPackage lifetime expired")
                         .with_wire_code(reason)
                 }
-                reducer::mls::REASON_KEYPACKAGE_CLAIM_GENERATION_MISMATCH => AppError::new(
+                arkret_sdk::ReasonCode::CLAIM_GENERATION_MISMATCH => AppError::new(
                     ErrorCode::FailedPrecondition,
                     "KeyPackage cross-signing generation mismatch",
                 )

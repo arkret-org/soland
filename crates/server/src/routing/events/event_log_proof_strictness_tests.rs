@@ -943,7 +943,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
     assert_eq!(err.status, StatusCode::BAD_REQUEST);
     assert_eq!(
         err.code,
-        crate::error::reasons::EFFECTIVE_SCOPE_REDUCER_MANAGED
+        arkret_sdk::ReasonCode::EFFECTIVE_SCOPE_REDUCER_MANAGED
     );
 }
 

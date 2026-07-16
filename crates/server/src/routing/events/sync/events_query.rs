@@ -58,7 +58,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     if let Some(session) = session.as_ref() {
         if let Err(error) = super::super::require_agent_session_scope(
             session,
-            super::super::AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE,
+            arkret_sdk::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
         ) {
             render_error(res, error.http_status(), error.wire_code(), &error.message);
             return;
@@ -818,7 +818,7 @@ async fn events_query_impl(
     if let Some(session) = session.as_ref() {
         super::super::require_agent_session_scope(
             session,
-            super::super::AGENT_SCOPE_EVENTS_QUERY_SCAN,
+            arkret_sdk::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
         )?;
     }
     let filter_digest =
@@ -1094,7 +1094,10 @@ async fn full_event_from_projection_json(
 fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
     matches!(
         row.get("event_kind").and_then(Value::as_str),
-        Some(arkret_sdk::events::EventKind::MESSAGE_CREATE | arkret_sdk::events::EventKind::MESSAGE_REVISE)
+        Some(
+            arkret_sdk::events::EventKind::MESSAGE_CREATE
+                | arkret_sdk::events::EventKind::MESSAGE_REVISE
+        )
     ) && row.get("payload").is_some_and(|payload| {
         payload.get("redacted").and_then(Value::as_bool) == Some(true)
             || payload.get("state").and_then(Value::as_str) == Some("redacted")

@@ -47,10 +47,6 @@ pub fn router() -> Router {
         .push(projection_query::protocol_router())
 }
 
-pub(crate) const AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE: &str = "ak.self.events.stream.subscribe";
-pub(crate) const AGENT_SCOPE_EVENTS_QUERY_SCAN: &str = "ak.self.events.query.scan";
-pub(crate) const AGENT_SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ak.self.events.command.submit";
-
 pub(crate) fn require_agent_session_scope(
     session: &SessionRecord,
     required_scope: &str,
@@ -136,8 +132,11 @@ mod tests {
     #[test]
     fn human_sessions_are_not_limited_by_agent_service_scopes() {
         assert!(
-            require_agent_session_scope(&human_session(), AGENT_SCOPE_EVENTS_COMMAND_SUBMIT)
-                .is_ok()
+            require_agent_session_scope(
+                &human_session(),
+                arkret_sdk::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT
+            )
+            .is_ok()
         );
     }
 
@@ -145,15 +144,19 @@ mod tests {
     fn agent_session_requires_stream_subscribe_scope() {
         assert!(
             require_agent_session_scope(
-                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_QUERY_SCAN]),
-                AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE,
+                &session_with_agent_scopes(&[
+                    arkret_sdk::ServiceOperationId::SELF_EVENTS_QUERY_SCAN
+                ]),
+                arkret_sdk::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
             )
             .is_err()
         );
         assert!(
             require_agent_session_scope(
-                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE]),
-                AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE,
+                &session_with_agent_scopes(&[
+                    arkret_sdk::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE
+                ]),
+                arkret_sdk::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
             )
             .is_ok()
         );
@@ -163,15 +166,19 @@ mod tests {
     fn agent_session_requires_query_scan_scope() {
         assert!(
             require_agent_session_scope(
-                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_STREAM_SUBSCRIBE]),
-                AGENT_SCOPE_EVENTS_QUERY_SCAN,
+                &session_with_agent_scopes(&[
+                    arkret_sdk::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE
+                ]),
+                arkret_sdk::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
             )
             .is_err()
         );
         assert!(
             require_agent_session_scope(
-                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_QUERY_SCAN]),
-                AGENT_SCOPE_EVENTS_QUERY_SCAN,
+                &session_with_agent_scopes(&[
+                    arkret_sdk::ServiceOperationId::SELF_EVENTS_QUERY_SCAN
+                ]),
+                arkret_sdk::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
             )
             .is_ok()
         );
@@ -181,15 +188,19 @@ mod tests {
     fn agent_session_requires_command_submit_scope() {
         assert!(
             require_agent_session_scope(
-                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_QUERY_SCAN]),
-                AGENT_SCOPE_EVENTS_COMMAND_SUBMIT,
+                &session_with_agent_scopes(&[
+                    arkret_sdk::ServiceOperationId::SELF_EVENTS_QUERY_SCAN
+                ]),
+                arkret_sdk::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
             )
             .is_err()
         );
         assert!(
             require_agent_session_scope(
-                &session_with_agent_scopes(&[AGENT_SCOPE_EVENTS_COMMAND_SUBMIT]),
-                AGENT_SCOPE_EVENTS_COMMAND_SUBMIT,
+                &session_with_agent_scopes(&[
+                    arkret_sdk::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT
+                ]),
+                arkret_sdk::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
             )
             .is_ok()
         );

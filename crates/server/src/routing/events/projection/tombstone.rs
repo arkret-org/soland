@@ -121,7 +121,8 @@ pub fn tombstone_projection_event_for_message_redaction(
 ) {
     if !matches!(
         event.event_kind.as_str(),
-        arkret_sdk::events::EventKind::MESSAGE_CREATE | arkret_sdk::events::EventKind::MESSAGE_REVISE
+        arkret_sdk::events::EventKind::MESSAGE_CREATE
+            | arkret_sdk::events::EventKind::MESSAGE_REVISE
     ) {
         return;
     }

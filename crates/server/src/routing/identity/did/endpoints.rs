@@ -155,8 +155,10 @@ pub(crate) async fn identity_describe(
             "ak.root.identity.log.query.list".to_owned(),
             "ak.root.identity.receipts.query.list".to_owned(),
             "ak.root.identity.command.submit_did_operation".to_owned(),
-            arkret_sdk::SERVICE_REGISTRATION_ENSURE_OPERATION.to_owned(),
-            arkret_sdk::SERVICE_REGISTRATION_GET_OPERATION.to_owned(),
+            arkret_sdk::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE
+                .to_owned(),
+            arkret_sdk::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_RESOURCE_GET
+                .to_owned(),
         ],
         supported_bindings: vec![IdentityRegistryBinding {
             kind: "http".to_owned(),

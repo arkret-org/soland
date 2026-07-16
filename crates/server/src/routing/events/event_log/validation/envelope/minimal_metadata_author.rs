@@ -89,7 +89,7 @@ fn author_credential_invalid(detail: impl std::fmt::Display) -> EventValidationE
     event_validation_error(
         error_http_status(code),
         code.as_str(),
-        crate::error::reasons::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID,
+        arkret_sdk::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID,
     )
 }
 
@@ -387,7 +387,7 @@ mod tests {
             assert_eq!(error.code, "failed_precondition");
             assert_eq!(
                 error.message,
-                crate::error::reasons::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID
+                arkret_sdk::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID
             );
         }
     }

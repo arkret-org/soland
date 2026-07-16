@@ -16,7 +16,8 @@ pub(super) fn validate_reaction_scope_policy(
     };
     if !matches!(
         kind,
-        arkret_sdk::events::EventKind::REACTION_ADD | arkret_sdk::events::EventKind::REACTION_REMOVE
+        arkret_sdk::events::EventKind::REACTION_ADD
+            | arkret_sdk::events::EventKind::REACTION_REMOVE
     ) {
         return Ok(());
     }
@@ -117,7 +118,8 @@ pub(super) fn operation_target_scope_circle_id(
         | arkret_sdk::events::EventKind::STRAND_REORDER => {
             strand_scope("target_ref").or_else(|| strand_scope("strand_id"))
         }
-        arkret_sdk::events::EventKind::REACTION_ADD | arkret_sdk::events::EventKind::REACTION_REMOVE => {
+        arkret_sdk::events::EventKind::REACTION_ADD
+        | arkret_sdk::events::EventKind::REACTION_REMOVE => {
             // A reaction's scope is the target Message's Strand scope — reacting
             // into a Circle is a write into that scope and requires Circle
             // membership just like authoring there. Unknown target (not yet
@@ -564,7 +566,7 @@ pub async fn validate_content_encryption_floor(
                     && !encryption_profile_requires_content_encryption(Some(profile))
                     && realm_requires_content_encryption(state, operation.realm_id.as_str()).await
                 {
-                    return Err(CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR);
+                    return Err(arkret_sdk::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR);
                 }
             }
             _ => {}
