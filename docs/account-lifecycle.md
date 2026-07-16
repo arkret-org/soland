@@ -21,25 +21,38 @@ with the projection rewrite worker.
 
 ## Failed-login lockout
 
-`POST /_soland/gate/auth/dev-login` and `POST /_arkret/gate/account/session-grants`
-participate in the in-memory failed-login counter
-(`AppState::failed_login_attempts`).
+> **Status: not enforced.** The counter below cannot currently fire, and
+> nothing else in soland limits repeated credential failures. Tracked in
+> `review_code.md`; do not read this section as a description of live
+> behaviour.
+
+`AppState::failed_login_attempts` implements a lockout intended for the
+credential-issuing surfaces:
 
 - Five consecutive failures within a 15-minute rolling window flip the
-  actor into a 15-minute lockout.
-- While locked the handler returns 403 with wire code `account_locked`
-  and a body that does **not** reveal whether the credential would
-  otherwise have been valid.
+  actor into a 15-minute lockout (`record_failed_login`).
+- While locked the handler returns 403 and a body that does **not**
+  reveal whether the credential would otherwise have been valid
+  (`account_lockout_error`).
 - The counter resets on the first successful login (`clear_failed_login`).
 - Failures older than the window do not contribute to the threshold —
   the next failure starts the count over.
 - Constants: see `ACCOUNT_LOCKOUT_THRESHOLD`,
   `ACCOUNT_LOCKOUT_DURATION`, `ACCOUNT_LOCKOUT_WINDOW` in
-  `src/state.rs`.
+  `src/state/records.rs`.
 
-Each failure emits an `auth.failed_attempt` audit row carrying
-`attempts`, `surface`, and `locked_until` so on-call can correlate
-spikes without inspecting raw tracing output.
+Why it cannot fire: `record_failed_login` — the counter's only writer —
+has no caller. It was written for `POST
+/_arkret/gate/account/session-grants`, which soland no longer mounts
+(api-conventions.md §3.3 moved credential issuance to the Account
+Authority; see `routing/identity/auth.rs`). soland now delegates every
+credential check to coauth's introspection endpoint, so it never observes
+a credential failure to count. The only surface still consulting the
+lockout is dev-login, which authenticates nothing in development mode, so
+it reads a map that is always empty.
+
+The gap this leaves is coauth's: it owns credential verification and has
+no lockout of its own.
 
 ## GDPR erasure cascade
 

@@ -288,8 +288,6 @@ fn eligibility_wire(eligibility: &PruneEligibility) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    
-    
 
     use soland_data::Db;
 

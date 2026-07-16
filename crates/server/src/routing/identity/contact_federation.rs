@@ -850,15 +850,11 @@ fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> 
 
 #[cfg(test)]
 mod tests {
-    
-    
 
     use soland_data::Db;
 
     use super::*;
-    use crate::config::{
-        AppConfig, ObjectStorageConfig,
-    };
+    use crate::config::{AppConfig, ObjectStorageConfig};
 
     fn test_config() -> AppConfig {
         AppConfig {

@@ -575,7 +575,6 @@ impl RealmMetaRecord {
             .get(service_id)
             .is_some_and(|classes| classes.contains(&data_class))
     }
-
 }
 
 #[derive(Clone, Debug)]

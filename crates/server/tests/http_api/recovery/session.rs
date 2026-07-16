@@ -1,6 +1,5 @@
 //! Integration tests — C-P2..C-P5 recovery session lifecycle + completion.
 
-
 use std::sync::Arc;
 
 use soland::persistence::SolandMemoryPersistenceStore;

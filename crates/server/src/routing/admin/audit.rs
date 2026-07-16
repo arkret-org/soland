@@ -213,17 +213,22 @@ async fn audit_erasure_receipts(
     json_ok(AuditErasureReceiptsOutcome { receipts })
 }
 
-/// Client-side telemetry sink.
+/// Client self-service telemetry sink.
 ///
-/// `POST /_soland/admin/audit/user-action` accepts a batched user-action audit
-/// envelope shape (`actor`, `action`, `outcome`, `note?`, `recorded_at`)
-/// — the same shape that sodmin emits internally and that inkson posts
-/// via `ArkretApi::post_audit_user_action`.
+/// `POST /_soland/self/audit/user-action` (see [`ingest_router`]; the mount is
+/// `self`, not `admin`) accepts a user-action audit envelope shaped
+/// `{actor, action, outcome, note?, recorded_at}`.
 ///
 /// The endpoint is authenticated; the posted `actor` MUST match the
 /// session actor (no cross-actor writes). The audit entry is appended
 /// via `append_audit_log` so it shows up in the same `audit/events`
 /// query a sodmin operator already runs.
+///
+/// This models a client logging *its own* user's actions, so there is no
+/// target field. Operator actions are not posted here: soland stamps those
+/// itself while handling the admin endpoint (see `admin/spec.rs`
+/// `admin_account_state_action`), binding the session actor and the target id
+/// rather than trusting a client-asserted copy.
 #[endpoint(
     operation_id = "org.arkret.soland.audit.user_action",
     tags("audit"),

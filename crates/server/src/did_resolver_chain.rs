@@ -331,7 +331,6 @@ fn valid_trust_domain(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    
     use std::sync::Arc;
 
     use arkret_sdk::Did;

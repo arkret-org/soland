@@ -18,7 +18,6 @@
 //! transition, so the Move passes verify and the post-state is
 //! `Value("join")`.
 
-
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) use arkret_sdk::lattice::CellState;

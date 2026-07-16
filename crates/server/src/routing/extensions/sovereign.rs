@@ -110,8 +110,14 @@ pub fn outbound_allowed(config: &AppConfig, target_url: &str) -> bool {
 }
 
 /// Log an outbound HTTP attempt to the sovereign-boundary audit log.
-/// Always called BEFORE the call is issued so denied attempts also
+/// Intended to run BEFORE the call is issued so denied attempts also
 /// land in the audit trail.
+///
+/// **Not wired.** Neither this nor [`outbound_allowed`] has a production
+/// caller: `crate::security`'s egress guard — the one chokepoint every
+/// outbound request passes through — does not consult them, so
+/// `sovereign_enclave_allowed_outbound_hosts` restricts nothing and no
+/// boundary audit row is emitted. Tracked in `review_code.md`.
 pub fn audit_outbound_call(state: &AppState, target_url: &str, reason: &str, allowed: bool) {
     let posture = if allowed { "allowed" } else { "denied" };
     tracing::info!(

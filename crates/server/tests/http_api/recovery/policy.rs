@@ -1,6 +1,5 @@
 //! Integration tests — REC-1 recovery policy publication + read APIs.
 
-
 use std::sync::Arc;
 
 use soland::persistence::{PersistenceStore, SolandMemoryPersistenceStore};

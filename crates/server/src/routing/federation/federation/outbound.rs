@@ -553,9 +553,6 @@ pub(crate) fn test_app_state_with_peers(
     peers: Vec<String>,
     erasure_propagation_window_ms: u64,
 ) -> crate::state::AppState {
-    
-    
-
     use soland_data::Db;
 
     use crate::config::AppConfig;

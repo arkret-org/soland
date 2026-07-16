@@ -966,7 +966,6 @@ impl MessageState {
     ) -> Option<MessageExpiryProjection> {
         message_expiry_projection_from_value(self.expiry.as_ref(), self.created_at, now)
     }
-
 }
 
 pub fn message_expiry_projection_from_value(

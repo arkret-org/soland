@@ -4,7 +4,6 @@
 //! file was split into per-domain submodules. All items are reachable
 //! to siblings via `super::common::*` (re-exported by `http_api.rs`).
 
-
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 

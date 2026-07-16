@@ -1,6 +1,5 @@
 //! Integration tests — REC-1 recovery receipt verification + read APIs.
 
-
 use std::sync::Arc;
 
 use soland::persistence::SolandMemoryPersistenceStore;

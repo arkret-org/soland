@@ -351,7 +351,6 @@ pub struct OutboundPushBridgeCacheInvalidateOutcome {
 // matters — the SDK root re-exports a different, client-side typed
 // `sync::SyncRequestBody` under the same name.
 pub use arkret_sdk::SyncRequestBody;
-
 // Snapshot head operations return the full signed `ak.schema.snapshot.v1`
 // manifest. soland answers both operations with `not_implemented` until it can
 // produce a real Snapshot detached proof.

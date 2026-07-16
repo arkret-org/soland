@@ -103,7 +103,6 @@ pub(crate) use wire::{
     FederationTrustHeaders, delivery_binding_handed_over_response, delivery_binding_stale_response,
 };
 
-
 #[cfg(test)]
 #[path = "../federation_tests.rs"]
 mod tests;

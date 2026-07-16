@@ -1636,15 +1636,11 @@ impl ConsentRevokeInvalidationChannel {
 
 #[cfg(test)]
 mod tests {
-    
-    
 
     use soland_data::Db;
 
     use super::*;
-    use crate::config::{
-        AppConfig, ObjectStorageConfig,
-    };
+    use crate::config::{AppConfig, ObjectStorageConfig};
 
     #[test]
     fn consent_revoke_cascade_table_stable() {

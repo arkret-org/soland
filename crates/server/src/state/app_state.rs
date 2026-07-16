@@ -94,13 +94,20 @@ pub struct AppState {
     /// mean `active`; non-active rows gate auth/session issuance and directory
     /// visibility. Hydrated from `persistence.account_lifecycle()` at boot.
     pub account_lifecycle: Arc<Mutex<BTreeMap<String, AccountLifecycleRecord>>>,
-    /// In-memory failed-auth counter, keyed by actor DID.
-    /// Spec: A.3 — auth handlers (`/_soland/gate/auth/dev-login`,
-    /// `/_arkret/gate/account/session-grants`) bump the counter on failure; once it
-    /// crosses `ACCOUNT_LOCKOUT_THRESHOLD` (5) within the active window
-    /// the actor is locked out for `ACCOUNT_LOCKOUT_DURATION` (15 min).
-    /// A successful login clears the row. Durable storage lands with
-    /// the account-state projection.
+    /// In-memory failed-auth counter, keyed by actor DID. Once an actor
+    /// crosses `ACCOUNT_LOCKOUT_THRESHOLD` (5) within the active window it is
+    /// locked out for `ACCOUNT_LOCKOUT_DURATION` (15 min); a successful login
+    /// clears the row.
+    ///
+    /// **Never populated today, so the lockout never triggers.** Its only
+    /// writer (`record_failed_login`) has no caller: it was written for
+    /// `/_arkret/gate/account/session-grants`, which soland no longer mounts
+    /// (api-conventions.md §3.3 moved credential issuance to the Account
+    /// Authority). soland now delegates credential checks to coauth's
+    /// introspection endpoint and never sees a failure to count, and the one
+    /// remaining reader — dev-login — authenticates nothing. See
+    /// `docs/account-lifecycle.md` and `review_code.md`; do not treat this
+    /// counter as live protection.
     pub failed_login_attempts: Arc<Mutex<BTreeMap<String, FailedLoginRecord>>>,
     /// Deployment-local account registration policy. It uses the canonical
     /// account-operation DTO so the HTTP handler, audit payload, tests, and a
@@ -1117,6 +1124,10 @@ impl AppState {
     /// [`PSI_PROBE_MAX_PER_WINDOW`]; once exceeded the caller MUST withhold a
     /// fresh match result and surface `retry_after_ms`, so a requester cannot
     /// poll the holder's hit bit at high frequency to read grant/revoke timing.
+    ///
+    /// **Not wired.** The only caller is `routing::operation_conformance_tests`,
+    /// so no PSI surface actually withholds results and the SEC-09 cap is not
+    /// enforced against a real requester. Tracked in `review_code.md`.
     pub fn record_psi_probe(&self, requester: &str, holder: &str) -> PsiProbeOutcome {
         let mut map = self.psi_probe_tracker.lock();
         let now = chrono::Utc::now();

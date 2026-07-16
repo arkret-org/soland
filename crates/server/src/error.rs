@@ -168,7 +168,6 @@ pub mod reasons {
     pub const PEER_UNRESOLVABLE: &str = core_error::ERROR_CODE_PEER_UNRESOLVABLE;
     pub const KEYPACKAGE_UNKNOWN: &str = core_error::ERROR_CODE_KEYPACKAGE_UNKNOWN;
 
-
     // Agent / pairing / session-grant reason codes.
     pub const PROOF_INVALID: &str = core_error::REASON_PROOF_INVALID;
     pub const ACTOR_KIND_REDUCER_MANAGED: &str = core_error::REASON_ACTOR_KIND_REDUCER_MANAGED;
