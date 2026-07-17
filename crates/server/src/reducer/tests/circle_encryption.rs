@@ -181,7 +181,7 @@ fn circle_self_join_requires_open_rule() {
     );
     assert!(state.circles[&circle].members.contains("did:web:alice"));
     // Flip the Circle to open and retry.
-    state.circles.get_mut(&circle).unwrap().join_rule = "open".to_owned();
+    state.circles.get_mut(&circle).unwrap().join_rule = "public".to_owned();
     let op_open = make_operation(
         arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
         &realm,

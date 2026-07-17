@@ -448,7 +448,8 @@ impl ProjectionState {
                     // On non-open Circles, the §9.1 transition table allows
                     // the same transition only when the actor holds explicit
                     // Circle-local member management.
-                    if join_rule != "open" && !payload_asserts_circle_manage(payload, &circle_id) {
+                    if join_rule != "public" && !payload_asserts_circle_manage(payload, &circle_id)
+                    {
                         return ProjectionEffect::Rejected {
                             reason: CIRCLE_JOIN_NOT_OPEN.to_owned(),
                         };

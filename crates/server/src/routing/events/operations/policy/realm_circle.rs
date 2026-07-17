@@ -291,7 +291,7 @@ pub(super) fn circle_member_manage_required(state: &AppState, operation: &Operat
                 {
                     projection
                         .circle(circle_id)
-                        .map(|circle| circle.join_rule != "open")
+                        .map(|circle| circle.join_rule != "public")
                 }
             }
             .unwrap_or(false)

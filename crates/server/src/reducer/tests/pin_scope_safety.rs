@@ -34,7 +34,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
                     "realm_id": REALM_ID,
                     "title": "Private",
                     "created_by": "did:web:alice.example",
-                    "join_rule": "open",
+                    "join_rule": "public",
                     "encryption_profile": "mls_rfc9420"
                 }
             }),

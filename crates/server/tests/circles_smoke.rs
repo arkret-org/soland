@@ -610,7 +610,7 @@ fn circle_scoped_morph_preserves_scope_for_update_gates() {
                     "id": CIRCLE_A,
                     "realm_id": REALM_A,
                     "title": "Private Ops",
-                    "join_rule": "open",
+                    "join_rule": "public",
                     "created_by": ALICE,
                 }
             }),

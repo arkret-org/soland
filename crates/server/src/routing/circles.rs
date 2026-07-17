@@ -542,7 +542,7 @@ async fn post_circle_member(
     // `ak:circle:<uuid>` resource; we stamp the verdict into the operation so
     // the reducer's fail-closed second-line check can rely on it. A
     // self-service join (`actor == sender`) is left to the reducer's
-    // `join_rule=open` gate.
+    // `join_rule=public` gate.
     let join_rule = {
         let projection = state.projection.lock();
         projection
@@ -898,7 +898,7 @@ fn circle_member_manage_required(
 ) -> bool {
     match membership {
         "invite" | "ban" => true,
-        "join" if target == sender => join_rule.is_some_and(|rule| rule != "open"),
+        "join" if target == sender => join_rule.is_some_and(|rule| rule != "public"),
         _ => target != sender,
     }
 }

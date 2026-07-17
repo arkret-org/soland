@@ -414,6 +414,77 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
 }
 
 #[test]
+fn space_wip_policy_is_projected_and_removed_scope_fields_fail_closed() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let space_id = "ak:space:01904100-0000-7000-8000-cfc039892099";
+
+    let create = make_operation(
+        arkret_sdk::events::EventKind::SPACE_CREATE,
+        realm_id,
+        serde_json::json!({
+            "object": {
+                "id": space_id,
+                "realm_id": realm_id,
+                "kind": "list",
+                "title": "WIP",
+                "fields": {
+                    "wip_limit": 5,
+                    "wip_limit_enforcement": "reject"
+                }
+            }
+        }),
+    );
+    assert!(matches!(
+        state.apply(&create, &hlc),
+        ProjectionEffect::SpaceContainerLifecycle { .. }
+    ));
+    assert_eq!(state.space_containers[space_id].fields["wip_limit"], 5);
+
+    for object in [
+        serde_json::json!({
+            "id": "ak:space:01904100-0000-7000-8000-cfc039892100",
+            "realm_id": realm_id,
+            "kind": "board",
+            "title": "Old default",
+            "default_scope_circle_id": "ak:circle:01904100-0000-7000-8000-cfc039892101"
+        }),
+        serde_json::json!({
+            "id": "ak:space:01904100-0000-7000-8000-cfc039892102",
+            "realm_id": realm_id,
+            "kind": "list",
+            "title": "Old floor",
+            "child_scope_policy": {
+                "kind": "require_e2ee",
+                "metadata_encryption_floor": "e2ee_required"
+            }
+        }),
+        serde_json::json!({
+            "id": "ak:space:01904100-0000-7000-8000-cfc039892103",
+            "realm_id": realm_id,
+            "kind": "board",
+            "title": "Wrong WIP owner",
+            "fields": {"wip_limit": 5, "wip_limit_enforcement": "warn"}
+        }),
+    ] {
+        let effect = state.apply(
+            &make_operation(
+                arkret_sdk::events::EventKind::SPACE_CREATE,
+                realm_id,
+                serde_json::json!({"object": object}),
+            ),
+            &hlc,
+        );
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Rejected { ref reason }
+                if reason == arkret_sdk::ErrorCode::SCHEMA_VIOLATION
+        ));
+    }
+}
+
+#[test]
 fn space_container_child_order_tracks_rank_updates() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
@@ -753,7 +824,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                     "realm_id": realm_id,
                     "title": "Private",
                     "created_by": "did:web:alice.example",
-                    "join_rule": "open",
+                    "join_rule": "public",
                     "encryption_profile": "mls_rfc9420"
                 }
             }),
@@ -889,7 +960,7 @@ fn child_scope_policy_gates_space_parent_edges() {
                     "realm_id": realm_id,
                     "title": "Private",
                     "created_by": "did:web:alice.example",
-                    "join_rule": "open",
+                    "join_rule": "public",
                     "encryption_profile": "mls_rfc9420"
                 }
             }),
