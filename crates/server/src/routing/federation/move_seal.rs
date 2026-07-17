@@ -27,7 +27,7 @@ use arkret_sdk::state::{
     SealEffect, SealReject, StoreError, apply_seal, control_event_set_root,
     union_predecessor_covered_events, verify_move,
 };
-use arkret_sdk::{Event, Move, MoveId, NotarySig, RealmId, Seal, SealId};
+use arkret_sdk::{Event, Move, MoveId, NotarySig, RealmId, Seal, SealId, SealKind};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -800,6 +800,289 @@ async fn try_apply_device_generation_event_seal(
         rejected_moves: Vec::new(),
         post_state_root: seal.state_root.clone(),
     }))
+}
+
+pub(crate) async fn apply_managed_agent_event_seal(
+    state: &AppState,
+    seal: &Seal,
+    agent_record: &crate::persistence::AgentPrincipalRecord,
+    session_device_id: &str,
+) -> Result<SealEffect, AppError> {
+    seal.validate_id()
+        .map_err(|error| seal_admission_error(format!("managed Agent PCR Seal id: {error}")))?;
+    seal.validate_structural().map_err(|error| {
+        seal_admission_error(format!("managed Agent PCR Seal structure: {error}"))
+    })?;
+    crate::jws_verify::verify_replay_window(&seal.hlc, state.config.jws_replay_window_seconds)
+        .map_err(|error| {
+            seal_admission_error(format!("managed Agent PCR Seal replay_window: {error}"))
+        })?;
+    // `Seal.kind` is an in-memory classification and is intentionally absent
+    // from the v1 wire schema / signed canonical body. This admission path
+    // proves compaction semantics below by requiring exact cumulative coverage,
+    // roots, state, and delta, then normalizes the accepted local value so
+    // runtime DAG consumers can classify it without trusting an unsigned field.
+    let mut accepted_seal = seal.clone();
+    accepted_seal.kind = SealKind::Compaction;
+    let seal = &accepted_seal;
+    if seal.realm_id.as_str() != agent_record.principal_control_realm_id {
+        return Err(seal_admission_error(
+            "managed Agent PCR Seal Realm differs from the accepted Agent binding",
+        ));
+    }
+    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        state,
+        agent_record,
+        chrono::Utc::now(),
+    )
+    .await?;
+
+    let admission_lock =
+        crate::routing::identity::device_generation::device_generation_admission_lock(
+            seal.realm_id.as_str(),
+        );
+    let _guard = admission_lock.lock().await;
+    if let Some(mut existing) = state.seal_store.get(&seal.id).map_err(|error| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("managed Agent PCR Seal lookup failed: {error}"),
+        )
+    })? {
+        existing.kind = SealKind::Compaction;
+        if existing != *seal {
+            return Err(seal_admission_error(
+                "managed Agent PCR Seal id already exists with different signature material",
+            ));
+        }
+        return Ok(SealEffect {
+            seal: seal.id.clone(),
+            accepted_move_ids: seal.delta.clone(),
+            rejected_moves: Vec::new(),
+            post_state_root: seal.state_root.clone(),
+        });
+    }
+
+    let mut leaves = state
+        .seal_store
+        .list_leaves(&seal.realm_id)
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("managed Agent PCR Seal frontier unavailable: {error}"),
+            )
+        })?;
+    leaves.sort();
+    if seal.predecessor_refs != leaves {
+        return Err(seal_admission_error(
+            "managed Agent PCR Seal predecessors differ from the complete accepted frontier",
+        ));
+    }
+    let current = union_predecessor_covered_events(&leaves, state.seal_store.as_ref())
+        .map_err(AppError::from)?;
+
+    let records = state
+        .persistence
+        .events()
+        .realm_events_newest_first(seal.realm_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("managed Agent PCR Event history unavailable: {error}"),
+            )
+        })?;
+    let mut events = Vec::with_capacity(records.len());
+    for record in records {
+        let event = serde_json::from_value::<Event>(record.envelope).map_err(|error| {
+            seal_admission_error(format!(
+                "stored managed Agent PCR Event {} is invalid: {error}",
+                record.event_id
+            ))
+        })?;
+        let digest = event.event_digest().map_err(|error| {
+            seal_admission_error(format!(
+                "stored managed Agent PCR Event {} digest failed: {error}",
+                event.event_id
+            ))
+        })?;
+        if digest != record.canonical_digest {
+            return Err(seal_admission_error(format!(
+                "stored managed Agent PCR Event {} canonical digest mismatch",
+                event.event_id
+            )));
+        }
+        events.push(event);
+    }
+    let material =
+        arkret_sdk::identity::materialize_managed_agent_pcr_control(&events).map_err(|error| {
+            seal_admission_error(format!(
+                "managed Agent PCR control material is invalid: {error}"
+            ))
+        })?;
+    if material.realm_id != seal.realm_id
+        || material.agent_id.as_str() != agent_record.id
+        || material.controller_id.as_str() != agent_record.controller_id
+        || material.authorization_ref != agent_record.controller_authorization_ref
+    {
+        return Err(device_generation_fenced(
+            "managed Agent PCR Seal authority differs from the accepted Agent delegation",
+        ));
+    }
+
+    let target = material
+        .covered_event_digests
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !current.is_subset(&target) {
+        return Err(seal_admission_error(
+            "managed Agent PCR accepted coverage is not a subset of canonical history",
+        ));
+    }
+    let expected_delta = target.difference(&current).cloned().collect::<Vec<_>>();
+    if expected_delta.is_empty() || seal.delta != expected_delta {
+        return Err(seal_admission_error(
+            "managed Agent PCR Seal delta must equal all newly accepted canonical Events",
+        ));
+    }
+    let declared = seal
+        .covered_event_digests
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if declared.len() != seal.covered_event_digests.len() || declared != target {
+        return Err(seal_admission_error(
+            "managed Agent PCR Seal coverage differs from canonical Event history",
+        ));
+    }
+    let expected_root = control_event_set_root(&target).map_err(AppError::from)?;
+    if seal.control_event_set_root != expected_root || seal.completeness_root != expected_root {
+        return Err(seal_admission_error(
+            "managed Agent PCR Seal control/completeness root mismatch",
+        ));
+    }
+    if seal.state_root != material.state_root {
+        return Err(seal_admission_error(format!(
+            "managed Agent PCR Seal state_root mismatch: submitted {}, expected {}",
+            seal.state_root, material.state_root
+        )));
+    }
+    let expected_notary_seq = leaves
+        .iter()
+        .map(|leaf| {
+            state
+                .seal_store
+                .get(leaf)
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::InternalError,
+                        format!("managed Agent PCR predecessor lookup failed: {error}"),
+                    )
+                })?
+                .ok_or_else(|| seal_admission_error("managed Agent PCR predecessor is missing"))
+                .map(|predecessor| predecessor.notary_seq)
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max()
+        .map_or(Ok(0), |sequence| {
+            sequence
+                .checked_add(1)
+                .ok_or_else(|| seal_admission_error("managed Agent PCR Seal notary_seq overflow"))
+        })?;
+    if seal.notary_seq != expected_notary_seq {
+        return Err(seal_admission_error(
+            "managed Agent PCR Seal notary_seq does not follow its predecessors",
+        ));
+    }
+
+    let NotarySig::Single(signature) = &seal.notary_signature else {
+        return Err(device_generation_fenced(
+            "managed Agent PCR Seal requires one controller-device signature",
+        ));
+    };
+    let expected_method = format!("{}#{session_device_id}", agent_record.controller_id);
+    if signature.verification_method != expected_method {
+        return Err(device_generation_fenced(
+            "managed Agent PCR Seal signer differs from the authenticated controller device",
+        ));
+    }
+    let device = state
+        .persistence
+        .devices()
+        .get(&agent_record.controller_id, session_device_id)
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("controller device lookup failed: {error}"),
+            )
+        })?
+        .ok_or_else(|| device_generation_fenced("controller device is not registered"))?;
+    let generation = crate::routing::identity::device_generation::current_device_generation(
+        state,
+        &agent_record.controller_id,
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::FrontierUnavailable,
+            format!("controller device generation unavailable: {error}"),
+        )
+    })?
+    .ok_or_else(|| device_generation_fenced("controller has no active device generation"))?;
+    if generation.status
+        != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+        || device.revoked_at.is_some()
+        || device.verification_state != "verified"
+        || device
+            .payload
+            .get("authorized_generation_ref")
+            .and_then(serde_json::Value::as_str)
+            != Some(generation.current_ref.as_str())
+    {
+        return Err(device_generation_fenced(
+            "managed Agent PCR Seal signer is not in the active controller device generation",
+        ));
+    }
+    let public_key = device
+        .payload
+        .get("device_public_key")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| device_generation_fenced("controller device signing key is missing"))?;
+    verify_device_seal_signature(seal, public_key)?;
+
+    let delta = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
+    let new_ops = material
+        .event_ops
+        .iter()
+        .filter(|(_, op)| delta.contains(&op.move_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    match state
+        .event_seal_committer
+        .commit_if_frontier(seal, &leaves, &new_ops, &target)
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(seal_admission_error(
+                "managed Agent PCR Seal lost the atomic frontier compare-and-swap",
+            ));
+        }
+        Err(StoreError::Conflict(error)) => return Err(seal_admission_error(error)),
+        Err(error) => {
+            return Err(AppError::new(
+                ErrorCode::InternalError,
+                format!("commit managed Agent PCR Seal atomically: {error}"),
+            ));
+        }
+    }
+    Ok(SealEffect {
+        seal: seal.id.clone(),
+        accepted_move_ids: seal.delta.clone(),
+        rejected_moves: Vec::new(),
+        post_state_root: seal.state_root.clone(),
+    })
 }
 
 pub(crate) async fn apply_inbound_seal(

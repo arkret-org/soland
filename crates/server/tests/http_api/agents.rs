@@ -2,7 +2,8 @@
 
 use super::common::*;
 
-const CONTROLLER_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+pub(crate) const CONTROLLER_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+pub(crate) const CONTROLLER_DEVICE_SIGNING_SEED: [u8; 32] = [91u8; 32];
 
 fn test_session_credential_hash(token: &str, audience: &str) -> String {
     let mut hasher = Sha256::new();
@@ -12,7 +13,7 @@ fn test_session_credential_hash(token: &str, audience: &str) -> String {
     format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
 
-async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
+pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
     let now = chrono::Utc::now();
     state
         .persistence
@@ -52,9 +53,10 @@ async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
         .unwrap();
 }
 
-async fn seed_active_controller_device_generation(state: &AppState, controller: &str) {
+pub(crate) async fn seed_active_controller_device_generation(state: &AppState, controller: &str) {
     let now = chrono::Utc::now();
     let generation_ref = "1-test-device-generation";
+    let signing_key = SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED);
     state
         .persistence
         .webvh()
@@ -142,7 +144,8 @@ async fn seed_active_controller_device_generation(state: &AppState, controller: 
                 "display_name": "Alice Desktop",
                 "verification": "verified",
                 "last_seen_at": now,
-                "authorized_generation_ref": generation_ref
+                "authorized_generation_ref": generation_ref,
+                "device_public_key": test_ed25519_multibase_public(&signing_key)
             }),
             created_at: now,
             updated_at: now,
@@ -152,7 +155,7 @@ async fn seed_active_controller_device_generation(state: &AppState, controller: 
         .unwrap();
 }
 
-async fn seed_agent_provision_prerequisites(state: &AppState, controller: &str) {
+pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, controller: &str) {
     let now = chrono::Utc::now();
     let policy_id = new_prefixed_uuid7("ak:policy:");
     state

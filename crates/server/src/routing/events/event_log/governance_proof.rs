@@ -139,6 +139,20 @@ async fn materialize_realm_control(
                 format!("canonical Realm Event store unavailable: {error}"),
             )
         })?;
+    if realm_records.iter().any(|record| {
+        record
+            .envelope
+            .get("effects")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|effects| {
+                effects.iter().any(|effect| {
+                    effect.get("cell").and_then(serde_json::Value::as_str)
+                        == Some(arkret_sdk::identity::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL)
+                })
+            })
+    }) {
+        return materialize_managed_agent_realm_control(state, realm_id, &realm_records);
+    }
     let generation_fence = first_generation_event_seal_requirement(state, &realm_records).await?;
     let principal_control_actor = realm_records
         .iter()
@@ -415,6 +429,90 @@ async fn materialize_realm_control(
         joined,
         seal_view,
         covered_event_digests,
+    })
+}
+
+fn materialize_managed_agent_realm_control(
+    state: &AppState,
+    realm_id: &RealmId,
+    records: &[crate::state::CanonicalEventRecord],
+) -> Result<MaterializedRealmControl, AppError> {
+    let mut events = Vec::with_capacity(records.len());
+    for record in records {
+        let mut event =
+            serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+                AppError::new(
+                    ErrorCode::StateMismatch,
+                    format!(
+                        "stored managed Agent PCR Event {} is not canonical: {error}",
+                        record.event_id
+                    ),
+                )
+            })?;
+        // `effective_scope` is reducer-managed accepted output and therefore
+        // absent from the producer-signed submit envelope. Managed PCR Events
+        // are closed over their own Realm, so materialize the same authoritative
+        // Realm scope that the ordinary Realm proof path stamps above. The field
+        // is excluded from producer canonical bytes and does not alter the
+        // accepted digest or controller signature.
+        if event.effective_scope.is_none() {
+            event.effective_scope = Some(GovernanceScope::Realm {
+                realm_id: realm_id.clone(),
+            });
+        }
+        let digest = event.event_digest().map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!(
+                    "stored managed Agent PCR Event {} digest failed: {error}",
+                    record.event_id
+                ),
+            )
+        })?;
+        if digest != record.canonical_digest {
+            return Err(AppError::new(
+                ErrorCode::StateMismatch,
+                format!(
+                    "stored managed Agent PCR Event {} canonical digest mismatch",
+                    record.event_id
+                ),
+            ));
+        }
+        events.push(event);
+    }
+    let material =
+        arkret_sdk::identity::materialize_managed_agent_pcr_control(&events).map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!("managed Agent PCR control material is invalid: {error}"),
+            )
+        })?;
+    if &material.realm_id != realm_id {
+        return Err(AppError::new(
+            ErrorCode::StateMismatch,
+            "managed Agent PCR material resolved to a different Realm",
+        ));
+    }
+    let seal_view = crate::notary::ensure_materialized_event_seal(
+        state,
+        realm_id,
+        &material.covered_event_digests,
+        &material.state_root,
+        &material.event_ops,
+        true,
+        None,
+    )
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::FrontierUnavailable,
+            format!("accepted managed Agent PCR Seal materialization failed: {error}"),
+        )
+    })?;
+    Ok(MaterializedRealmControl {
+        events,
+        joined: material.joined,
+        seal_view,
+        covered_event_digests: material.covered_event_digests,
     })
 }
 
