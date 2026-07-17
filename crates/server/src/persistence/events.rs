@@ -400,7 +400,6 @@ fn identity_anchor_slot_conflicts<'a>(
 
 fn receipt_covers_event(receipt: &EventBatchReceipt, event_id: &str) -> bool {
     receipt.events.iter().any(|event| match event {
-        arkret_sdk::EventBatchReceiptEvent::Event(id) => id.as_str() == event_id,
         arkret_sdk::EventBatchReceiptEvent::Item(item) => item.event_id.as_str() == event_id,
         arkret_sdk::EventBatchReceiptEvent::Digest(_) => false,
     })
@@ -647,7 +646,6 @@ async fn insert_event_batch_receipt(
         .events
         .iter()
         .filter_map(|event| match event {
-            arkret_sdk::EventBatchReceiptEvent::Event(id) => Some(id.as_str()),
             arkret_sdk::EventBatchReceiptEvent::Item(item) => Some(item.event_id.as_str()),
             arkret_sdk::EventBatchReceiptEvent::Digest(_) => None,
         })
