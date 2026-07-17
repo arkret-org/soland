@@ -839,6 +839,41 @@ pub(crate) fn validate_morph_create_payload(operation: &Operation) -> Result<(),
     Ok(())
 }
 
+/// Current-v1 View definitions removed presentation-local write policy and
+/// make lifecycle timestamps reducer-owned. Admission rejects the retired
+/// fields instead of silently preserving them in generic JSON maps.
+pub(crate) fn validate_view_payload(operation: &Operation) -> Result<(), &'static str> {
+    fn contains_retired_field(value: &Value) -> bool {
+        match value {
+            Value::Object(fields) => fields.iter().any(|(key, value)| {
+                matches!(
+                    key.as_str(),
+                    "selection_policy"
+                        | "page_size"
+                        | "wip_limit_enforcement"
+                        | "state_changed_at"
+                ) || contains_retired_field(value)
+            }),
+            Value::Array(values) => values.iter().any(contains_retired_field),
+            _ => false,
+        }
+    }
+
+    for field in ["object", "definition", "patch"] {
+        if let Some(value) = operation.payload.get(field) {
+            if contains_retired_field(value) {
+                return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+            }
+            if let Some(state) = value.get("state") {
+                if !matches!(state.as_str(), Some("active" | "tombstoned")) {
+                    return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn reject_morph_metadata_business_fields(
     metadata: &serde_json::Map<String, Value>,
 ) -> Result<(), &'static str> {

@@ -61,6 +61,42 @@ fn op(
     )
 }
 
+#[test]
+fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
+    let realm_id =
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000611").unwrap();
+    for definition in [
+        json!({"collection": {"page_size": 50}}),
+        json!({"collection": {"selection_policy": "multiple"}}),
+        json!({"collection": {"grouping": {"wip_limit_enforcement": "warn"}}}),
+        json!({"state": "tombstoned", "state_changed_at": "2026-07-17T00:00:00Z"}),
+    ] {
+        let operation = op(
+            realm_id.clone(),
+            "000000000611",
+            arkret_sdk::events::EventKind::VIEW_UPDATE,
+            json!({
+                "view_id": "ak:view:01904100-0000-7000-8000-000000000611",
+                "patch": definition
+            }),
+        );
+        assert_eq!(
+            validate_view_payload(&operation),
+            Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        );
+    }
+    let current = op(
+        realm_id,
+        "000000000612",
+        arkret_sdk::events::EventKind::VIEW_UPDATE,
+        json!({
+            "view_id": "ak:view:01904100-0000-7000-8000-000000000611",
+            "patch": {"state": "tombstoned"}
+        }),
+    );
+    validate_view_payload(&current).unwrap();
+}
+
 fn test_state() -> AppState {
     AppState::new(test_config(), Db { pool: None })
 }

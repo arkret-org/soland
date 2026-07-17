@@ -475,7 +475,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             // reducer / cell-family pipeline owns mv-register semantics.
             OperationPayloadSchema {
                 requirements: VIEW_CREATE_REQUIREMENTS,
-                validate: None,
+                validate: Some(validate_view_payload),
             }
         }
         arkret_sdk::events::EventKind::READ_CURSOR_ADVANCE => OperationPayloadSchema {
