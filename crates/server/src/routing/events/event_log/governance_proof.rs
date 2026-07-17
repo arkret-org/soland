@@ -829,8 +829,31 @@ pub(crate) fn canonical_event_ops(
         .and_then(serde_json::Value::as_str)
         == Some("principal_control")
     {
-        CellRef::new("ak:cell:ak.component.realm.create.v1:principal_control")
-            .map_err(proof_state_error)?
+        let principal_cell = CellRef::new(arkret_sdk::identity::PRINCIPAL_CONTROL_CREATE_CELL)
+            .map_err(proof_state_error)?;
+        let managed_agent_cell =
+            CellRef::new(arkret_sdk::identity::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL)
+                .map_err(proof_state_error)?;
+        let principal_count = event
+            .effects
+            .iter()
+            .filter(|effect| effect.cell == principal_cell)
+            .count();
+        let managed_agent_count = event
+            .effects
+            .iter()
+            .filter(|effect| effect.cell == managed_agent_cell)
+            .count();
+        match (principal_count, managed_agent_count) {
+            (1, 0) => principal_cell,
+            (0, 1) => managed_agent_cell,
+            _ => {
+                return Err(AppError::new(
+                    ErrorCode::StateMismatch,
+                    "Principal Control Realm create proof material must contain exactly one canonical create-log effect",
+                ));
+            }
+        }
     } else {
         create_cell.clone()
     };
@@ -934,4 +957,75 @@ fn proof_state_error(error: impl std::fmt::Display) -> AppError {
         ErrorCode::StateMismatch,
         format!("MLS governance proof state mismatch: {error}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn managed_agent_pcr_create() -> Event {
+        let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe").unwrap();
+        let actor_id = arkret_sdk::Did::new("did:web:agent.example").unwrap();
+        let mut event = Event::new(
+            arkret_sdk::events::EventKind::REALM_CREATE,
+            realm_id.clone(),
+            actor_id.clone(),
+            1,
+            arkret_sdk::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
+            serde_json::json!({
+                "object": {
+                    "id": realm_id,
+                    "created_by": actor_id,
+                    "fields": {"purpose": "principal_control"},
+                    "notary": {"type": "single_did", "did": actor_id},
+                }
+            }),
+        )
+        .unwrap();
+        event.effects = vec![
+            arkret_sdk::identity::managed_agent_principal_control_create_effect(
+                &event.realm_id,
+                event.actor_seq,
+            )
+            .unwrap(),
+        ];
+        event
+    }
+
+    #[test]
+    fn governance_materializer_accepts_managed_agent_create_marker() {
+        let event = managed_agent_pcr_create();
+        let move_id = MoveId::new(format!("sha256:{}", "11".repeat(32))).unwrap();
+        let ops = canonical_event_ops(&event, &move_id).unwrap();
+        assert_eq!(ops.len(), 3);
+        assert!(ops.iter().any(|(cell, _)| {
+            cell.as_str() == format!("ak:cell:ak.component.realm.create.v1:{}", event.realm_id)
+        }));
+        assert!(ops.iter().all(|(cell, _)| {
+            cell.as_str() != arkret_sdk::identity::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL
+        }));
+    }
+
+    #[test]
+    fn governance_materializer_rejects_legacy_managed_agent_create_effect() {
+        let mut event = managed_agent_pcr_create();
+        event.effects = vec![arkret_sdk::Effect {
+            cell: CellRef::new(format!(
+                "ak:cell:ak.component.realm.create.v1:{}",
+                event.realm_id
+            ))
+            .unwrap(),
+            op: LatticeOp {
+                op_type: LatticeOpType::Set,
+                tag: None,
+                value: Some(event.payload["object"].clone()),
+                from: None,
+                to: None,
+                reason: None,
+                issuer_seq: None,
+            },
+        }];
+        let move_id = MoveId::new(format!("sha256:{}", "22".repeat(32))).unwrap();
+        assert!(canonical_event_ops(&event, &move_id).is_err());
+    }
 }
