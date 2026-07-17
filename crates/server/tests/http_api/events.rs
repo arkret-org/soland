@@ -4,6 +4,73 @@
 
 use super::common::*;
 
+async fn fetch_chunked_mls_governance_proof(
+    state: &AppState,
+    token: &str,
+    realm_id: &str,
+    mut request_value: Value,
+) -> (
+    Vec<arkret_sdk::MlsGovernanceProofBundle>,
+    arkret_sdk::MaterializedMlsGovernanceProofBundle,
+) {
+    let mut frontier_response = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(frontier_response.status_code, Some(StatusCode::OK));
+    let frontier: arkret_sdk::EventsFrontierAccountClientState = frontier_response
+        .take_json()
+        .await
+        .expect("typed Realm Seal frontier");
+    let arkret_sdk::EventsFrontierView::RealmSealView(frontier) = frontier.frontier else {
+        panic!("Realm frontier must materialize a Seal view");
+    };
+    let object = request_value
+        .as_object_mut()
+        .expect("proof request fixture is an object");
+    object.insert(
+        "trusted_anchor_seal_id".to_owned(),
+        Value::String(frontier.seal_id.to_string()),
+    );
+    object.insert("chunk_index".to_owned(), Value::from(0));
+    object.remove("expected_bundle_digest");
+    let base_request: arkret_sdk::MlsGovernanceProofRequest =
+        serde_json::from_value(request_value).expect("typed chunk-0 proof request");
+
+    let mut first_response =
+        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&base_request)
+            .send(&app_from_state(state.clone()))
+            .await;
+    let first_status = first_response.status_code.expect("proof status");
+    let first_body: Value = first_response.take_json().await.expect("proof body");
+    assert_eq!(first_status, StatusCode::OK, "proof response: {first_body}");
+    let first: arkret_sdk::MlsGovernanceProofBundle =
+        serde_json::from_value(first_body).expect("typed proof chunk 0");
+    let mut chunks = vec![first.clone()];
+    for chunk_index in 1..first.chunk_manifest.chunk_count {
+        let mut request = base_request.clone();
+        request.chunk_index = chunk_index;
+        request.expected_bundle_digest = Some(first.bundle_digest.clone());
+        let mut response =
+            TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+                .add_header("authorization", format!("Bearer {token}"), true)
+                .json(&request)
+                .send(&app_from_state(state.clone()))
+                .await;
+        let status = response.status_code.expect("proof chunk status");
+        let body: Value = response.take_json().await.expect("proof chunk body");
+        assert_eq!(status, StatusCode::OK, "proof chunk response: {body}");
+        chunks.push(serde_json::from_value(body).expect("typed proof chunk"));
+    }
+    let materialized = arkret_sdk::assemble_mls_governance_proof_chunks(&base_request, &chunks)
+        .expect("complete proof chunks assemble");
+    (chunks, materialized)
+}
+
 fn test_session_credential_hash(token: &str, audience: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(audience.as_bytes());
@@ -620,25 +687,12 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         "binding_profile": "ak.profile.mls_governance_binding.full.v1",
         "reducer_profile": "ak.reducer.v1"
     });
-    let mut proof_response =
-        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&proof_request)
-            .send(&app_from_state(state.clone()))
-            .await;
-    let proof_status = proof_response.status_code.expect("proof status");
-    let proof_body: Value = proof_response.take_json().await.expect("proof body");
-    assert_eq!(
-        proof_status,
-        StatusCode::OK,
-        "bootstrap control Event proof failed: {proof_body}"
-    );
-    let bundle: arkret_sdk::MlsGovernanceProofBundle =
-        serde_json::from_value(proof_body).expect("typed bootstrap governance proof");
+    let (_, bundle) =
+        fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request).await;
     arkret_sdk::verify_mls_governance_proof_bundle(
         &bundle,
         &bundle.governance_binding,
-        &bundle.trust_anchor_seal_id,
+        &bundle.trusted_anchor_seal_id,
         |_| Ok(()),
         |_| Ok(()),
     )
@@ -721,36 +775,76 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         "binding_profile": "ak.profile.mls_governance_binding.full.v1",
         "reducer_profile": "ak.reducer.v1"
     });
-    let mut proof_response =
-        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&proof_request)
-            .send(&app_from_state(state.clone()))
-            .await;
-    let proof_status = proof_response.status_code.expect("proof status");
-    let proof_body: Value = proof_response.take_json().await.expect("proof body");
-    assert_eq!(proof_status, StatusCode::OK, "proof response: {proof_body}");
-    let bundle: arkret_sdk::MlsGovernanceProofBundle =
-        serde_json::from_value(proof_body).expect("typed proof bundle");
+    let (proof_chunks, bundle) =
+        fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request.clone()).await;
     let verified = arkret_sdk::verify_mls_governance_proof_bundle(
         &bundle,
         &bundle.governance_binding,
-        &bundle.trust_anchor_seal_id,
+        &bundle.trusted_anchor_seal_id,
         |_| Ok(()),
         |_| Ok(()),
     )
     .expect("server proof verifies with SDK");
     assert_eq!(verified.accepted_seal_id, bundle.accepted_seal_id);
 
-    let second_bundle: arkret_sdk::MlsGovernanceProofBundle =
+    let mut valid_request_value = proof_request.clone();
+    valid_request_value["trusted_anchor_seal_id"] =
+        Value::String(bundle.trusted_anchor_seal_id.to_string());
+    valid_request_value["chunk_index"] = Value::from(0);
+    let valid_request: arkret_sdk::MlsGovernanceProofRequest =
+        serde_json::from_value(valid_request_value).expect("typed proof request");
+
+    let mut unreachable_request = valid_request.clone();
+    unreachable_request.trusted_anchor_seal_id =
+        arkret_sdk::SealId::new(format!("ak:seal:sha256:{}", "ff".repeat(32))).unwrap();
+    let mut unreachable =
         TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
             .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&proof_request)
+            .json(&unreachable_request)
             .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .expect("second proof body");
+            .await;
+    assert_eq!(unreachable.status_code, Some(StatusCode::CONFLICT));
+    let unreachable_body: Value = unreachable.take_json().await.expect("anchor error body");
+    assert_eq!(
+        unreachable_body["error"]["code"],
+        "mls_governance_anchor_unreachable"
+    );
+
+    let mut stale_manifest_request = valid_request.clone();
+    stale_manifest_request.chunk_index = 1;
+    stale_manifest_request.expected_bundle_digest =
+        Some(arkret_sdk::Hash::new(format!("sha256:{}", "ee".repeat(32))).unwrap());
+    let mut stale_manifest =
+        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&stale_manifest_request)
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(stale_manifest.status_code, Some(StatusCode::CONFLICT));
+    let stale_body: Value = stale_manifest
+        .take_json()
+        .await
+        .expect("stale manifest error body");
+    assert_eq!(stale_body["error"]["code"], "frontier_unavailable");
+
+    let mut out_of_range_request = valid_request;
+    out_of_range_request.chunk_index = proof_chunks[0].chunk_manifest.chunk_count;
+    out_of_range_request.expected_bundle_digest = Some(bundle.bundle_digest.clone());
+    let mut out_of_range =
+        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&out_of_range_request)
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(out_of_range.status_code, Some(StatusCode::BAD_REQUEST));
+    let out_of_range_body: Value = out_of_range
+        .take_json()
+        .await
+        .expect("chunk range error body");
+    assert_eq!(out_of_range_body["error"]["code"], "invalid_param");
+
+    let (_, second_bundle) =
+        fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request).await;
     assert_eq!(
         second_bundle.accepted_seal_id, bundle.accepted_seal_id,
         "unchanged Event coverage must reuse the accepted Seal"
@@ -848,22 +942,13 @@ async fn agent_controller_can_fetch_managed_pcr_mls_governance_proof() {
         "binding_profile": "ak.profile.mls_governance_binding.full.v1",
         "reducer_profile": "ak.reducer.v1"
     });
-    let mut proof_response =
-        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&proof_request)
-            .send(&app_from_state(state.clone()))
-            .await;
-    let proof_status = proof_response.status_code.expect("proof status");
-    let proof_body: Value = proof_response.take_json().await.expect("proof body");
-    assert_eq!(
-        proof_status,
-        StatusCode::OK,
-        "managed Agent PCR governance proof failed: {proof_body}"
-    );
-    let bundle: arkret_sdk::MlsGovernanceProofBundle =
-        serde_json::from_value(proof_body).expect("typed managed PCR governance proof");
+    let (_, bundle) =
+        fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request.clone()).await;
     assert_eq!(bundle.realm_id.as_str(), realm_id);
+    let mut denied_request = proof_request;
+    denied_request["trusted_anchor_seal_id"] =
+        Value::String(bundle.trusted_anchor_seal_id.to_string());
+    denied_request["chunk_index"] = Value::from(0);
 
     let bob_token = dev_token_for_device(
         state.clone(),
@@ -874,7 +959,7 @@ async fn agent_controller_can_fetch_managed_pcr_mls_governance_proof() {
     .await;
     let mut denied = TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .json(&proof_request)
+        .json(&denied_request)
         .send(&app_from_state(state))
         .await;
     assert_eq!(denied.status_code, Some(StatusCode::NOT_FOUND));
