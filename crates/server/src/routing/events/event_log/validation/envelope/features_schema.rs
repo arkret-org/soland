@@ -159,11 +159,11 @@ pub(crate) fn validate_event_time_fields(
         ));
     }
     match created_at_value.and_then(Value::as_str) {
-        Some(value) => canonical::validate_timestamp_canonical(value).map_err(|_| {
+        Some(value) => canonical::validate_timestamp_millis_canonical(value).map_err(|_| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_param",
-                "created_at must use canonical RFC3339 UTC form",
+                "created_at must use canonical RFC3339 UTC millisecond form",
             )
         })?,
         None if !state.config.development_mode => {

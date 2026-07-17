@@ -885,6 +885,19 @@ fn production_requires_canonical_event_time_fields() {
     assert!(err.message.contains("created_at"));
 
     object.insert("created_at".to_owned(), json!("2026-05-17T00:00:00Z"));
+    let err = validate_event_time_fields(&state, &object)
+        .expect_err("whole-second shorthand is not canonical milliseconds");
+    assert_eq!(err.code, "invalid_param");
+
+    object.insert(
+        "created_at".to_owned(),
+        json!("2026-05-17T00:00:00.000123Z"),
+    );
+    let err = validate_event_time_fields(&state, &object)
+        .expect_err("microseconds are not canonical milliseconds");
+    assert_eq!(err.code, "invalid_param");
+
+    object.insert("created_at".to_owned(), json!("2026-05-17T00:00:00.000Z"));
     let err = validate_event_time_fields(&state, &object).expect_err("production requires hlc");
     assert_eq!(err.code, "missing_param");
     assert!(err.message.contains("hlc"));
