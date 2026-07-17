@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{
-    CellRef, ConsentCellList, ConsentCellView, ConsentRequestRequestBody, ConsentState,
+    ConsentCellList, ConsentCellView, ConsentId, ConsentRequestRequestBody, ConsentState,
     ConsentUpdateRequestBody, Did, EventId, Operation,
 };
 use chrono::{DateTime, Utc};
@@ -1094,15 +1094,23 @@ fn consent_cell_id(holder: &str, peer: &str, scope: &str) -> String {
 }
 
 fn consent_cell_id_for_consent_id(consent_id: &str) -> String {
-    if let Ok(cell_ref) = CellRef::new(consent_id.to_owned()) {
-        return cell_ref.into_string();
-    }
-    format!("ak:cell:ak.component.consent.grant.v1:{consent_id}")
+    let consent_id = ConsentId::new(consent_id.to_owned())
+        .expect("consent IDs are validated before cell projection");
+    arkret_sdk::consent::consent_cell_id(&consent_id)
+        .expect("typed consent IDs always produce valid cell references")
+        .into_string()
 }
 
 fn consent_id(payload: &Value) -> Result<String, AppError> {
-    first_payload_string(payload, &["consent_id", "cell_subject", "cell_id"])
-        .ok_or_else(|| AppError::missing_param("consent_id is required"))
+    let consent_id = payload
+        .get("consent_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("consent_id is required"))?;
+    ConsentId::new(consent_id.to_owned())
+        .map(ConsentId::into_string)
+        .map_err(|_| {
+            AppError::invalid_param("consent_id must be an ak:consent:<UUIDv7> identifier")
+        })
 }
 
 fn consent_holder(operation: &Operation) -> Result<String, AppError> {

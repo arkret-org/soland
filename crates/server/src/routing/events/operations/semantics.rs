@@ -154,6 +154,22 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 .validate()
                 .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
         }
+        arkret_sdk::events::EventKind::CONSENT_GRANT => {
+            let _: arkret_sdk::ConsentGrantPayload = typed_payload_fields(
+                operation,
+                &[
+                    "consent_id",
+                    "peer",
+                    "consent_scope",
+                    "not_before",
+                    "expires_at",
+                    "constraints",
+                    "evidence_ref",
+                    "reason",
+                ],
+            )?;
+            Ok(())
+        }
         // ak.space.archive / ak.space.restore use the typed
         // SpaceStateTransitionPayload (space_id, new_state, reason?).
         // The removed top-level `target_ref` form is rejected
@@ -176,22 +192,12 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // ak.consent.revoke — observed_dots[] required; implicit
-        // cascade is schema_violation. We accept the call sites that
-        // do not yet emit consent.revoke events (no payload to check)
-        // by returning Ok when the payload doesn't even resemble a
-        // consent revoke (missing consent_id) — the per-kind schema
-        // dispatcher will catch totally-empty payloads separately.
+        // The complete canonical typed shape is required; validating only
+        // observed_dots would allow malformed identifiers.
         arkret_sdk::events::EventKind::CONSENT_REVOKE => {
-            if operation.payload.get("consent_id").is_none()
-                && operation.payload.get("observed_dots").is_none()
-            {
-                return Ok(());
-            }
             validate_consent_revoke_payload(&operation.payload)
                 .map(|_| ())
-                .or_else(|_| validate_observed_dots_payload(operation))
-                .map_err(|_| "ak.consent.revoke payload violates observed_dots requirement")
+                .map_err(|_| "ak.consent.revoke payload violates its canonical typed shape")
         }
         // ak.cross_signing.publish — round 4 CAS-register cell with
         // required `expected_previous_generation`. The reducer accepts

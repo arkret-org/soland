@@ -45,9 +45,11 @@ pub(crate) fn direct_pair_key(
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     let left = direct_pair_key_participant(left, "actor")?;
     let right = direct_pair_key_participant(right, "peer")?;
-    arkret_sdk::direct_conversation_pair_key(trust_domain, left, right).map_err(|error| {
-        AppError::internal(format!("direct pair key construction failed: {error}"))
-    })
+    arkret_sdk::direct_conversation_pair_key(trust_domain, left, right)
+        .map(|pair_key| pair_key.into_string())
+        .map_err(|error| {
+            AppError::internal(format!("direct pair key construction failed: {error}"))
+        })
 }
 
 pub(super) fn direct_pair_key_participant(
@@ -283,16 +285,54 @@ pub(crate) async fn create_direct_binding_with_realm(
         return Err(error);
     }
 
-    let binding_fact_payload = json!({
-        "pair_key": pair_key,
-        "participants_unordered": active_binding.participants_unordered.clone(),
-        "realm_id": realm_id,
-        "main_strand_id": main_strand_id,
-        "contact_refs": contact_fact_refs(contact),
-        "member_event_refs": member_event_refs,
-        "main_strand_create_ref": main_strand_create_ref,
-        "created_at": active_binding.created_at.to_rfc3339(),
-    });
+    let binding_fact = arkret_sdk::DirectConversationBoundPayload {
+        pair_key: arkret_sdk::Hash::new(pair_key.to_owned())
+            .map_err(|error| AppError::internal(format!("stored pair key is invalid: {error}")))?,
+        participants_unordered: active_binding
+            .participants_unordered
+            .iter()
+            .map(|participant| arkret_sdk::Did::new(participant.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                AppError::internal(format!("stored direct participant is invalid: {error}"))
+            })?,
+        realm_id: arkret_sdk::RealmId::new(realm_id.clone())
+            .map_err(|error| AppError::internal(format!("stored realm id is invalid: {error}")))?,
+        main_strand_id: arkret_sdk::StrandId::new(main_strand_id.clone()).map_err(|error| {
+            AppError::internal(format!("stored main strand id is invalid: {error}"))
+        })?,
+        contact_refs: contact_fact_refs(contact)
+            .into_iter()
+            .map(arkret_sdk::EventId::new)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                AppError::internal(format!("stored contact event ref is invalid: {error}"))
+            })?,
+        member_event_refs: member_event_refs
+            .into_iter()
+            .map(arkret_sdk::EventId::new)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                AppError::internal(format!("stored member event ref is invalid: {error}"))
+            })?,
+        main_strand_create_ref: arkret_sdk::EventId::new(main_strand_create_ref).map_err(
+            |error| AppError::internal(format!("stored strand event ref is invalid: {error}")),
+        )?,
+        created_at: active_binding.created_at,
+        binding_state: None,
+        supersedes_binding_ref: None,
+    };
+    let trust_domain = arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+        .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
+    binding_fact
+        .validate_pair_key(trust_domain)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "direct binding pair key validation failed: {error}"
+            ))
+        })?;
+    let binding_fact_payload = serde_json::to_value(binding_fact)
+        .map_err(|error| AppError::internal(format!("direct binding encoding failed: {error}")))?;
     let _ = crate::routing::events::projection::append_projection_event(
         state,
         ProjectionEventRecord {

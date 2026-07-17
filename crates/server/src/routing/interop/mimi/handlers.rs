@@ -480,6 +480,8 @@ pub(super) async fn mimi_consent_request(
         .as_ref()
         .map(|(consent_id, _cell)| consent_id.clone())
         .unwrap_or_else(|| ids::generate("consent"));
+    let consent_id = arkret_sdk::ConsentId::new(consent_id)
+        .map_err(|error| AppError::internal(format!("generated consent id is invalid: {error}")))?;
     let _receipt = mimi_receipt(
         state,
         "ak.open.mimi.command.request_consent",
