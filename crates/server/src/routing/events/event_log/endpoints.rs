@@ -681,13 +681,19 @@ async fn events_frontier(
             return Err(AppError::not_found("realm not found"));
         }
         if managed_agent_pcr {
-            let frontier =
-                crate::routing::identity::managed_agent_pcr::managed_agent_event_frontier(
-                    state,
-                    &realm_value,
+            let seal =
+                crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
+                    state, &realm_id,
                 )
                 .await?
-                .ok_or_else(|| AppError::not_found("realm has no accepted Event frontier"))?;
+                .accepted_seal;
+            let frontier = RealmSealFrontierView {
+                realm_id,
+                seal_id: seal.id,
+                control_event_set_root: seal.control_event_set_root,
+                state_root: seal.state_root,
+                hlc: Some(seal.hlc),
+            };
             return crate::result::json_ok(EventsFrontierAccountClientState {
                 frontier: EventsFrontierView::RealmSealView(frontier),
                 receipts: Vec::new(),

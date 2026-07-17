@@ -109,21 +109,36 @@ async fn materialize_realm_control(
     state: &AppState,
     realm_id: &RealmId,
 ) -> Result<MaterializedRealmControl, AppError> {
-    let records = state
+    let stats = state
         .persistence
         .events()
-        .snapshot_all()
+        .realm_event_stats(realm_id.as_str())
         .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::FrontierUnavailable,
-                format!("canonical Event store unavailable: {error}"),
+                format!("canonical Event bounds preflight unavailable: {error}"),
             )
         })?;
-    let realm_records = records
-        .into_iter()
-        .filter(|record| record.realm_id.as_deref() == Some(realm_id.as_str()))
-        .collect::<Vec<_>>();
+    if stats.count > arkret_sdk::MLS_GOVERNANCE_MAX_COVERED_EVENT_DIGESTS as u64
+        || stats.canonical_bytes > arkret_sdk::MLS_GOVERNANCE_MAX_TOTAL_ITEM_BYTES as u64
+    {
+        return Err(AppError::new(
+            ErrorCode::MlsGovernanceProofBoundsExceeded,
+            "Realm Event history exceeds MLS governance proof materialization bounds",
+        ));
+    }
+    let realm_records = state
+        .persistence
+        .events()
+        .realm_events_newest_first(realm_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("canonical Realm Event store unavailable: {error}"),
+            )
+        })?;
     let generation_fence = first_generation_event_seal_requirement(state, &realm_records).await?;
     let principal_control_actor = realm_records
         .iter()

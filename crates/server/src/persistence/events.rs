@@ -41,6 +41,9 @@ pub trait EventStore: Send + Sync {
     async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>>;
     async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+    /// Cheap Realm-local cardinality/byte preflight for bounded proof
+    /// materialization. Implementations must not load Event envelopes.
+    async fn realm_event_stats(&self, realm_id: &str) -> PersistenceResult<RealmEventStats>;
     async fn peer_authz_state_records(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     async fn peer_events_query_page(
         &self,
@@ -53,6 +56,12 @@ pub trait EventStore: Send + Sync {
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RealmEventStats {
+    pub count: u64,
+    pub canonical_bytes: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -256,6 +265,21 @@ impl EventStore for MemoryEventStore {
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
         Ok(self.data.lock().values().cloned().collect())
+    }
+
+    async fn realm_event_stats(&self, realm_id: &str) -> PersistenceResult<RealmEventStats> {
+        let data = self.data.lock();
+        let mut stats = RealmEventStats::default();
+        for record in data
+            .values()
+            .filter(|record| record.realm_id.as_deref() == Some(realm_id))
+        {
+            stats.count = stats.count.saturating_add(1);
+            stats.canonical_bytes = stats
+                .canonical_bytes
+                .saturating_add(record.canonical_bytes.len() as u64);
+        }
+        Ok(stats)
     }
 
     async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<CanonicalEventRecord>> {
@@ -507,6 +531,14 @@ struct CanonicalEventRow {
     envelope: Value,
     #[diesel(sql_type = Timestamptz)]
     received_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(QueryableByName)]
+struct RealmEventStatsRow {
+    #[diesel(sql_type = BigInt)]
+    event_count: i64,
+    #[diesel(sql_type = BigInt)]
+    canonical_bytes: i64,
 }
 
 #[derive(QueryableByName)]
@@ -852,6 +884,24 @@ impl EventStore for PgEventStore {
         )
         .load::<CanonicalEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn realm_event_stats(&self, realm_id: &str) -> PersistenceResult<RealmEventStats> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
+        sql_query(
+            "SELECT COUNT(*)::bigint AS event_count, \
+             COALESCE(SUM(OCTET_LENGTH(canonical_bytes)), 0)::bigint AS canonical_bytes \
+             FROM canonical_events WHERE realm_id = $1",
+        )
+        .bind::<SqlUuid, _>(realm_id_uuid)
+        .get_result::<RealmEventStatsRow>(&mut *conn)
+        .await
+        .map(|row| RealmEventStats {
+            count: row.event_count.max(0) as u64,
+            canonical_bytes: row.canonical_bytes.max(0) as u64,
+        })
         .map_err(PersistenceError::from)
     }
 

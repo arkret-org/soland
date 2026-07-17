@@ -820,7 +820,10 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
             .json(&stale_manifest_request)
             .send(&app_from_state(state.clone()))
             .await;
-    assert_eq!(stale_manifest.status_code, Some(StatusCode::CONFLICT));
+    assert_eq!(
+        stale_manifest.status_code,
+        Some(StatusCode::SERVICE_UNAVAILABLE)
+    );
     let stale_body: Value = stale_manifest
         .take_json()
         .await
