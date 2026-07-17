@@ -19,6 +19,7 @@
 use arkret_sdk::http::ServerDescribeOutcome;
 use arkret_sdk::{ServiceDescribe, ServiceIdentityState};
 use salvo::http::StatusCode;
+use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -307,8 +308,18 @@ async fn database_ready(state: &AppState) -> bool {
     summary = "Server capability description"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.server.query.describe"))]
-async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescribeOutcome> {
+async fn server_describe(
+    service_type: QueryParam<String, false>,
+    depot: &mut Depot,
+) -> JsonResult<ServerDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    if let Some(service_type) = service_type.into_inner()
+        && service_type != arkret_sdk::ServiceType::PrincipalServer.as_str()
+    {
+        return Err(crate::error::AppError::invalid_param(format!(
+            "service_type {service_type:?} is not available on this binding"
+        )));
+    }
     json_ok(ServerDescribeOutcome(build_server_description(state)))
 }
 

@@ -109,7 +109,7 @@ async fn account_subscribe_first_frame_with_status(
     }
     let mut response = request.send(&app_from_state(state)).await;
     let status = response.status_code.expect("response status");
-    let body = response.take_string().await.expect("response body");
+    let body = take_first_response_chunk(&mut response).await;
     let first = body.lines().next().unwrap_or(body.as_str());
     let frame = serde_json::from_str(first).unwrap_or_else(|error| {
         panic!("account subscribe returned non-json frame: {error}: {body}")
@@ -1031,7 +1031,7 @@ async fn incremental_sync_emits_realm_with_new_timeline_event() {
 }
 
 #[tokio::test]
-async fn account_subscribe_long_poll_wakes_on_broadcast() {
+async fn account_subscribe_stays_open_after_catchup_and_delivers_broadcast() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
 
@@ -1040,13 +1040,13 @@ async fn account_subscribe_long_poll_wakes_on_broadcast() {
 
     let waker_state = state.clone();
     let waker = tokio::spawn(async move {
-        // Give the long-poll a beat to subscribe before we fire.
+        // Give the stream a beat to subscribe before we fire.
         tokio::time::sleep(Duration::from_millis(150)).await;
         let message = persist_test_message(
             &waker_state,
             DEMO_REALM_ID,
             "did:web:alice.example",
-            "wake up the poll",
+            "wake up the stream",
         )
         .await;
         let _ = waker_state.event_broadcast.send(EventNotification::event(
@@ -1062,18 +1062,26 @@ async fn account_subscribe_long_poll_wakes_on_broadcast() {
     });
 
     let start = tokio::time::Instant::now();
-    let woken = account_subscribe_frame(
-        state.clone(),
-        Some(&alice),
-        &format!("catchup=true&after={cursor}"),
-    )
+    let mut response = TestClient::get(format!(
+        "http://server/_arkret/self/account/subscribe?catchup=true&after={cursor}"
+    ))
+    .add_header("authorization", format!("Bearer {alice}"), true)
+    .send(&app_from_state(state.clone()))
     .await;
+    let initial: Value = serde_json::from_str(&take_first_response_chunk(&mut response).await)
+        .expect("initial delta frame");
+    assert_eq!(initial["kind"], "delta");
+    let catchup: Value = serde_json::from_str(&take_first_response_chunk(&mut response).await)
+        .expect("catchup-complete frame");
+    assert_eq!(catchup["kind"], "catchup_complete");
+    let woken: Value = serde_json::from_str(&take_first_response_chunk(&mut response).await)
+        .expect("post-catchup delta frame");
     let elapsed = start.elapsed();
     let message = waker.await.unwrap();
 
     assert!(
         elapsed < Duration::from_secs(3),
-        "broadcast should wake long-poll well before the deadline: {elapsed:?}"
+        "broadcast should wake the open stream well before the heartbeat deadline: {elapsed:?}"
     );
     let timeline = woken["realms"][DEMO_REALM_ID]["timeline"]["events"]
         .as_array()

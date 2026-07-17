@@ -236,14 +236,14 @@ pub(crate) async fn fanout_actor_private_update(
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.query.list"))]
 async fn get_device_messages(
     aa: AuthArgs,
-    from: QueryParam<String, false>,
+    after: QueryParam<String, false>,
     limit: QueryParam<u32, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DeviceMessagesGetOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let cursor = from.into_inner();
+    let cursor = after.into_inner();
     let cursor_position = match cursor {
         Some(cursor) => match parse_and_validate_sync_cursor(
             &cursor,
@@ -462,6 +462,10 @@ fn device_message_envelope_from_record(
         None => None,
     };
     Some(DeviceMessageEnvelope {
+        message_id: arkret_sdk::DeviceMessageId::new(
+            message.content.get("message_id")?.as_str()?.to_owned(),
+        )
+        .ok()?,
         kind,
         sender_principal_id: arkret_sdk::Did::new(message.sender.clone()).ok()?,
         sender_device_id: arkret_sdk::DeviceId::new(
