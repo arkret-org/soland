@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use serde::de::DeserializeOwned;
+
 use super::*;
 
 const RELATION_CONFLICT_FANOUT_LIMIT: usize = 16;
@@ -880,87 +882,168 @@ impl ProjectionState {
         ProjectionEffect::RelationDeleted { relation_id }
     }
 
-    pub(crate) fn apply_container_position(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> ProjectionEffect {
-        let relation_id = operation
-            .payload
-            .get("relation_id")
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("expected_position")
-                    .and_then(|value| value.get("relation_id"))
-            })
-            .and_then(|v| v.as_str())
-            .unwrap_or(operation.operation_id.as_str())
-            .to_owned();
-        let relation_kind = operation
-            .payload
-            .get("relation_kind")
-            .and_then(|v| v.as_str())
-            .unwrap_or("contains")
-            .to_owned();
-        let object_ref = operation
-            .payload
-            .get("object_ref")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
-        let container_id = operation
-            .payload
-            .get("to_container_id")
-            .or_else(|| operation.payload.get("container_id"))
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
-        let mut fields = BTreeMap::new();
-        if let Some(rank) = operation.payload.get("rank") {
-            fields.insert("rank".to_owned(), rank.clone());
+    pub(crate) fn apply_container_move_item(&mut self, operation: &Operation) -> ProjectionEffect {
+        let payload: arkret_sdk::ContainerMoveItemPayload =
+            match typed_container_payload::<arkret_sdk::ContainerMoveItemPayload>(
+                &operation.payload,
+                &[
+                    "item_ref",
+                    "from_container_ref",
+                    "container_ref",
+                    "relation_kind",
+                    "rank",
+                    "expected_position_digest",
+                ],
+            ) {
+                Ok(payload) if payload.validate().is_ok() => payload,
+                _ => {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                }
+            };
+        let cell_id = match container_position_cell_id(&payload.container_ref, &payload.item_ref) {
+            Some(cell_id) => cell_id,
+            None => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
+        if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
+            return ProjectionEffect::Rejected {
+                reason: "cell_in_bottom_state".to_owned(),
+            };
         }
-        let relation_scope_circle_id = container_id
-            .as_deref()
-            .and_then(|id| self.resolve_object_scope_circle_id(id))
-            .or_else(|| {
-                object_ref
-                    .as_deref()
-                    .and_then(|id| self.resolve_object_scope_circle_id(id))
-            })
-            .map(ToOwned::to_owned);
-        let source_event_id = operation
-            .payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let source_event_digest = Some(relation_event_digest(operation));
+        if let Some(expected) = &payload.expected_position_digest
+            && container_cell_digest(self.cells.get(&cell_id)).as_deref() != Some(expected.as_str())
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ErrorCode::CAS_CONFLICT.to_owned(),
+            };
+        }
 
-        let state = self
-            .relations
-            .entry(relation_id.clone())
-            .or_insert_with(|| SolandRelationState {
-                relation_id: relation_id.clone(),
-                realm_id: operation.realm_id.to_string(),
-                relation_kind: relation_kind.clone(),
-                scope_circle_id: relation_scope_circle_id.clone(),
-                from_ref: container_id.clone(),
-                to_ref: object_ref.clone(),
-                fields: BTreeMap::new(),
-                state: "active".to_owned(),
-                source_event_id: source_event_id.clone(),
-                source_event_digest: source_event_digest.clone(),
-                created_at: now,
-                history_basis_seals: operation_history_basis_seals(operation),
-                updated_at: now,
-            });
-        state.relation_kind = relation_kind;
-        state.from_ref = container_id;
-        state.to_ref = object_ref;
-        state.scope_circle_id = relation_scope_circle_id;
-        state.fields.extend(fields);
-        state.state = "active".to_owned();
-        state.updated_at = now;
-        ProjectionEffect::RelationCreated(state.clone())
+        if let Some(from_container_ref) = &payload.from_container_ref
+            && from_container_ref != &payload.container_ref
+            && let Some(previous_cell_id) =
+                container_position_cell_id(from_container_ref, &payload.item_ref)
+        {
+            self.cells.remove(&previous_cell_id);
+        }
+        let container_ref = payload.container_ref.clone();
+        let item_ref = payload.item_ref.clone();
+        self.cells.insert(
+            cell_id,
+            CellState::Value(serde_json::json!({
+                "item_ref": payload.item_ref,
+                "container_ref": payload.container_ref,
+                "relation_kind": payload.relation_kind,
+                "rank": payload.rank
+            })),
+        );
+        ProjectionEffect::ContainerPositionProjected {
+            container_ref,
+            item_ref,
+        }
     }
+
+    pub(crate) fn apply_container_rebalance(&mut self, operation: &Operation) -> ProjectionEffect {
+        let payload: arkret_sdk::ContainerRebalancePayload =
+            match typed_container_payload::<arkret_sdk::ContainerRebalancePayload>(
+                &operation.payload,
+                &[
+                    "container_ref",
+                    "relation_kind",
+                    "positions",
+                    "expected_order_digest",
+                ],
+            ) {
+                Ok(payload) if payload.validate().is_ok() => payload,
+                _ => {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                }
+            };
+        let order_cell_id = match container_order_cell_id(&payload.container_ref) {
+            Some(cell_id) => cell_id,
+            None => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
+        if matches!(self.cells.get(&order_cell_id), Some(CellState::Bottom(_))) {
+            return ProjectionEffect::Rejected {
+                reason: "cell_in_bottom_state".to_owned(),
+            };
+        }
+        if container_cell_digest(self.cells.get(&order_cell_id)).as_deref()
+            != Some(payload.expected_order_digest.as_str())
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ErrorCode::CAS_CONFLICT.to_owned(),
+            };
+        }
+
+        let container_ref = payload.container_ref.clone();
+        let position_count = payload.positions.len();
+        self.cells.insert(
+            order_cell_id,
+            CellState::Value(serde_json::json!({
+                "container_ref": payload.container_ref,
+                "relation_kind": payload.relation_kind,
+                "positions": payload.positions
+            })),
+        );
+        ProjectionEffect::ContainerOrderProjected {
+            container_ref,
+            position_count,
+        }
+    }
+}
+
+fn typed_container_payload<T: DeserializeOwned>(
+    payload: &Value,
+    fields: &[&str],
+) -> std::result::Result<T, serde_json::Error> {
+    let object = payload.as_object().cloned().unwrap_or_default();
+    let wire_payload = fields
+        .iter()
+        .filter_map(|field| {
+            object
+                .get(*field)
+                .cloned()
+                .map(|value| ((*field).to_owned(), value))
+        })
+        .collect();
+    serde_json::from_value(Value::Object(wire_payload))
+}
+
+fn container_position_cell_id(container_ref: &str, item_ref: &str) -> Option<CellRef> {
+    let subject = arkret_sdk::composite_subject(&[container_ref, item_ref]).ok()?;
+    CellRef::new(format!(
+        "ak:cell:ak.component.container.position.v1:{subject}"
+    ))
+    .ok()
+}
+
+fn container_order_cell_id(container_ref: &str) -> Option<CellRef> {
+    CellRef::new(format!(
+        "ak:cell:ak.component.container.order.v1:{container_ref}"
+    ))
+    .ok()
+}
+
+fn container_cell_digest(state: Option<&CellState>) -> Option<String> {
+    let value = match state {
+        Some(CellState::Value(value)) => value,
+        Some(CellState::Bottom(_)) => return None,
+        None => &Value::Null,
+    };
+    arkret_sdk::canonical::canonical_json_bytes(value)
+        .ok()
+        .map(arkret_sdk::canonical::sha256_digest)
 }
 
 fn relation_scope_circle_id_from_payload(payload: &Value) -> Option<String> {

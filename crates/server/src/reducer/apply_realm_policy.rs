@@ -1,6 +1,100 @@
+use serde::de::DeserializeOwned;
+
 use super::*;
 
 impl ProjectionState {
+    pub(crate) fn apply_realm_notary(&mut self, operation: &Operation) -> ProjectionEffect {
+        let payload: arkret_sdk::RealmNotaryPayload =
+            match typed_realm_control_payload::<arkret_sdk::RealmNotaryPayload>(
+                &operation.payload,
+                &["realm_id", "notary"],
+            ) {
+                Ok(payload)
+                    if payload.validate().is_ok()
+                        && payload.realm_id.as_str() == operation.realm_id.as_str() =>
+                {
+                    payload
+                }
+                _ => {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                }
+            };
+        let realm_id = payload.realm_id.to_string();
+        let Ok(cell_id) = CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}")) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
+            return ProjectionEffect::Rejected {
+                reason: "cell_in_bottom_state".to_owned(),
+            };
+        }
+        let Ok(value) = serde_json::to_value(payload.notary) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        self.cells.insert(cell_id, CellState::Value(value));
+        ProjectionEffect::RealmNotaryProjected { realm_id }
+    }
+
+    pub(crate) fn apply_realm_digest_suite_transition(
+        &mut self,
+        operation: &Operation,
+    ) -> ProjectionEffect {
+        let payload: arkret_sdk::RealmDigestSuiteTransitionPayload =
+            match typed_realm_control_payload::<arkret_sdk::RealmDigestSuiteTransitionPayload>(
+                &operation.payload,
+                &[
+                    "from_digest_algorithm",
+                    "to_digest_algorithm",
+                    "transition_snapshot_ref",
+                    "snapshot_commitment",
+                ],
+            ) {
+                Ok(payload) if payload.validate().is_ok() => payload,
+                _ => {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                }
+            };
+        let realm_id = operation.realm_id.to_string();
+        if self.realm_digest_algorithm(&realm_id).as_deref()
+            != Some(payload.from_digest_algorithm.as_str())
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ErrorCode::CAS_CONFLICT.to_owned(),
+            };
+        }
+        let Ok(cell_id) = CellRef::new(format!(
+            "ak:cell:ak.component.realm.digest_suite.v1:{realm_id}"
+        )) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
+            return ProjectionEffect::Rejected {
+                reason: "cell_in_bottom_state".to_owned(),
+            };
+        }
+        let digest_algorithm = payload.to_digest_algorithm.as_str().to_owned();
+        let Ok(value) = serde_json::to_value(payload) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        self.cells.insert(cell_id, CellState::Value(value));
+        ProjectionEffect::RealmDigestSuiteTransitionProjected {
+            realm_id,
+            digest_algorithm,
+        }
+    }
+
     /// R1.2 — project a `ak.realm.delivery_binding_policy` event into the
     /// `ak.component.realm.delivery_binding_policy.v1` cas-register cell.
     /// The payload is taken whole as the cell value so downstream readers
@@ -973,6 +1067,23 @@ impl ProjectionState {
             realm_id,
         }
     }
+}
+
+fn typed_realm_control_payload<T: DeserializeOwned>(
+    payload: &Value,
+    fields: &[&str],
+) -> std::result::Result<T, serde_json::Error> {
+    let object = payload.as_object().cloned().unwrap_or_default();
+    let wire_payload = fields
+        .iter()
+        .filter_map(|field| {
+            object
+                .get(*field)
+                .cloned()
+                .map(|value| ((*field).to_owned(), value))
+        })
+        .collect();
+    serde_json::from_value(Value::Object(wire_payload))
 }
 
 /// `call-state.md` §4.2 — terminal call lifecycle states.

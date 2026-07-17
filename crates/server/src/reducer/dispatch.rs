@@ -154,12 +154,19 @@ fn apply_relation_delete_dispatch(
 ) -> ProjectionEffect {
     s.apply_relation_delete(op)
 }
-fn apply_container_position_dispatch(
+fn apply_container_move_item_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_container_position(op, op.created_at)
+    s.apply_container_move_item(op)
+}
+fn apply_container_rebalance_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_container_rebalance(op)
 }
 fn apply_membership_dispatch(
     s: &mut ProjectionState,
@@ -273,6 +280,20 @@ fn apply_realm_set_default_strand_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_realm_set_default_strand(op, op.created_at)
+}
+fn apply_realm_notary_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_notary(op)
+}
+fn apply_realm_digest_suite_transition_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_digest_suite_transition(op)
 }
 fn apply_erasure_receipt_dispatch(
     s: &mut ProjectionState,
@@ -950,11 +971,11 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     );
     m.insert(
         arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM,
-        apply_container_position_dispatch,
+        apply_container_move_item_dispatch,
     );
     m.insert(
         arkret_sdk::events::EventKind::CONTAINER_REBALANCE,
-        apply_container_position_dispatch,
+        apply_container_rebalance_dispatch,
     );
     m.insert(
         arkret_sdk::events::EventKind::MEMBER_STATE,
@@ -1017,6 +1038,14 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         arkret_sdk::events::EventKind::REALM_SET_DEFAULT_STRAND,
         apply_realm_set_default_strand_dispatch,
+    );
+    m.insert(
+        arkret_sdk::events::EventKind::REALM_NOTARY,
+        apply_realm_notary_dispatch,
+    );
+    m.insert(
+        arkret_sdk::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+        apply_realm_digest_suite_transition_dispatch,
     );
     m.insert(CONFLICT_REPAIR, apply_conflict_repair_dispatch);
     m.insert(

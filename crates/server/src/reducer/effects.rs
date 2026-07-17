@@ -45,6 +45,14 @@ pub enum ProjectionEffect {
     RelationDeleted {
         relation_id: String,
     },
+    ContainerPositionProjected {
+        container_ref: String,
+        item_ref: String,
+    },
+    ContainerOrderProjected {
+        container_ref: String,
+        position_count: usize,
+    },
     MembershipChanged {
         realm_id: String,
         member: String,
@@ -140,6 +148,13 @@ pub enum ProjectionEffect {
     },
     RealmSearchPolicyProjected {
         realm_id: String,
+    },
+    RealmNotaryProjected {
+        realm_id: String,
+    },
+    RealmDigestSuiteTransitionProjected {
+        realm_id: String,
+        digest_algorithm: String,
     },
     /// `ak.realm.media_service` projected into the canonical
     /// `ak.component.realm.media_service.v1` cas-register cell consumed by

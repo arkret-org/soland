@@ -1,5 +1,6 @@
 use arkret_sdk::Operation;
 use arkret_sdk::schema::event_payload_validator_catalog;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::*;
@@ -99,6 +100,60 @@ pub(crate) fn validate_reaction_target_kind(
 /// wire-broken `target_ref` form; producers must emit canonical `space_id`.
 fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<(), &'static str> {
     match kind {
+        arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM => {
+            let payload: arkret_sdk::ContainerMoveItemPayload = typed_payload_fields(
+                operation,
+                &[
+                    "item_ref",
+                    "from_container_ref",
+                    "container_ref",
+                    "relation_kind",
+                    "rank",
+                    "expected_position_digest",
+                ],
+            )?;
+            payload
+                .validate()
+                .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        }
+        arkret_sdk::events::EventKind::CONTAINER_REBALANCE => {
+            let payload: arkret_sdk::ContainerRebalancePayload = typed_payload_fields(
+                operation,
+                &[
+                    "container_ref",
+                    "relation_kind",
+                    "positions",
+                    "expected_order_digest",
+                ],
+            )?;
+            payload
+                .validate()
+                .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        }
+        arkret_sdk::events::EventKind::REALM_NOTARY => {
+            let payload: arkret_sdk::RealmNotaryPayload =
+                typed_payload_fields(operation, &["realm_id", "notary"])?;
+            if payload.realm_id != operation.realm_id {
+                return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+            }
+            payload
+                .validate()
+                .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        }
+        arkret_sdk::events::EventKind::REALM_DIGEST_SUITE_TRANSITION => {
+            let payload: arkret_sdk::RealmDigestSuiteTransitionPayload = typed_payload_fields(
+                operation,
+                &[
+                    "from_digest_algorithm",
+                    "to_digest_algorithm",
+                    "transition_snapshot_ref",
+                    "snapshot_commitment",
+                ],
+            )?;
+            payload
+                .validate()
+                .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        }
         // ak.space.archive / ak.space.restore use the typed
         // SpaceStateTransitionPayload (space_id, new_state, reason?).
         // The removed top-level `target_ref` form is rejected
@@ -296,6 +351,26 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         "ak.profile.create" | "ak.profile.update" => Ok(()),
         _ => Ok(()),
     }
+}
+
+fn typed_payload_fields<T: DeserializeOwned>(
+    operation: &Operation,
+    fields: &[&str],
+) -> Result<T, &'static str> {
+    let Some(payload) = operation.payload.as_object() else {
+        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+    };
+    let wire_payload = fields
+        .iter()
+        .filter_map(|field| {
+            payload
+                .get(*field)
+                .cloned()
+                .map(|value| ((*field).to_owned(), value))
+        })
+        .collect();
+    serde_json::from_value(Value::Object(wire_payload))
+        .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
 }
 
 pub(crate) fn validate_operation_schema_from_sdk_artifact(
@@ -747,11 +822,6 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // `artifacts/registry/removed-event-kinds.json`). The generic
         // unknown-event-kind path in `event_log::submit_event` already
         // hard-rejects these kinds; no operation schema branch is needed.
-        arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM
-        | arkret_sdk::events::EventKind::CONTAINER_REBALANCE => OperationPayloadSchema {
-            requirements: RELATION_ID_REQUIREMENTS,
-            validate: None,
-        },
         // Applet protocol family.
         arkret_sdk::events::EventKind::APPLET_REGISTRATION => OperationPayloadSchema {
             requirements: APPLET_REGISTRATION_REQUIREMENTS,
@@ -892,4 +962,75 @@ pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static 
         )
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+
+    fn operation(kind: &str, payload: Value) -> Operation {
+        Operation::create(
+            arkret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+            arkret_sdk::RealmId::new(REALM_ID).unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    #[test]
+    fn typed_container_payload_rejects_legacy_shape() {
+        let legacy = operation(
+            arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM,
+            serde_json::json!({
+                "object_ref": "ak:morph:01904100-0000-7000-8000-000000000201",
+                "to_container_id": "ak:morph:01904100-0000-7000-8000-000000000101",
+                "relation_kind": "contains",
+                "rank": "A"
+            }),
+        );
+        assert_eq!(
+            validate_typed_payload_shapes(
+                arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM,
+                &legacy,
+            ),
+            Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        );
+    }
+
+    #[test]
+    fn typed_realm_control_payloads_enforce_realm_and_transition_rules() {
+        let wrong_realm = operation(
+            arkret_sdk::events::EventKind::REALM_NOTARY,
+            serde_json::json!({
+                "realm_id": "ak:realm:01904100-0000-7000-8000-000000000099",
+                "notary": {"type": "single_did", "did": "did:web:notary.example"}
+            }),
+        );
+        assert_eq!(
+            validate_typed_payload_shapes(
+                arkret_sdk::events::EventKind::REALM_NOTARY,
+                &wrong_realm,
+            ),
+            Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        );
+
+        let noop = operation(
+            arkret_sdk::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+            serde_json::json!({
+                "from_digest_algorithm": "sha256",
+                "to_digest_algorithm": "sha256",
+                "transition_snapshot_ref": "ak:snapshot:01904100-0000-7000-8000-000000000301",
+                "snapshot_commitment": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }),
+        );
+        assert_eq!(
+            validate_typed_payload_shapes(
+                arkret_sdk::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+                &noop,
+            ),
+            Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        );
+    }
 }

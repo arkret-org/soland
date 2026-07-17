@@ -664,11 +664,21 @@ impl ProjectionState {
     }
 
     pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {
-        self.realm_create_log(realm_id)
-            .and_then(|entries| entries.last())
-            .and_then(|entry| entry.get("digest_algorithm"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
+        CellRef::new(format!(
+            "ak:cell:ak.component.realm.digest_suite.v1:{realm_id}"
+        ))
+        .ok()
+        .and_then(|cell_id| self.cell_value(&cell_id))
+        .and_then(|value| value.get("to_digest_algorithm"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            self.realm_create_log(realm_id)
+                .and_then(|entries| entries.last())
+                .and_then(|entry| entry.get("digest_algorithm"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
     }
 
     pub fn realm_requires_content_encryption(&self, realm_id: &str) -> bool {
