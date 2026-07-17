@@ -42,7 +42,7 @@ fn cascade_realm_destroy_locks_cross_realm_parent_ref() {
                     "realm_id": realm_b,
                     "kind": "folder",
                     "title": "Child in Realm B",
-                    "parent_ref": parent_in_a,
+                    "parent_space_id": parent_in_a,
                 }
             }),
         ),
@@ -454,7 +454,7 @@ fn space_container_child_order_tracks_rank_updates() {
                         "realm_id": realm_id,
                         "kind": "list",
                         "title": title,
-                        "parent_ref": board_id,
+                        "parent_space_id": board_id,
                         "rank": rank,
                         "created_by": "did:web:alice.example"
                     }
@@ -525,7 +525,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
                     "realm_id": realm_id,
                     "kind": "list",
                     "title": "Todo",
-                    "parent_ref": board_id,
+                    "parent_space_id": board_id,
                     "rank": "r001",
                     "created_by": "did:web:alice.example"
                 }
@@ -641,7 +641,7 @@ fn board_archive_cascades_child_lists_and_cards() {
                     "realm_id": realm_id,
                     "kind": "list",
                     "title": "Todo",
-                    "parent_ref": board_id,
+                    "parent_space_id": board_id,
                     "rank": "r001",
                     "created_by": "did:web:alice.example"
                 }
