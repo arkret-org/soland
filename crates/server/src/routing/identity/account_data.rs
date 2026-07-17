@@ -17,14 +17,14 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_storage::{AccountDataRecord, AgentStore};
 
 use super::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, fanout_actor_private_update,
 };
 use super::{AuthArgs, now};
 use crate::error::AppError;
-use crate::persistence::AgentStore;
-use crate::state::{AccountDataRecord, AppState};
+use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
 const MAX_DATA_TYPE_LEN: usize = 256;
@@ -401,9 +401,10 @@ async fn delete_account_data(
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
+    use soland_storage::PersistenceStore;
+    use soland_storage_memory::SolandMemoryPersistenceStore;
 
     use super::*;
-    use crate::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
 
     fn encrypted_envelope(data_type: &str) -> Value {
         serde_json::to_value(
@@ -515,7 +516,7 @@ mod tests {
                 .unwrap()
         );
 
-        let mut record = crate::persistence::AgentPrincipalRecord::new(
+        let mut record = soland_storage::AgentPrincipalRecord::new(
             agent_id.to_owned(),
             "did:web:alice.example".to_owned(),
             "ak:realm:01964137-0000-7000-8000-000000000010".to_owned(),

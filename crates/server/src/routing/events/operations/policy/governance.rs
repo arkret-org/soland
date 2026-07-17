@@ -641,7 +641,7 @@ pub(super) fn direct_conversation_member_state_guard(
 pub(super) fn active_direct_conversation_binding_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Option<crate::state::DirectConversationBindingRecord> {
+) -> Option<soland_storage::DirectConversationBindingRecord> {
     state
         .direct_conversation_bindings
         .lock()

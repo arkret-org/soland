@@ -686,7 +686,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     state
         .persistence
         .account_data()
-        .put(&soland::state::AccountDataRecord {
+        .put(&soland_storage::AccountDataRecord {
             actor: "did:web:alice.example".to_owned(),
             data_type: "ak.presence.visibility".to_owned(),
             payload: serde_json::json!({
@@ -1081,7 +1081,7 @@ async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
     state
         .persistence
         .typing()
-        .put(soland::state::TypingRecord {
+        .put(soland_storage::TypingRecord {
             actor: "did:web:alice.example".to_owned(),
             realm_id: DEMO_REALM_ID.to_owned(),
             scope_id: Some(strand_id.to_owned()),
@@ -1114,7 +1114,7 @@ fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabl
     let now = chrono::Utc::now();
     state.projection.lock().strands.insert(
         strand_id.to_owned(),
-        soland::reducer::StrandProjection {
+        soland_domain::reducer::StrandProjection {
             strand_id: strand_id.to_owned(),
             realm_id: DEMO_REALM_ID.to_owned(),
             tracks: std::collections::BTreeMap::from([(
@@ -1129,7 +1129,7 @@ fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabl
             title: "Typing scope".to_owned(),
             summary: None,
             fields: Default::default(),
-            state: soland::reducer::ObjectLifecycleState::Active,
+            state: soland_domain::reducer::ObjectLifecycleState::Active,
             state_changed_at: None,
             created_by: "did:web:alice.example".to_owned(),
             created_at: now,

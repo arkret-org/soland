@@ -34,6 +34,7 @@ use ed25519_dalek::Signer;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_storage::PolicyDocumentRecord;
 
 use super::{now, validate_canonical_json_value, validate_did};
 use crate::error::AppError;
@@ -41,7 +42,7 @@ use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::append_audit_log;
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, PolicyDocumentRecord};
+use crate::state::AppState;
 use crate::wire::{
     OkOutcome, PolicyDocumentOutcome, PolicyDocumentsOutcome, UpsertPolicyDocumentRequestBody,
 };

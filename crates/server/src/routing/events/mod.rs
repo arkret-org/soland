@@ -1,6 +1,5 @@
 use salvo::prelude::*;
-
-use crate::state::SessionRecord;
+use soland_storage::SessionRecord;
 
 pub(crate) mod event_log;
 pub(super) mod frontier;
@@ -84,9 +83,9 @@ pub fn peer_router() -> Router {
 mod tests {
     use arkret_sdk::FreshnessState;
     use chrono::Utc;
+    use soland_storage::AgentSessionRecord;
 
     use super::*;
-    use crate::state::AgentSessionRecord;
 
     fn session_with_agent_scopes(scopes: &[&str]) -> SessionRecord {
         SessionRecord {

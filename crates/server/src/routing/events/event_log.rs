@@ -34,6 +34,8 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_domain::{artifacts, kinds};
+use soland_storage::{CanonicalEventRecord, SessionRecord};
 
 use super::projection::{
     retention_risk_audit_flag, retention_risk_reason, retention_risk_ui_flag,
@@ -51,9 +53,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::organizations;
 use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
+use crate::state::AppState;
 use crate::wire::describe;
-use crate::{artifacts, kinds};
 
 // scalability-constraints.md §2: prev_refs ≤ 128 (with MUST-dedup), refs[] total
 // ≤ 128, and the `authorized_by` role ≤ 64 within that total. These are the v1

@@ -42,6 +42,7 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
+use soland_storage::BlobRecord;
 use tokio::io::AsyncReadExt as _;
 
 use super::blob::{
@@ -53,7 +54,7 @@ use super::{
     auth_or_render, is_valid_sha256_digest, now, realm_allows_plaintext_service_for_data_class,
     realm_has_member, render_error,
 };
-use crate::state::{AppState, BlobRecord};
+use crate::state::AppState;
 
 pub const TUS_VERSION: &str = "1.0.0";
 /// Protocol versions / extensions advertised both on the `OPTIONS` probe

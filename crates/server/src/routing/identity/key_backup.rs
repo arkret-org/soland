@@ -12,12 +12,13 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
+use soland_storage::{RecoverySessionRecord, key_backup_daily_download_limit};
 
 use super::append_audit_log;
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, RecoverySessionRecord, key_backup_daily_download_limit};
+use crate::state::AppState;
 use crate::wire::{
     KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsReplaceOutcome,
 };
@@ -661,7 +662,7 @@ mod tests {
 
     #[test]
     fn download_limit_defaults_and_clamps_to_spec_range() {
-        use crate::state::{
+        use soland_storage::{
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT, KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX,
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN,
         };

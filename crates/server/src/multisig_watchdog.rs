@@ -25,8 +25,9 @@ use arkret_sdk::{
 };
 use base64::Engine as _;
 use chrono::Utc;
+use soland_storage::MultisigPendingRecord;
 
-use crate::state::{AppState, MultisigPendingRecord};
+use crate::state::AppState;
 
 /// Default poll interval. Override at construction time via
 /// [`MultisigWatchdog::with_tick_interval`].
@@ -374,7 +375,7 @@ fn verify_ed25519_partial(
 mod tests {
     use std::collections::BTreeMap;
 
-    use soland_data::Db;
+    use soland_storage_postgres::Db;
 
     use super::*;
     use crate::config::AppConfig;

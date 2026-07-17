@@ -435,7 +435,7 @@ async fn materialize_realm_control(
 fn materialize_managed_agent_realm_control(
     state: &AppState,
     realm_id: &RealmId,
-    records: &[crate::state::CanonicalEventRecord],
+    records: &[soland_storage::CanonicalEventRecord],
 ) -> Result<MaterializedRealmControl, AppError> {
     let mut events = Vec::with_capacity(records.len());
     for record in records {

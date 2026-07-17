@@ -8,8 +8,8 @@
 
 use arkret_sdk::{Operation, RealmLinkDirection};
 use serde_json::{Value, json};
-use soland::hlc::ServerHlc;
-use soland::reducer::{ProjectionEffect, ProjectionState};
+use soland_domain::hlc::ServerHlc;
+use soland_domain::reducer::{ProjectionEffect, ProjectionState};
 
 const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
@@ -164,7 +164,7 @@ fn realm_link_cell_value_persisted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     state.apply(&link_op(REALM_A, REALM_B, "join_gate_from", None), &hlc);
-    let cell_id = soland::reducer::realm_links::realm_link_projection_cell_ref(
+    let cell_id = soland_domain::reducer::realm_links::realm_link_projection_cell_ref(
         REALM_A,
         REALM_B,
         "join_gate_from",

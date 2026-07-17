@@ -25,10 +25,10 @@ use arkret_sdk::signatures::{
 };
 use arkret_sdk::{Did, Hash};
 use ed25519_dalek::{SigningKey, VerifyingKey};
-
-use crate::persistence::{
+use soland_storage::{
     WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS, WebvhFreshness, verify_did_document_freshness,
 };
+
 use crate::routing::identity::webvh_validation::{
     WebvhLogEntry, validate_log_chain, validate_witness_policy_for_log, verify_scid_against_did,
 };
@@ -352,7 +352,7 @@ pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Res
     }
 }
 
-fn is_embedded_webvh_document(did: &Did, record: &crate::state::WebvhDocumentRecord) -> bool {
+fn is_embedded_webvh_document(did: &Did, record: &soland_storage::WebvhDocumentRecord) -> bool {
     did.as_str().starts_with("did:webvh:")
         && record
             .method_evidence
@@ -364,7 +364,7 @@ fn is_embedded_webvh_document(did: &Did, record: &crate::state::WebvhDocumentRec
 async fn refresh_embedded_webvh_document_for_high_risk(
     state: &AppState,
     did: &Did,
-    record: &crate::state::WebvhDocumentRecord,
+    record: &soland_storage::WebvhDocumentRecord,
 ) -> Result<(), String> {
     if !is_embedded_webvh_document(did, record) {
         return Err("document is not a local embedded did:webvh record".to_owned());

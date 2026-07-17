@@ -1,0 +1,28 @@
+﻿[package]
+name = "soland-storage-postgres"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "PostgreSQL storage adapter and database bootstrap for Soland."
+
+[dependencies]
+anyhow = {workspace = true}
+arkret-sdk = {workspace = true,features = ["full-surface", "mls"]}
+async-trait = {workspace = true}
+base64 = {workspace = true}
+chrono = {workspace = true}
+deadpool = {workspace = true, features = ["rt_tokio_1"]}
+diesel = {workspace = true,features = ["postgres", "serde_json", "chrono", "uuid", "pq-src"]}
+diesel-async = {workspace = true,features = ["postgres", "deadpool", "async-connection-wrapper"]}
+diesel_migrations = {workspace = true,features = ["postgres"]}
+parking_lot = {workspace = true}
+serde_json = {workspace = true}
+soland-domain = {workspace = true}
+soland-storage = {workspace = true}
+tokio = {workspace = true,features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"]}
+tracing = {workspace = true}
+uuid = {workspace = true}

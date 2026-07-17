@@ -19,13 +19,14 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland_data::Db;
+use soland_storage::{
+    PersistenceStore, ServiceRegistrationCommitOutcome, WebvhDocumentRecord, WebvhLogRecord,
+};
+use soland_storage_memory::SolandMemoryPersistenceStore;
+use soland_storage_postgres::Db;
 
 use crate::config::AppConfig;
-use crate::persistence::{
-    PersistenceStore, PgPersistenceStore, ServiceRegistrationCommitOutcome,
-    SolandMemoryPersistenceStore, WebvhDocumentRecord, WebvhLogRecord,
-};
+use crate::persistence_registry::PgPersistenceStore;
 use crate::routing::identity::webvh_validation::{
     WebvhLogEntry, validate_log_chain, validate_rotation_authorization_for_log,
     validate_witness_policy_for_log, verify_log_subject, verify_scid_against_did,

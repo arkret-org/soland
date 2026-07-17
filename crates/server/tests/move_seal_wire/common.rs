@@ -37,7 +37,7 @@ pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use soland::config::{AppConfig, ObjectStorageConfig};
 pub(crate) use soland::service;
 pub(crate) use soland::state::AppState;
-pub(crate) use soland_data::Db;
+pub(crate) use soland_storage_postgres::Db;
 
 pub(crate) fn test_config() -> AppConfig {
     AppConfig {

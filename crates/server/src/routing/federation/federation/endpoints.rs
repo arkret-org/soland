@@ -7,6 +7,7 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_storage::FederationTransactionRecord;
 
 use super::actor_signature::{
     federation_verify_actor_digest, federation_verify_actor_unsigned_digest,
@@ -32,7 +33,7 @@ use super::{
 };
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, FederationTransactionRecord};
+use crate::state::AppState;
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(in crate::routing::federation::federation) struct FederationActorEventsOutcome {
@@ -498,7 +499,7 @@ pub(crate) async fn federation_actor_events(
 }
 
 fn projection_event_matches_actor(
-    event: &crate::state::ProjectionEventRecord,
+    event: &soland_storage::ProjectionEventRecord,
     actor: &str,
 ) -> bool {
     crate::routing::events::projection::projection_event_actor(event) == Some(actor)

@@ -1242,7 +1242,7 @@ pub async fn check_with_policy_server(
     members: &[String],
     resource_facets: &[String],
     policy_client: Option<&policy_client::PolicyClient>,
-    realm_config: Option<crate::reducer::RealmPolicyServerConfig>,
+    realm_config: Option<soland_domain::reducer::RealmPolicyServerConfig>,
     policy_request: Option<policy_client::PolicyCheckRequestInput>,
     request_ctx: &mut obligation_executor::RequestContext,
 ) -> MergedAuthzDecision {

@@ -32,9 +32,9 @@
 
 use arkret_sdk::Operation;
 use serde_json::Value;
+use soland_domain::kinds;
 
 use super::{is_valid_hash_digest, validate_did};
-use crate::kinds;
 use crate::routing::interop::participant_binding;
 use crate::state::AppState;
 

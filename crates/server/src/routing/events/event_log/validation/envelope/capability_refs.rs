@@ -235,9 +235,10 @@ pub(super) fn validate_data_event_joined_capability_view(
             }
             Some(cell_state) => {
                 let joined_grants = data_event_grants_from_state_at_ref(&joined_state);
-                let current =
-                    crate::reducer::engine_grant_from_capability_cell_state(grant_id, cell_state)
-                        .or_else(|| joined_grants.get(grant_id).cloned());
+                let current = soland_domain::reducer::engine_grant_from_capability_cell_state(
+                    grant_id, cell_state,
+                )
+                .or_else(|| joined_grants.get(grant_id).cloned());
                 let Some(current) = current else {
                     return Err(event_validation_error(
                         StatusCode::PRECONDITION_FAILED,
@@ -342,7 +343,7 @@ pub(super) fn data_event_grants_from_state_at_ref(
             continue;
         }
         if let Some(grant) =
-            crate::reducer::engine_grant_from_capability_cell_state(grant_id, cell_state)
+            soland_domain::reducer::engine_grant_from_capability_cell_state(grant_id, cell_state)
         {
             grants.insert(grant_id.to_owned(), grant);
         }
@@ -543,7 +544,7 @@ pub(super) fn effect_resource_candidates(
 
 pub(super) fn append_authz_resource_candidates(
     resources: &mut Vec<String>,
-    projection: Option<&crate::reducer::ProjectionState>,
+    projection: Option<&soland_domain::reducer::ProjectionState>,
     realm_id: &str,
     resource: &str,
 ) {

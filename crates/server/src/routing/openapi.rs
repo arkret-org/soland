@@ -32,7 +32,7 @@ fn arkret_openapi_doc(router: &Router) -> OpenApi {
         .add_extension(
             "x-arkret-artifacts",
             json!({
-                "registries": crate::artifacts::registry_summary(),
+                "registries": soland_domain::artifacts::registry_summary(),
                 "openapi_source": "arkret-spec/spec/v1/artifacts/openapi/arkret-service-api.openapi.yaml",
                 // Round-6: the round-4 entity/view scaffold (FacetName /
                 // ViewRenderer / AllowedEntityFacetsConstraint /

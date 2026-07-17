@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use soland_core::admin::seal::{
+use soland_contracts::admin::seal::{
     BottomCandidateHead, BottomRepairRequestBody, BottomRepairStrategy, NotaryReconfigRequestBody,
     SubmitControlMoveOutcome,
 };

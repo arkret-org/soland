@@ -8,10 +8,11 @@ use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_storage::BlobRecord;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
 use crate::error::AppError;
-use crate::state::{AppState, BlobRecord};
+use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]

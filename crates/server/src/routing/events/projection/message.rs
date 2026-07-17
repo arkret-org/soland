@@ -1,7 +1,8 @@
 use arkret_sdk::Operation;
 use serde_json::Value;
+use soland_storage::MessageRecord;
 
-use crate::state::{AppState, MessageRecord};
+use crate::state::AppState;
 
 pub async fn project_federated_message(state: &AppState, origin: &str, operation: &Operation) {
     let event_id = operation
@@ -16,7 +17,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
             )
         });
     let message_id =
-        crate::reducer::message_id_from_payload_or_event_id(&operation.payload, &event_id);
+        soland_domain::reducer::message_id_from_payload_or_event_id(&operation.payload, &event_id);
     let store = state.persistence.messages();
     if matches!(store.get(&event_id).await, Ok(Some(_))) {
         return;

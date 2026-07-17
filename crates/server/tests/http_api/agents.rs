@@ -18,7 +18,7 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
     state
         .persistence
         .sessions()
-        .put(&soland::state::SessionRecord {
+        .put(&soland_storage::SessionRecord {
             token_hash: test_session_credential_hash(token, &state.service_id),
             actor: actor.to_owned(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
@@ -34,7 +34,7 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
     state
         .persistence
         .devices()
-        .put(&soland::state::DeviceInventoryRecord {
+        .put(&soland_storage::DeviceInventoryRecord {
             actor: actor.to_owned(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             display_name: Some("Alice Desktop".to_owned()),
@@ -60,7 +60,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     state
         .persistence
         .webvh()
-        .append_log_event(soland::state::WebvhLogRecord {
+        .append_log_event(soland_storage::WebvhLogRecord {
             event_digest: format!("sha256:{}", "1".repeat(64)),
             did: controller.to_owned(),
             seq: 1,
@@ -115,7 +115,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         state
             .persistence
             .events()
-            .put(soland::state::CanonicalEventRecord {
+            .put(soland_storage::CanonicalEventRecord {
                 event_id,
                 actor_id: controller.to_owned(),
                 actor_seq,
@@ -134,7 +134,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     state
         .persistence
         .devices()
-        .put(&soland::state::DeviceInventoryRecord {
+        .put(&soland_storage::DeviceInventoryRecord {
             actor: controller.to_owned(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             display_name: Some("Alice Desktop".to_owned()),
@@ -161,7 +161,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
     state
         .persistence
         .recovery_policies()
-        .insert(soland::state::RecoveryPolicyRecord {
+        .insert(soland_storage::RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
             principal_id: controller.to_owned(),
             version: 1,
@@ -198,7 +198,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         .realm_meta()
         .put(
             &realm_id,
-            &soland::state::RealmMetaRecord {
+            &soland_storage::RealmMetaRecord {
                 owner: controller.to_owned(),
                 deleted: false,
                 discoverability: "private".to_owned(),

@@ -1,4 +1,4 @@
-use soland_data::Db;
+use soland_storage_postgres::Db;
 
 use super::*;
 use crate::config::{AppConfig, FederationFanoutTopology};

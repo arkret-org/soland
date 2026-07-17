@@ -399,7 +399,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
     // Realm raises its floor to `e2ee_required` via `ak.realm.policy_components`;
     // the reducer projection then rejects plaintext private Strand content.
     {
-        let hlc = soland::hlc::ServerHlc::new("lifecycle-test");
+        let hlc = soland_domain::hlc::ServerHlc::new("lifecycle-test");
         let mut projection = state.projection.lock();
         projection.apply(
             &arkret_sdk::Operation::create(

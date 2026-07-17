@@ -9,8 +9,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::{Value, json};
+use soland_domain::reducer::{InviteProjection, ProjectionState};
 
-use crate::reducer::{InviteProjection, ProjectionState};
 use crate::state::AppState;
 
 const BINDING_PROOF_TRANSCRIPT_DOMAIN: &str = "ak.invite.claim.binding_proof.v1\n";
@@ -40,7 +40,7 @@ pub(crate) fn invite_claim_proof_context_from_projection(
     projection: &ProjectionState,
     operation: &Operation,
 ) -> Result<Option<InviteClaimProofContext>, &'static str> {
-    if !crate::kinds::operation_is_invite_claim(operation) {
+    if !soland_domain::kinds::operation_is_invite_claim(operation) {
         return Ok(None);
     }
     let Some(payload) = operation.payload.as_object() else {

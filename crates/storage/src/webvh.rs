@@ -1,0 +1,102 @@
+use super::*;
+/// DID documents + their key-log events. The two are coupled: every accepted
+/// `submit_did_operation` writes a document and appends a log entry.
+#[async_trait]
+pub trait WebvhStore: Send + Sync {
+    async fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>>;
+    async fn get_embedded_webvh_document_by_local_id(
+        &self,
+        local_id: &str,
+    ) -> PersistenceResult<Option<WebvhDocumentRecord>>;
+    async fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()>;
+    async fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()>;
+    async fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>>;
+    async fn commit_log_operation(
+        &self,
+        expected_current_head: Option<String>,
+        document: WebvhDocumentRecord,
+        event: WebvhLogRecord,
+    ) -> PersistenceResult<WebvhLogCommitOutcome>;
+    async fn get_service_registration(
+        &self,
+        key: &arkret_sdk::ServiceRegistrationKey,
+    ) -> PersistenceResult<Option<arkret_sdk::ServiceRegistrationOutcome>>;
+    async fn commit_service_registration(
+        &self,
+        key: arkret_sdk::ServiceRegistrationKey,
+        outcome: arkret_sdk::ServiceRegistrationOutcome,
+        document: WebvhDocumentRecord,
+        event: WebvhLogRecord,
+    ) -> PersistenceResult<ServiceRegistrationCommitOutcome>;
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WebvhLogCommitOutcome {
+    Accepted,
+    Duplicate,
+    Conflict,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ServiceRegistrationCommitOutcome {
+    Created(arkret_sdk::ServiceRegistrationOutcome),
+    Existing(arkret_sdk::ServiceRegistrationOutcome),
+    Conflict,
+}
+#[doc(hidden)]
+pub fn decode_registration_outcome(
+    value: Value,
+) -> PersistenceResult<arkret_sdk::ServiceRegistrationOutcome> {
+    serde_json::from_value(value).map_err(|error| {
+        PersistenceError::Internal(format!(
+            "stored service registration outcome is invalid: {error}"
+        ))
+    })
+}
+#[doc(hidden)]
+pub fn registration_as_existing(
+    mut outcome: arkret_sdk::ServiceRegistrationOutcome,
+) -> arkret_sdk::ServiceRegistrationOutcome {
+    outcome.created = false;
+    outcome
+}
+#[doc(hidden)]
+pub fn registrations_match(
+    left: &arkret_sdk::ServiceRegistrationOutcome,
+    right: &arkret_sdk::ServiceRegistrationOutcome,
+) -> bool {
+    left.service_id == right.service_id
+        && left.version_id == right.version_id
+        && left.registration_receipt.log_head_digest == right.registration_receipt.log_head_digest
+        && left.registration_receipt.control_key_digest
+            == right.registration_receipt.control_key_digest
+}
+#[doc(hidden)]
+pub fn valid_new_service_registration_records(
+    outcome: &arkret_sdk::ServiceRegistrationOutcome,
+    document: &WebvhDocumentRecord,
+    event: &WebvhLogRecord,
+) -> bool {
+    document.did == outcome.service_id.as_str()
+        && event.did == outcome.service_id.as_str()
+        && document.seq == 1
+        && event.seq == 1
+        && document.key_log_head.as_deref() == Some(event.event_digest.as_str())
+        && outcome.registration_receipt.log_head_digest == event.event_digest
+}
+#[doc(hidden)]
+pub fn document_declares_registration_key(
+    document: &Value,
+    key: &arkret_sdk::ServiceRegistrationKey,
+) -> bool {
+    document
+        .get("service")
+        .and_then(Value::as_array)
+        .is_some_and(|services| {
+            services.iter().any(|entry| {
+                entry.get("type").and_then(Value::as_str) == Some("ArkretService")
+                    && entry.get("serviceType").and_then(Value::as_str)
+                        == Some(key.service_type().as_str())
+                    && entry.get("serviceEndpoint").and_then(Value::as_str)
+                        == Some(key.public_base().as_str())
+            })
+        })
+}

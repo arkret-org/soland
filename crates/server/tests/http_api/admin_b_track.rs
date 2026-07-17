@@ -1,6 +1,6 @@
 //! Integration tests for sodmin-driven admin B-track endpoints.
 
-use soland::state::BlobRecord;
+use soland_storage::BlobRecord;
 
 use super::common::*;
 

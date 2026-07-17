@@ -57,6 +57,7 @@ use ed25519_dalek::{Signature, Verifier};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_storage::SessionRecord;
 
 use super::{
     authenticated_session, device_inventory_to_json, handle_for_did, invite_token_matches_realm,
@@ -67,7 +68,7 @@ use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::organizations;
-use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
+use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery};
 
 mod actors_users;
 mod agent_selector;

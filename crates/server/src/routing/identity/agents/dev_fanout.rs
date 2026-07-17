@@ -214,7 +214,7 @@ fn reconcile_self_realm_owner_projection(
     state: &AppState,
     realm_id: &str,
     controller_id: &str,
-    meta: &crate::state::RealmMetaRecord,
+    meta: &soland_storage::RealmMetaRecord,
 ) -> Result<(), AppError> {
     if meta.owner != controller_id {
         return Err(AppError::new(
@@ -242,7 +242,7 @@ fn reconcile_self_realm_owner_projection(
         None => {
             projection.realm_states.insert(
                 realm_id.to_owned(),
-                crate::reducer::SolandRealmState {
+                soland_domain::reducer::SolandRealmState {
                     realm_id: realm_id.to_owned(),
                     owner: Some(controller_id.to_owned()),
                     title: None,
@@ -594,10 +594,10 @@ pub(super) async fn submit_revoke_agent_grants(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use soland_data::Db;
+    use soland_storage::RealmMetaRecord;
+    use soland_storage_postgres::Db;
 
     use super::*;
-    use crate::state::RealmMetaRecord;
 
     fn realm_meta(owner: &str) -> RealmMetaRecord {
         let now = chrono::Utc::now();
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn runtime_agent_key_scope_service_actions_are_registered() {
-        let registry = crate::artifacts::operation_ids();
+        let registry = soland_domain::artifacts::operation_ids();
         for action in [
             SCOPE_EVENTS_STREAM_SUBSCRIBE,
             SCOPE_EVENTS_QUERY_SCAN,
@@ -699,7 +699,7 @@ mod tests {
 
     #[test]
     fn deprecated_self_events_scope_tokens_are_not_registered() {
-        let registry = crate::artifacts::operation_ids();
+        let registry = soland_domain::artifacts::operation_ids();
         for action in [
             "events.subscribe",
             "ak.self.events.subscribe",

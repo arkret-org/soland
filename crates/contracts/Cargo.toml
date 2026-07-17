@@ -1,0 +1,20 @@
+[package]
+name = "soland-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Shared deployment-local contracts for Soland integrations."
+
+[features]
+default = []
+salvo = ["dep:salvo"]
+
+[dependencies]
+arkret-core = {workspace = true,default-features = false}
+salvo = {workspace = true,optional = true,features = ["oapi"]}
+serde = {workspace = true,features = ["derive"]}
+serde_json = {workspace = true}

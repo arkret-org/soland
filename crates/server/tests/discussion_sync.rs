@@ -5,13 +5,14 @@ use arkret_sdk::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use soland::config::AppConfig;
-use soland::reducer::{
+use soland::service;
+use soland::state::{AppState, RealmDirectoryEntry};
+use soland_domain::reducer::{
     CircleLifecycleState, CircleMembershipState, CircleProjection, ObjectLifecycleState,
     StrandProjection,
 };
-use soland::service;
-use soland::state::{AppState, RealmDirectoryEntry, RealmInviteRecord, RealmMetaRecord};
-use soland_data::Db;
+use soland_storage::{RealmInviteRecord, RealmMetaRecord};
+use soland_storage_postgres::Db;
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(1_000);
 

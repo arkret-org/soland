@@ -3,13 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use diesel::sql_query;
-use diesel::sql_types::Text;
-use diesel_async::RunQueryDsl;
 use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use soland_data::PgPool;
+use soland_storage_postgres::PgPool;
 use tokio::sync::{broadcast, mpsc};
 use tokio_postgres::{AsyncMessage, NoTls};
 
@@ -176,12 +173,7 @@ impl PgEventNotificationRelay {
             notification,
         };
         let payload = serde_json::to_string(&envelope)?;
-        let mut conn = crate::persistence::pg_conn(&self.pool).await?;
-        sql_query("SELECT pg_notify('soland_event_notifications', $1)")
-            .bind::<Text, _>(&payload)
-            .execute(&mut *conn)
-            .await?;
-        Ok(())
+        soland_storage_postgres::publish_event_notification(&self.pool, &payload).await
     }
 
     async fn listen_forever(self: Arc<Self>, local: broadcast::Sender<EventNotification>) {

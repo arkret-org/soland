@@ -3,7 +3,7 @@
 //! Surfaces:
 //! - `GET /_arkret/self/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...
 //!   ` — list the typed cross-Realm links projected from `ak.realm.link` events. Powered by
-//!   [`crate::reducer::ProjectionState::realm_links_query`].
+//!   [`soland_domain::reducer::ProjectionState::realm_links_query`].
 //! - `POST /_arkret/self/realms/{realm_id}/links` — write a `ak.realm.link` Move from `realm_id →
 //!   target_realm_id`. The reducer runs the canonical Realm Link FSM validators; a rejected payload
 //!   comes back as HTTP 422 with the spec reason code.
@@ -35,12 +35,14 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_domain::reducer::RealmLinkState;
+use soland_domain::reducer::realm_links::{
+    check_realm_link_admissible, effective_policy_for_realm,
+};
 
 use super::{AuthArgs, accept_local_operations};
 use crate::error::AppError;
 use crate::ids;
-use crate::reducer::RealmLinkState;
-use crate::reducer::realm_links::{check_realm_link_admissible, effective_policy_for_realm};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::organizations;
 use crate::state::AppState;
@@ -184,6 +186,19 @@ pub struct MemberApplicationEntry {
     pub application_pending: Option<bool>,
 }
 
+impl From<soland_domain::reducer::MemberApplicationView> for MemberApplicationEntry {
+    fn from(value: soland_domain::reducer::MemberApplicationView) -> Self {
+        Self {
+            applicant_did: value.applicant_did,
+            application_receipt_digest: value.application_receipt_digest,
+            status: value.status,
+            submitted_at: value.submitted_at,
+            answers: value.answers,
+            application_pending: value.application_pending,
+        }
+    }
+}
+
 /// Outcome of the product-local member-application listing
 /// (`org.arkret.soland.member_application.query.list`).
 #[derive(Debug, Clone, serde::Serialize, salvo::oapi::ToSchema)]
@@ -241,11 +256,11 @@ async fn list_member_applications(
             &review_capability,
             realm_id.as_str(),
         );
-        let applications = projection.member_applications_for_viewer(
-            realm_id.as_str(),
-            &viewer,
-            viewer_is_reviewer,
-        );
+        let applications = projection
+            .member_applications_for_viewer(realm_id.as_str(), &viewer, viewer_is_reviewer)
+            .into_iter()
+            .map(MemberApplicationEntry::from)
+            .collect();
         let receipts = projection.member_application_receipts(realm_id.as_str());
         (applications, viewer_is_reviewer, receipts)
     };

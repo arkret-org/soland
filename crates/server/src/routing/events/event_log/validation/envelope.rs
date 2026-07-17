@@ -70,7 +70,7 @@ fn unsupported_digest_algorithm_error(suite: &str) -> EventValidationError {
 }
 
 pub(crate) fn preflight_mls_projection_reject(
-    proj: &crate::reducer::ProjectionState,
+    proj: &soland_domain::reducer::ProjectionState,
     operation: &Operation,
 ) -> Option<String> {
     let kind = kinds::canonical_kind_string(operation);
@@ -84,36 +84,38 @@ pub(crate) fn preflight_mls_projection_reject(
             let effect = match kind.as_str() {
                 arkret_sdk::events::EventKind::MLS_KEYPACKAGE => {
                     match operation.payload.get("action").and_then(Value::as_str) {
-                        Some("publish") => {
-                            crate::reducer::mls::apply_keypackage_publish(&mut snapshot, operation)
-                        }
-                        Some("claim") => {
-                            crate::reducer::mls::apply_keypackage_claim(&mut snapshot, operation)
-                        }
-                        Some(other) => crate::reducer::ProjectionEffect::Rejected {
+                        Some("publish") => soland_domain::reducer::mls::apply_keypackage_publish(
+                            &mut snapshot,
+                            operation,
+                        ),
+                        Some("claim") => soland_domain::reducer::mls::apply_keypackage_claim(
+                            &mut snapshot,
+                            operation,
+                        ),
+                        Some(other) => soland_domain::reducer::ProjectionEffect::Rejected {
                             reason: format!("mls_keypackage_action_unknown:{other}"),
                         },
-                        None => crate::reducer::ProjectionEffect::Rejected {
+                        None => soland_domain::reducer::ProjectionEffect::Rejected {
                             reason: "mls_keypackage_action_missing".to_owned(),
                         },
                     }
                 }
                 arkret_sdk::events::EventKind::MLS_WELCOME => {
-                    crate::reducer::mls::apply_welcome_enqueue(&mut snapshot, operation)
+                    soland_domain::reducer::mls::apply_welcome_enqueue(&mut snapshot, operation)
                 }
                 arkret_sdk::events::EventKind::MLS_GENESIS => {
-                    crate::reducer::mls::apply_group_genesis(&mut snapshot, operation)
+                    soland_domain::reducer::mls::apply_group_genesis(&mut snapshot, operation)
                 }
                 arkret_sdk::events::EventKind::MLS_PROPOSAL => {
-                    crate::reducer::mls::apply_remove_proposal(&mut snapshot, operation)
+                    soland_domain::reducer::mls::apply_remove_proposal(&mut snapshot, operation)
                 }
                 arkret_sdk::events::EventKind::MLS_COMMIT => {
-                    crate::reducer::mls::apply_commit_epoch(&mut snapshot, operation)
+                    soland_domain::reducer::mls::apply_commit_epoch(&mut snapshot, operation)
                 }
-                _ => crate::reducer::ProjectionEffect::Ignored,
+                _ => soland_domain::reducer::ProjectionEffect::Ignored,
             };
             match effect {
-                crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
+                soland_domain::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
                 _ => None,
             }
         }
@@ -132,9 +134,9 @@ pub(crate) fn preflight_mls_projection_reject(
 /// new `ak.moderation.decision` were applied to the live projection by their
 /// own earlier `submit_event_value` calls, so the cell already reflects them.
 pub(crate) fn preflight_moderation_projection_reject(
-    proj: &crate::reducer::ProjectionState,
+    proj: &soland_domain::reducer::ProjectionState,
     operation: &Operation,
-    hlc: &crate::hlc::ServerHlc,
+    hlc: &soland_domain::hlc::ServerHlc,
 ) -> Option<String> {
     let kind = kinds::canonical_kind_string(operation);
     let is_moderation = matches!(
@@ -151,16 +153,16 @@ pub(crate) fn preflight_moderation_projection_reject(
     }
     let mut snapshot = proj.clone();
     match snapshot.apply(operation, hlc) {
-        crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
+        soland_domain::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
         _ => None,
     }
 }
 
 pub(crate) fn preflight_invite_projection_reject(
     _state: &AppState,
-    proj: &crate::reducer::ProjectionState,
+    proj: &soland_domain::reducer::ProjectionState,
     operation: &Operation,
-    hlc: &crate::hlc::ServerHlc,
+    hlc: &soland_domain::hlc::ServerHlc,
 ) -> Option<String> {
     let kind = kinds::canonical_kind_string(operation);
     if !matches!(
@@ -172,15 +174,15 @@ pub(crate) fn preflight_invite_projection_reject(
     }
     let mut snapshot = proj.clone();
     match snapshot.apply(operation, hlc) {
-        crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
+        soland_domain::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
         _ => None,
     }
 }
 
 pub(crate) fn preflight_calendar_projection_reject(
-    proj: &crate::reducer::ProjectionState,
+    proj: &soland_domain::reducer::ProjectionState,
     operation: &Operation,
-    hlc: &crate::hlc::ServerHlc,
+    hlc: &soland_domain::hlc::ServerHlc,
 ) -> Option<String> {
     let kind = kinds::canonical_kind_string(operation);
     if !matches!(
@@ -193,15 +195,15 @@ pub(crate) fn preflight_calendar_projection_reject(
     }
     let mut snapshot = proj.clone();
     match snapshot.apply(operation, hlc) {
-        crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
+        soland_domain::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
         _ => None,
     }
 }
 
 pub(crate) fn preflight_capability_projection_reject(
-    proj: &crate::reducer::ProjectionState,
+    proj: &soland_domain::reducer::ProjectionState,
     operation: &Operation,
-    hlc: &crate::hlc::ServerHlc,
+    hlc: &soland_domain::hlc::ServerHlc,
 ) -> Option<String> {
     let kind = kinds::canonical_kind_string(operation);
     if !matches!(
@@ -214,7 +216,7 @@ pub(crate) fn preflight_capability_projection_reject(
     }
     let mut snapshot = proj.clone();
     match snapshot.apply(operation, hlc) {
-        crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
+        soland_domain::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
         _ => None,
     }
 }

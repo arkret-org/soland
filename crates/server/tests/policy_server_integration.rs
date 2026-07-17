@@ -34,7 +34,7 @@ use serde_json::Value;
 use soland::authz::obligation_executor::RequestContext;
 use soland::authz::policy_client::{PolicyCheckRequestInput, PolicyClient, PolicyFrontierSnapshot};
 use soland::authz::{MergedAuthzDecision, SolandAuthzEngine, check_with_policy_server};
-use soland::reducer::RealmPolicyServerConfig;
+use soland_domain::reducer::RealmPolicyServerConfig;
 
 const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
 const POLICY_SERVER_DID: &str = "did:web:policy.example.com";

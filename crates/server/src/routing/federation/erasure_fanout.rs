@@ -35,8 +35,8 @@ use arkret_sdk::{Did, Operation, OperationId, RealmId};
 use chrono::Utc;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use soland_domain::reducer::FanoutPeerStatus;
 
-use crate::reducer::FanoutPeerStatus;
 use crate::state::AppState;
 
 /// How often the timeout-sweep worker wakes up. Bounded well below
@@ -414,9 +414,9 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use soland_domain::reducer::ErasureReceiptRecord;
 
     use super::*;
-    use crate::reducer::ErasureReceiptRecord;
 
     fn fake_state() -> AppState {
         // Reuse the federation::tests config builder via a thin

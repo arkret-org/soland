@@ -14,13 +14,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_storage::{DeviceInventoryRecord, DeviceMessageRecord};
 
 use super::{SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, DeviceInventoryRecord, DeviceMessageRecord};
+use crate::state::AppState;
 use crate::wire::{
     DeviceMessageEnvelope, DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody,
     DeviceMessagesGetOutcome, DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody,
@@ -33,7 +34,7 @@ pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 
 pub(crate) async fn prune_device_messages_for_limits(
     state: &AppState,
-) -> crate::persistence::PersistenceResult<()> {
+) -> soland_storage::PersistenceResult<()> {
     let device_messages = state.persistence.device_messages();
     let now = now();
     device_messages.prune_expired(now).await?;

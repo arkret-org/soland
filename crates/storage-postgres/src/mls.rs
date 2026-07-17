@@ -1,0 +1,543 @@
+use super::*;
+pub struct PgMlsKeyPackageStore {
+    pub pool: PgPool,
+}
+pub struct PgMlsWelcomeStore {
+    pub pool: PgPool,
+}
+pub struct PgMlsCommitStore {
+    pub pool: PgPool,
+}
+#[async_trait]
+impl MlsKeyPackageStore for PgMlsKeyPackageStore {
+    async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let ssk_generation = db_ssk_generation(record.ssk_generation)?;
+        let inserted = sql_query(
+            "INSERT INTO mls_key_packages \
+             (id, keypackage_ref, keypackage_digest, actor_id, device_id, key_package_bytes, \
+              capabilities, capabilities_digest, device_signature, last_resort, \
+              last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+              claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, consumed_at, \
+              created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.id)
+        .bind::<Text, _>(&record.keypackage_ref)
+        .bind::<Text, _>(&record.keypackage_digest)
+        .bind::<Text, _>(&record.actor_id)
+        .bind::<Text, _>(&record.device_id)
+        .bind::<Binary, _>(&record.key_package_bytes)
+        .bind::<Jsonb, _>(serde_json::json!(record.capabilities))
+        .bind::<Text, _>(&record.capabilities_digest)
+        .bind::<Jsonb, _>(&record.device_signature)
+        .bind::<Bool, _>(record.last_resort)
+        .bind::<Nullable<Text>, _>(&record.last_resort_realm_id)
+        .bind::<BigInt, _>(record.lifetime_not_before)
+        .bind::<BigInt, _>(record.lifetime_not_after)
+        .bind::<Nullable<Text>, _>(&record.claimed_by_mls_group_id)
+        .bind::<Nullable<BigInt>, _>(ssk_generation)
+        .bind::<Nullable<Text>, _>(&record.device_authorize_event_id)
+        .bind::<Nullable<BigInt>, _>(record.consumed_at)
+        .bind::<BigInt, _>(record.created_at)
+        .execute(&mut *conn)
+        .await.map_err(PersistenceError::database)?;
+        Ok(inserted > 0)
+    }
+
+    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
+             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, consumed_at, \
+             created_at \
+             FROM mls_key_packages WHERE id = $1",
+        )
+        .bind::<Text, _>(id)
+        .get_result::<MlsKeyPackagePgRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(MlsKeyPackageRow::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn try_claim(
+        &self,
+        id: &str,
+        group_id: &str,
+        intended_realm_id: Option<&str>,
+        ssk_generation: Option<u64>,
+        device_authorize_event_id: Option<&str>,
+        consumed_at: i64,
+    ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let ssk_generation = db_ssk_generation(ssk_generation)?;
+        sql_query(
+            "UPDATE mls_key_packages \
+             SET claimed_by_mls_group_id = CASE WHEN last_resort AND $2 <> 'revoked' THEN claimed_by_mls_group_id ELSE $2 END, \
+                 last_resort_realm_id = CASE WHEN last_resort AND $2 <> 'revoked' THEN COALESCE(last_resort_realm_id, $3) ELSE last_resort_realm_id END, \
+                 ssk_generation = COALESCE($4, ssk_generation), \
+                 device_authorize_event_id = COALESCE($5, device_authorize_event_id), \
+                 consumed_at = CASE WHEN last_resort AND $2 <> 'revoked' THEN consumed_at ELSE $6 END \
+             WHERE id = $1 \
+               AND (claimed_by_mls_group_id IS NULL OR claimed_by_mls_group_id <> 'revoked') \
+               AND (claimed_by_mls_group_id IS NULL OR (last_resort AND $2 <> 'revoked')) \
+               AND ($4 IS NULL OR ssk_generation = $4) \
+               AND ($5 IS NULL OR device_authorize_event_id = $5) \
+               AND ((NOT last_resort) OR $2 = 'revoked' OR (last_resort_realm_id IS NULL AND $3 IS NOT NULL) OR last_resort_realm_id = $3) \
+             RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
+             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, consumed_at, \
+             created_at",
+        )
+        .bind::<Text, _>(id)
+        .bind::<Text, _>(group_id)
+        .bind::<Nullable<Text>, _>(intended_realm_id)
+        .bind::<Nullable<BigInt>, _>(ssk_generation)
+        .bind::<Nullable<Text>, _>(device_authorize_event_id)
+        .bind::<BigInt, _>(consumed_at)
+        .get_result::<MlsKeyPackagePgRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(MlsKeyPackageRow::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
+             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, consumed_at, \
+             created_at \
+             FROM mls_key_packages ORDER BY created_at ASC, id ASC",
+        )
+        .load::<MlsKeyPackagePgRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(MlsKeyPackageRow::from).collect())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn list_claimed_by_group(
+        &self,
+        mls_group_id: &str,
+    ) -> PersistenceResult<Vec<MlsKeyPackageRow>> {
+        if mls_group_id == "revoked" {
+            return Ok(Vec::new());
+        }
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
+             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, consumed_at, \
+             created_at \
+             FROM mls_key_packages WHERE claimed_by_mls_group_id = $1 \
+             ORDER BY consumed_at ASC NULLS FIRST, id ASC",
+        )
+        .bind::<Text, _>(mls_group_id)
+        .load::<MlsKeyPackagePgRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(MlsKeyPackageRow::from).collect())
+        .map_err(PersistenceError::database)
+    }
+}
+#[async_trait]
+impl MlsWelcomeStore for PgMlsWelcomeStore {
+    async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "INSERT INTO mls_welcomes \
+             (id, mls_group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
+              key_package_id, enqueued_at, delivered_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.id)
+        .bind::<Text, _>(&record.group_id)
+        .bind::<Text, _>(&record.recipient_actor_id)
+        .bind::<Text, _>(&record.recipient_device_id)
+        .bind::<Binary, _>(&record.welcome_bytes)
+        .bind::<Text, _>(&record.key_package_id)
+        .bind::<BigInt, _>(record.enqueued_at)
+        .bind::<Nullable<BigInt>, _>(record.delivered_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(())
+    }
+
+    async fn drain_pending(
+        &self,
+        recipient_actor_id: &str,
+        recipient_device_id: &str,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX).max(0);
+        sql_query(
+            "WITH picked AS ( \
+                 SELECT id FROM mls_welcomes \
+                 WHERE recipient_actor_id = $1 \
+                   AND recipient_device_id = $2 \
+                   AND delivered_at IS NULL \
+                 ORDER BY enqueued_at ASC, id ASC \
+                 LIMIT $4 \
+                 FOR UPDATE SKIP LOCKED \
+             ) \
+             UPDATE mls_welcomes AS w \
+             SET delivered_at = $3 \
+             FROM picked \
+             WHERE w.id = picked.id \
+             RETURNING w.id, w.mls_group_id, w.recipient_actor_id, w.recipient_device_id, \
+             w.welcome_bytes, w.key_package_id, w.enqueued_at, w.delivered_at",
+        )
+        .bind::<Text, _>(recipient_actor_id)
+        .bind::<Text, _>(recipient_device_id)
+        .bind::<BigInt, _>(now_unix_secs)
+        .bind::<BigInt, _>(limit)
+        .load::<MlsWelcomeRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(MlsWelcomeRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT id, mls_group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
+             key_package_id, enqueued_at, delivered_at \
+             FROM mls_welcomes ORDER BY enqueued_at ASC, id ASC",
+        )
+        .load::<MlsWelcomeRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(MlsWelcomeRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+}
+#[async_trait]
+impl MlsCommitStore for PgMlsCommitStore {
+    async fn get(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let scope = mls_effective_scope_parts(effective_scope)?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, \
+             governance_binding, committed_at, frontier_contested \
+             FROM mls_commits \
+             WHERE effective_scope_kind = $1 \
+               AND realm_id = $2 \
+               AND circle_id IS NOT DISTINCT FROM $3 \
+               AND mls_group_id = $4",
+        )
+        .bind::<Text, _>(&scope.kind)
+        .bind::<Text, _>(&scope.realm_id)
+        .bind::<Nullable<Text>, _>(&scope.circle_id)
+        .bind::<Text, _>(group_id)
+        .get_result::<MlsCommitEpochRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(MlsCommitEpochRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn initialize_genesis(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        leader_actor_id: &str,
+        covered_seals: &[String],
+        governance_binding: &Value,
+        committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let scope = mls_effective_scope_parts(effective_scope)?;
+        let mut frontier = covered_seals.to_vec();
+        frontier.sort();
+        frontier.dedup();
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "INSERT INTO mls_commits \
+             (id, effective_scope_kind, realm_id, circle_id, effective_scope, mls_group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, false) \
+             ON CONFLICT DO NOTHING \
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested",
+        )
+        .bind::<SqlUuid, _>(Uuid::now_v7())
+        .bind::<Text, _>(&scope.kind)
+        .bind::<Text, _>(&scope.realm_id)
+        .bind::<Nullable<Text>, _>(&scope.circle_id)
+        .bind::<Jsonb, _>(effective_scope)
+        .bind::<Text, _>(group_id)
+        .bind::<Text, _>(leader_actor_id)
+        .bind::<Jsonb, _>(serde_json::json!(frontier))
+        .bind::<Jsonb, _>(governance_binding)
+        .bind::<BigInt, _>(committed_at)
+        .get_result::<MlsCommitEpochRow>(&mut *conn).await
+        .optional()
+        .map(|row| row.map(MlsCommitEpochRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn try_bump(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        expected_prev_epoch: u64,
+        leader_actor_id: &str,
+        covered_seals: &[String],
+        governance_binding: &Value,
+        committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let scope = mls_effective_scope_parts(effective_scope)?;
+        let expected_epoch = i64::try_from(expected_prev_epoch)
+            .map_err(|_| PersistenceError::Internal("MLS epoch exceeds i64".to_owned()))?;
+        let next_epoch = expected_prev_epoch
+            .checked_add(1)
+            .and_then(|epoch| i64::try_from(epoch).ok())
+            .ok_or_else(|| PersistenceError::Internal("MLS epoch overflow".to_owned()))?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "UPDATE mls_commits SET \
+               epoch = $6, \
+               leader_actor_id = $7, \
+               covered_seals = ( \
+                 SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb) \
+                 FROM jsonb_array_elements_text(mls_commits.covered_seals || $8::jsonb) AS merged(value) \
+               ), \
+               governance_binding = $9, \
+               committed_at = $10, \
+               frontier_contested = false \
+             WHERE effective_scope_kind = $1 \
+               AND realm_id = $2 \
+               AND circle_id IS NOT DISTINCT FROM $3 \
+               AND mls_group_id = $4 \
+               AND epoch = $5 \
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested",
+        )
+        .bind::<Text, _>(&scope.kind)
+        .bind::<Text, _>(&scope.realm_id)
+        .bind::<Nullable<Text>, _>(&scope.circle_id)
+        .bind::<Text, _>(group_id)
+        .bind::<BigInt, _>(expected_epoch)
+        .bind::<BigInt, _>(next_epoch)
+        .bind::<Text, _>(leader_actor_id)
+        .bind::<Jsonb, _>(serde_json::json!(covered_seals))
+        .bind::<Jsonb, _>(governance_binding)
+        .bind::<BigInt, _>(committed_at)
+        .get_result::<MlsCommitEpochRow>(&mut *conn).await
+        .optional()
+        .map(|row| row.map(MlsCommitEpochRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn mark_frontier_contested(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        epoch: u64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let scope = mls_effective_scope_parts(effective_scope)?;
+        let epoch = i64::try_from(epoch)
+            .map_err(|_| PersistenceError::Internal("MLS epoch exceeds i64".to_owned()))?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "UPDATE mls_commits SET frontier_contested = true \
+             WHERE effective_scope_kind = $1 \
+               AND realm_id = $2 \
+               AND circle_id IS NOT DISTINCT FROM $3 \
+               AND mls_group_id = $4 \
+               AND epoch = $5 \
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested",
+        )
+        .bind::<Text, _>(&scope.kind)
+        .bind::<Text, _>(&scope.realm_id)
+        .bind::<Nullable<Text>, _>(&scope.circle_id)
+        .bind::<Text, _>(group_id)
+        .bind::<BigInt, _>(epoch)
+        .get_result::<MlsCommitEpochRow>(&mut *conn).await
+        .optional()
+        .map(|row| row.map(MlsCommitEpochRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested \
+             FROM mls_commits ORDER BY effective_scope_kind ASC, realm_id ASC, circle_id ASC, mls_group_id ASC",
+        )
+        .load::<MlsCommitEpochRow>(&mut *conn).await
+        .map(|rows| rows.into_iter().map(MlsCommitEpochRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+}
+#[derive(QueryableByName)]
+struct MlsKeyPackagePgRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    keypackage_ref: String,
+    #[diesel(sql_type = Text)]
+    keypackage_digest: String,
+    #[diesel(sql_type = Text)]
+    actor_id: String,
+    #[diesel(sql_type = Text)]
+    device_id: String,
+    #[diesel(sql_type = Binary)]
+    key_package_bytes: Vec<u8>,
+    #[diesel(sql_type = Jsonb)]
+    capabilities: Value,
+    #[diesel(sql_type = Text)]
+    capabilities_digest: String,
+    #[diesel(sql_type = Jsonb)]
+    device_signature: Value,
+    #[diesel(sql_type = Bool)]
+    last_resort: bool,
+    #[diesel(sql_type = Nullable<Text>)]
+    last_resort_realm_id: Option<String>,
+    #[diesel(sql_type = BigInt)]
+    lifetime_not_before: i64,
+    #[diesel(sql_type = BigInt)]
+    lifetime_not_after: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    claimed_by_mls_group_id: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    ssk_generation: Option<i64>,
+    #[diesel(sql_type = Nullable<Text>)]
+    device_authorize_event_id: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    consumed_at: Option<i64>,
+    #[diesel(sql_type = BigInt)]
+    created_at: i64,
+}
+impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
+    fn from(row: MlsKeyPackagePgRow) -> Self {
+        Self {
+            id: row.id,
+            keypackage_ref: row.keypackage_ref,
+            keypackage_digest: row.keypackage_digest,
+            actor_id: row.actor_id,
+            device_id: row.device_id,
+            key_package_bytes: row.key_package_bytes,
+            capabilities: json_string_array(row.capabilities),
+            capabilities_digest: row.capabilities_digest,
+            device_signature: row.device_signature,
+            last_resort: row.last_resort,
+            last_resort_realm_id: row.last_resort_realm_id,
+            lifetime_not_before: row.lifetime_not_before,
+            lifetime_not_after: row.lifetime_not_after,
+            claimed_by_mls_group_id: row.claimed_by_mls_group_id,
+            ssk_generation: row
+                .ssk_generation
+                .and_then(|generation| u64::try_from(generation).ok())
+                .filter(|generation| *generation >= 1),
+            device_authorize_event_id: row.device_authorize_event_id,
+            consumed_at: row.consumed_at,
+            created_at: row.created_at,
+        }
+    }
+}
+#[derive(QueryableByName)]
+struct MlsWelcomeRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    mls_group_id: String,
+    #[diesel(sql_type = Text)]
+    recipient_actor_id: String,
+    #[diesel(sql_type = Text)]
+    recipient_device_id: String,
+    #[diesel(sql_type = Binary)]
+    welcome_bytes: Vec<u8>,
+    #[diesel(sql_type = Text)]
+    key_package_id: String,
+    #[diesel(sql_type = BigInt)]
+    enqueued_at: i64,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    delivered_at: Option<i64>,
+}
+impl From<MlsWelcomeRow> for MlsWelcomeRecord {
+    fn from(row: MlsWelcomeRow) -> Self {
+        Self {
+            id: row.id,
+            group_id: row.mls_group_id,
+            recipient_actor_id: row.recipient_actor_id,
+            recipient_device_id: row.recipient_device_id,
+            welcome_bytes: row.welcome_bytes,
+            key_package_id: row.key_package_id,
+            enqueued_at: row.enqueued_at,
+            delivered_at: row.delivered_at,
+        }
+    }
+}
+#[derive(QueryableByName)]
+struct MlsCommitEpochRow {
+    #[diesel(sql_type = SqlUuid)]
+    id: Uuid,
+    #[diesel(sql_type = Text)]
+    mls_group_id: String,
+    #[diesel(sql_type = Jsonb)]
+    effective_scope: Value,
+    #[diesel(sql_type = BigInt)]
+    epoch: i64,
+    #[diesel(sql_type = Text)]
+    leader_actor_id: String,
+    #[diesel(sql_type = Jsonb)]
+    covered_seals: Value,
+    #[diesel(sql_type = Jsonb)]
+    governance_binding: Value,
+    #[diesel(sql_type = BigInt)]
+    committed_at: i64,
+    #[diesel(sql_type = Bool)]
+    frontier_contested: bool,
+}
+impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
+    fn from(row: MlsCommitEpochRow) -> Self {
+        Self {
+            id: row.id,
+            group_id: row.mls_group_id,
+            effective_scope: row.effective_scope,
+            epoch: row.epoch.max(0) as u64,
+            leader_actor_id: row.leader_actor_id,
+            covered_seals: json_string_array(row.covered_seals),
+            governance_binding: row.governance_binding,
+            committed_at: row.committed_at,
+            frontier_contested: row.frontier_contested,
+        }
+    }
+}

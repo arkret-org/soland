@@ -1,0 +1,22 @@
+[package]
+name = "soland-storage-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "In-memory Soland storage adapter."
+
+[dependencies]
+arkret-sdk = {workspace = true,features = ["full-surface", "mls"]}
+async-trait = {workspace = true}
+chrono = {workspace = true,features = ["serde"]}
+parking_lot = {workspace = true}
+serde_json = {workspace = true}
+soland-storage = {workspace = true}
+uuid = {workspace = true,features = ["v4", "v7", "serde"]}
+
+[dev-dependencies]
+tokio = {workspace = true,features = ["macros", "rt-multi-thread"]}

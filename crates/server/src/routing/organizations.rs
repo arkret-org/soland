@@ -18,13 +18,12 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_storage::{OrganizationPolicyRecord, OrganizationRecord, RealmModerationPolicyRecord};
 
 use crate::error::{AppError, ErrorCode};
 use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::validate_did;
-use crate::state::{
-    AppState, OrganizationPolicyRecord, OrganizationRecord, RealmModerationPolicyRecord,
-};
+use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -196,7 +195,7 @@ fn ensure_organization_registry_admin(state: &AppState, actor: &str) -> Result<(
 
 pub(crate) async fn refresh_organization_projection(
     state: &AppState,
-) -> Result<(), crate::persistence::PersistenceError> {
+) -> Result<(), soland_storage::PersistenceError> {
     let organizations = state.persistence.organizations().list().await?;
     {
         let mut map = state.organizations.lock();
@@ -572,7 +571,7 @@ pub(crate) async fn link_realm_to_organization(
     state: &AppState,
     realm_id: &str,
     organization_id: &str,
-) -> Result<(), crate::persistence::PersistenceError> {
+) -> Result<(), soland_storage::PersistenceError> {
     state
         .persistence
         .realm_organizations()
@@ -816,7 +815,7 @@ pub(crate) async fn persist_realm_moderation_policy(
     realm_id: &str,
     payload: Value,
     actor: &str,
-) -> Result<RealmModerationPolicyRecord, crate::persistence::PersistenceError> {
+) -> Result<RealmModerationPolicyRecord, soland_storage::PersistenceError> {
     let record = RealmModerationPolicyRecord {
         realm_id: realm_id.to_owned(),
         payload,
@@ -848,7 +847,7 @@ async fn ensure_organization_placeholder(
     state: &AppState,
     organization_id: &str,
     actor: &str,
-) -> Result<(), crate::persistence::PersistenceError> {
+) -> Result<(), soland_storage::PersistenceError> {
     if state
         .persistence
         .organizations()

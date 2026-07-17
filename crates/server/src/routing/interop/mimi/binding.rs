@@ -297,12 +297,12 @@ pub(super) fn validate_mimi_submit_governance_binding(
         return Err(error("mls_governance_binding_encoding_profile_invalid"));
     }
     if binding.get("binding_profile").and_then(Value::as_str)
-        != Some(crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE)
+        != Some(soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE)
     {
         return Err(error("mls_governance_binding_profile_invalid"));
     }
     if binding.get("reducer_profile").and_then(Value::as_str)
-        != Some(crate::kinds::MLS_REDUCER_PROFILE_V1)
+        != Some(soland_domain::kinds::MLS_REDUCER_PROFILE_V1)
     {
         return Err(error("mls_governance_binding_reducer_profile_invalid"));
     }

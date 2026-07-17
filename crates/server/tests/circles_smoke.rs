@@ -19,8 +19,8 @@
 
 use arkret_sdk::{Did, Operation, OperationId, RealmId};
 use serde_json::{Value, json};
-use soland::hlc::ServerHlc;
-use soland::reducer::{
+use soland_domain::hlc::ServerHlc;
+use soland_domain::reducer::{
     CircleLifecycleState, ProjectionEffect, ProjectionState, SolandMembershipState,
 };
 

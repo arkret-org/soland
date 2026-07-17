@@ -1,7 +1,7 @@
 use serde_json::Value;
+use soland_storage::AgentSessionRecord;
 
 use super::*;
-use crate::state::AgentSessionRecord;
 
 /// Revoke every active bearer session for an actor.
 pub async fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {

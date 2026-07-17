@@ -82,7 +82,7 @@ pub(crate) async fn seed_verified_device_with_public_key(
     state
         .persistence
         .devices()
-        .put(&soland::state::DeviceInventoryRecord {
+        .put(&soland_storage::DeviceInventoryRecord {
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
             display_name: Some("Directory Test Device".to_owned()),

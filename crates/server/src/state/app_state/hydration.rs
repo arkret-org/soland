@@ -7,11 +7,11 @@ use super::*;
 /// strings or invalid rows are silently skipped (logged at warn) —
 /// the in-memory state stays authoritative.
 pub(super) async fn hydrate_projections_from_persistence(
-    persistence: &dyn crate::persistence::PersistenceStore,
+    persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     authz: &SolandAuthzEngine,
 ) {
-    use crate::reducer::{
+    use soland_domain::reducer::{
         AppletProjection, ChildScopePolicy, KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey,
         MlsKeyPackage, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
         SpaceContainerProjection, StrandProjection,
@@ -46,7 +46,7 @@ pub(super) async fn hydrate_projections_from_persistence(
         for (realm_id, record) in rows {
             proj.realm_states.insert(
                 realm_id.clone(),
-                crate::reducer::SolandRealmState {
+                soland_domain::reducer::SolandRealmState {
                     realm_id,
                     owner: Some(record.owner),
                     title: None,
@@ -302,7 +302,8 @@ pub(super) async fn hydrate_projections_from_persistence(
     // never the epoch / policy_root the genesis locked.
     if let Ok(records) = persistence.mls_commits().snapshot_all().await {
         for record in records {
-            let Ok(scope_key) = crate::reducer::mls::effective_scope_key(&record.effective_scope)
+            let Ok(scope_key) =
+                soland_domain::reducer::mls::effective_scope_key(&record.effective_scope)
             else {
                 tracing::warn!(
                     group_id = %record.group_id,
@@ -392,7 +393,7 @@ pub(super) fn hydrate_applet_install_grants(
 }
 
 pub(super) async fn hydrate_realms_from_canonical_events(
-    persistence: &dyn crate::persistence::PersistenceStore,
+    persistence: &dyn soland_storage::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
     service_id: &str,
 ) {
@@ -490,7 +491,7 @@ pub(super) fn hydrate_realm_member_state_event(
 }
 
 pub(super) async fn hydrate_realm_create_event(
-    persistence: &dyn crate::persistence::PersistenceStore,
+    persistence: &dyn soland_storage::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
     record: &CanonicalEventRecord,
     service_id: &str,
@@ -588,7 +589,7 @@ pub(super) async fn hydrate_realm_create_event(
         }
     }
     let minimal_metadata_realm =
-        payload_object.is_some_and(crate::kinds::payload_declares_minimal_metadata_realm);
+        payload_object.is_some_and(soland_domain::kinds::payload_declares_minimal_metadata_realm);
 
     let mut entry = RealmDirectoryEntry::new(realm_id.clone(), title);
     entry.description = summary.clone();
@@ -640,7 +641,7 @@ pub(super) async fn hydrate_realm_create_event(
 }
 
 pub(super) async fn hydrate_realm_policy_event(
-    persistence: &dyn crate::persistence::PersistenceStore,
+    persistence: &dyn soland_storage::PersistenceStore,
     record: &CanonicalEventRecord,
 ) {
     let Some(realm_id) = event_record_realm_id(record) else {

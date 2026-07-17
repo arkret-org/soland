@@ -4,7 +4,7 @@
 //! Spec: `event-kind-registry.json` entry for `ak.device.push_route`
 //! (composite cell_subject `(recipient_service_id, principal_id,
 //! device_id, push_route)`) plus `device-lifecycle.md §5a.2`. The reducer
-//! lives at `soland::reducer::ProjectionState::apply_push_route` and is
+//! lives at `soland_domain::reducer::ProjectionState::apply_push_route` and is
 //! reached through the canonical `apply` dispatcher.
 //!
 //! These tests drive `ProjectionState` directly so they exercise the
@@ -15,8 +15,8 @@
 
 use arkret_sdk::Operation;
 use serde_json::{Value, json};
-use soland::hlc::ServerHlc;
-use soland::reducer::{ProjectionEffect, ProjectionState, PushRouteSubject};
+use soland_domain::hlc::ServerHlc;
+use soland_domain::reducer::{ProjectionEffect, ProjectionState, PushRouteSubject};
 
 const SERVICE_ID_LOCAL: &str = "did:web:principal.acme.example";
 const SERVICE_ID_OTHER: &str = "did:web:principal.rogue.example";

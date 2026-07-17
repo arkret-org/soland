@@ -2,7 +2,7 @@
 //!
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
-use soland::state::DeviceMessageRecord;
+use soland_storage::DeviceMessageRecord;
 
 use super::common::*;
 

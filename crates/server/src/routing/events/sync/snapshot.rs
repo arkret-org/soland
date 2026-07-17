@@ -803,7 +803,7 @@ async fn state_events_for_realm(
     )
 }
 
-fn projection_event_position(event: &crate::state::ProjectionEventRecord) -> i64 {
+fn projection_event_position(event: &soland_storage::ProjectionEventRecord) -> i64 {
     timestamp_position_with_tie_breaker(event.received_at, &event.event_id)
 }
 
@@ -1120,7 +1120,7 @@ async fn pending_call_signal_records_for_subscriber(
     realm_id: &str,
     session: &SessionRecord,
     full_sync: bool,
-) -> Vec<crate::state::CallSignalRelayRecord> {
+) -> Vec<soland_storage::CallSignalRelayRecord> {
     let watermark = if full_sync {
         0
     } else {

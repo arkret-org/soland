@@ -84,7 +84,7 @@ fn known_routes_map_resolves_known_path() {
 #[tokio::test]
 async fn arkret_v1_unknown_path_returns_unrecognized_endpoint() {
     use salvo::test::{ResponseExt, TestClient};
-    use soland_data::Db;
+    use soland_storage_postgres::Db;
 
     use crate::state::AppState;
 
@@ -108,7 +108,7 @@ async fn arkret_v1_unknown_path_returns_unrecognized_endpoint() {
 #[tokio::test]
 async fn known_path_wrong_method_returns_method_not_allowed_with_allow_header() {
     use salvo::test::{ResponseExt, TestClient};
-    use soland_data::Db;
+    use soland_storage_postgres::Db;
 
     use crate::state::AppState;
 

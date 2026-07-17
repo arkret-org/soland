@@ -1,0 +1,136 @@
+use super::*;
+/// SOL-02-004 — classify a `key_backups` INSERT failure. A unique violation on
+/// `key_backups_series_seq_key` means a concurrent successor PUT already
+/// claimed this `(actor_id, series_id, series_seq)` tuple; surface it as a
+/// [`PersistenceError::Conflict`] so the receive path can reject the loser of
+/// the race with the §7.6 `series_seq_not_monotonic` wire code instead of a
+/// generic 5xx. Every other diesel error stays a `Database` error.
+fn map_key_backup_put_error(error: diesel::result::Error) -> PersistenceError {
+    use diesel::result::{DatabaseErrorKind, Error as DieselError};
+    if let DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, info) = &error {
+        let constraint = info.constraint_name().unwrap_or_default();
+        if constraint.is_empty() || constraint == "key_backups_series_seq_key" {
+            return PersistenceError::Conflict(format!(
+                "series_seq_not_monotonic: {}",
+                info.message()
+            ));
+        }
+    }
+    PersistenceError::database(error)
+}
+pub struct PgKeyBackupStore {
+    pub pool: PgPool,
+}
+#[async_trait]
+impl KeyBackupStore for PgKeyBackupStore {
+    async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let extract_str = |key: &str| -> Option<String> {
+            payload
+                .get(key)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        };
+        let account_id = extract_str("account_id")
+            .or_else(|| extract_str("actor_id"))
+            .or_else(|| extract_str("actor"));
+        let device_id = extract_str("device_id");
+        let scheme = extract_str("scheme").or_else(|| extract_str("algorithm"));
+        let version: i32 = payload
+            .get("version")
+            .and_then(Value::as_i64)
+            .map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+            .unwrap_or(0);
+        // base64-decoded key material lives in `key_material_encrypted` if the
+        // caller already provided raw bytes via a `bytes_b64` field. Otherwise
+        // the encrypted material stays in the JSONB envelope.
+        let key_material: Option<Vec<u8>> = payload
+            .get("key_material_encrypted_b64")
+            .and_then(Value::as_str)
+            .and_then(|s| {
+                use base64::Engine as _;
+                use base64::engine::general_purpose::STANDARD;
+                STANDARD.decode(s).ok()
+            });
+        sql_query(
+            "INSERT INTO key_backups \
+             (id, account_id, device_id, scheme, version, key_material_encrypted, payload, created_at, last_accessed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL) \
+             ON CONFLICT (id) DO UPDATE SET \
+                account_id = EXCLUDED.account_id, \
+                device_id = EXCLUDED.device_id, \
+                scheme = EXCLUDED.scheme, \
+                version = EXCLUDED.version, \
+                key_material_encrypted = EXCLUDED.key_material_encrypted, \
+                payload = EXCLUDED.payload",
+        )
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&backup_id))
+        .bind::<Nullable<Text>, _>(&account_id)
+        .bind::<Nullable<Text>, _>(&device_id)
+        .bind::<Nullable<Text>, _>(&scheme)
+        .bind::<Integer, _>(version)
+        .bind::<Nullable<Binary>, _>(key_material.as_deref())
+        .bind::<Jsonb, _>(&payload)
+        .execute(&mut *conn).await
+        .map(|_| ())
+        .map_err(map_key_backup_put_error)
+    }
+
+    async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        // last_accessed_at side-effect on read is informational; failure here
+        // must not crash the get path.
+        let _ = sql_query("UPDATE key_backups SET last_accessed_at = NOW() WHERE id = $1")
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
+            .execute(&mut *conn)
+            .await;
+        sql_query("SELECT payload FROM key_backups WHERE id = $1")
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
+            .get_result::<JsonPayloadRow>(&mut *conn)
+            .await
+            .optional()
+            .map(|row| row.map(|r| r.payload))
+            .map_err(PersistenceError::database)
+    }
+
+    async fn delete(&self, backup_id: &str) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("DELETE FROM key_backups WHERE id = $1")
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
+            .execute(&mut *conn)
+            .await
+            .map(|n| n > 0)
+            .map_err(PersistenceError::database)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("SELECT payload FROM key_backups ORDER BY created_at ASC, id ASC")
+            .load::<JsonPayloadRow>(&mut *conn)
+            .await
+            .map(|rows| rows.into_iter().map(|r| r.payload).collect())
+            .map_err(PersistenceError::database)
+    }
+
+    async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT payload FROM key_backups WHERE account_id = $1 ORDER BY created_at ASC, id ASC",
+        )
+        .bind::<Text, _>(actor_id)
+        .load::<JsonPayloadRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(|r| r.payload).collect())
+        .map_err(PersistenceError::database)
+    }
+}

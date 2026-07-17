@@ -10,6 +10,7 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_storage::{ServiceRegistrationCommitOutcome, WebvhDocumentRecord, WebvhLogRecord};
 
 use super::did::require_embedded_webvh_registration_bearer;
 use super::webvh_validation::{
@@ -18,9 +19,8 @@ use super::webvh_validation::{
     verify_webvh_log_proof,
 };
 use crate::error::{AppError, ErrorCode};
-use crate::persistence::ServiceRegistrationCommitOutcome;
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
+use crate::state::AppState;
 
 #[endpoint(
     operation_id = "ak.root.identity.service_registration.command.ensure",

@@ -203,7 +203,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     state
         .persistence
         .projection_events()
-        .append(soland::state::ProjectionEventRecord {
+        .append(soland_storage::ProjectionEventRecord {
             event_id: first_event_id.to_owned(),
             realm_id: demo_realm_id().to_owned(),
             event_kind: "ak.message.create".to_owned(),
@@ -270,7 +270,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     state
         .persistence
         .projection_events()
-        .append(soland::state::ProjectionEventRecord {
+        .append(soland_storage::ProjectionEventRecord {
             event_id: second_event_id.to_owned(),
             realm_id: demo_realm_id().to_owned(),
             event_kind: "ak.message.create".to_owned(),

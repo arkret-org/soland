@@ -91,7 +91,7 @@ fn contains_ci(haystack: &str, needle_lower: &str) -> bool {
 
 async fn query_audit_trail(
     state: &AppState,
-    session: &crate::state::SessionRecord,
+    session: &soland_storage::SessionRecord,
     action: &str,
     filters: &BTreeMap<String, String>,
     count: usize,
@@ -120,7 +120,7 @@ async fn query_audit_trail(
 /// canonical grammar — such rows cannot be represented in the typed contract.
 pub(super) fn admin_actor_row(
     state: &AppState,
-    account: &crate::state::AccountRecord,
+    account: &soland_storage::AccountRecord,
     device_counts: &BTreeMap<String, u64>,
     realm_counts: &BTreeMap<String, u64>,
 ) -> Option<AdminActor> {
@@ -559,7 +559,7 @@ pub(super) async fn admin_list_capabilities(
 // Devices
 // ---------------------------------------------------------------------------
 
-fn admin_device_row(device: &crate::state::DeviceInventoryRecord) -> AdminDevice {
+fn admin_device_row(device: &soland_storage::DeviceInventoryRecord) -> AdminDevice {
     AdminDevice {
         id: device.device_id.clone(),
         actor_id: Some(device.actor.clone()),
@@ -687,7 +687,7 @@ mod tests {
     /// authorization decision itself, which dev-mode fixtures cannot reach.)
     #[test]
     fn require_admin_principal_is_fail_closed_in_production() {
-        let session = |actor: &str| crate::state::SessionRecord {
+        let session = |actor: &str| soland_storage::SessionRecord {
             token_hash: "hash".to_owned(),
             actor: actor.to_owned(),
             device_id: "ak:device:test".to_owned(),
@@ -704,7 +704,7 @@ mod tests {
                 admin_principal_dids: vec!["did:web:op.example".to_owned()],
                 ..crate::config::AppConfig::test_default()
             },
-            soland_data::Db { pool: None },
+            soland_storage_postgres::Db { pool: None },
         );
 
         let denied = super::require_admin_principal(&state, session("did:web:nobody.example"))

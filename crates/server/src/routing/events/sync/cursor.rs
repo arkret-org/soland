@@ -887,7 +887,7 @@ pub(super) async fn account_cursor_revoke(
     } else {
         Some(session.device_id.clone())
     };
-    let record = crate::state::CursorRevocation {
+    let record = soland_storage::CursorRevocation {
         cursor_digest: sha256_hex(cursor.as_bytes()),
         principal_id: session.actor.clone(),
         device_id,

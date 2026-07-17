@@ -337,7 +337,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
     state
         .persistence
         .devices()
-        .put(&soland::state::DeviceInventoryRecord {
+        .put(&soland_storage::DeviceInventoryRecord {
             verification_state: "verified".to_owned(),
             payload: serde_json::json!({
                 "device_id": device_id,

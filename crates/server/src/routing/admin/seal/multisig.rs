@@ -13,7 +13,7 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use soland_core::admin::seal::{MultisigPendingEntry, MultisigPendingOutcome};
+use soland_contracts::admin::seal::{MultisigPendingEntry, MultisigPendingOutcome};
 
 use super::AuthArgs;
 use crate::error::{AppError, ErrorCode};
@@ -92,7 +92,7 @@ pub(crate) async fn admin_submit_multisig_partial(
         .map_err(persistence_to_app_err)?
     {
         Some(r) => r,
-        None => crate::state::MultisigPendingRecord {
+        None => soland_storage::MultisigPendingRecord {
             seal_id: seal_id_str.clone(),
             realm_id: realm_id_str.clone(),
             threshold_k: 1,
@@ -290,7 +290,7 @@ pub(crate) async fn admin_rotate_signing_key(
     ))
 }
 
-fn persistence_to_app_err(e: crate::persistence::PersistenceError) -> AppError {
+fn persistence_to_app_err(e: soland_storage::PersistenceError) -> AppError {
     AppError::new(
         ErrorCode::InternalError,
         format!("multisig store error: {e}"),
@@ -302,7 +302,9 @@ fn persistence_to_app_err(e: crate::persistence::PersistenceError) -> AppError {
 /// threshold-signed Seal. Returns the aggregated seal_id on success.
 /// Errors are intentionally swallowed by the caller (best-effort); the
 /// row stays in the store so a watchdog can retry.
-fn try_aggregate_partials(record: &crate::state::MultisigPendingRecord) -> Result<String, String> {
+fn try_aggregate_partials(
+    record: &soland_storage::MultisigPendingRecord,
+) -> Result<String, String> {
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
 

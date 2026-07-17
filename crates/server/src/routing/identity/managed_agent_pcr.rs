@@ -8,10 +8,10 @@ use arkret_sdk::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
+use soland_storage::{AgentPrincipalRecord, WebvhDocumentRecord, WebvhLogRecord};
 
 use crate::error::{AppError, ErrorCode};
-use crate::persistence::AgentPrincipalRecord;
-use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
+use crate::state::AppState;
 
 const PCR_SERVICE_TYPE: &str = "ArkretPrincipalControlRealm";
 const PCR_SERVICE_FRAGMENT: &str = "arkret-principal-control-realm";

@@ -42,13 +42,13 @@ use salvo::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use soland_domain::reducer::{
+    CircleLifecycleState, CircleProjection, MlsRemoveObligation, ProjectionState,
+};
 
 use super::{AuthArgs, accept_local_operations};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
-use crate::reducer::{
-    CircleLifecycleState, CircleProjection, MlsRemoveObligation, ProjectionState,
-};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;

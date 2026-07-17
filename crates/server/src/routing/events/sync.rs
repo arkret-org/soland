@@ -36,6 +36,11 @@ pub(crate) use futures_util::stream::StreamExt;
 pub(crate) use salvo::http::{StatusCode, header};
 pub(crate) use salvo::prelude::*;
 pub(crate) use serde_json::{Value, json};
+pub(crate) use soland_domain::reducer::ProjectionState;
+pub(crate) use soland_storage::{
+    DeviceInventoryRecord, PresenceRecord, ProjectionEventRecord, RealmMetaRecord, SessionRecord,
+    SyncCursorRecord,
+};
 pub(crate) use tokio::sync::broadcast::error::RecvError;
 
 use super::super::identity::device_messages::prune_device_messages_for_limits;
@@ -52,11 +57,8 @@ use super::{
     render_error, sha256_hex, snapshot_manifest_for_realm, validate_did,
 };
 pub(crate) use crate::ids;
-pub(crate) use crate::persistence::SyncCursorRecord;
-pub(crate) use crate::reducer::ProjectionState;
 pub(crate) use crate::state::{
-    AppState, DeviceInventoryRecord, HandleClaimDigestInput, HandleClaimEvidenceRecord,
-    PresenceRecord, ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord, SessionRecord,
+    AppState, HandleClaimDigestInput, HandleClaimEvidenceRecord, RealmDirectoryEntry,
 };
 pub(crate) use crate::wire::{EventsQueryPostRequestBody, SyncRequestBody};
 

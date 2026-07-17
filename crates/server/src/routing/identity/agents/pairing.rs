@@ -148,7 +148,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         .unwrap_or_else(chrono::Utc::now);
     let expires_at =
         required_pairing_expires_at(&agent_record)?.to_rfc3339_opts(SecondsFormat::Millis, true);
-    let write = crate::persistence::AgentRuntimeApprovalWrite {
+    let write = soland_storage::AgentRuntimeApprovalWrite {
         agent_id: agent_id.to_owned(),
         pairing_request_id: body.pairing_request_id.to_string(),
         approval_request_id: proposed_approval_request_id.clone(),
@@ -391,7 +391,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         paired_request_digest_from_record_event(&agent_record, &accepted.envelope)?;
 
     let terminal_notification = account_notification_context(&agent_record);
-    let activation = crate::persistence::AgentRuntimeActivation {
+    let activation = soland_storage::AgentRuntimeActivation {
         agent_id: agent_id.clone(),
         approval_request_id: approval_request_id.clone(),
         runtime_key_binding_digest: agent_record
@@ -630,7 +630,7 @@ pub(super) async fn agent_key_pair(
     // accepted (a failed submit above propagates via `?` and MUST NOT leave
     // the agent flipped to active).
     let terminal_notification = account_notification_context(&agent_record);
-    let activation = crate::persistence::AgentRuntimeActivation {
+    let activation = soland_storage::AgentRuntimeActivation {
         agent_id: agent_id.to_owned(),
         approval_request_id: agent_record.approval_request_id.clone().ok_or_else(|| {
             pairing_failed_precondition("agent pairing approval metadata is incomplete")

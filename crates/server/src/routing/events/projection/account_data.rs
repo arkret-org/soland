@@ -1,12 +1,13 @@
 use arkret_sdk::Operation;
 use serde_json::{Value, json};
+use soland_domain::kinds;
+use soland_storage::AccountDataRecord;
 
-use crate::kinds;
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, READ_MARKER_UPDATE_TYPE,
     fanout_actor_private_update,
 };
-use crate::state::{AccountDataRecord, AppState};
+use crate::state::AppState;
 
 /// Project a `ak.realm.read_receipt_policy` (post-R1.2; was
 /// `ak.space.read_receipt_policy`) durable-event into
@@ -224,9 +225,9 @@ pub(super) async fn fanout_projection_effect_private_update(
     state: &AppState,
     origin: &str,
     source_device_id: &str,
-    effect: &crate::reducer::ProjectionEffect,
+    effect: &soland_domain::reducer::ProjectionEffect,
 ) {
-    let crate::reducer::ProjectionEffect::ReadMarkerUpdated(marker) = effect else {
+    let soland_domain::reducer::ProjectionEffect::ReadMarkerUpdated(marker) = effect else {
         return;
     };
     if source_device_id.is_empty() || marker.actor_id != origin {

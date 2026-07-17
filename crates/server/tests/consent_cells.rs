@@ -5,7 +5,7 @@ use serde_json::Value;
 use soland::config::AppConfig;
 use soland::state::AppState;
 use soland::{ids, service};
-use soland_data::Db;
+use soland_storage_postgres::Db;
 
 const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
 

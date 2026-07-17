@@ -3,13 +3,13 @@ use arkret_sdk::{
     RejectedItem, namespace_pattern_matches,
 };
 use salvo::http::StatusCode;
+use soland_storage::{AppletTransactionReplayBegin, AppletTransactionReplayRecord, SessionRecord};
 
 use super::signature::VerifiedInboundTransactionSignature;
 use super::types::AppletRecord;
 use crate::error::AppError;
-use crate::persistence::{AppletTransactionReplayBegin, AppletTransactionReplayRecord};
 use crate::routing::events::event_log::submit_event_value;
-use crate::state::{AppState, SessionRecord};
+use crate::state::AppState;
 
 pub(super) async fn process_verified_transaction(
     state: &AppState,

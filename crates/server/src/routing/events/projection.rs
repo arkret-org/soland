@@ -102,7 +102,7 @@ mod tests {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let event = crate::state::ProjectionEventRecord {
+        let event = soland_storage::ProjectionEventRecord {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000f1".to_owned(),
             realm_id: REALM_ID.to_owned(),
             event_kind: arkret_sdk::events::EventKind::STRAND_UPDATE.to_owned(),

@@ -2,7 +2,7 @@
 //!
 //! [`PolicyClient`] issues `POST /_arkret/self/policy/check` against the
 //! `policy_server_url` of the request's Realm
-//! ([`crate::reducer::RealmPolicyServerConfig`]), with per-realm
+//! ([`soland_domain::reducer::RealmPolicyServerConfig`]), with per-realm
 //! `cache_ttl_seconds` decision caching and `timeout_ms` fail-closed
 //! semantics.
 //!
@@ -48,9 +48,8 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::Value;
+use soland_domain::reducer::RealmPolicyServerConfig;
 use subtle::ConstantTimeEq as _;
-
-use crate::reducer::RealmPolicyServerConfig;
 
 type VerificationKeyResolver =
     Arc<dyn Fn(&str) -> Result<VerifyingKey, String> + Send + Sync + 'static>;

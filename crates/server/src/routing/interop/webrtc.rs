@@ -28,14 +28,15 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
+use soland_domain::reducer::{ProjectionEffect, ProjectionState};
+use soland_storage::{CanonicalEventRecord, SessionRecord};
 
 use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
-use crate::reducer::{ProjectionEffect, ProjectionState};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
+use crate::state::AppState;
 use crate::wire::{
     CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
     CallMediaTokenExchangeRequestBody,

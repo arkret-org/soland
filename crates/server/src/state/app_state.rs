@@ -12,13 +12,9 @@ use arkret_sdk::{
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use soland_data::Db;
-
-use super::did_resolver_chain;
-use super::member_identity::MemberIdentityRegistry;
-use super::notification::{EventBroadcast, Mutex, SubscribeReconnectGate};
-use super::realm_directory::{RealmDirectoryEntry, RealmDirectoryIndex};
-use super::records::{
+use soland_domain::hlc::ServerHlc;
+use soland_domain::reducer::ProjectionState;
+use soland_storage::{
     ACCOUNT_LOCKOUT_DURATION, ACCOUNT_LOCKOUT_THRESHOLD, ACCOUNT_LOCKOUT_WINDOW,
     AccountLifecycleRecord, AccountRecord, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord,
     CursorRevocation, DirectConversationBindingRecord, FailedLoginRecord,
@@ -30,18 +26,21 @@ use super::records::{
     MODERATION_REPORT_RATE_TRACKER_MAX_ENTRIES, MODERATION_REPORT_RATE_WINDOW_SECS,
     ModerationFrankingReplayRecord, ModerationReportRateOutcome, ModerationReportRateRecord,
     OrganizationPolicyRecord, OrganizationRecord, PSI_HIT_BUCKET_SECS, PSI_PROBE_MAX_PER_WINDOW,
-    PSI_PROBE_TRACKER_MAX_ENTRIES, PSI_PROBE_WINDOW, PsiProbeOutcome, PsiProbeRecord,
-    RealmMetaRecord, RealmModerationPolicyRecord, RetentionPolicyRecord, RetentionTombstoneRecord,
-    SovereignDeploymentState,
+    PSI_PROBE_TRACKER_MAX_ENTRIES, PSI_PROBE_WINDOW, PersistenceResult, PersistenceStore,
+    PsiProbeOutcome, PsiProbeRecord, RealmMetaRecord, RealmModerationPolicyRecord,
+    RetentionPolicyRecord, RetentionTombstoneRecord, SovereignDeploymentState,
 };
+use soland_storage_memory::SolandMemoryPersistenceStore;
+use soland_storage_postgres::Db;
+
+use super::did_resolver_chain;
+use super::member_identity::MemberIdentityRegistry;
+use super::notification::{EventBroadcast, Mutex, SubscribeReconnectGate};
+use super::realm_directory::{RealmDirectoryEntry, RealmDirectoryIndex};
 use crate::authz::SolandAuthzEngine;
 use crate::config::{AppConfig, NotarySigningKeyOrigin};
-use crate::hlc::ServerHlc;
 use crate::object_storage::{ObjectStorage, build_object_storage};
-use crate::persistence::{
-    PersistenceResult, PersistenceStore, PgPersistenceStore, SolandMemoryPersistenceStore,
-};
-use crate::reducer::ProjectionState;
+use crate::persistence_registry::PgPersistenceStore;
 use crate::verified_profiles::VerifiedProfileDescriptor;
 
 mod hydration;
@@ -233,7 +232,7 @@ pub struct AppState {
     pub seal_store: Arc<dyn SealStore>,
     pub cell_store: Arc<dyn CellStore>,
     pub cell_registry: Arc<dyn CellRegistry>,
-    pub(crate) event_seal_committer: Arc<dyn super::state_resolution::EventSealCommitStore>,
+    pub(crate) event_seal_committer: Arc<dyn soland_storage_postgres::EventSealCommitStore>,
     /// Live event notification bus for `ak.self.events.stream.subscribe`.
     /// Memory mode uses the local broadcast channel; PostgreSQL mode also
     /// publishes over LISTEN/NOTIFY so subscribers connected to another
@@ -564,7 +563,7 @@ impl AppState {
         let admin_keystore = Arc::new(admin_keystore);
 
         let state_resolution_stores =
-            super::state_resolution::build_state_resolution_stores(db.pool.clone());
+            soland_storage_postgres::build_state_resolution_stores(db.pool.clone());
 
         // Space-container/Strand/Morph projections are hydrated from durable
         // persistence in [`AppState::hydrate`] (an explicit async boot step)
@@ -952,7 +951,7 @@ impl AppState {
         {
             let mut proj = self.projection.lock();
             for record in realm_organization_statements {
-                let row = crate::reducer::RealmOrganizationStatementState {
+                let row = soland_domain::reducer::RealmOrganizationStatementState {
                     realm_id: record.realm_id.clone(),
                     organization_id: record.organization_id.clone(),
                     relationship: record.relationship.clone(),
@@ -1533,9 +1532,7 @@ mod membership_hydration_tests {
     // commit is rejected for "no genesis").
     #[tokio::test]
     async fn mls_projections_rehydrate_from_durable_stores() {
-        use crate::persistence::{
-            MlsKeyPackageRow, PersistenceStore, SolandMemoryPersistenceStore,
-        };
+        use soland_storage::{MlsKeyPackageRow, PersistenceStore};
 
         let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
         let group_id = "ak:mls_group:019f0dd3-aaaa";
@@ -1596,8 +1593,8 @@ mod membership_hydration_tests {
 
         // Commit-epoch projection is rebuilt with the genesis-locked policy_root
         // → the add-member commit's governance binding check passes.
-        let key = crate::reducer::MlsCommitEpochKey::new(
-            crate::reducer::mls::effective_scope_key(&effective_scope).unwrap(),
+        let key = soland_domain::reducer::MlsCommitEpochKey::new(
+            soland_domain::reducer::mls::effective_scope_key(&effective_scope).unwrap(),
             group_id.to_owned(),
         );
         let epoch = proj
@@ -1610,7 +1607,8 @@ mod membership_hydration_tests {
 
     #[tokio::test]
     async fn realm_owner_rehydrates_for_capability_upper_bound_checks() {
-        use crate::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
+        use soland_storage::PersistenceStore;
+        use soland_storage_memory::SolandMemoryPersistenceStore;
 
         let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
         let owner = "did:webvh:z6mkfixture:example.test:users:alice";

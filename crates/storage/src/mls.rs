@@ -1,0 +1,256 @@
+use super::*;
+/// G3.S1 — durable KeyPackage row.
+///
+/// The Pg backend's `(actor_id, device_id, id)` composite key is what
+/// enforces at-most-one row per `keypackage_id`. `try_claim` is the
+/// CAS path — it returns `Ok(true)` on the first claim, `Ok(false)` if
+/// the row is already claimed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsKeyPackageRow {
+    pub id: String,
+    pub keypackage_ref: String,
+    pub keypackage_digest: String,
+    pub actor_id: String,
+    pub device_id: String,
+    pub key_package_bytes: Vec<u8>,
+    pub capabilities: Vec<String>,
+    pub capabilities_digest: String,
+    pub device_signature: Value,
+    pub last_resort: bool,
+    pub last_resort_realm_id: Option<String>,
+    pub lifetime_not_before: i64,
+    pub lifetime_not_after: i64,
+    /// MLS group id that claimed this row. `None` while claimable.
+    pub claimed_by_mls_group_id: Option<String>,
+    pub ssk_generation: Option<u64>,
+    pub device_authorize_event_id: Option<String>,
+    pub consumed_at: Option<i64>,
+    pub created_at: i64,
+}
+/// G3.S1 — durable Welcome envelope row (per recipient device).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsWelcomeRecord {
+    pub id: String,
+    pub group_id: String,
+    pub recipient_actor_id: String,
+    pub recipient_device_id: String,
+    pub welcome_bytes: Vec<u8>,
+    pub key_package_id: String,
+    pub enqueued_at: i64,
+    pub delivered_at: Option<i64>,
+}
+/// G3.S1 — durable per-group commit epoch row. The protocol identity is
+/// the tagged `effective_scope` plus `mls_group_id`; the row's `epoch`
+/// is bumped monotonically by the CAS-protected `try_bump` path. `id`
+/// is the database row identity, not the protocol identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsCommitEpochRecord {
+    pub id: Uuid,
+    pub group_id: String,
+    pub effective_scope: Value,
+    pub epoch: u64,
+    pub leader_actor_id: String,
+    pub covered_seals: Vec<String>,
+    pub governance_binding: Value,
+    pub committed_at: i64,
+    /// `true` once concurrent commits resolved the group's
+    /// `covered_frontier_cell` to `⊥` (encryption-and-audit.md §2.5.2). Cleared
+    /// when a resolving commit advances the epoch via `try_bump`.
+    pub frontier_contested: bool,
+}
+/// G3.S1 — KeyPackage store. The `try_claim` CAS path is what
+/// guarantees at-most-one Welcome per published KeyPackage.
+#[async_trait]
+pub trait MlsKeyPackageStore: Send + Sync {
+    /// Insert a fresh KeyPackage row. Returns `Ok(false)` if the
+    /// `id` is already present (re-publishes of the same id are
+    /// idempotent — production fixtures sometimes resubmit on retry).
+    async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool>;
+    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>>;
+    /// Atomically claim the named KeyPackage for `mls_group_id`. Returns
+    /// `Ok(Some(record))` on success (with `claimed_by_mls_group_id` /
+    /// `consumed_at` filled in), `Ok(None)` if the row is already
+    /// claimed or does not exist. The CAS check + update happens
+    /// inside the store so two concurrent callers see at-most-one win.
+    async fn try_claim(
+        &self,
+        id: &str,
+        mls_group_id: &str,
+        intended_realm_id: Option<&str>,
+        ssk_generation: Option<u64>,
+        device_authorize_event_id: Option<&str>,
+        consumed_at: i64,
+    ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
+    /// Snapshot all rows. Diagnostics + the integration test rely on it.
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
+    /// All rows claimed by `mls_group_id` (excluding the sentinel
+    /// `"revoked"` claims). Ordered by `consumed_at` then `id` so callers
+    /// get a stable leaf iteration order. Feeds the minimal-metadata
+    /// author-credential admission view (encryption-and-audit.md §2.10.3).
+    async fn list_claimed_by_group(
+        &self,
+        mls_group_id: &str,
+    ) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
+}
+/// G3.S1 — Welcome to-device queue store. Each recipient device drains
+/// its queue via `drain_pending`, which marks pending rows
+/// `delivered_at = now()` so a re-poll won't redeliver.
+#[async_trait]
+pub trait MlsWelcomeStore: Send + Sync {
+    async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()>;
+    /// Return at most `limit` rows where `delivered_at IS NULL`. Marks
+    /// each returned row with `delivered_at = now_unix_secs` in the
+    /// same call so subsequent polls skip them.
+    async fn drain_pending(
+        &self,
+        recipient_actor_id: &str,
+        recipient_device_id: &str,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
+}
+/// G3.S1 — per-group MLS commit epoch store.
+#[async_trait]
+pub trait MlsCommitStore: Send + Sync {
+    async fn get(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
+    /// Initialize a group at epoch 0. Returns `Ok(None)` when the group
+    /// already has an epoch row.
+    async fn initialize_genesis(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        leader_actor_id: &str,
+        covered_seals: &[String],
+        governance_binding: &Value,
+        committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
+    /// Atomically advance the group's epoch IFF `expected_prev_epoch`
+    /// matches the existing row's current epoch.
+    /// Returns `Ok(Some(new_record))` on success, `Ok(None)` on a
+    /// missing genesis row or stale `expected_prev_epoch`.
+    async fn try_bump(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        expected_prev_epoch: u64,
+        leader_actor_id: &str,
+        covered_seals: &[String],
+        governance_binding: &Value,
+        committed_at: i64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
+    /// §2.5.2 — flag the group's current epoch row as contested (`⊥`) after
+    /// concurrent commits. A no-op (`Ok(None)`) when no epoch row exists or the
+    /// stored epoch has already advanced past `epoch`.
+    async fn mark_frontier_contested(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        epoch: u64,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>>;
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[doc(hidden)]
+pub struct MlsCommitEpochStoreKey {
+    pub effective_scope_kind: String,
+    pub realm_id: String,
+    pub circle_id: Option<String>,
+    pub mls_group_id: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct MlsEffectiveScopeParts {
+    pub kind: String,
+    pub realm_id: String,
+    pub circle_id: Option<String>,
+}
+impl MlsEffectiveScopeParts {
+    fn store_key(&self, group_id: &str) -> MlsCommitEpochStoreKey {
+        MlsCommitEpochStoreKey {
+            effective_scope_kind: self.kind.clone(),
+            realm_id: self.realm_id.clone(),
+            circle_id: self.circle_id.clone(),
+            mls_group_id: group_id.to_owned(),
+        }
+    }
+}
+#[doc(hidden)]
+pub fn mls_epoch_key(
+    effective_scope: &Value,
+    group_id: &str,
+) -> PersistenceResult<MlsCommitEpochStoreKey> {
+    Ok(mls_effective_scope_parts(effective_scope)?.store_key(group_id))
+}
+#[doc(hidden)]
+pub fn mls_effective_scope_parts(
+    effective_scope: &Value,
+) -> PersistenceResult<MlsEffectiveScopeParts> {
+    let object = effective_scope.as_object().ok_or_else(|| {
+        PersistenceError::Internal("MLS effective_scope must be an object".to_owned())
+    })?;
+    let kind = object
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| PersistenceError::Internal("MLS effective_scope missing kind".to_owned()))?;
+    let realm_id = object
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            PersistenceError::Internal("MLS effective_scope missing realm_id".to_owned())
+        })?;
+    if realm_id.is_empty() {
+        return Err(PersistenceError::Internal(
+            "MLS effective_scope has empty realm_id".to_owned(),
+        ));
+    }
+    match kind {
+        "realm" => {
+            if object.len() != 2 || object.contains_key("circle_id") {
+                return Err(PersistenceError::Internal(
+                    "MLS realm effective_scope must only contain kind and realm_id".to_owned(),
+                ));
+            }
+            Ok(MlsEffectiveScopeParts {
+                kind: kind.to_owned(),
+                realm_id: realm_id.to_owned(),
+                circle_id: None,
+            })
+        }
+        "circle" => {
+            let circle_id = object
+                .get("circle_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    PersistenceError::Internal("MLS effective_scope missing circle_id".to_owned())
+                })?;
+            if circle_id.is_empty() || object.len() != 3 {
+                return Err(PersistenceError::Internal(
+                    "MLS circle effective_scope must only contain kind, realm_id, and circle_id"
+                        .to_owned(),
+                ));
+            }
+            Ok(MlsEffectiveScopeParts {
+                kind: kind.to_owned(),
+                realm_id: realm_id.to_owned(),
+                circle_id: Some(circle_id.to_owned()),
+            })
+        }
+        _ => Err(PersistenceError::Internal(
+            "MLS effective_scope has invalid kind".to_owned(),
+        )),
+    }
+}
+#[doc(hidden)]
+pub fn db_ssk_generation(generation: Option<u64>) -> PersistenceResult<Option<i64>> {
+    generation
+        .map(|generation| {
+            i64::try_from(generation)
+                .map_err(|_| PersistenceError::Internal("ssk_generation exceeds i64".to_owned()))
+        })
+        .transpose()
+}

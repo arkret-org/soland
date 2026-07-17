@@ -22,7 +22,7 @@ use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::service;
 use soland::state::AppState;
-use soland_data::Db;
+use soland_storage_postgres::Db;
 
 const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
 
@@ -882,7 +882,7 @@ fn applet_service_id_document(package: &AppletPackage) -> arkret_sdk::identity::
 async fn ingest_applet_service_id_document(state: &AppState, package: &AppletPackage) {
     let now = chrono::Utc::now();
     let document = applet_service_id_document(package);
-    let record = soland::state::WebvhDocumentRecord {
+    let record = soland_storage::WebvhDocumentRecord {
         did: package.service_id.to_string(),
         did_document: serde_json::to_value(document).unwrap(),
         key_log_head: Some(package.registration_epoch.to_string()),

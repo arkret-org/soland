@@ -145,15 +145,15 @@ pub fn typed_uuid_part_expect_internal(typed: &str) -> Uuid {
 /// may receive **untrusted** input (e.g. a value pulled raw out of an event
 /// payload, or a client-supplied path/query id).
 ///
-/// SOL-COR-02: returns a [`crate::persistence::PersistenceError::SchemaViolation`]
+/// SOL-COR-02: returns a [`soland_storage::PersistenceError::SchemaViolation`]
 /// (which surfaces as the `schema_violation` wire reason) instead of panicking,
 /// so a malformed id degrades to a structured 4xx rather than aborting the
 /// request task and losing the error code.
 pub fn typed_uuid_part_or_schema_violation(
     typed: &str,
-) -> Result<Uuid, crate::persistence::PersistenceError> {
+) -> Result<Uuid, soland_storage::PersistenceError> {
     typed_uuid_part(typed).ok_or_else(|| {
-        crate::persistence::PersistenceError::SchemaViolation(format!(
+        soland_storage::PersistenceError::SchemaViolation(format!(
             "malformed typed wire ID: {typed:?}"
         ))
     })

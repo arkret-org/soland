@@ -18,14 +18,14 @@ pub(crate) use serde_json::Value;
 pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use soland::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
 pub(crate) use soland::ratelimit::RateLimiterConfig;
-pub(crate) use soland::state::{
-    AppState, EventNotification, MessageRecord, PresenceRecord, RealmDirectoryEntry,
-    RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord,
-};
+pub(crate) use soland::state::{AppState, EventNotification, RealmDirectoryEntry};
 pub(crate) use soland::{
     artifacts, service, service_with_rate_limiter_config, service_with_request_size_limit,
 };
-pub(crate) use soland_data::Db;
+pub(crate) use soland_storage::{
+    MessageRecord, PresenceRecord, RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord,
+};
+pub(crate) use soland_storage_postgres::Db;
 
 pub(crate) const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
 /// Fixed REST-style TURN shared secret installed by `test_config()` so the
@@ -433,7 +433,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
         drop(realms);
         state.projection.lock().members.insert(
             (realm_id.to_owned(), member.to_owned()),
-            soland::reducer::SolandMembershipState {
+            soland_domain::reducer::SolandMembershipState {
                 member: member.to_owned(),
                 realm_id: realm_id.to_owned(),
                 state: "join".to_owned(),
@@ -1558,7 +1558,7 @@ pub(crate) async fn persist_test_message(
     state
         .persistence
         .events()
-        .put(soland::state::CanonicalEventRecord {
+        .put(soland_storage::CanonicalEventRecord {
             event_id: record.event_id.clone(),
             actor_id: sender.to_owned(),
             actor_seq: envelope["actor_seq"].as_u64().unwrap(),

@@ -20,6 +20,7 @@ mod settings;
 
 use audit::append_audit_log;
 pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
+use soland_storage::SessionRecord;
 
 use super::system::util;
 use super::{
@@ -28,7 +29,7 @@ use super::{
     strand_id_for_projection_event, strand_id_from_realm_id, strand_projection_for_realm,
 };
 use crate::error::{AppError, ErrorCode};
-use crate::state::{AppState, SessionRecord};
+use crate::state::AppState;
 
 /// Salvo middleware that gates an admin route on an OAuth-style admin
 /// scope. The middleware performs the bearer session lookup, introspects

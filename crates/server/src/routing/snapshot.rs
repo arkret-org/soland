@@ -1,7 +1,8 @@
 use serde_json::{Value, json};
+use soland_storage::{BlobRecord, CanonicalEventRecord, DeviceInventoryRecord};
 
 use super::*;
-use crate::state::{AppState, BlobRecord, CanonicalEventRecord, DeviceInventoryRecord};
+use crate::state::AppState;
 use crate::wire::now;
 
 pub(crate) async fn snapshot_manifest_for_realm(

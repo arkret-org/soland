@@ -4,9 +4,9 @@ use std::sync::{Arc, OnceLock};
 
 use arkret_sdk::{MoveId, RealmId, SealId};
 use serde_json::Value;
+use soland_storage::{CanonicalEventRecord, PersistenceError};
 
-use crate::persistence::PersistenceError;
-use crate::state::{AppState, CanonicalEventRecord};
+use crate::state::AppState;
 
 const DEVICE_GENERATION_ADMISSION_LOCK_SHARDS: usize = 1024;
 

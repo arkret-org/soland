@@ -5,8 +5,8 @@
 //!   spec's triage architecture.
 //! - moderation appeals are durable `ak.moderation.appeal.*` events submitted through `POST
 //!   /_arkret/self/events`. The four-state appeal FSM and separation-of-duties enforcement are
-//!   authoritative in the reducer (`crate::reducer::apply_moderation`), surfaced at ingest by the
-//!   moderation projection preflight.
+//!   authoritative in the reducer (`soland_domain::reducer::apply_moderation`), surfaced at ingest
+//!   by the moderation projection preflight.
 
 use std::time::Duration;
 
@@ -20,13 +20,14 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_storage::MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES;
 
 use super::{append_audit_log, now, query_param, realm_has_member, sha256_hex, validate_did};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES};
+use crate::state::AppState;
 use crate::wire::{ModerationReportOutcome, ModerationReportRequestBody};
 
 pub(super) fn protocol_router() -> Router {
@@ -234,9 +235,9 @@ fn moderation_target_effective_scope_value(
 }
 
 fn moderation_target_message<'a>(
-    projection: &'a crate::reducer::ProjectionState,
+    projection: &'a soland_domain::reducer::ProjectionState,
     target_ref: &str,
-) -> Option<&'a crate::reducer::MessageState> {
+) -> Option<&'a soland_domain::reducer::MessageState> {
     projection.messages.get(target_ref).or_else(|| {
         target_ref
             .strip_prefix("ak:message:")
@@ -470,7 +471,7 @@ async fn validate_franking_event_time_anchor(
         .map_err(|error| franking_proof_invalid(error.to_string()))
 }
 
-fn encrypted_event_payload_digest(record: &crate::state::CanonicalEventRecord) -> Option<&str> {
+fn encrypted_event_payload_digest(record: &soland_storage::CanonicalEventRecord) -> Option<&str> {
     record
         .envelope
         .pointer("/payload/encrypted_content/payload_digest")
@@ -1346,7 +1347,7 @@ async fn moderation_appeal_submit(
 #[cfg(test)]
 mod report_safety_tests {
     use serde_json::{Value, json};
-    use soland_data::Db;
+    use soland_storage_postgres::Db;
 
     use super::*;
     use crate::config::{AppConfig, ObjectStorageConfig};
@@ -1372,7 +1373,7 @@ mod report_safety_tests {
         );
         state.projection.lock().messages.insert(
             TARGET.replacen("ak:message:", "ak:event:", 1),
-            crate::reducer::MessageState {
+            soland_domain::reducer::MessageState {
                 event_id: TARGET.replacen("ak:message:", "ak:event:", 1),
                 message_id: TARGET.to_owned(),
                 realm_id: REALM.to_owned(),
@@ -1406,7 +1407,7 @@ mod report_safety_tests {
         state
             .persistence
             .events()
-            .put(crate::state::CanonicalEventRecord {
+            .put(soland_storage::CanonicalEventRecord {
                 event_id: FRANKING_EVENT.to_owned(),
                 actor_id: REPORTER.to_owned(),
                 actor_seq: 1,
