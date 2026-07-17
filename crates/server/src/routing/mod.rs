@@ -12,7 +12,6 @@ pub(crate) mod events;
 // G3.S9: extensions (applet manifest verifier, bot/ghost actor, TSP, sovereign enclave).
 pub mod extensions;
 pub mod federation;
-pub(crate) mod http_signature;
 pub(crate) mod identity;
 mod interop;
 pub(crate) mod invites;
@@ -46,6 +45,11 @@ use identity::auth::{auth_or_render, authenticated_session, is_device_revoked};
 use identity::device_messages::{TO_DEVICE_PAGE_LIMIT, device_message_envelopes_after};
 #[cfg(test)]
 use identity::did::validate_did_document_services;
+use soland_http::util::{
+    bearer_token, handle_for_did, is_valid_discoverability, is_valid_hash_digest,
+    is_valid_sha256_digest, is_valid_sha256_hex, normalize_localpart, query_param, query_param_all,
+    render_error, sha256_hex, validate_device_id, validate_did, validate_space_id,
+};
 use spaces::space::{
     invite_token_matches_realm, invite_token_realm_id, is_realm_deleted, prune_expired_typing,
     realm_allows_plaintext_service_for_data_class, realm_discoverability,
@@ -54,20 +58,12 @@ use spaces::space::{
     touch_realm,
 };
 use system::extract::AuthArgs;
-use system::util::{
-    bearer_token, handle_for_did, is_valid_discoverability, is_valid_hash_digest,
-    is_valid_sha256_digest, is_valid_sha256_hex, is_valid_sync_token, normalize_localpart,
-    query_param, query_param_all, render_error, sha256_hex, validate_device_id, validate_did,
-    validate_space_id,
-};
 
 // Router construction (router builders, CORS handler, root/preflight handlers).
 mod router_build;
 // OpenAPI document construction + the soland-extension operation table.
-mod openapi;
 // 404/405 disambiguation, framework error catcher, sync-token guard, and the
 // `ArkretOpenApiDoc` depot type.
-mod openapi_routes;
 // Snapshot manifest builders + small inventory/token helpers.
 mod snapshot;
 
@@ -80,18 +76,6 @@ pub use interop::spawn_resumable_upload_ttl_sweeper;
 pub(crate) use interop::{
     MAX_BLOB_UPLOAD_BYTES, TUS_EXTENSIONS, TUS_VERSIONS, push_target_privacy_derivation_claim,
 };
-// OpenAPI internals + 404/405 helpers shared across the routing children. The
-// glob re-exports keep these reachable from `super::*` in the child modules
-// (and from `wire.rs` via `crate::routing::soland_extension_operation_ids`).
-pub(crate) use openapi::soland_extension_operation_ids;
-use openapi::{arkret_openapi_yaml, cached_arkret_openapi_doc};
-// Framework error catcher + OpenAPI doc depot type consumed by `crate::service`
-// and `crate::routing` children.
-pub use openapi_routes::ArkretOpenApiDoc;
-pub(crate) use openapi_routes::error_catcher;
-use openapi_routes::{
-    api_not_found, pattern_matches_path, populate_known_routes, wait_for_sync_token,
-};
 // CORS handler consumed by `crate::service`.
 pub(crate) use router_build::cors_handler_for_origin_spec;
 pub use router_build::{
@@ -102,6 +86,16 @@ pub use router_build::{
 pub(crate) use snapshot::{
     device_inventory_to_json, generate_invite_token, snapshot_manifest_for_realm,
 };
+// OpenAPI internals + 404/405 helpers shared across the routing children. The
+// glob re-exports keep these reachable from `super::*` in the child modules
+// (and from `wire.rs` via `crate::routing::soland_extension_operation_ids`).
+pub(crate) use soland_http::openapi::soland_extension_operation_ids;
+use soland_http::openapi::{arkret_openapi_yaml, cached_arkret_openapi_doc};
+// Framework error catcher + OpenAPI doc depot type consumed by `crate::service`
+// and `crate::routing` children.
+pub use soland_http::openapi_routes::ArkretOpenApiDoc;
+pub(crate) use soland_http::openapi_routes::error_catcher;
+use soland_http::openapi_routes::{api_not_found, wait_for_sync_token};
 
 pub(crate) async fn sync_token(state: &AppState) -> String {
     events::sync::sync_token_for_state(state).await

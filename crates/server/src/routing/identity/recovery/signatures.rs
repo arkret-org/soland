@@ -77,9 +77,11 @@ pub(super) async fn resolve_authorized_device_key_with_wire_code(
         .with_wire_code(wire_code)
     };
     let device = state
-        .persistence
-        .devices()
-        .get(principal_id, device_id)
+        .identity_application()
+        .find_device(soland_application::identity::FindDeviceQuery {
+            actor_id: principal_id.to_owned(),
+            device_id: device_id.to_owned(),
+        })
         .await
         .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
         .ok_or_else(not_authorized)?;
@@ -212,9 +214,11 @@ pub(super) async fn resolve_session_device_key_for_genesis_policy(
         .with_wire_code("recovery_policy_device_not_authorized")
     };
     let device = state
-        .persistence
-        .devices()
-        .get(principal_id, &session.device_id)
+        .identity_application()
+        .find_device(soland_application::identity::FindDeviceQuery {
+            actor_id: principal_id.to_owned(),
+            device_id: session.device_id.clone(),
+        })
         .await
         .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
         .ok_or_else(not_bound)?;

@@ -123,13 +123,13 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
     let device_id = "agent-session:ak:grant:0196419b-0000-7000-8000-000000000001";
     let now = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .sessions()
         .put(&soland_storage::SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.service_id),
+            token_hash: test_session_credential_hash(token, &state.service_id()),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
-            audience: state.service_id.clone(),
+            audience: state.service_id().clone(),
             session_public_key: Some("{}".to_owned()),
             agent_session: Some(soland_storage::AgentSessionRecord {
                 granted_scope: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
@@ -156,7 +156,7 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
         .await
         .unwrap();
     state
-        .persistence
+        .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
             actor: actor.to_owned(),
@@ -380,16 +380,39 @@ async fn events_describe_and_single_event_submit_work() {
     );
     let submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "single-event-atomic-commit", true)
         .json(&first)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(submitted["status"], "accepted");
+    assert_eq!(submitted["status"], "accepted", "response: {submitted}");
     assert_eq!(
         submitted["accepted"][0],
         "ak:event:01904100-0000-7000-8000-f15c8ea06c11"
+    );
+    let committed_idempotency = state
+        .test_persistence()
+        .idempotency_keys()
+        .get("did:web:alice.example", "single-event-atomic-commit")
+        .await
+        .unwrap()
+        .expect("accepted event commits its idempotent response");
+    assert_eq!(committed_idempotency.response_body, submitted);
+
+    let replayed: Value = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "single-event-atomic-commit", true)
+        .json(&first)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        replayed, submitted,
+        "idempotency replay returns first response"
     );
 
     let duplicate: Value = TestClient::post("http://server/_arkret/self/events")
@@ -689,7 +712,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     assert_eq!(body["accepted"][0], event["event_id"]);
     assert!(
         state
-            .projection
+            .test_projection()
             .lock()
             .member(&realm_id, "did:web:alice.example")
             .is_some_and(|member| member.state == "join")
@@ -788,7 +811,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     });
     let envelope = serde_json::to_value(&event).unwrap();
     state
-        .persistence
+        .test_persistence()
         .events()
         .put(soland_storage::CanonicalEventRecord {
             event_id: event.event_id.to_string(),
@@ -944,7 +967,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .expect("managed Agent id")
         .to_owned();
     let agent_record = state
-        .persistence
+        .test_persistence()
         .agents()
         .list_for_controller(controller_id)
         .await
@@ -1056,7 +1079,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     );
 
     let records = state
-        .persistence
+        .test_persistence()
         .events()
         .realm_events_newest_first(&realm_id)
         .await
@@ -1188,7 +1211,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         "submit response: {submitted}"
     );
     let projected = state
-        .persistence
+        .test_persistence()
         .realm_invites()
         .get(payload["invite_id"].as_str().unwrap())
         .await
@@ -1339,7 +1362,7 @@ async fn incremental_sync_meta_only_delta_advances_cursor_once() {
     );
 
     let mut meta = state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .get(&realm_id)
         .await
@@ -1347,7 +1370,7 @@ async fn incremental_sync_meta_only_delta_advances_cursor_once() {
         .expect("seeded realm meta");
     meta.updated_at = chrono::Utc::now() + chrono::Duration::seconds(1);
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(&realm_id, &meta)
         .await
@@ -1436,15 +1459,17 @@ async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batc
             "wake up the stream",
         )
         .await;
-        let _ = waker_state.event_broadcast.send(EventNotification::event(
-            DEMO_REALM_ID.to_owned(),
-            message.event_id.clone(),
-            serde_json::json!({
-                "kind": "ak.message.create",
-                "event_id": message.event_id,
-                "realm_id": DEMO_REALM_ID,
-            }),
-        ));
+        let _ = waker_state
+            .test_event_broadcast()
+            .send(EventNotification::event(
+                DEMO_REALM_ID.to_owned(),
+                message.event_id.clone(),
+                serde_json::json!({
+                    "kind": "ak.message.create",
+                    "event_id": message.event_id,
+                    "realm_id": DEMO_REALM_ID,
+                }),
+            ));
         message
     });
 

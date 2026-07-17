@@ -3,7 +3,7 @@ use diesel::{QueryableByName, sql_query};
 use diesel_async::RunQueryDsl;
 use serde_json::Value;
 
-use super::*;
+use super::{PgPool, pg_conn};
 
 #[derive(QueryableByName)]
 struct SettingRow {

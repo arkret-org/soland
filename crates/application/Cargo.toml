@@ -1,0 +1,23 @@
+[package]
+name = "soland-application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Transport- and adapter-independent Soland application use cases."
+
+[dependencies]
+arkret-sdk = { workspace = true, features = ["full-surface", "mls"] }
+async-trait.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+serde_json.workspace = true
+soland-domain.workspace = true
+soland-storage.workspace = true
+thiserror.workspace = true
+uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

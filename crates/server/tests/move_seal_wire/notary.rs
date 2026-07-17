@@ -142,7 +142,7 @@ async fn notary_pass_broadcasts_frontier_frame_to_subscribers() {
     // (dev_token), so we'd need the actor in realm.members. To avoid
     // wiring all that, we use the broadcast directly: subscribe to the
     // receiver and check the notification arrives.
-    let mut rx = state.event_broadcast.subscribe();
+    let mut rx = state.test_event_broadcast().subscribe();
     writer.await.expect("writer task");
     // Drain any non-frontier messages and find the frontier.
     let mut saw_frontier = false;
@@ -216,7 +216,7 @@ async fn notary_pass_populates_projection_cells_map() {
 
     // Inspect ProjectionState directly. The member_cell should now be in
     // the cells map with Value("join") (the FSM transition we sealed).
-    let proj = state.projection.lock();
+    let proj = state.test_projection().lock();
     let resolved = proj
         .cell(&member_cell())
         .expect("member.state cell should be in ProjectionState::cells after apply_seal");

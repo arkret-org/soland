@@ -44,14 +44,14 @@ async fn get_actor(
         .await
         .map_err(|error| {
             tracing::error!(%error, "failed to list accounts");
-            crate::error::AppError::internal("account store unavailable")
+            soland_http::error::AppError::internal("account store unavailable")
         })?
         .into_iter()
         .find(|account| account.did == actor_id || account.id == actor_id)
-        .ok_or_else(|| crate::error::AppError::not_found("actor not found"))?;
+        .ok_or_else(|| soland_http::error::AppError::not_found("actor not found"))?;
     let (device_counts, realm_counts) = queries::actor_count_maps(state).await;
     let actor = queries::admin_actor_row(state, &account, &device_counts, &realm_counts)
-        .ok_or_else(|| crate::error::AppError::not_found("actor not found"))?;
+        .ok_or_else(|| soland_http::error::AppError::not_found("actor not found"))?;
 
     append_audit_log(
         state,

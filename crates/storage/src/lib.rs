@@ -3,15 +3,17 @@
 //! Provides a trait-based interface for storage, allowing seamless switching
 //! between in-memory and PostgreSQL backends.
 
-// Re-exports for submodules (`use super::*;`). These also serve the root module.
-pub(crate) use std::collections::{BTreeMap, BTreeSet, VecDeque};
-pub(crate) use std::sync::Arc;
+// Crate-private imports shared by the explicitly imported storage modules.
+pub(crate) use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) use arkret_sdk::{BlobRef, EventBatchReceipt, Operation};
+pub(crate) use arkret_sdk::{EventBatchReceipt, Operation};
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
-pub(crate) use parking_lot::Mutex;
 pub(crate) use serde_json::Value;
+pub use soland_domain::identity::{
+    ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord,
+    DirectConversationBindingRecord,
+};
 pub(crate) use uuid::Uuid;
 
 mod agent_principal;
@@ -49,6 +51,7 @@ mod recovery;
 mod service_identity;
 mod sessions;
 mod sync_cursor;
+mod unit_of_work;
 mod webvh;
 mod webvh_freshness;
 pub use accounts::*;
@@ -77,6 +80,7 @@ pub use recovery::*;
 pub use service_identity::*;
 pub use sessions::*;
 pub use sync_cursor::*;
+pub use unit_of_work::*;
 pub use webvh::*;
 pub use webvh_freshness::{webvh_freshness_on_put, *};
 
@@ -107,10 +111,8 @@ impl PersistenceError {
     }
 }
 
-/// Combined persistence store trait. Every state surface that used to live
-/// behind an `Arc<Mutex<...>>` on `AppState` is reachable through one of
-/// these accessors.
-pub trait PersistenceStore: Send + Sync {
+/// Account, identity, messaging, and device persistence registry.
+pub trait IdentityStoreRegistry: Send + Sync {
     fn accounts(&self) -> &dyn AccountStore;
     fn account_localparts(&self) -> &dyn AccountLocalpartStore;
     fn account_lifecycle(&self) -> &dyn AccountLifecycleStore;
@@ -124,6 +126,10 @@ pub trait PersistenceStore: Send + Sync {
     fn messages(&self) -> &dyn MessageStore;
     fn blobs(&self) -> &dyn BlobStore;
     fn devices(&self) -> &dyn DeviceInventoryStore;
+}
+
+/// Federation, retention, organization, and audit persistence registry.
+pub trait FederationGovernanceStoreRegistry: Send + Sync {
     fn federation_transactions(&self) -> &dyn FederationTransactionStore;
     fn federation_outbox(&self) -> &dyn FederationOutboxStore;
     fn federation_frontier_exchange(&self) -> &dyn FederationFrontierExchangeStore;
@@ -136,6 +142,10 @@ pub trait PersistenceStore: Send + Sync {
     fn realm_organization_statements(&self) -> &dyn RealmOrganizationStatementStore;
     fn realm_moderation_policies(&self) -> &dyn RealmModerationPolicyStore;
     fn audit(&self) -> &dyn AuditStore;
+}
+
+/// Delivery, policy, recovery, and service identity persistence registry.
+pub trait DeliveryPolicyStoreRegistry: Send + Sync {
     fn moderation(&self) -> &dyn ModerationStore;
     fn federation_operations(&self) -> &dyn FederationOperationsStore;
     fn push_devices(&self) -> &dyn PushDeviceStore;
@@ -151,6 +161,10 @@ pub trait PersistenceStore: Send + Sync {
     fn webvh(&self) -> &dyn WebvhStore;
     fn service_identity(&self) -> &dyn ServiceIdentityStore;
     fn realm_invites(&self) -> &dyn RealmInviteStore;
+}
+
+/// Canonical event and derived projection persistence registry.
+pub trait EventProjectionStoreRegistry: Send + Sync {
     fn events(&self) -> &dyn EventStore;
     fn projection_events(&self) -> &dyn ProjectionEventStore;
     fn applets(&self) -> &dyn AppletStore;
@@ -162,6 +176,10 @@ pub trait PersistenceStore: Send + Sync {
     fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore;
     fn strand_projections(&self) -> &dyn StrandProjectionStore;
     fn morph_projections(&self) -> &dyn MorphProjectionStore;
+}
+
+/// MLS, agent, and notification persistence registry.
+pub trait MlsAgentStoreRegistry: Send + Sync {
     // G3.S1: MLS lifecycle stores.
     fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore;
     fn mls_welcomes(&self) -> &dyn MlsWelcomeStore;
@@ -172,16 +190,24 @@ pub trait PersistenceStore: Send + Sync {
     fn agents(&self) -> &dyn AgentStore;
     // AKP-0016 — per-recipient notification projection.
     fn notifications(&self) -> &dyn NotificationStore;
+}
+
+/// Synchronization and request idempotency persistence registry.
+pub trait SyncStoreRegistry: Send + Sync {
     fn sync_cursors(&self) -> &dyn SyncCursorStore;
     fn idempotency_keys(&self) -> &dyn IdempotencyStore;
 }
 
-pub(crate) fn json_string_array(value: Value) -> Vec<String> {
-    match value {
-        Value::Array(values) => values
-            .into_iter()
-            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-            .collect(),
-        _ => Vec::new(),
-    }
+/// Complete persistence capability assembled by an infrastructure adapter.
+pub trait PersistenceStore:
+    EventCommitUnitOfWork
+    + IdentityStoreRegistry
+    + FederationGovernanceStoreRegistry
+    + DeliveryPolicyStoreRegistry
+    + EventProjectionStoreRegistry
+    + MlsAgentStoreRegistry
+    + SyncStoreRegistry
+    + Send
+    + Sync
+{
 }

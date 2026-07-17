@@ -21,8 +21,10 @@ diesel-async = {workspace = true,features = ["postgres", "deadpool", "async-conn
 diesel_migrations = {workspace = true,features = ["postgres"]}
 parking_lot = {workspace = true}
 serde_json = {workspace = true}
-soland-domain = {workspace = true}
 soland-storage = {workspace = true}
 tokio = {workspace = true,features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"]}
 tracing = {workspace = true}
 uuid = {workspace = true}
+
+[dev-dependencies]
+soland-domain = {workspace = true}

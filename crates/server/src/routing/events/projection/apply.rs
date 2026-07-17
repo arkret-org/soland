@@ -1,8 +1,9 @@
 use arkret_sdk::Operation;
 use serde_json::{Value, json};
+use soland_application::delivery::DeviceMessageState;
 use soland_domain::kinds;
 use soland_domain::reducer::MlsWelcomeQueueKey;
-use soland_storage::{DeviceMessageRecord, MlsKeyPackageRow, MlsWelcomeRecord};
+use soland_storage::{MlsKeyPackageRow, MlsWelcomeRecord};
 
 use super::*;
 use crate::ids;
@@ -889,7 +890,7 @@ async fn project_mls_welcome_to_device(
     let position = state.next_to_device_position();
     let recipient = record.recipient_actor_id.clone();
     let device = record.recipient_device_id.clone();
-    let message = DeviceMessageRecord {
+    let message = DeviceMessageState {
         idempotency_key: format!("mls_welcome:{welcome_id}"),
         sender: origin.to_owned(),
         recipient: recipient.clone(),
@@ -907,7 +908,11 @@ async fn project_mls_welcome_to_device(
         sender_device_id = %sender_device_id,
         "DIAG appending MLS Welcome to device_messages queue"
     );
-    match state.persistence.device_messages().append(message).await {
+    match state
+        .delivery_application()
+        .append_device_message(message)
+        .await
+    {
         Ok(()) => tracing::warn!(
             target: "mls_welcome_delivery",
             %welcome_id, recipient = %recipient, device = %device, position,
@@ -958,7 +963,7 @@ async fn project_realm_key_share_to_device(
         operation.operation_id.as_str(),
         &wire_payload,
     );
-    let record = DeviceMessageRecord {
+    let record = DeviceMessageState {
         idempotency_key: format!("realm_key_share:{}", operation.operation_id),
         sender: origin.to_owned(),
         recipient: share.recipient_principal_id.to_string(),
@@ -967,7 +972,11 @@ async fn project_realm_key_share_to_device(
         content,
         created_at: operation.created_at,
     };
-    if let Err(error) = state.persistence.device_messages().append(record).await {
+    if let Err(error) = state
+        .delivery_application()
+        .append_device_message(record)
+        .await
+    {
         tracing::warn!(
             %error,
             operation_id = %operation.operation_id,
@@ -1221,9 +1230,8 @@ mod tests {
         project_realm_key_share_to_device(&state, sender, sender_device, &operation).await;
 
         let queued = state
-            .persistence
-            .device_messages()
-            .list_after(recipient, recipient_device, 0)
+            .delivery_application()
+            .device_messages_after(recipient, recipient_device, 0)
             .await
             .expect("queued device messages");
         assert_eq!(queued.len(), 1);
@@ -1277,7 +1285,7 @@ mod tests {
             "created_at": "2026-06-30T00:00:00Z"
         });
         let created_at = chrono::Utc::now();
-        let record = DeviceMessageRecord {
+        let record = DeviceMessageState {
             idempotency_key: format!("realm_key_share:{operation_id}"),
             sender: sender.to_owned(),
             recipient: recipient.to_owned(),

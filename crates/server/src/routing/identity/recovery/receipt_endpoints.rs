@@ -20,11 +20,10 @@ pub(super) async fn recovery_receipts_get(
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
     let receipts = state
-        .persistence
-        .recovery_receipts()
-        .list_for_principal(&principal)
+        .recovery_receipt_application()
+        .receipt_history(&principal)
         .await
-        .map_err(recovery_store_error)?;
+        .map_err(recovery_application_error)?;
     let receipts = receipts
         .iter()
         .map(recovery_receipt_item)
@@ -33,7 +32,7 @@ pub(super) async fn recovery_receipts_get(
 }
 
 pub(super) fn recovery_receipt_item(
-    record: &RecoveryReceiptRecord,
+    record: &soland_application::identity::RecoveryReceiptState,
 ) -> Result<SolandRecoveryReceiptItem, AppError> {
     Ok(SolandRecoveryReceiptItem {
         receipt_id: ReceiptId::new(record.receipt_id.clone())
@@ -54,6 +53,27 @@ pub(super) fn recovery_receipt_item(
         accepted_at: record.accepted_at,
         receipt: record.raw_payload.clone(),
     })
+}
+
+fn application_recovery_receipt(
+    record: RecoveryReceiptRecord,
+) -> soland_application::identity::RecoveryReceiptState {
+    soland_application::identity::RecoveryReceiptState {
+        receipt_id: record.receipt_id,
+        principal_id: record.principal_id,
+        recovery_session_id: record.recovery_session_id,
+        policy_id: record.policy_id,
+        policy_version: record.policy_version,
+        trust_domain: record.trust_domain,
+        new_device_id: record.new_device_id,
+        proof_digest: record.proof_digest,
+        outcome: record.outcome,
+        started_at: record.started_at,
+        completed_at: record.completed_at,
+        raw_payload: record.raw_payload,
+        verification_method: record.verification_method,
+        accepted_at: record.accepted_at,
+    }
 }
 
 fn recovery_receipt_outcome(value: &str) -> Result<RecoveryReceiptOutcome, AppError> {
@@ -120,11 +140,10 @@ pub(super) async fn recovery_receipt_put(
     // Cross-check against the active policy when one is recorded —
     // policy_id + policy_version MUST match the accepted snapshot.
     let active = state
-        .persistence
-        .recovery_policies()
-        .get_active_for_principal(&record.principal_id)
+        .recovery_policy_application()
+        .active_policy(&record.principal_id)
         .await
-        .map_err(recovery_store_error)?
+        .map_err(recovery_application_error)?
         .ok_or_else(|| {
             AppError::conflict(format!(
                 "no accepted recovery policy for principal `{}`",
@@ -167,11 +186,14 @@ pub(super) async fn recovery_receipt_put(
     let accepted_at = chrono::Utc::now();
     record.accepted_at = accepted_at;
     state
-        .persistence
-        .recovery_receipts()
-        .insert(record.clone())
+        .recovery_receipt_application()
+        .record_receipt(application_recovery_receipt(record.clone()))
         .await
-        .map_err(recovery_receipt_store_error)?;
+        .map_err(|error| match error {
+            soland_application::ApplicationError::Storage(error) => {
+                recovery_receipt_store_error(error)
+            }
+        })?;
 
     append_audit_log(
         state,

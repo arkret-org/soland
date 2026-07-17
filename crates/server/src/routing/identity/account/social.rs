@@ -59,9 +59,10 @@ pub(crate) async fn contact_request(
         .is_some_and(|did| did != state.service_id);
     if !is_remote_target {
         let target_account = state
-            .persistence
-            .accounts()
-            .get(&target)
+            .identity_application()
+            .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+                actor_id: target.clone(),
+            })
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
         if target_account.is_none() {
@@ -108,9 +109,9 @@ pub(crate) async fn contact_request(
     } else {
         message.clone()
     };
-    let store = state.persistence.contacts();
-    if let Some(mut existing) = store
-        .get_scoped(&session.actor, &target, &scope)
+    let contacts = state.contact_application();
+    if let Some(mut existing) = contacts
+        .contact(&session.actor, &target, &scope)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
@@ -131,8 +132,8 @@ pub(crate) async fn contact_request(
                 existing.message = record_message.clone();
             }
             existing.updated_at = now();
-            store
-                .put(&existing)
+            contacts
+                .save_contact(existing.clone())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             if stub_message && message_changed {
@@ -153,14 +154,14 @@ pub(crate) async fn contact_request(
             requester_consent_refs,
         )?);
     }
-    if store
-        .get_scoped(&target, &session.actor, &scope)
+    if contacts
+        .contact(&target, &session.actor, &scope)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some()
     {
         return Err(AppError::new(
-            crate::error::ErrorCode::DuplicateConflict,
+            soland_http::error::ErrorCode::DuplicateConflict,
             "contact relationship already exists",
         ));
     }
@@ -205,8 +206,8 @@ pub(crate) async fn contact_request(
         "accepted",
     )
     .await;
-    store
-        .put(&contact)
+    contacts
+        .save_contact(contact.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if stub_message {
@@ -305,9 +306,8 @@ async fn has_accepted_contact_for_peer_any_scope(
     peer: &str,
 ) -> Result<bool, AppError> {
     let contacts = state
-        .persistence
-        .contacts()
-        .list_for_actor(actor)
+        .contact_application()
+        .contacts_for_actor(actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(contacts.iter().any(|record| {
@@ -370,7 +370,7 @@ async fn append_contact_fact_projection_event(
         state,
         ProjectionEventRecord {
             event_id: event_ref.to_string(),
-            realm_id: super::super::recovery::principal_control_realm_for_did(issuer),
+            realm_id: soland_domain::identity::principal_control_realm_for_did(issuer),
             event_kind: event_kind.to_owned(),
             operation_type: "contact_fact".to_owned(),
             operation_id: None,
@@ -401,9 +401,9 @@ pub(crate) async fn contact_respond(
     if !matches!(body.action.as_str(), "accept" | "reject") {
         return Err(AppError::invalid_param("action must be accept or reject"));
     }
-    let store = state.persistence.contacts();
-    let Some(mut contact) = store
-        .get(body.requester.as_str(), &session.actor)
+    let contacts = state.contact_application();
+    let Some(mut contact) = contacts
+        .contact_any(body.requester.as_str(), &session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     else {
@@ -437,7 +437,7 @@ pub(crate) async fn contact_respond(
             return json_ok(contact_respond_outcome(&contact, Vec::new())?);
         }
         return Err(AppError::new(
-            crate::error::ErrorCode::DuplicateConflict,
+            soland_http::error::ErrorCode::DuplicateConflict,
             "contact request is no longer pending",
         ));
     }
@@ -494,8 +494,8 @@ pub(crate) async fn contact_respond(
     };
     contact.response_event_ref = Some(response_event_ref.to_string());
     contact.updated_at = now();
-    store
-        .put(&contact)
+    contacts
+        .save_contact(contact.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if body.action == "reject" {
@@ -615,7 +615,7 @@ pub(crate) async fn contact_tombstone(
     // Flip every holder↔peer contact row this holder controls to
     // `tombstoned`. The holder's own outgoing rows are the authoritative
     // tombstone target.
-    let store = state.persistence.contacts();
+    let contacts = state.contact_application();
     let mut tombstoned_any = false;
     let tombstone_event_ref = synthetic_contact_event_ref();
     let mut requester_side_revoke_scopes = Vec::new();
@@ -623,8 +623,8 @@ pub(crate) async fn contact_tombstone(
     // on cross-PS contact deliveries). Used as the federation fallback when the
     // request body omits `peer_service_id`.
     let mut row_peer_service_id: Option<String> = None;
-    let rows = store
-        .list_for_actor(&holder)
+    let rows = contacts
+        .contacts_for_actor(&holder)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     for mut row in rows {
@@ -654,8 +654,8 @@ pub(crate) async fn contact_tombstone(
         row.status = "tombstoned".to_owned();
         row.tombstone_event_ref = Some(tombstone_event_ref.to_string());
         row.updated_at = now;
-        store
-            .put(&row)
+        contacts
+            .save_contact(row)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
         tombstoned_any = true;
@@ -680,9 +680,8 @@ pub(crate) async fn contact_tombstone(
         && let Some(policy) = blocked_invite_policy_update(state, &holder, &peer)
     {
         state
-                .persistence
-                .invite_receive_policies()
-                .put(&policy)
+                .contact_application()
+                .save_invite_policy(policy.clone())
                 .await
                 .map_err(|error| {
                     tracing::error!(%error, holder = %holder, "failed to persist invite_receive_policy block");
@@ -845,9 +844,8 @@ pub(crate) async fn set_invite_receive_policy(
     // Write through to durable storage so the override survives restarts
     // (hydrated back into the in-memory map by `AppState::hydrate`).
     state
-        .persistence
-        .invite_receive_policies()
-        .put(&policy)
+        .contact_application()
+        .save_invite_policy(policy.clone())
         .await
         .map_err(|error| {
             tracing::error!(%error, actor = %session.actor, "failed to persist invite_receive_policy");
@@ -874,9 +872,8 @@ pub(crate) async fn list_contacts(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let records = state
-        .persistence
-        .contacts()
-        .list_for_actor(&session.actor)
+        .contact_application()
+        .contacts_for_actor(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let records =
@@ -1103,9 +1100,8 @@ async fn contact_list_rows(
             continue;
         }
         let Some(record) = state
-            .persistence
-            .agents()
-            .get(row.peer.as_str())
+            .agent_pairing_application()
+            .agent(row.peer.as_str())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
         else {
@@ -1244,10 +1240,10 @@ pub(crate) async fn accepted_contact_for_pair(
     peer: &str,
     scope: &str,
 ) -> Result<Option<ContactRecord>, AppError> {
-    let store = state.persistence.contacts();
     for (requester, target) in [(actor, peer), (peer, actor)] {
-        if let Some(contact) = store
-            .get_scoped(requester, target, scope)
+        if let Some(contact) = state
+            .contact_application()
+            .contact(requester, target, scope)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
             && contact.status == "accepted"

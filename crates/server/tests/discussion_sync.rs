@@ -22,7 +22,7 @@ fn test_config() -> AppConfig {
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         seed_demo_data: true,
-        ..AppConfig::test_default()
+        ..soland_test_support::app_config()
     }
 }
 
@@ -75,10 +75,10 @@ async fn seed_realm(
     entry.description = Some("history visibility fixture".to_owned());
     entry.public = true;
     entry.members.insert(owner_did);
-    state.realms.lock().upsert(entry);
+    state.test_realms().lock().upsert(entry);
 
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(
             &realm_id,
@@ -113,9 +113,9 @@ async fn seed_realm(
 }
 
 async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
-    let service_id = state.service_id.clone();
+    let service_id = state.service_id().clone();
     let mut meta = state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .get(realm_id)
         .await
@@ -128,7 +128,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
     );
     meta.updated_at = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(realm_id, &meta)
         .await
@@ -138,7 +138,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
 /// Have the owner admit a new member by submitting a
 /// `ak.member.state{membership:"join", actor_id: new_member}` event. The
 /// projection layer records `member.joined_at` (used by sync's
-/// history_visibility gate) and updates `state.realms.members` via
+/// history_visibility gate) and updates `state.test_realms().members` via
 /// `project_member_state`. The owner is already a member (seeded by
 /// `seed_realm`), so the event-log preflight `realm_has_member` check
 /// admits the event.
@@ -188,7 +188,7 @@ async fn seed_pending_invite(
     let now = chrono::Utc::now();
     let invite_id = new_prefixed_uuid7("ak:invite:");
     state
-        .persistence
+        .test_persistence()
         .realm_invites()
         .put(RealmInviteRecord {
             invite_id: invite_id.clone(),
@@ -196,7 +196,7 @@ async fn seed_pending_invite(
             inviter: inviter.to_owned(),
             invitee: Some(invitee.to_owned()),
             invite_delivery_target: Some(json!({
-                "recipient_service_id": state.service_id.clone(),
+                "recipient_service_id": state.service_id().clone(),
                 "recipient_service_type": "principal_server"
             })),
             introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
@@ -290,7 +290,7 @@ fn install_projected_circle_scope(
         .iter()
         .map(|member| (*member).to_owned())
         .collect::<BTreeSet<_>>();
-    state.projection.lock().circles.insert(
+    state.test_projection().lock().circles.insert(
         circle_id.to_owned(),
         CircleProjection {
             circle_id: circle_id.to_owned(),
@@ -315,7 +315,7 @@ fn install_projected_circle_scope(
             members,
         },
     );
-    let mut projection = state.projection.lock();
+    let mut projection = state.test_projection().lock();
     for member in projection
         .circles
         .get(circle_id)
@@ -350,7 +350,7 @@ fn install_projected_strand_scope(
     created_by: &str,
 ) {
     let now = chrono::Utc::now();
-    state.projection.lock().strands.insert(
+    state.test_projection().lock().strands.insert(
         strand_id.to_owned(),
         StrandProjection {
             strand_id: strand_id.to_owned(),
@@ -683,7 +683,7 @@ async fn invite_accept_member_receives_joined_history_messages_after_accept() {
     .await;
     assert!(
         state
-            .projection
+            .test_projection()
             .lock()
             .member(&realm_id, bob_did)
             .is_some_and(|member| member.state == "join"),
@@ -980,7 +980,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         bob_did
     );
 
-    let projection = state.projection.lock();
+    let projection = state.test_projection().lock();
     let reactions = projection.reactions_for_event(&root_event_id);
     assert!(
         reactions.iter().any(|reaction| {
@@ -1133,7 +1133,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         .find(|event| event["event_id"] == poll_event_id)
         .unwrap_or_else(|| panic!("poll missing from sync projection: {timeline:?}"));
     assert_eq!(poll["payload"]["content"]["kind"], "ak.content.poll");
-    let projection = state.projection.lock();
+    let projection = state.test_projection().lock();
     let poll_state = projection.poll(&poll_ref).expect("poll projection");
     assert!(
         poll_state

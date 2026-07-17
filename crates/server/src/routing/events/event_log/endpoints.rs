@@ -36,8 +36,7 @@ async fn submit_event_seal(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(&session, "ak.self.events.command.submit_seal")?;
     let seal = body.into_inner();
-    let expected_realm =
-        crate::routing::identity::recovery::principal_control_realm_for_did(&session.actor);
+    let expected_realm = soland_domain::identity::principal_control_realm_for_did(&session.actor);
     let managed_agent = if seal.realm_id.as_str() == expected_realm {
         None
     } else {
@@ -233,11 +232,47 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 return;
             }
         }
-        let (status, body) = submit_event_dispatch(state, &session, submit).await;
+        let (status, body, idempotency_committed) = match submit {
+            SolandEventsSubmitRequestBody::Single(envelope) => {
+                let envelope_for_chaos = envelope.clone();
+                let result = submit_event_value_with_idempotency(
+                    state,
+                    &session,
+                    envelope,
+                    EventCommitIdempotency {
+                        principal_id: session.actor.clone(),
+                        key: key.to_owned(),
+                        service_id: state.service_id.clone(),
+                        request_hash: request_hash.clone(),
+                    },
+                )
+                .await;
+                match result {
+                    Ok(response) => {
+                        maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response)
+                            .await;
+                        let committed = !response.duplicate;
+                        (
+                            StatusCode::OK,
+                            submit_outcome_value(&response.outcome),
+                            committed,
+                        )
+                    }
+                    Err(error) => {
+                        let (status, body) = submit_one_error_value(error);
+                        (status, body, false)
+                    }
+                }
+            }
+            other => {
+                let (status, body) = submit_event_dispatch(state, &session, other).await;
+                (status, body, false)
+            }
+        };
         // Only deterministic outcomes are cached: a 5xx is transient, so caching
         // it would wrongly pin a server-side failure under the key and block a
         // legitimate retry. The client may safely re-send the same key.
-        if !status.is_server_error() {
+        if !status.is_server_error() && !idempotency_committed {
             persist_idempotency_first_response(
                 state,
                 &session.actor,
@@ -275,8 +310,6 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
 /// §6 only requires "at least until the related Event is fully synced or
 /// expired"; 24h comfortably covers a client's retry horizon while keeping the
 /// table bounded under the periodic TTL sweep.
-const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
-
 /// Run the (already-authenticated, non-federation) submit and reduce it to the
 /// rendered `(status, body)` pair — the same value either rendered directly or
 /// cached under an `Idempotency-Key`. Mirrors the no-key match arms exactly so
@@ -661,7 +694,7 @@ async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<EventsFrontierAccountClientState> {
+) -> soland_http::result::JsonResult<EventsFrontierAccountClientState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor_id = query_param(req, "actor_id").or_else(|| query_param(req, "actor"));
@@ -679,8 +712,7 @@ async fn events_frontier(
     if let Some(realm_value) = realm_selector {
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-        let own_pcr =
-            crate::routing::identity::recovery::principal_control_realm_for_did(&session.actor);
+        let own_pcr = soland_domain::identity::principal_control_realm_for_did(&session.actor);
         let managed_agent_pcr =
             crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
                 state,
@@ -714,7 +746,7 @@ async fn events_frontier(
                 state_root: seal.state_root,
                 hlc: Some(seal.hlc),
             };
-            return crate::result::json_ok(EventsFrontierAccountClientState {
+            return soland_http::result::json_ok(EventsFrontierAccountClientState {
                 frontier: EventsFrontierView::RealmSealView(frontier),
                 receipts: Vec::new(),
             });
@@ -731,6 +763,21 @@ async fn events_frontier(
         let seal = match head {
             Some(seal) => seal,
             None => {
+                let stats = state
+                    .persistence
+                    .events()
+                    .realm_event_stats(realm_id.as_str())
+                    .await
+                    .map_err(|error| {
+                        AppError::internal(format!(
+                            "canonical Realm Event preflight unavailable: {error}"
+                        ))
+                    })?;
+                if stats.count == 0 {
+                    return Err(AppError::not_found(
+                        "realm has no accepted Seal on this deployment",
+                    ));
+                }
                 crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
                     state, &realm_id,
                 )
@@ -738,7 +785,7 @@ async fn events_frontier(
                 .accepted_seal
             }
         };
-        return crate::result::json_ok(EventsFrontierAccountClientState {
+        return soland_http::result::json_ok(EventsFrontierAccountClientState {
             frontier: EventsFrontierView::RealmSealView(RealmSealFrontierView {
                 realm_id,
                 seal_id: seal.id,
@@ -803,7 +850,7 @@ async fn events_frontier(
         // the same response so this surface does not disclose existence.
         None => (0, None),
     };
-    crate::result::json_ok(EventsFrontierAccountClientState {
+    soland_http::result::json_ok(EventsFrontierAccountClientState {
         frontier: EventsFrontierView::Actor(ActorFrontierView {
             actor_id,
             actor_seq,

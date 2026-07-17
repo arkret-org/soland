@@ -11,13 +11,13 @@ use sha2::{Digest, Sha256};
 use crate::error::AppError;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CanonicalBodyDigests {
-    pub(crate) content_digest: String,
-    pub(crate) request_digest: String,
+pub struct CanonicalBodyDigests {
+    pub content_digest: String,
+    pub request_digest: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SignatureWindowViolation {
+pub enum SignatureWindowViolation {
     MissingCreated,
     MissingExpires,
     CreatedOutsideSkew,
@@ -26,29 +26,29 @@ pub(crate) enum SignatureWindowViolation {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct SignatureBaseComponent<'a> {
+pub struct SignatureBaseComponent<'a> {
     name: &'static str,
     value: Option<&'a str>,
 }
 
 impl<'a> SignatureBaseComponent<'a> {
-    pub(crate) fn required(name: &'static str, value: &'a str) -> Self {
+    pub fn required(name: &'static str, value: &'a str) -> Self {
         Self {
             name,
             value: Some(value),
         }
     }
 
-    pub(crate) fn optional(name: &'static str, value: Option<&'a str>) -> Self {
+    pub fn optional(name: &'static str, value: Option<&'a str>) -> Self {
         Self { name, value }
     }
 }
 
-pub(crate) fn rfc9530_content_digest(bytes: &[u8]) -> String {
+pub fn rfc9530_content_digest(bytes: &[u8]) -> String {
     format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(bytes)))
 }
 
-pub(crate) fn canonical_body_digests(
+pub fn canonical_body_digests(
     value: &Value,
     canonical_error: impl FnOnce(String) -> AppError,
 ) -> Result<CanonicalBodyDigests, AppError> {
@@ -60,7 +60,7 @@ pub(crate) fn canonical_body_digests(
     })
 }
 
-pub(crate) fn required_header(
+pub fn required_header(
     req: &Request,
     name: &str,
     missing_error: impl FnOnce(&str) -> AppError,
@@ -74,7 +74,7 @@ pub(crate) fn required_header(
         .ok_or_else(|| missing_error(name))
 }
 
-pub(crate) fn signature_params(
+pub fn signature_params(
     req: &Request,
     header_name: &str,
     missing_error: impl FnOnce() -> AppError,
@@ -91,7 +91,7 @@ pub(crate) fn signature_params(
         .ok_or_else(invalid_error)
 }
 
-pub(crate) fn signature_param_value(signature_params: &str, key: &str) -> Option<String> {
+pub fn signature_param_value(signature_params: &str, key: &str) -> Option<String> {
     signature_params.split(';').skip(1).find_map(|part| {
         let (name, value) = part.split_once('=')?;
         if name.trim() != key {
@@ -101,7 +101,7 @@ pub(crate) fn signature_param_value(signature_params: &str, key: &str) -> Option
     })
 }
 
-pub(crate) fn validate_signature_freshness(
+pub fn validate_signature_freshness(
     signature_params: &str,
 ) -> Result<(), SignatureWindowViolation> {
     let now = Utc::now().timestamp();
@@ -123,10 +123,7 @@ pub(crate) fn validate_signature_freshness(
     Ok(())
 }
 
-pub(crate) fn signature_base(
-    components: &[SignatureBaseComponent<'_>],
-    signature_params: &str,
-) -> String {
+pub fn signature_base(components: &[SignatureBaseComponent<'_>], signature_params: &str) -> String {
     let mut base = String::new();
     for component in components {
         if let Some(value) = component.value {
@@ -137,7 +134,7 @@ pub(crate) fn signature_base(
     base
 }
 
-pub(crate) fn verify_signature_header(
+pub fn verify_signature_header(
     req: &Request,
     header_name: &str,
     signature_base: &str,
@@ -154,7 +151,7 @@ pub(crate) fn verify_signature_header(
         .map_err(|_| verify_error())
 }
 
-pub(crate) fn decode_signature_header(value: &str) -> Result<Signature, &'static str> {
+pub fn decode_signature_header(value: &str) -> Result<Signature, &'static str> {
     let signature_b64 = value
         .strip_prefix("sig1=:")
         .and_then(|value| value.strip_suffix(':'))
@@ -165,10 +162,7 @@ pub(crate) fn decode_signature_header(value: &str) -> Result<Signature, &'static
     Signature::from_slice(&signature_bytes).map_err(|_| "Signature header is not Ed25519 length")
 }
 
-pub(crate) fn deterministic_development_signing_key(
-    domain: &[u8],
-    key_material: &str,
-) -> SigningKey {
+pub fn deterministic_development_signing_key(domain: &[u8], key_material: &str) -> SigningKey {
     let mut hasher = Sha256::new();
     hasher.update(domain);
     hasher.update(key_material.as_bytes());

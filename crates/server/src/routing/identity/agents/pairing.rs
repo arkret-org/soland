@@ -129,9 +129,10 @@ pub(super) async fn submit_agent_runtime_key_request(
 
     let controller_id = agent_record.controller_id.clone();
     let account = state
-        .persistence
-        .accounts()
-        .get(&controller_id)
+        .identity_application()
+        .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+            actor_id: controller_id.clone(),
+        })
         .await
         .map_err(|error| AppError::internal(format!("controller account lookup failed: {error}")))?
         .ok_or_else(|| AppError::internal("controller account is missing"))?;
@@ -148,13 +149,13 @@ pub(super) async fn submit_agent_runtime_key_request(
         .unwrap_or_else(chrono::Utc::now);
     let expires_at =
         required_pairing_expires_at(&agent_record)?.to_rfc3339_opts(SecondsFormat::Millis, true);
-    let write = soland_storage::AgentRuntimeApprovalWrite {
+    let write = soland_application::identity::StoreAgentRuntimeApprovalCommand {
         agent_id: agent_id.to_owned(),
         pairing_request_id: body.pairing_request_id.to_string(),
         approval_request_id: proposed_approval_request_id.clone(),
         approval_notification_id: proposed_notification_id.clone(),
         approval_requested_at: proposed_requested_at,
-        controller_account_id: account.id.clone(),
+        controller_account_id: account.account_id.clone(),
         recipient_service_id: state.service_id.clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: public_key_digest.as_str().to_owned(),
@@ -162,9 +163,8 @@ pub(super) async fn submit_agent_runtime_key_request(
         runtime_key_request: runtime_key_request_for_controller(&body),
     };
     let stored = state
-        .persistence
-        .agents()
-        .put_runtime_approval_if_compatible(&write)
+        .agent_pairing_application()
+        .store_runtime_approval(&write)
         .await
         .map_err(|err| AppError::internal(format!("runtime approval request save failed: {err}")))?
         .ok_or_else(|| {
@@ -202,23 +202,26 @@ pub(super) async fn submit_agent_runtime_key_request(
         "update"
     };
     state
-        .persistence
-        .notifications()
-        .put_account_delta(json!({
-            "notification_id": notification_id.clone(),
-            "recipient_id": controller_id,
-            "controller_account_id": account.id.clone(),
-            "recipient_service_id": state.service_id.clone(),
-            "source_account_artifact_id": approval_request_id.clone(),
-            "projection_action": projection_action,
-            "projection_data": {
-                "kind": "agent_runtime_approval",
-                "approval_request_id": approval_request_id.clone(),
-                "agent_id": agent_id,
-                "requested_at": requested_at,
-                "expires_at": expires_at,
+        .delivery_application()
+        .store_account_delta(
+            soland_application::delivery::StoreAccountNotificationDeltaCommand {
+                record: json!({
+                    "notification_id": notification_id.clone(),
+                    "recipient_id": controller_id,
+                    "controller_account_id": account.account_id.clone(),
+                    "recipient_service_id": state.service_id.clone(),
+                    "source_account_artifact_id": approval_request_id.clone(),
+                    "projection_action": projection_action,
+                    "projection_data": {
+                        "kind": "agent_runtime_approval",
+                        "approval_request_id": approval_request_id.clone(),
+                        "agent_id": agent_id,
+                        "requested_at": requested_at,
+                        "expires_at": expires_at,
+                    },
+                }),
             },
-        }))
+        )
         .await
         .map_err(|error| {
             AppError::internal(format!(
@@ -228,7 +231,7 @@ pub(super) async fn submit_agent_runtime_key_request(
     let _ = state
         .event_broadcast
         .send(crate::state::EventNotification::account(
-            account.id,
+            account.account_id,
             state.service_id.clone(),
         ));
     json_ok(AgentRuntimeApprovalOutcome {
@@ -282,9 +285,8 @@ async fn lookup_pairing_record(
         return Err(agent_pairing_not_found());
     }
     let record = state
-        .persistence
-        .agents()
-        .get_by_pairing_request_id(pairing_request_id)
+        .agent_pairing_application()
+        .pairing_record(pairing_request_id)
         .await
         .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
         .ok_or_else(agent_pairing_not_found)?;
@@ -337,9 +339,8 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         &state.service_id,
     )?;
     let events = state
-        .persistence
-        .events()
-        .snapshot_all()
+        .event_query_application()
+        .accepted_events_for_actor(&agent_id)
         .await
         .map_err(|error| {
             AppError::internal(format!("authorization reconciliation failed: {error}"))
@@ -391,7 +392,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         paired_request_digest_from_record_event(&agent_record, &accepted.envelope)?;
 
     let terminal_notification = account_notification_context(&agent_record);
-    let activation = soland_storage::AgentRuntimeActivation {
+    let activation = soland_application::identity::ActivateAgentRuntimeCommand {
         agent_id: agent_id.clone(),
         approval_request_id: approval_request_id.clone(),
         runtime_key_binding_digest: agent_record
@@ -406,9 +407,8 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         authorized_at: accepted.received_at,
     };
     let activated = state
-        .persistence
-        .agents()
-        .activate_runtime_if_current(&activation)
+        .agent_pairing_application()
+        .activate_runtime(&activation)
         .await
         .map_err(|error| {
             AppError::internal(format!(
@@ -417,9 +417,8 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         })?;
     if !activated {
         return state
-            .persistence
-            .agents()
-            .get(&agent_id)
+            .agent_pairing_application()
+            .agent(&agent_id)
             .await
             .map_err(|error| {
                 AppError::internal(format!(
@@ -439,9 +438,8 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         "reconciled accepted Agent authorization into activation projection"
     );
     state
-        .persistence
-        .agents()
-        .get(&agent_id)
+        .agent_pairing_application()
+        .agent(&agent_id)
         .await
         .map_err(|error| {
             AppError::internal(format!(
@@ -630,7 +628,7 @@ pub(super) async fn agent_key_pair(
     // accepted (a failed submit above propagates via `?` and MUST NOT leave
     // the agent flipped to active).
     let terminal_notification = account_notification_context(&agent_record);
-    let activation = soland_storage::AgentRuntimeActivation {
+    let activation = soland_application::identity::ActivateAgentRuntimeCommand {
         agent_id: agent_id.to_owned(),
         approval_request_id: agent_record.approval_request_id.clone().ok_or_else(|| {
             pairing_failed_precondition("agent pairing approval metadata is incomplete")
@@ -649,9 +647,8 @@ pub(super) async fn agent_key_pair(
     // open status poll and consumes this approval for the current pairing
     // request atomically (including runtime replacement re-pairing, §3.6.1).
     let activated = state
-        .persistence
-        .agents()
-        .activate_runtime_if_current(&activation)
+        .agent_pairing_application()
+        .activate_runtime(&activation)
         .await
         .map_err(|err| AppError::internal(format!("agent state activation failed: {err}")))?;
     if !activated {
@@ -865,20 +862,23 @@ pub(super) async fn persist_terminal_account_notification(
     reason: &str,
 ) -> Result<(), AppError> {
     state
-        .persistence
-        .notifications()
-        .put_account_delta(json!({
-            "notification_id": context.notification_id,
-            "recipient_id": context.recipient_id,
-            "controller_account_id": context.controller_account_id.clone(),
-            "recipient_service_id": context.recipient_service_id.clone(),
-            "source_account_artifact_id": context.approval_request_id,
-            "projection_action": "remove",
-            "projection_data": {
-                "kind": "agent_runtime_approval",
-                "reason": reason,
+        .delivery_application()
+        .store_account_delta(
+            soland_application::delivery::StoreAccountNotificationDeltaCommand {
+                record: json!({
+                    "notification_id": context.notification_id,
+                    "recipient_id": context.recipient_id,
+                    "controller_account_id": context.controller_account_id.clone(),
+                    "recipient_service_id": context.recipient_service_id.clone(),
+                    "source_account_artifact_id": context.approval_request_id,
+                    "projection_action": "remove",
+                    "projection_data": {
+                        "kind": "agent_runtime_approval",
+                        "reason": reason,
+                    },
+                }),
             },
-        }))
+        )
         .await
         .map_err(|error| {
             AppError::internal(format!(
@@ -908,9 +908,8 @@ async fn finalize_terminal_account_notification(
     let approval_request_id = context.approval_request_id.clone();
     persist_terminal_account_notification(state, context, reason).await?;
     state
-        .persistence
-        .agents()
-        .clear_runtime_approval_notification_if_current(agent_id, &approval_request_id)
+        .agent_pairing_application()
+        .clear_approval_notification(agent_id, &approval_request_id)
         .await
         .map_err(|error| {
             AppError::internal(format!(

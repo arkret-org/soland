@@ -38,7 +38,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::Signer as _;
-use soland_storage::{FederationOutboxDeadLetterRecord, FederationOutboxRecord, PersistenceResult};
+use soland_storage::{FederationOutboxRecord, PersistenceResult};
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -74,6 +74,46 @@ fn now_unix_secs() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+fn persistence_delivery(
+    record: soland_application::federation::PendingFederationDelivery,
+) -> FederationOutboxRecord {
+    FederationOutboxRecord {
+        id: record.delivery.id,
+        peer_did: record.delivery.peer_did,
+        peer_url: record.delivery.peer_url,
+        endpoint: record.delivery.endpoint,
+        idempotency_key: record.delivery.idempotency_key,
+        payload_json: record.delivery.payload_json,
+        attempts: record.attempts,
+        next_attempt_at: record.next_attempt_at,
+        last_status: record.last_status,
+        last_response_excerpt: record.last_response_excerpt,
+        created_at: record.delivery.created_at,
+        delivered_at: record.delivered_at,
+    }
+}
+
+fn application_delivery(
+    record: &FederationOutboxRecord,
+) -> soland_application::federation::PendingFederationDelivery {
+    soland_application::federation::PendingFederationDelivery {
+        delivery: soland_application::federation::FederationDeliveryRecord {
+            id: record.id.clone(),
+            peer_did: record.peer_did.clone(),
+            peer_url: record.peer_url.clone(),
+            endpoint: record.endpoint.clone(),
+            idempotency_key: record.idempotency_key.clone(),
+            payload_json: record.payload_json.clone(),
+            created_at: record.created_at,
+        },
+        attempts: record.attempts,
+        next_attempt_at: record.next_attempt_at,
+        last_status: record.last_status,
+        last_response_excerpt: record.last_response_excerpt.clone(),
+        delivered_at: record.delivered_at,
+    }
+}
+
 /// G3.S0 — synchronous outbox enqueue.
 ///
 /// Inserts one row per `(peer, resource)` tuple. Idempotent on
@@ -92,40 +132,40 @@ pub async fn enqueue_outbound(
     idempotency_key: &str,
     payload_json: &str,
 ) -> PersistenceResult<FederationOutboxRecord> {
-    let store = state.persistence.federation_outbox();
     let now = now_unix_secs();
-    let candidate = FederationOutboxRecord {
-        id: Uuid::new_v4().to_string(),
-        peer_did: peer_did.to_owned(),
-        peer_url: peer_url.trim_end_matches('/').to_owned(),
-        endpoint: endpoint.to_owned(),
-        idempotency_key: idempotency_key.to_owned(),
-        payload_json: payload_json.to_owned(),
+    let result = state
+        .federation_application()
+        .enqueue_delivery(
+            soland_application::federation::EnqueueFederationDeliveryCommand {
+                delivery: soland_application::federation::FederationDeliveryRecord {
+                    id: Uuid::new_v4().to_string(),
+                    peer_did: peer_did.to_owned(),
+                    peer_url: peer_url.trim_end_matches('/').to_owned(),
+                    endpoint: endpoint.to_owned(),
+                    idempotency_key: idempotency_key.to_owned(),
+                    payload_json: payload_json.to_owned(),
+                    created_at: now,
+                },
+            },
+        )
+        .await
+        .map_err(|error| match error {
+            soland_application::ApplicationError::Storage(error) => error,
+        })?;
+    Ok(FederationOutboxRecord {
+        id: result.id,
+        peer_did: result.peer_did,
+        peer_url: result.peer_url,
+        endpoint: result.endpoint,
+        idempotency_key: result.idempotency_key,
+        payload_json: result.payload_json,
         attempts: 0,
-        next_attempt_at: now,
+        next_attempt_at: result.created_at,
         last_status: None,
         last_response_excerpt: None,
-        created_at: now,
+        created_at: result.created_at,
         delivered_at: None,
-    };
-    let inserted = store.enqueue(&candidate).await?;
-    if inserted {
-        Ok(candidate)
-    } else {
-        // The UNIQUE INDEX on (peer_did, idempotency_key) collided —
-        // return the existing row so callers can still observe the
-        // outbox state without a follow-up lookup.
-        let existing = store
-            .snapshot_all()
-            .await?
-            .into_iter()
-            .find(|row| {
-                row.peer_did == candidate.peer_did
-                    && row.idempotency_key == candidate.idempotency_key
-            })
-            .unwrap_or(candidate);
-        Ok(existing)
-    }
+    })
 }
 
 fn rfc9421_sign(
@@ -292,13 +332,12 @@ impl FederationDispatcher {
         let now = now_unix_secs();
         let rows = self
             .state
-            .persistence
-            .federation_outbox()
-            .pending_due(now, POLL_BATCH_LIMIT)
+            .federation_application()
+            .pending_deliveries(now, POLL_BATCH_LIMIT)
             .await
             .map_err(|e| e.to_string())?;
         for row in rows {
-            self.deliver_one(row).await;
+            self.deliver_one(persistence_delivery(row)).await;
         }
         Ok(())
     }
@@ -336,9 +375,8 @@ impl FederationDispatcher {
                     );
                     if let Err(error) = self
                         .state
-                        .persistence
-                        .federation_outbox()
-                        .update(&row)
+                        .federation_application()
+                        .record_delivery_attempt(&application_delivery(&row))
                         .await
                     {
                         tracing::warn!(
@@ -422,9 +460,8 @@ impl FederationDispatcher {
 
         if let Err(error) = self
             .state
-            .persistence
-            .federation_outbox()
-            .update(&row)
+            .federation_application()
+            .record_delivery_attempt(&application_delivery(&row))
             .await
         {
             tracing::warn!(
@@ -486,7 +523,7 @@ impl FederationDispatcher {
         reason: &str,
     ) {
         let failed_at = row.delivered_at.unwrap_or_else(now_unix_secs);
-        let record = FederationOutboxDeadLetterRecord {
+        let record = soland_application::federation::FederationDeadLetter {
             id: Uuid::new_v4().to_string(),
             outbox_id: row.id.clone(),
             peer_did: row.peer_did.clone(),
@@ -505,9 +542,8 @@ impl FederationDispatcher {
         crate::metrics::record_federation_outbox_dead_letter();
         if let Err(error) = self
             .state
-            .persistence
-            .federation_outbox()
-            .insert_dead_letter(&record)
+            .federation_application()
+            .record_dead_letter(&record)
             .await
         {
             tracing::warn!(

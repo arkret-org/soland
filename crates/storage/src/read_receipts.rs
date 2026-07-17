@@ -1,4 +1,4 @@
-use super::*;
+use super::{PersistenceResult, ReadReceiptRelayRecord, async_trait};
 /// Short-TTL relay for `ak.receipt.read` ephemeral payloads.
 ///
 /// Records are retained only until `expires_at` and are delivered through the

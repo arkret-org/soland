@@ -8,9 +8,11 @@ use arkret_sdk::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
-use soland_storage::{AgentPrincipalRecord, WebvhDocumentRecord, WebvhLogRecord};
+use soland_application::identity::{
+    AgentPairingState as AgentPrincipalRecord, DidDocumentState, DidLogEvent,
+};
+use soland_http::error::{AppError, ErrorCode};
 
-use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 
 const PCR_SERVICE_TYPE: &str = "ArkretPrincipalControlRealm";
@@ -81,9 +83,8 @@ pub(crate) async fn persist_managed_agent_did_binding(
         ))
     })?;
     state
-        .persistence
-        .webvh()
-        .put_document(WebvhDocumentRecord {
+        .did_application()
+        .store_document(DidDocumentState {
             did: agent_id.to_owned(),
             did_document: document,
             key_log_head: Some(digest.clone()),
@@ -104,9 +105,8 @@ pub(crate) async fn persist_managed_agent_did_binding(
             AppError::internal(format!("managed Agent DID persist failed: {error}"))
         })?;
     state
-        .persistence
-        .webvh()
-        .append_log_event(WebvhLogRecord {
+        .did_application()
+        .append_log_event(DidLogEvent {
             event_digest: digest,
             did: agent_id.to_owned(),
             seq: 1,
@@ -241,9 +241,8 @@ pub(crate) async fn project_agent_pcr_recovery(
     let pcr_id = agent_record.principal_control_realm_id.as_str();
     let authorization_ref = agent_record.controller_authorization_ref.as_str();
     let backups = state
-        .persistence
-        .key_backups()
-        .list_for_actor(controller_id)
+        .key_backup_application()
+        .backups_for_actor(controller_id)
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR backup lookup failed: {error}")))?;
     let mut candidates = Vec::new();
@@ -327,9 +326,8 @@ pub(crate) async fn project_agent_pcr_recovery(
         return Ok(stale());
     }
     let active_policy = state
-        .persistence
-        .recovery_policies()
-        .get_active_for_principal(controller_id)
+        .recovery_policy_application()
+        .active_policy(controller_id)
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?;
     let policy_matches = active_policy.as_ref().is_some_and(|policy| {
@@ -358,9 +356,8 @@ pub(crate) async fn resolve_agent_pcr_for_principal(
     principal_id: &str,
 ) -> Result<Option<String>, AppError> {
     Ok(state
-        .persistence
-        .agents()
-        .get(principal_id)
+        .agent_pairing_application()
+        .agent(principal_id)
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR lookup failed: {error}")))?
         .map(|record| record.principal_control_realm_id))
@@ -384,9 +381,8 @@ pub(crate) async fn managed_agent_record_for_controller_pcr(
     pcr_id: &str,
 ) -> Result<Option<AgentPrincipalRecord>, AppError> {
     let agents = state
-        .persistence
-        .agents()
-        .list_for_controller(controller_id)
+        .agent_pairing_application()
+        .agents_for_controller(controller_id)
         .await
         .map_err(|error| AppError::internal(format!("managed Agent PCR lookup failed: {error}")))?;
     Ok(agents.into_iter().find(|record| {
@@ -401,9 +397,8 @@ pub(crate) async fn managed_agent_event_frontier(
     let realm_id = RealmId::new(pcr_id.to_owned())
         .map_err(|error| AppError::internal(format!("stored Agent PCR id invalid: {error}")))?;
     let events = state
-        .persistence
-        .events()
-        .snapshot_all()
+        .event_query_application()
+        .accepted_events()
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR event lookup failed: {error}")))?;
     let has_events = events.iter().any(|event| {
@@ -635,9 +630,8 @@ async fn current_managed_frontier(
         return Ok(None);
     };
     let commits = state
-        .persistence
-        .mls_commits()
-        .snapshot_all()
+        .mls_commit_query_application()
+        .commits()
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR MLS lookup failed: {error}")))?;
     let mut matching = commits.into_iter().filter(|commit| {
@@ -673,9 +667,8 @@ async fn managed_agent_record(
     agent_id: &str,
 ) -> Result<AgentPrincipalRecord, AppError> {
     state
-        .persistence
-        .agents()
-        .get(agent_id)
+        .agent_pairing_application()
+        .agent(agent_id)
         .await
         .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
         .ok_or_else(|| schema_error("managed_principal_id does not identify a local managed Agent"))
@@ -722,9 +715,8 @@ async fn agent_did_document_at(
     accepted_at: DateTime<Utc>,
 ) -> Result<Value, AppError> {
     let mut history = state
-        .persistence
-        .webvh()
-        .list_log_events(agent_id)
+        .did_application()
+        .log_events(agent_id)
         .await
         .map_err(|error| AppError::internal(format!("Agent DID history lookup failed: {error}")))?;
     history.sort_by_key(|entry| (entry.created_at, entry.seq));
@@ -869,9 +861,8 @@ async fn validate_current_recovery_recipient(
     evaluated_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
     let policy = state
-        .persistence
-        .recovery_policies()
-        .get_active_for_principal(backup.actor_id.as_str())
+        .recovery_policy_application()
+        .active_policy(backup.actor_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
         .ok_or_else(|| {

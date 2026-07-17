@@ -15,8 +15,7 @@
 //!
 //! The implementation is split across sibling submodules under `recovery/`;
 //! this module root keeps the routers, the shared `use` surface (re-exported to
-//! submodules via `use super::*;`), and the externally-referenced
-//! `principal_control_realm_for_did`.
+//! submodules via `use super::*;`).
 
 use std::collections::BTreeSet;
 
@@ -38,15 +37,14 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
+use soland_domain::identity::principal_control_realm_for_did;
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 use soland_storage::{
-    DeviceInventoryRecord, PersistenceError, RecoveryPolicyRecord, RecoveryReceiptRecord,
-    RecoverySessionRecord, SessionRecord,
+    PersistenceError, RecoveryPolicyRecord, RecoveryReceiptRecord, SessionRecord,
 };
 
 use super::{AuthArgs, append_audit_log};
-use crate::error::{AppError, ErrorCode};
-use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
 mod errors;
@@ -97,30 +95,4 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("recovery-policies").get(recovery_policies_get))
         .push(Router::with_path("recovery-receipt").post(recovery_receipt_put))
         .push(Router::with_path("recovery-receipts").get(recovery_receipts_get))
-}
-
-/// Deterministic principal control realm id for a principal DID
-/// (`ak:realm:<uuidv7>`). Device-control events (`ak.device.authorize`,
-/// `ak.device.list_update`, future `ak.cross_signing.publish`) land here. The
-/// realm is auto-materialized by the projector on the first accepted op.
-pub fn principal_control_realm_for_did(principal_did: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"ak:realm:principal-control:v1:");
-    hasher.update(principal_did.as_bytes());
-    let digest = hasher.finalize();
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    // Force UUIDv7 version (0x7) + RFC-9562 variant (0b10).
-    bytes[6] = (bytes[6] & 0x0F) | 0x70;
-    bytes[8] = (bytes[8] & 0x3F) | 0x80;
-    let group =
-        |slice: &[u8]| -> String { slice.iter().map(|b| format!("{b:02x}")).collect::<String>() };
-    format!(
-        "ak:realm:{}-{}-{}-{}-{}",
-        group(&bytes[0..4]),
-        group(&bytes[4..6]),
-        group(&bytes[6..8]),
-        group(&bytes[8..10]),
-        group(&bytes[10..16]),
-    )
 }

@@ -110,7 +110,7 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
             && device["display_name"] == "Paired Phone"
     }));
     let stored = state
-        .persistence
+        .test_persistence()
         .devices()
         .get("did:web:alice.example", sibling)
         .await
@@ -126,7 +126,7 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     );
     assert!(
         state
-            .persistence
+            .test_persistence()
             .audit()
             .snapshot_all()
             .await
@@ -184,7 +184,7 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
     assert_eq!(body["error"]["code"], "device_already_authorized", "{body}");
 
     let mut revoked_target = state
-        .persistence
+        .test_persistence()
         .devices()
         .get(actor, first_new_device)
         .await
@@ -192,7 +192,7 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
         .expect("paired device record");
     revoked_target.revoked_at = Some(chrono::Utc::now());
     state
-        .persistence
+        .test_persistence()
         .devices()
         .put(&revoked_target)
         .await
@@ -203,21 +203,31 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
     assert_eq!(body["error"]["code"], "device_revoked", "{body}");
 
     let mut revoked = state
-        .persistence
+        .test_persistence()
         .devices()
         .get(actor, trusted_device)
         .await
         .unwrap()
         .expect("trusted device record");
     revoked.revoked_at = Some(chrono::Utc::now());
-    state.persistence.devices().put(&revoked).await.unwrap();
+    state
+        .test_persistence()
+        .devices()
+        .put(&revoked)
+        .await
+        .unwrap();
 
     let (status, body) =
         post_account_device_pair(state.clone(), &trusted_token, third_new_device, "c2ln").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     assert_eq!(body["error"]["code"], "unauthenticated", "{body}");
 
-    let audit = state.persistence.audit().snapshot_all().await.unwrap();
+    let audit = state
+        .test_persistence()
+        .audit()
+        .snapshot_all()
+        .await
+        .unwrap();
     assert_eq!(
         audit
             .iter()
@@ -1093,7 +1103,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
 /// Grant `subject` a realm-scoped call capability (`action`) in the shared
 /// authz engine, mirroring what the capability-grant projection would fold in.
 fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action: &str) {
-    state.authz.create_grant(
+    state.test_authz().create_grant(
         realm_id.to_owned(),
         "did:web:alice.example".to_owned(),
         subject.to_owned(),
@@ -1139,7 +1149,7 @@ fn seed_call_state(
     }
     let cell_id = CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
     state
-        .projection
+        .test_projection()
         .lock()
         .cells
         .insert(cell_id, CellState::Value(value));
@@ -1150,7 +1160,7 @@ fn install_media_service_epoch(state: &AppState, media_service: Value) {
         "ak:cell:ak.component.realm.media_service.v1:{DEMO_REALM_ID}"
     ))
     .unwrap();
-    state.projection.lock().cells.insert(
+    state.test_projection().lock().cells.insert(
         cell_id,
         CellState::Value(serde_json::json!({ "media_service": media_service })),
     );
@@ -1368,7 +1378,7 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
     // Force-expire the relayed record by rewriting its expires_at into the past.
     {
         let record = state
-            .persistence
+            .test_persistence()
             .call_signal_relay()
             .list_for_realm(DEMO_REALM_ID)
             .await
@@ -1379,7 +1389,7 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
     // pruning after the relay TTL passes. We drive expiry deterministically by
     // appending an expired record directly and pruning.
     state
-        .persistence
+        .test_persistence()
         .call_signal_relay()
         .append(soland_storage::CallSignalRelayRecord {
             realm_id: DEMO_REALM_ID.to_owned(),
@@ -1428,7 +1438,7 @@ async fn ephemeral_call_signal_without_send_capability_is_denied() {
 
     // Nothing entered the relay.
     let relayed = state
-        .persistence
+        .test_persistence()
         .call_signal_relay()
         .list_for_realm(DEMO_REALM_ID)
         .await

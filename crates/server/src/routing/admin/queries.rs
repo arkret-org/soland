@@ -36,10 +36,10 @@ use arkret_sdk::{AccountStatus, Did};
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_http::error::{AppError, ErrorCode};
 use util::query_param;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal, util};
-use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -162,10 +162,13 @@ pub(super) async fn actor_count_maps(
     state: &AppState,
 ) -> (BTreeMap<String, u64>, BTreeMap<String, u64>) {
     let mut device_counts: BTreeMap<String, u64> = BTreeMap::new();
-    for device in state.persistence.devices().list().await.unwrap_or_default() {
-        if device.revoked_at.is_none() {
-            *device_counts.entry(device.actor.clone()).or_default() += 1;
-        }
+    for actor in state
+        .identity_application()
+        .list_active_device_actors(soland_application::identity::ListActiveDeviceActorsQuery)
+        .await
+        .unwrap_or_default()
+    {
+        *device_counts.entry(actor).or_default() += 1;
     }
     let mut realm_counts: BTreeMap<String, u64> = BTreeMap::new();
     let realm_snapshot: Vec<_> = {

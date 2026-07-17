@@ -3,5 +3,6 @@
 pub mod artifacts;
 pub mod capability;
 pub mod hlc;
+pub mod identity;
 pub mod kinds;
 pub mod reducer;

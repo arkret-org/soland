@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use arkret_sdk::{ReadReceipt, ReadScopeKind};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::Value;
+use soland_http::error::AppError;
 use soland_storage::{CanonicalEventRecord, ReadReceiptRelayRecord, SessionRecord};
 
-use crate::error::AppError;
 use crate::routing::events::event_log::{
     canonical_realm_id_for_record, effective_scope_for_envelope, event_visible_to_session,
 };

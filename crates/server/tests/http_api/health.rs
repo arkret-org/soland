@@ -164,9 +164,9 @@ async fn health_and_describe_work() {
             .any(|operation| operation == "ak.self.circle.command.restore")
     );
     for operation_id in [
-        "ak.self.authz.query.check",
-        "ak.self.authz.grants.query.effective",
-        "ak.self.authz.invites.query.list",
+        "ak.self.test_authz().query.check",
+        "ak.self.test_authz().grants.query.effective",
+        "ak.self.test_authz().invites.query.list",
         "ak.self.policy.query.check",
     ] {
         assert!(

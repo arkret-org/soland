@@ -7,6 +7,8 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 use soland_storage::FederationTransactionRecord;
 
 use super::actor_signature::{
@@ -31,8 +33,6 @@ use super::{
     federation_destination_matches, ingest_federation_operations, now, operation_is_visible,
     redaction_targets_from_operations, sync_token, verify_federation_origin,
 };
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -110,7 +110,7 @@ pub(crate) async fn federation_transaction(
     // cross_domain_replay_rejected.
     let trust_headers = FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
         AppError::new(
-            crate::error::ErrorCode::SchemaViolation,
+            soland_http::error::ErrorCode::SchemaViolation,
             violation.message(),
         )
         .with_status(StatusCode::BAD_REQUEST)
@@ -155,7 +155,7 @@ pub(crate) async fn federation_transaction(
         Ok(Some(record)) if record.status == super::FEDERATION_TXN_STATUS_PROCESSING => {
             if record.content_digest != content_digest {
                 return Err(AppError::new(
-                    crate::error::ErrorCode::DuplicateConflict,
+                    soland_http::error::ErrorCode::DuplicateConflict,
                     "federation transaction id was reused with different content",
                 ));
             }
@@ -164,7 +164,7 @@ pub(crate) async fn federation_transaction(
                 .num_seconds();
             if claim_age_secs < super::FEDERATION_TXN_PROCESSING_TAKEOVER_SECS {
                 return Err(AppError::new(
-                    crate::error::ErrorCode::TemporarilyUnavailable,
+                    soland_http::error::ErrorCode::TemporarilyUnavailable,
                     "federation transaction is being processed by a concurrent delivery; retry",
                 ));
             }
@@ -222,7 +222,7 @@ pub(crate) async fn federation_transaction(
         }
         Ok(Some(_)) => {
             return Err(AppError::new(
-                crate::error::ErrorCode::DuplicateConflict,
+                soland_http::error::ErrorCode::DuplicateConflict,
                 "federation transaction id was reused with different content",
             ));
         }
@@ -282,7 +282,7 @@ pub(crate) async fn federation_transaction(
             .map_err(|error| AppError::internal(error.to_string()))?;
         if !claimed {
             return Err(AppError::new(
-                crate::error::ErrorCode::TemporarilyUnavailable,
+                soland_http::error::ErrorCode::TemporarilyUnavailable,
                 "federation transaction is being processed by a concurrent delivery; retry",
             ));
         }
@@ -761,7 +761,7 @@ pub(crate) async fn federation_verify_actor(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let request_hash = federation_verify_actor_digest(&body).map_err(|message| {
-        AppError::new(crate::error::ErrorCode::SchemaViolation, message)
+        AppError::new(soland_http::error::ErrorCode::SchemaViolation, message)
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     validate_federation_request_binding(&state.config.trust_domain, req, &request_hash)?;
@@ -791,7 +791,7 @@ pub(crate) async fn federation_verify_actor(
 
     let unsigned_request_digest =
         federation_verify_actor_unsigned_digest(&body).map_err(|message| {
-            AppError::new(crate::error::ErrorCode::SchemaViolation, message)
+            AppError::new(soland_http::error::ErrorCode::SchemaViolation, message)
                 .with_status(StatusCode::BAD_REQUEST)
         })?;
     let verification =
@@ -882,7 +882,7 @@ pub(crate) async fn federation_seals_push(
     let body = body.into_inner();
     if !verify_federation_origin(&body.origin) {
         return Err(AppError::new(
-            crate::error::ErrorCode::Unauthenticated,
+            soland_http::error::ErrorCode::Unauthenticated,
             "federation origin must be a valid DID",
         )
         .with_status(StatusCode::UNAUTHORIZED));

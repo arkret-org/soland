@@ -1,4 +1,4 @@
-use super::*;
+use super::{CursorRevocation, PersistenceResult, Utc, Value, async_trait};
 /// Stateful sync-cursor handle binding (`cursor.schema.json` `h`).
 ///
 /// One row per distinct cursor content: the handle is an HMAC digest of the

@@ -12,6 +12,8 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 
 use super::super::applet_manifest::verify_manifest;
 use super::ghost::{
@@ -38,8 +40,6 @@ use super::types::{
     AppletProtocolDescribeOutcome, AppletRecord, AppletRevokeRecordOutcome, AppletView,
     GhostActorRecord, SOLAND_EDGE_APPLET_ID,
 };
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
 use crate::routing::identity::auth::revoke_delegated_sessions_for_applet;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -371,7 +371,7 @@ async fn revoke_auth_side_delegated_sessions_for_applet(
     let Some(revoke_url) = session_grant_revoke_url(state)? else {
         return Ok(Vec::new());
     };
-    let grant_jwt = crate::routing::system::util::bearer_token(req)
+    let grant_jwt = soland_http::util::bearer_token(req)
         .map(str::to_owned)
         .ok_or_else(|| {
             AppError::unauthenticated(
@@ -394,7 +394,7 @@ async fn revoke_auth_side_delegated_sessions_for_applet(
         .await
         .map_err(|error| {
             AppError::new(
-                crate::error::ErrorCode::TemporarilyUnavailable,
+                soland_http::error::ErrorCode::TemporarilyUnavailable,
                 format!("Auth-side applet delegated session revoke request failed: {error}"),
             )
         })?;
@@ -404,7 +404,7 @@ async fn revoke_auth_side_delegated_sessions_for_applet(
     }
     if !status.is_success() {
         return Err(AppError::new(
-            crate::error::ErrorCode::TemporarilyUnavailable,
+            soland_http::error::ErrorCode::TemporarilyUnavailable,
             format!("Auth-side applet delegated session revoke was rejected: {status}"),
         ));
     }
@@ -413,7 +413,7 @@ async fn revoke_auth_side_delegated_sessions_for_applet(
         .await
         .map_err(|error| {
             AppError::new(
-                crate::error::ErrorCode::TemporarilyUnavailable,
+                soland_http::error::ErrorCode::TemporarilyUnavailable,
                 format!("invalid Auth-side applet delegated session revoke response: {error}"),
             )
         })?;

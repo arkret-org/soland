@@ -8,6 +8,7 @@ use arkret_sdk::{
     RealmId, canonical, namespace_pattern_matches,
 };
 use serde_json::{Value, json};
+use soland_http::error::AppError;
 use soland_storage::{CanonicalEventRecord, ProjectionEventRecord};
 
 use super::record::{
@@ -18,7 +19,6 @@ use super::types::{
     AppletGhostIngressRequestBody, AppletRecord, EVENT_SCHEMA_ID, FormalAppletEvent,
     GhostActorRecord,
 };
-use crate::error::AppError;
 use crate::ids;
 use crate::state::AppState;
 

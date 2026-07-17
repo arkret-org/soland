@@ -43,14 +43,8 @@ const BANNED: &[(&str, &[&str])] = &[
             "object_store",
         ],
     ),
-    (
-        "soland-storage",
-        &["salvo", "diesel", "diesel-async"],
-    ),
-    (
-        "soland-storage-memory",
-        &["diesel", "diesel-async"],
-    ),
+    ("soland-storage", &["salvo", "diesel", "diesel-async"]),
+    ("soland-storage-memory", &["diesel", "diesel-async"]),
     (
         "soland-application",
         &[
@@ -63,12 +57,7 @@ const BANNED: &[(&str, &[&str])] = &[
     ),
     (
         "soland-http",
-        &[
-            "diesel",
-            "diesel-async",
-            "tokio-postgres",
-            "object_store",
-        ],
+        &["diesel", "diesel-async", "tokio-postgres", "object_store"],
     ),
 ];
 
@@ -78,7 +67,10 @@ fn main() {
         .output()
         .expect("failed to run cargo metadata");
     if !output.status.success() {
-        eprintln!("cargo metadata failed:\n{}", String::from_utf8_lossy(&output.stderr));
+        eprintln!(
+            "cargo metadata failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         std::process::exit(1);
     }
 
@@ -97,7 +89,9 @@ fn main() {
     let mut errors = Vec::new();
 
     for package in packages {
-        let name = package["name"].as_str().expect("package name must be a string");
+        let name = package["name"]
+            .as_str()
+            .expect("package name must be a string");
         if !guarded.contains(name) {
             continue;
         }
@@ -106,16 +100,18 @@ fn main() {
             .as_array()
             .expect("package dependencies must be an array");
         for dependency in dependencies {
-            if dependency["kind"].as_str().is_some_and(|kind| kind != "normal") {
+            if dependency["kind"]
+                .as_str()
+                .is_some_and(|kind| kind != "normal")
+            {
                 continue;
             }
             let dependency_name = dependency["name"]
                 .as_str()
                 .expect("dependency name must be a string");
-            let dependency_package = dependency["rename"]
-                .as_str()
-                .unwrap_or(dependency_name);
-            if workspace_names.contains(dependency_package) && guarded.contains(dependency_package) {
+            let dependency_package = dependency["rename"].as_str().unwrap_or(dependency_name);
+            if workspace_names.contains(dependency_package) && guarded.contains(dependency_package)
+            {
                 graph
                     .entry(name.to_owned())
                     .or_default()
@@ -131,9 +127,7 @@ fn main() {
                 .find(|(package_name, _)| *package_name == name)
                 .is_some_and(|(_, banned)| banned.contains(&dependency_package))
             {
-                errors.push(format!(
-                    "banned dependency: {name} -> {dependency_package}"
-                ));
+                errors.push(format!("banned dependency: {name} -> {dependency_package}"));
             }
         }
     }
@@ -142,7 +136,14 @@ fn main() {
     let mut active = BTreeSet::new();
     let mut path = Vec::new();
     for node in graph.keys() {
-        detect_cycle(node, &graph, &mut visited, &mut active, &mut path, &mut errors);
+        detect_cycle(
+            node,
+            &graph,
+            &mut visited,
+            &mut active,
+            &mut path,
+            &mut errors,
+        );
     }
 
     if errors.is_empty() {
@@ -170,7 +171,10 @@ fn detect_cycle(
         if let Some(start) = path.iter().position(|entry| entry == node) {
             let mut cycle = path[start..].to_vec();
             cycle.push(node.to_owned());
-            errors.push(format!("workspace dependency cycle: {}", cycle.join(" -> ")));
+            errors.push(format!(
+                "workspace dependency cycle: {}",
+                cycle.join(" -> ")
+            ));
         }
         return;
     }

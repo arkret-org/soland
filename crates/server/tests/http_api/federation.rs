@@ -13,7 +13,7 @@ const PEER_DELIVERY_FRONTIER: &str = "ak:event:01904100-0000-7000-8000-fede00000
 
 fn seed_peer_delivery_binding(state: &AppState) {
     let now = Utc::now();
-    state.projection.lock().members.insert(
+    state.test_projection().lock().members.insert(
         (TEST_REALM_ID.to_owned(), "did:web:alice.example".to_owned()),
         soland_domain::reducer::SolandMembershipState {
             member: "did:web:alice.example".to_owned(),
@@ -195,7 +195,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     assert!(outcome["rejected"].as_array().is_none_or(Vec::is_empty));
     assert!(
         state
-            .persistence
+            .test_persistence()
             .events()
             .get("ak:event:01904100-0000-7000-8000-fede000001ff")
             .await
@@ -353,7 +353,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     // Realm must explicitly authorize the receiving service to see it. This
     // keeps the assertion focused on foreign-domain member relay acceptance.
     let mut realm_meta = state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .get(TEST_REALM_ID)
         .await
@@ -367,7 +367,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
         BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
     );
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(TEST_REALM_ID, &realm_meta)
         .await
@@ -429,7 +429,7 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
     );
     assert_eq!(
         state
-            .persistence
+            .test_persistence()
             .mls_welcomes()
             .snapshot_all()
             .await
@@ -598,7 +598,7 @@ fn peer_get_headers(target_uri: &str) -> Vec<(&'static str, String)> {
 async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str, member_did: &str) {
     let now = Utc::now() - ChronoDuration::seconds(60);
     let mut meta = state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .get(TEST_REALM_ID)
         .await
@@ -629,7 +629,7 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
         .insert(arkret_sdk::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(TEST_REALM_ID, &meta)
         .await
@@ -814,7 +814,7 @@ async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<
     let canonical_digest = event_canonical_digest(&event);
     let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&event).unwrap();
     state
-        .persistence
+        .test_persistence()
         .events()
         .put(CanonicalEventRecord {
             event_id,
@@ -837,7 +837,7 @@ fn install_test_circle(state: &AppState, circle_id: &str, members: &[&str]) {
         .iter()
         .map(|member| (*member).to_owned())
         .collect::<BTreeSet<_>>();
-    state.projection.lock().circles.insert(
+    state.test_projection().lock().circles.insert(
         circle_id.to_owned(),
         CircleProjection {
             circle_id: circle_id.to_owned(),

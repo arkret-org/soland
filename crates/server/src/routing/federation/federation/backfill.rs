@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use soland_http::error::AppError;
 
 use super::endpoints::FederationOperationFrontierOutcome;
 use super::outbound::{
@@ -6,7 +7,6 @@ use super::outbound::{
     record_outbound_fanout_attempt,
 };
 use super::sha256_hex;
-use crate::error::AppError;
 use crate::state::AppState;
 
 pub(super) fn configured_peer_from_backfill_body(

@@ -618,11 +618,11 @@ pub(super) async fn signed_handle_claim(
     audience: &str,
     cache: bool,
 ) -> Result<SdkHandleClaim, AppError> {
-    if let Err(rejection) =
-        crate::wire_validators::handle_claim_subject::validate_subject(&json!({ "subject": did }))
-    {
+    if let Err(rejection) = soland_http::wire_validators::handle_claim_subject::validate_subject(
+        &json!({ "subject": did }),
+    ) {
         return Err(AppError::new(
-            crate::error::ErrorCode::SchemaViolation,
+            soland_http::error::ErrorCode::SchemaViolation,
             rejection.message,
         ));
     }
@@ -738,11 +738,11 @@ pub(super) async fn list_handles_for_subject(
     if subject.is_empty() {
         return Err(AppError::missing_param("subject is required"));
     }
-    if let Err(rejection) = crate::wire_validators::handle_claim_subject::validate_subject(
+    if let Err(rejection) = soland_http::wire_validators::handle_claim_subject::validate_subject(
         &json!({ "subject": subject.as_str() }),
     ) {
         return Err(AppError::new(
-            crate::error::ErrorCode::SchemaViolation,
+            soland_http::error::ErrorCode::SchemaViolation,
             rejection.message,
         ));
     }

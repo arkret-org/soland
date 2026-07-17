@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    FederationFrontierExchangeRecord, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
+    FederationTransactionRecord, Operation, PersistenceResult, async_trait,
+};
 /// Trait for durable federation transaction replay records.
 #[async_trait]
 pub trait FederationTransactionStore: Send + Sync {

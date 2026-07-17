@@ -16,12 +16,12 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_storage::{
-    AccountDataRecord, ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ProjectionEventRecord,
-};
+use soland_application::identity::{AccountDataState, FindAccountByActorQuery};
+use soland_domain::identity::{ConsentCellKey, ConsentCellRecord, ConsentGrantDot};
+use soland_http::error::AppError;
+use soland_storage::ProjectionEventRecord;
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
-use crate::error::AppError;
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
 };
@@ -303,9 +303,10 @@ async fn request_consent_cell(
         ));
     }
     let holder_account = state
-        .persistence
-        .accounts()
-        .get(body.holder_did.as_str())
+        .identity_application()
+        .find_account_by_actor(FindAccountByActorQuery {
+            actor_id: body.holder_did.as_str().to_owned(),
+        })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if holder_account.is_none() {
@@ -367,7 +368,7 @@ pub(super) async fn persist_consent_cell(
     record: &ConsentCellRecord,
     previous: Option<ConsentCellRecord>,
 ) -> Result<(), AppError> {
-    if let Err(error) = state.persistence.consent_cells().put(record).await {
+    if let Err(error) = state.consent_application().save_cell(record.clone()).await {
         let restored = restore_consent_cell_after_persist_failure(state, record, previous);
         tracing::error!(
             %error,
@@ -782,9 +783,10 @@ pub(super) async fn auto_revoke_requester_side_contact_consent(
     contact_event_ref: Option<&str>,
 ) -> Result<(Vec<String>, bool), AppError> {
     let requester_exists = state
-        .persistence
-        .accounts()
-        .get(requester)
+        .identity_application()
+        .find_account_by_actor(FindAccountByActorQuery {
+            actor_id: requester.to_owned(),
+        })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
@@ -1411,7 +1413,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
         state,
         ProjectionEventRecord {
             event_id: ids::generate_event_id(),
-            realm_id: super::recovery::principal_control_realm_for_did(holder),
+            realm_id: soland_domain::identity::principal_control_realm_for_did(holder),
             event_kind: "ak.vector.consent.cache_invalidation.v1".to_owned(),
             operation_type: "consent_revoke_cache_invalidation".to_owned(),
             operation_id: None,
@@ -1443,7 +1445,7 @@ async fn consent_invalidation_peer_service_ids(
 ) -> Vec<String> {
     let mut services = BTreeSet::new();
     for actor in [holder, peer] {
-        let records = match state.persistence.contacts().list_for_actor(actor).await {
+        let records = match state.contact_application().contacts_for_actor(actor).await {
             Ok(records) => records,
             Err(error) => {
                 tracing::warn!(
@@ -1484,9 +1486,9 @@ async fn invalidate_quarantined_invites_for_revoke(
     if !matches!(scope, "invite" | "any") {
         return Ok(0);
     }
-    let account_data = state.persistence.account_data();
-    let Some(existing) = account_data
-        .get(holder, ACCOUNT_DATA_TYPE_INVITE_QUARANTINE)
+    let Some(existing) = state
+        .account_data_application()
+        .entry(holder, ACCOUNT_DATA_TYPE_INVITE_QUARANTINE)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     else {
@@ -1528,14 +1530,15 @@ async fn invalidate_quarantined_invites_for_revoke(
             "removed_entries": removed,
         }),
     );
-    let record = AccountDataRecord {
-        actor: holder.to_owned(),
+    let record = AccountDataState {
+        actor_id: holder.to_owned(),
         data_type: ACCOUNT_DATA_TYPE_INVITE_QUARANTINE.to_owned(),
         payload: Value::Object(object),
         updated_at: revoked_at,
     };
-    account_data
-        .put(&record)
+    state
+        .account_data_application()
+        .save_entry(record.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     fanout_actor_private_update(
@@ -1738,12 +1741,7 @@ mod tests {
         persist_consent_cell(&state, &cell, previous).await.unwrap();
 
         // Persistence holds the cell.
-        let snapshot = state
-            .persistence
-            .consent_cells()
-            .snapshot_all()
-            .await
-            .unwrap();
+        let snapshot = state.consent_application().cells().await.unwrap();
         assert_eq!(snapshot.len(), 1, "one cell persisted");
 
         // A fresh AppState that shares the same persistence store re-hydrates
@@ -1751,7 +1749,7 @@ mod tests {
         let fresh = AppState::new_with_persistence(
             test_config(),
             Db { pool: None },
-            state.persistence.clone(),
+            state.test_persistence().clone(),
         );
         fresh.hydrate().await.unwrap();
         assert!(

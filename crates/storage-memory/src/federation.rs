@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    Arc, BTreeMap, FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
+    FederationOperationsStore, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
+    FederationOutboxStore, FederationTransactionRecord, FederationTransactionStore, Mutex,
+    Operation, PersistenceResult, async_trait, frontier_exchange_failure_record,
+    frontier_exchange_success_record,
+};
 // In-memory federation transaction replay store
 pub(crate) struct MemoryFederationTransactionStore {
     data: Arc<Mutex<BTreeMap<(String, String), FederationTransactionRecord>>>,
@@ -51,7 +57,7 @@ impl FederationTransactionStore for MemoryFederationTransactionStore {
 // Memory backend matches the Pg `federation_outbox_peer_idem` UNIQUE
 // INDEX semantics.
 pub(crate) struct MemoryFederationOutboxStore {
-    data: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
+    pub(crate) data: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
     dead_letters: Arc<Mutex<BTreeMap<String, FederationOutboxDeadLetterRecord>>>,
 }
 impl MemoryFederationOutboxStore {

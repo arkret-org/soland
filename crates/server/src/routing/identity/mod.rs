@@ -1,5 +1,27 @@
 use salvo::prelude::*;
 
+pub(crate) fn persistence_session_identity(
+    session: soland_application::identity::SessionIdentityState,
+) -> soland_storage::SessionRecord {
+    soland_storage::SessionRecord {
+        token_hash: session.token_hash,
+        actor: session.actor_id,
+        device_id: session.device_id,
+        audience: session.audience,
+        session_public_key: session.session_public_key,
+        agent_session: session
+            .agent_session
+            .map(|agent| soland_storage::AgentSessionRecord {
+                granted_scope: agent.granted_scope,
+                scope_details: agent.scope_details,
+                freshness_state: agent.freshness_state,
+            }),
+        expires_at: session.expires_at,
+        created_at: session.created_at,
+        revoked_at: session.revoked_at,
+    }
+}
+
 pub(super) mod account;
 pub(super) mod account_data;
 pub(crate) mod agents;
@@ -19,8 +41,7 @@ pub(in crate::routing) mod key_backup;
 mod keys;
 pub(crate) mod managed_agent_pcr;
 // R3 spec-sync (arkret-spec b47ff6ec) — recovery policy / receipt
-// endpoints (HTTP-4 / REC-1). pub(crate) so the control-realm derivation
-// (`principal_control_realm_for_did`) is reachable from the events policy gate.
+// endpoints (HTTP-4 / REC-1).
 pub(crate) mod recovery;
 mod service_registration;
 // SPEC-CR-001 — RFC 9421 sender-constrained (PoP) verification hoop for the

@@ -27,7 +27,10 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland_storage::{ContactRecord, ProjectionEventRecord};
+use soland_domain::identity::ContactRecord;
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
+use soland_storage::ProjectionEventRecord;
 
 use super::consent::{
     auto_revoke_requester_side_contact_consent, consent_cell_snapshot,
@@ -35,8 +38,6 @@ use super::consent::{
     project_contact_managed_consent_ref,
 };
 use super::now;
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
 const HEADER_CONTENT_DIGEST: &str = "content-digest";
@@ -102,7 +103,7 @@ pub(crate) async fn federate_contact_fact(
 
     let fact_kind = PeerContactFactKind::from_wire(fact_kind)
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    let issuer_pcr = super::recovery::principal_control_realm_for_did(issuer);
+    let issuer_pcr = soland_domain::identity::principal_control_realm_for_did(issuer);
     let contact_event = build_contact_envelope(
         state,
         fact_kind,
@@ -417,9 +418,8 @@ async fn should_stub_incoming_contact_message(
         return Ok(false);
     }
     let contacts = state
-        .persistence
-        .contacts()
-        .list_for_actor(target)
+        .contact_application()
+        .contacts_for_actor(target)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let accepted_contact = contacts.iter().any(|record| {
@@ -492,7 +492,7 @@ async fn append_delivered_contact_fact_projection_event(
         state,
         ProjectionEventRecord {
             event_id: contact_event_id.to_owned(),
-            realm_id: super::recovery::principal_control_realm_for_did(issuer),
+            realm_id: soland_domain::identity::principal_control_realm_for_did(issuer),
             event_kind: fact_kind.to_owned(),
             operation_type: "delivered_contact_fact".to_owned(),
             operation_id: None,
@@ -531,7 +531,7 @@ async fn project_delivered_contact_fact(
             })
             .or_else(|| payload.get("scope").and_then(Value::as_str)),
     )?;
-    let store = state.persistence.contacts();
+    let contacts = state.contact_application();
     match fact_kind {
         "ak.contact.requested" => {
             // requester = issuer, target = subject_id (this holder). Form a
@@ -547,8 +547,8 @@ async fn project_delivered_contact_fact(
             } else {
                 raw_message.clone()
             };
-            if let Some(existing) = store
-                .get_scoped(issuer, subject_id, &scope)
+            if let Some(existing) = contacts
+                .contact(issuer, subject_id, &scope)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 && existing.status == "pending"
@@ -572,8 +572,8 @@ async fn project_delivered_contact_fact(
                 created_at: now(),
                 updated_at: now(),
             };
-            store
-                .put(&contact)
+            contacts
+                .save_contact(contact)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             if stub_message {
@@ -604,8 +604,8 @@ async fn project_delivered_contact_fact(
             // original event refs, so the requester's row surfaces
             // invite_consent_grant_ref / bidirectional scopes without
             // re-minting target-controlled grant facts locally.
-            let Some(mut contact) = store
-                .get_scoped(subject_id, issuer, &scope)
+            let Some(mut contact) = contacts
+                .contact(subject_id, issuer, &scope)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
             else {
@@ -656,8 +656,8 @@ async fn project_delivered_contact_fact(
             if let Some(source) = source_service_id {
                 contact.peer_service_id = Some(source.to_owned());
             }
-            store
-                .put(&contact)
+            contacts
+                .save_contact(contact)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             append_delivered_contact_fact_projection_event(
@@ -671,8 +671,8 @@ async fn project_delivered_contact_fact(
             Ok("accepted")
         }
         "ak.contact.rejected" => {
-            let Some(mut contact) = store
-                .get_scoped(subject_id, issuer, &scope)
+            let Some(mut contact) = contacts
+                .contact(subject_id, issuer, &scope)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
             else {
@@ -708,8 +708,8 @@ async fn project_delivered_contact_fact(
             contact.status = "rejected".to_owned();
             contact.response_event_ref = Some(contact_event_id.to_owned());
             contact.updated_at = now();
-            store
-                .put(&contact)
+            contacts
+                .save_contact(contact)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             auto_revoke_requester_side_contact_consent(
@@ -734,8 +734,8 @@ async fn project_delivered_contact_fact(
         }
         "ak.contact.tombstoned" => {
             // Downgrade every local row this holder shares with the issuer.
-            let rows = store
-                .list_for_actor(subject_id)
+            let rows = contacts
+                .contacts_for_actor(subject_id)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             let mut requester_side_revoke_scopes = Vec::new();
@@ -755,8 +755,8 @@ async fn project_delivered_contact_fact(
                 row.status = "tombstoned".to_owned();
                 row.tombstone_event_ref = Some(contact_event_id.to_owned());
                 row.updated_at = now();
-                store
-                    .put(&row)
+                contacts
+                    .save_contact(row)
                     .await
                     .map_err(|error| AppError::internal(error.to_string()))?;
             }
@@ -906,9 +906,8 @@ mod tests {
         assert_eq!(outcome, "accepted");
 
         let record = state
-            .persistence
-            .contacts()
-            .get_scoped(requester, target, "direct_message")
+            .contact_application()
+            .contact(requester, target, "direct_message")
             .await
             .expect("contact store lookup")
             .expect("pending_incoming row was projected");

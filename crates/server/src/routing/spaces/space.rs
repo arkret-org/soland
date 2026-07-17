@@ -25,10 +25,10 @@ use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
 use soland_domain::reducer::{CHILD_ORDER_CELL_FAMILY, ObjectLifecycleState};
+use soland_http::error::{AppError, ErrorCode};
 use soland_storage::SessionRecord;
 
 use super::{AuthArgs, accept_local_operations};
-use crate::error::{AppError, ErrorCode};
 use crate::routing::events::operations::operation_policy_reason_code;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry};
@@ -729,7 +729,7 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
         tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid actor DID shape");
         return false;
     };
-    if realm_id == crate::routing::identity::recovery::principal_control_realm_for_did(actor) {
+    if realm_id == soland_domain::identity::principal_control_realm_for_did(actor) {
         return true;
     }
     let realms = state.realms.lock();

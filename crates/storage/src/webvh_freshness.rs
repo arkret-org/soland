@@ -2,7 +2,7 @@
 //!
 //! Pure, fail-closed freshness helpers shared by the memory and Pg backends.
 
-use super::*;
+use super::{Utc, WebvhDocumentRecord};
 
 /// Baseline DID document freshness TTL for high-risk verification paths
 /// (15 minutes).

@@ -36,9 +36,8 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 
 /// Registered applet capabilities recognised by the verifier. Anything
 /// not in this set fails closed with `unknown_capability`. The list is

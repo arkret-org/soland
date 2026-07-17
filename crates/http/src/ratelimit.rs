@@ -335,11 +335,25 @@ impl RateLimiter {
 #[derive(Clone)]
 pub struct RateLimiterMiddleware {
     limiter: RateLimiter,
+    config_provider: Option<Arc<dyn Fn() -> RateLimiterConfig + Send + Sync>>,
 }
 
 impl RateLimiterMiddleware {
     pub fn new(limiter: RateLimiter) -> Self {
-        Self { limiter }
+        Self {
+            limiter,
+            config_provider: None,
+        }
+    }
+
+    pub fn with_config_provider(
+        limiter: RateLimiter,
+        config_provider: Arc<dyn Fn() -> RateLimiterConfig + Send + Sync>,
+    ) -> Self {
+        Self {
+            limiter,
+            config_provider: Some(config_provider),
+        }
     }
 }
 
@@ -398,10 +412,10 @@ impl Handler for RateLimiterMiddleware {
         // this hoop, so `AppState` is always in the depot; the fallback to the
         // limiter's boot config only matters in unit tests that exercise the
         // middleware without injected state.
-        let effective = depot
-            .get_typed::<crate::state::AppState>()
-            .ok()
-            .map(|state| state.settings().rate_limit.to_limiter_config())
+        let effective = self
+            .config_provider
+            .as_ref()
+            .map(|provider| provider())
             .unwrap_or_else(|| self.limiter.config.clone());
         let ceiling = effective.ceiling_for(class);
 
@@ -412,7 +426,7 @@ impl Handler for RateLimiterMiddleware {
             let retry_after = self.limiter.retry_after_window(&key, effective.window);
             let retry_after_ms = retry_after.as_millis().try_into().unwrap_or(u64::MAX);
             let retry_after_seconds = retry_after_ms.div_ceil(1000).max(1);
-            let request_id = crate::ids::generate_request_id();
+            let request_id = arkret_sdk::new_prefixed_uuid7("ak:request:");
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
             res.headers_mut()
                 .insert(salvo::http::header::RETRY_AFTER, retry_after_seconds.into());

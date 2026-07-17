@@ -4,10 +4,10 @@ use salvo::http::Method;
 use salvo::http::request::SecureMaxSize;
 use salvo::oapi::RouterExt;
 use salvo::prelude::*;
+use soland_http::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware};
 
 use super::*;
 use crate::config::AppConfig;
-use crate::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware};
 use crate::state::AppState;
 
 pub fn router(state: AppState) -> Router {
@@ -59,6 +59,11 @@ pub fn router_with_rate_limiter_and_request_size_config(
         state.settings.store(std::sync::Arc::new(settings));
     }
     let rate_limiter = RateLimiter::new(rate_limiter_config);
+    let rate_limit_state = state.clone();
+    let rate_limit_middleware = RateLimiterMiddleware::with_config_provider(
+        rate_limiter,
+        std::sync::Arc::new(move || rate_limit_state.settings().rate_limit.to_limiter_config()),
+    );
     // COT-06-002 / service-http-binding.md §2.1.2: decide whether to expose the
     // test-only `/_arkret/_conformance/*` namespace before `state` is moved into
     // the affix hoop. The namespace is mounted only when the
@@ -66,11 +71,15 @@ pub fn router_with_rate_limiter_and_request_size_config(
     // segment stays unknown and falls through to `api_not_found` (404
     // `unrecognized_endpoint`), exactly as §2.1.2 requires.
     let conformance_harness_enabled = conformance::conformance_harness_enabled(&state.config);
+    let error_exposure = soland_http::error::ErrorExposure {
+        development_mode: state.config.development_mode,
+    };
     let router = Router::new()
         .hoop(crate::metrics::MetricsMiddleware)
         .hoop(SecureMaxSize::new(max_request_size_bytes))
+        .hoop(affix_state::inject(error_exposure))
         .hoop(affix_state::inject(state))
-        .hoop(RateLimiterMiddleware::new(rate_limiter));
+        .hoop(rate_limit_middleware);
     let router = router
         .push(system::health_router())
         .push(interop::well_known_router())
@@ -107,7 +116,10 @@ pub fn router_with_rate_limiter_and_request_size_config(
                 .push(soland_local_router()),
         )
         .push(api_v1_router(conformance_harness_enabled));
-    let doc = cached_arkret_openapi_doc(&router);
+    let doc = cached_arkret_openapi_doc(
+        &router,
+        serde_json::json!(soland_domain::artifacts::registry_summary()),
+    );
     router
         .unshift(
             Router::with_path(".well-known/arkret/openapi.yaml")

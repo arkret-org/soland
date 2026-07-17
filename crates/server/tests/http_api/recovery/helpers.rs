@@ -88,7 +88,7 @@ pub(crate) fn ensure_cross_signing(
 ) {
     let principal = Did::new(principal_id.to_owned()).unwrap();
     if state
-        .cross_signing
+        .test_cross_signing()
         .lock()
         .current_cross_signing(&principal)
         .is_none()
@@ -303,7 +303,7 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
     })
 }
 
-/// Seed an accepted `ak.cross_signing.publish` (generation 1) into the server's
+/// Seed an accepted `ak.test_cross_signing().publish` (generation 1) into the server's
 /// DeviceManager so `/complete` can verify the device binding against the SSK.
 pub(crate) fn seed_cross_signing(
     state: &AppState,
@@ -337,7 +337,7 @@ pub(crate) fn seed_cross_signing(
     let content: arkret_sdk::CrossSigningPublish =
         serde_json::from_value(publish).expect("cross-signing publish content");
     state
-        .cross_signing
+        .test_cross_signing()
         .lock()
         .record_cross_signing_publish(content)
         .expect("seed cross-signing publish");
@@ -355,7 +355,7 @@ pub(crate) async fn seed_control_event(
     let envelope = serde_json::json!({ "payload": payload });
     let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
     state
-        .persistence
+        .test_persistence()
         .events()
         .put(CanonicalEventRecord {
             event_id: event_id.to_owned(),
@@ -623,7 +623,7 @@ pub(crate) async fn seed_recovery_policy(
         }
     });
     state
-        .persistence
+        .test_persistence()
         .recovery_policies()
         .insert(RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
@@ -675,7 +675,7 @@ pub(crate) async fn ingest_fresh_recovery_did_document(state: &AppState, did: &s
         })
     };
     state
-        .persistence
+        .test_persistence()
         .webvh()
         .put_document(WebvhDocumentRecord {
             did: did.to_owned(),
@@ -722,13 +722,13 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
     let now = chrono::Utc::now();
     let device_id = RECOVERY_TEST_DEVICE;
     state
-        .persistence
+        .test_persistence()
         .sessions()
         .put(&SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.service_id),
+            token_hash: test_session_credential_hash(token, &state.service_id()),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
-            audience: state.service_id.clone(),
+            audience: state.service_id().clone(),
             session_public_key: None,
             agent_session: None,
             expires_at: now + chrono::Duration::minutes(10),
@@ -738,7 +738,7 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
         .await
         .unwrap();
     state
-        .persistence
+        .test_persistence()
         .devices()
         .put(&DeviceInventoryRecord {
             actor: actor.to_owned(),

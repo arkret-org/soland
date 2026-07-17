@@ -1,9 +1,9 @@
 use arkret_sdk::Operation;
 use salvo::http::StatusCode;
 use serde_json::Value;
+use soland_http::error::AppError;
 
 use super::outbound::parse_peer_target;
-use crate::error::AppError;
 use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::state::AppState;
 
@@ -89,7 +89,7 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
 ) -> Result<(), AppError> {
     if operations.len() > MAX_INBOUND_FEDERATION_OPERATIONS {
         return Err(AppError::new(
-            crate::error::ErrorCode::PayloadTooLarge,
+            soland_http::error::ErrorCode::PayloadTooLarge,
             format!(
                 "federation operation batch exceeds limit: {} > {}",
                 operations.len(),
@@ -156,9 +156,12 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
 }
 
 fn app_error_from_policy_gate(rejection: policy_gate::PolicyGateRejection) -> AppError {
-    AppError::new(crate::error::ErrorCode::CapabilityDenied, rejection.message)
-        .with_status(rejection.status)
-        .with_wire_code(rejection.code)
+    AppError::new(
+        soland_http::error::ErrorCode::CapabilityDenied,
+        rejection.message,
+    )
+    .with_status(rejection.status)
+    .with_wire_code(rejection.code)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

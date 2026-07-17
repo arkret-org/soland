@@ -7,11 +7,11 @@
 ///
 /// Registered reasons and top-level errors are consumed directly through
 /// arkret_sdk::ReasonCode and arkret_sdk::ErrorCode.
-pub(crate) mod reasons {
-    pub(crate) const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =
+pub mod reasons {
+    pub const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =
         "member_identity_handle_field_forbidden";
-    pub(crate) const CLAIM_TYPE_UNSUPPORTED: &str = "claim_type_unsupported";
-    pub(crate) const HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID: &str =
+    pub const CLAIM_TYPE_UNSUPPORTED: &str = "claim_type_unsupported";
+    pub const HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID: &str =
         "handle_claim_subject_not_principal_did";
 }
 use salvo::async_trait;
@@ -19,7 +19,10 @@ use salvo::http::StatusCode;
 use salvo::oapi::{self, Components, EndpointOutRegister, Operation, ToSchema};
 use salvo::prelude::*;
 
-use crate::routing::system::util::render_error;
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ErrorExposure {
+    pub development_mode: bool,
+}
 
 /// Construct an [`AppError`] with a canonical [`ErrorCode`] variant.
 ///
@@ -63,6 +66,99 @@ pub use arkret_sdk::ErrorCode;
 /// Convert the SDK registry status into Salvo's `StatusCode`.
 pub fn error_http_status(code: ErrorCode) -> StatusCode {
     StatusCode::from_u16(code.http_status()).expect("registry status codes are valid HTTP statuses")
+}
+
+fn request_id() -> String {
+    arkret_sdk::new_prefixed_uuid7("ak:request:")
+}
+
+pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {
+    res.status_code(status);
+    res.render(Json(
+        arkret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id()),
+    ));
+}
+
+pub fn render_error_with_detail(
+    res: &mut Response,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    reason_detail: &str,
+) {
+    res.status_code(status);
+    res.render(Json(
+        arkret_sdk::ErrorEnvelope::new(code, message)
+            .with_request_id(request_id())
+            .with_detail(
+                "reason_detail",
+                serde_json::Value::String(reason_detail.to_owned()),
+            ),
+    ));
+}
+
+pub fn render_error_with_reason_code(
+    res: &mut Response,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    reason_code: &str,
+    reason_detail: Option<&str>,
+) {
+    let mut envelope = arkret_sdk::ErrorEnvelope::new(code, message)
+        .with_request_id(request_id())
+        .with_detail(
+            "reason_code",
+            serde_json::Value::String(reason_code.to_owned()),
+        );
+    if let Some(reason_detail) = reason_detail {
+        envelope = envelope.with_detail(
+            "reason_detail",
+            serde_json::Value::String(reason_detail.to_owned()),
+        );
+    }
+    res.status_code(status);
+    res.render(Json(envelope));
+}
+
+pub fn render_error_with_top_level_reason(
+    res: &mut Response,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    reason: &str,
+    reason_detail: Option<&str>,
+) {
+    let mut envelope = arkret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id());
+    if let Some(reason_detail) = reason_detail {
+        envelope = envelope.with_detail(
+            "reason_detail",
+            serde_json::Value::String(reason_detail.to_owned()),
+        );
+    }
+    let mut body = serde_json::to_value(&envelope).unwrap_or_else(|_| {
+        serde_json::json!({
+            "ok": false,
+            "error": { "code": code, "message": message },
+        })
+    });
+    if let Some(object) = body.as_object_mut() {
+        object.insert(
+            "reason".to_owned(),
+            serde_json::Value::String(reason.to_owned()),
+        );
+        if let Some(error) = object
+            .get_mut("error")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            error.insert(
+                "reason".to_owned(),
+                serde_json::Value::String(reason.to_owned()),
+            );
+        }
+    }
+    res.status_code(status);
+    res.render(Json(body));
 }
 
 /// Render an SDK-owned error code through soland's standard error envelope.
@@ -264,8 +360,8 @@ impl Writer for AppError {
         let status = self.http_status();
         let wire = self.wire_code().to_owned();
         let development_mode = depot
-            .get_typed::<crate::state::AppState>()
-            .map(|state| state.config.development_mode)
+            .get_typed::<ErrorExposure>()
+            .map(|exposure| exposure.development_mode)
             .unwrap_or(false);
         let redact_internal = self.code == ErrorCode::InternalError && !development_mode;
         if redact_internal {
@@ -282,7 +378,7 @@ impl Writer for AppError {
             self.message.as_str()
         };
         if let Some(reason) = self.top_level_reason.as_deref() {
-            crate::routing::system::util::render_error_with_top_level_reason(
+            render_error_with_top_level_reason(
                 res,
                 status,
                 &wire,
@@ -291,7 +387,7 @@ impl Writer for AppError {
                 self.reason_detail.as_deref(),
             );
         } else if let Some(reason_code) = self.reason_code.as_deref() {
-            crate::routing::system::util::render_error_with_reason_code(
+            render_error_with_reason_code(
                 res,
                 status,
                 &wire,
@@ -300,13 +396,7 @@ impl Writer for AppError {
                 self.reason_detail.as_deref(),
             );
         } else if let Some(reason_detail) = self.reason_detail.as_deref() {
-            crate::routing::system::util::render_error_with_detail(
-                res,
-                status,
-                &wire,
-                public_message,
-                reason_detail,
-            );
+            render_error_with_detail(res, status, &wire, public_message, reason_detail);
         } else {
             render_error(res, status, &wire, public_message);
         }

@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Arc, BTreeMap, CursorRevocation, Mutex, PersistenceResult, SyncCursorRecord, SyncCursorStore,
+    Utc, async_trait,
+};
 /// In-memory `handle -> SyncCursorRecord` table. Mirrors the
 /// `sync_cursor_handles` Pg table on the same primary key.
 pub(crate) struct MemorySyncCursorStore {

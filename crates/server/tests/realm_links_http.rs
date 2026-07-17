@@ -20,7 +20,7 @@ fn test_config() -> AppConfig {
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         seed_demo_data: true,
-        ..AppConfig::test_default()
+        ..soland_test_support::app_config()
     }
 }
 
@@ -69,8 +69,8 @@ fn project_inheritance_policy(
             "max_depth": 1,
         }),
     );
-    let mut proj = state.projection.lock();
-    proj.apply(&op, &state.hlc);
+    let mut proj = state.test_projection().lock();
+    proj.apply(&op, &state.test_hlc());
 }
 
 /// G3.S5 — happy path: POST a `governed_by` link from B → A, GET the

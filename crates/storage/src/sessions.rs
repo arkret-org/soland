@@ -1,4 +1,4 @@
-use super::*;
+use super::{AgentSessionRecord, PersistenceResult, SessionRecord, Value, async_trait};
 /// Trait for session storage operations.
 #[async_trait]
 pub trait SessionStore: Send + Sync {
@@ -29,7 +29,9 @@ pub fn decode_session_agent_payload(payload: &Value) -> Option<AgentSessionRecor
 mod tests {
     use arkret_sdk::FreshnessState;
 
-    use super::*;
+    use super::{
+        AgentSessionRecord, SessionRecord, decode_session_agent_payload, encode_session_payload,
+    };
 
     #[test]
     fn session_payload_round_trips_agent_session() {

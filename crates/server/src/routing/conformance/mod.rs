@@ -49,8 +49,9 @@ use salvo::prelude::*;
 pub(crate) mod handlers;
 pub(crate) mod util;
 
+use soland_http::error::{AppError, ErrorCode};
+
 use crate::config::AppConfig;
-use crate::error::{AppError, ErrorCode};
 
 /// Boot-time snapshot of whether the conformance harness is active,
 /// set once when [`crate::routing::api_v1_router`] decides whether to mount

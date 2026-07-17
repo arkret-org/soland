@@ -1,4 +1,4 @@
-use super::*;
+use super::{AgentPrincipalRecord, PersistenceResult, Value, async_trait};
 /// AKP-0010 — agent participation policy persistence. Controller
 /// selections (`ak.agent.participation.v1`) and the governance ceiling
 /// projection are stored as JSON records mirroring the

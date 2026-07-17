@@ -262,7 +262,7 @@ pub(in crate::routing::events::operations) fn validate_principal_control_realm_b
         .get("principal_id")
         .and_then(Value::as_str)
         .ok_or("principal_control_event_missing_principal_id")?;
-    let expected = crate::routing::identity::recovery::principal_control_realm_for_did(principal);
+    let expected = soland_domain::identity::principal_control_realm_for_did(principal);
     if realm_ids_match(operation.realm_id.as_str(), &expected) {
         Ok(())
     } else {
@@ -344,9 +344,8 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
     }
     if kind == "ak.agent.key.authorize" {
         let record = state
-            .persistence
-            .agents()
-            .get(&agent_id)
+            .agent_pairing_application()
+            .agent(&agent_id)
             .await
             .map_err(|_| "managed_agent_principal_binding_unavailable")?
             .ok_or("managed_agent_principal_binding_unavailable")?;

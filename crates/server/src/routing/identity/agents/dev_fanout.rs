@@ -20,9 +20,9 @@ use arkret_sdk::{
 };
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
+use soland_http::error::{AppError, ErrorCode};
 
 use super::SessionRecord;
-use crate::error::{AppError, ErrorCode};
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
 
@@ -48,14 +48,10 @@ pub(super) async fn submit_agent_fanout_event(
 ) -> Result<String, AppError> {
     let actor = session.actor.clone();
     let next_seq = state
-        .persistence
-        .events()
-        .max_actor_seq(&actor)
+        .event_query_application()
+        .next_actor_sequence(&actor)
         .await
-        .ok()
-        .flatten()
-        .unwrap_or(0)
-        + 1;
+        .unwrap_or(1);
     let event_uuid = uuid::Uuid::now_v7();
     let event_id = format!("ak:event:{event_uuid}");
     let operation_alias = format!("ak:operation:{}", uuid::Uuid::now_v7());
@@ -102,14 +98,10 @@ async fn submit_managed_agent_control_event(
     payload: Value,
 ) -> Result<String, AppError> {
     let next_seq = state
-        .persistence
-        .events()
-        .max_actor_seq(agent_id)
+        .event_query_application()
+        .next_actor_sequence(agent_id)
         .await
-        .ok()
-        .flatten()
-        .unwrap_or(0)
-        + 1;
+        .unwrap_or(1);
     let event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
     let payload_bytes = canonical::canonical_json_bytes(&payload).unwrap_or_default();
     let payload_digest = canonical::sha256_digest(&payload_bytes);
@@ -175,8 +167,7 @@ pub(super) async fn require_controller_principal_control_realm(
     state: &AppState,
     session: &SessionRecord,
 ) -> Result<String, AppError> {
-    let realm_id =
-        crate::routing::identity::recovery::principal_control_realm_for_did(&session.actor);
+    let realm_id = soland_domain::identity::principal_control_realm_for_did(&session.actor);
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -193,9 +184,8 @@ pub(super) async fn require_controller_principal_control_realm(
     // Startup hydration normally provides the same state, but correctness of
     // provisioning must not depend on a restart having rebuilt every cache.
     let meta = state
-        .persistence
-        .realm_meta()
-        .get(&realm_id)
+        .realm_query_application()
+        .realm_metadata(&realm_id)
         .await
         .map_err(|err| AppError::internal(format!("self Realm metadata lookup failed: {err}")))?
         .ok_or_else(|| {
@@ -214,9 +204,9 @@ fn reconcile_self_realm_owner_projection(
     state: &AppState,
     realm_id: &str,
     controller_id: &str,
-    meta: &soland_storage::RealmMetaRecord,
+    meta: &soland_application::events::RealmMetadata,
 ) -> Result<(), AppError> {
-    if meta.owner != controller_id {
+    if meta.owner_id != controller_id {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "self Realm owner does not match the authenticated controller",

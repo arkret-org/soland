@@ -165,8 +165,8 @@ async fn member_identity_unsupported_signature_algorithm_is_422() {
     let err = validate_member_identity_proof(&state, &payload)
         .await
         .expect_err("unsupported MemberIdentity signature algorithm must fail closed");
-    let code = crate::error::ErrorCode::UnsupportedSignatureAlg;
-    assert_eq!(err.status, crate::error::error_http_status(code));
+    let code = soland_http::error::ErrorCode::UnsupportedSignatureAlg;
+    assert_eq!(err.status, soland_http::error::error_http_status(code));
     assert_eq!(err.code, code.as_str());
 }
 

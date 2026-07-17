@@ -17,11 +17,12 @@ pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::Value;
 pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use soland::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
-pub(crate) use soland::ratelimit::RateLimiterConfig;
 pub(crate) use soland::state::{AppState, EventNotification, RealmDirectoryEntry};
 pub(crate) use soland::{
-    artifacts, service, service_with_rate_limiter_config, service_with_request_size_limit,
+    service, service_with_rate_limiter_config, service_with_request_size_limit,
 };
+pub(crate) use soland_domain::artifacts;
+pub(crate) use soland_http::ratelimit::RateLimiterConfig;
 pub(crate) use soland_storage::{
     MessageRecord, PresenceRecord, RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord,
 };
@@ -50,13 +51,13 @@ pub(crate) fn test_config() -> AppConfig {
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         resumable_upload_dir: std::env::temp_dir().join("soland-test-resumable-uploads"),
         seed_demo_data: true,
-        ..AppConfig::test_default()
+        ..soland_test_support::app_config()
     }
 }
 
 pub(crate) fn test_state_with_service_id(service_id: &str) -> AppState {
     let mut state = AppState::new(test_config(), Db { pool: None });
-    state.service_id = service_id.to_owned();
+    state.test_set_service_id(service_id.to_owned());
     state
 }
 
@@ -288,7 +289,7 @@ pub(crate) async fn seed_did_document_also_known_as(state: &AppState, did: &str,
         .map(|alias| Value::String((*alias).to_owned()))
         .collect::<Vec<_>>();
     state
-        .persistence
+        .test_persistence()
         .webvh()
         .put_document(WebvhDocumentRecord {
             did: did.to_owned(),
@@ -333,7 +334,7 @@ pub(crate) async fn seed_test_realm(
     entry.description = summary.map(ToOwned::to_owned);
     entry.public = discoverability == "public";
     entry.members.insert(owner_did);
-    state.realms.lock().upsert(entry);
+    state.test_realms().lock().upsert(entry);
 
     let plaintext_visible_services: std::collections::BTreeSet<String> = plaintext_visible_services
         .iter()
@@ -357,7 +358,7 @@ pub(crate) async fn seed_test_realm(
         })
         .collect();
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(
             &realm_id,
@@ -387,7 +388,7 @@ pub(crate) async fn seed_test_realm(
         let invite_id = new_prefixed_uuid7("ak:invite:");
         let invite_token = new_prefixed_uuid7("ak:invite-token:");
         state
-            .persistence
+            .test_persistence()
             .realm_invites()
             .put(RealmInviteRecord {
                 invite_id,
@@ -395,7 +396,7 @@ pub(crate) async fn seed_test_realm(
                 inviter: owner.to_owned(),
                 invitee: Some((*invitee).to_owned()),
                 invite_delivery_target: Some(serde_json::json!({
-                    "recipient_service_id": state.service_id.clone(),
+                    "recipient_service_id": state.service_id().clone(),
                     "recipient_service_type": "principal_server"
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
@@ -425,13 +426,13 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
     let now = chrono::Utc::now();
-    let mut realms = state.realms.lock();
+    let mut realms = state.test_realms().lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.insert(member_did);
         let members = realm_member_roster(&entry);
         realms.upsert(entry);
         drop(realms);
-        state.projection.lock().members.insert(
+        state.test_projection().lock().members.insert(
             (realm_id.to_owned(), member.to_owned()),
             soland_domain::reducer::SolandMembershipState {
                 member: member.to_owned(),
@@ -462,14 +463,14 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
 pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Value {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
-    let mut realms = state.realms.lock();
+    let mut realms = state.test_realms().lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.remove(&member_did);
         let members = realm_member_roster(&entry);
         realms.upsert(entry);
         drop(realms);
         state
-            .projection
+            .test_projection()
             .lock()
             .members
             .remove(&(realm_id.to_owned(), member.to_owned()));
@@ -503,7 +504,7 @@ fn realm_member_roster(entry: &RealmDirectoryEntry) -> Vec<Value> {
 }
 
 pub(crate) async fn delete_test_realm(state: &AppState, realm_id: &str) -> Value {
-    let store = state.persistence.realm_meta();
+    let store = state.test_persistence().realm_meta();
     if let Some(mut meta) = store.get(realm_id).await.unwrap() {
         meta.deleted = true;
         meta.updated_at = chrono::Utc::now();
@@ -606,7 +607,7 @@ pub(crate) fn signed_canonical_event(
     payload: Value,
 ) -> Value {
     let now = chrono::Utc::now();
-    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
@@ -862,7 +863,7 @@ pub(crate) async fn authorize_test_plaintext_message_service(
 ) {
     let now = chrono::Utc::now();
     let mut meta = state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .get(realm_id)
         .await
@@ -886,14 +887,14 @@ pub(crate) async fn authorize_test_plaintext_message_service(
             updated_at: now,
         });
     meta.plaintext_visible_services
-        .insert(state.service_id.clone());
+        .insert(state.service_id().clone());
     meta.plaintext_visible_service_classes
-        .entry(state.service_id.clone())
+        .entry(state.service_id().clone())
         .or_default()
         .insert(arkret_sdk::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(realm_id, &meta)
         .await
@@ -1532,7 +1533,12 @@ pub(crate) async fn persist_test_message(
         encrypted: false,
         created_at: chrono::Utc::now(),
     };
-    state.persistence.messages().put(&record).await.unwrap();
+    state
+        .test_persistence()
+        .messages()
+        .put(&record)
+        .await
+        .unwrap();
     let envelope = signed_canonical_event(
         &record.event_id,
         "ak.message.create",
@@ -1556,7 +1562,7 @@ pub(crate) async fn persist_test_message(
         .expect("signed fixture digest")
         .to_owned();
     state
-        .persistence
+        .test_persistence()
         .events()
         .put(soland_storage::CanonicalEventRecord {
             event_id: record.event_id.clone(),

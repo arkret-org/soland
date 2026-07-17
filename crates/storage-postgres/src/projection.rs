@@ -1,4 +1,12 @@
-use super::*;
+use super::{
+    BigInt, Jsonb, MorphProjectionRecord, MorphProjectionStore, Nullable, Operation,
+    OptionalExtension, PersistenceError, PersistenceResult, PgPool, ProjectionEventAppendOutcome,
+    ProjectionEventRecord, ProjectionEventStore, QueryableByName, RunQueryDsl,
+    SpaceContainerProjectionRecord, SpaceContainerProjectionStore, SqlUuid, StrandProjectionRecord,
+    StrandProjectionStore, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
+    projected_operation_realm_discoverability, projected_operation_realm_summary,
+    projected_operation_realm_title, sql_query,
+};
 pub struct PgSpaceContainerProjectionStore {
     pub pool: PgPool,
 }
@@ -618,10 +626,12 @@ pub async fn persist_projected_operation_to_pg(
     pool: &PgPool,
     origin: &str,
     operation: &Operation,
+    event_type: &str,
+    is_message_create: bool,
+    is_membership_or_realm_lifecycle: bool,
 ) -> PersistenceResult<()> {
     let mut conn = pg_conn(pool).await.map_err(PersistenceError::database)?;
-    let event_type = soland_domain::kinds::canonical_kind_string(operation);
-    if soland_domain::kinds::operation_is_message_create(operation) {
+    if is_message_create {
         let event_id = operation
             .payload
             .get("event_id")
@@ -648,7 +658,7 @@ pub async fn persist_projected_operation_to_pg(
         )
         .bind::<SqlUuid, _>(event_id_uuid)
         .bind::<SqlUuid, _>(realm_id_uuid)
-        .bind::<Text, _>(&event_type)
+        .bind::<Text, _>(event_type)
         .bind::<Nullable<Text>, _>(Some(sender))
         .bind::<Nullable<Text>, _>(thread_id)
         .bind::<Nullable<SqlUuid>, _>(Some(operation_id_uuid))
@@ -656,9 +666,7 @@ pub async fn persist_projected_operation_to_pg(
         .bind::<Timestamptz, _>(operation.created_at)
         .execute(&mut *conn)
         .await.map_err(PersistenceError::database)?;
-    } else if soland_domain::kinds::operation_is_membership(operation)
-        || soland_domain::kinds::operation_is_realm_lifecycle(operation)
-    {
+    } else if is_membership_or_realm_lifecycle {
         let title = projected_operation_realm_title(operation);
         let title_for_insert = title.unwrap_or_else(|| operation.realm_id.as_str());
         let summary = projected_operation_realm_summary(operation);
@@ -738,7 +746,7 @@ pub async fn persist_projected_operation_to_pg(
         )
         .bind::<SqlUuid, _>(operation_id_uuid)
         .bind::<SqlUuid, _>(realm_id_uuid)
-        .bind::<Text, _>(&event_type)
+        .bind::<Text, _>(event_type)
         .bind::<Text, _>(
             operation
                 .payload

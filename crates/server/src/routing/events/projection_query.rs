@@ -50,11 +50,11 @@ use soland_domain::reducer::{
     MessageState, MorphProjection, ObjectLifecycleState, ProjectionState, SolandRelationState,
     SpaceContainerLifecycleState, morph_document_body,
 };
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 use soland_storage::SessionRecord;
 
 use super::{realm_history_visibility, realm_id_accessible};
-use crate::error::{AppError, ErrorCode};
-use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
@@ -1290,11 +1290,11 @@ async fn list_relation_projections(
 ) -> JsonResult<RelationEdgeList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let from_ref = crate::routing::system::util::query_param(req, "from_ref");
-    let to_ref = crate::routing::system::util::query_param(req, "to_ref");
-    let relation_kind = crate::routing::system::util::query_param(req, "relation_kind");
-    let state_filter = crate::routing::system::util::query_param(req, "state")
-        .unwrap_or_else(|| "active".to_owned());
+    let from_ref = soland_http::util::query_param(req, "from_ref");
+    let to_ref = soland_http::util::query_param(req, "to_ref");
+    let relation_kind = soland_http::util::query_param(req, "relation_kind");
+    let state_filter =
+        soland_http::util::query_param(req, "state").unwrap_or_else(|| "active".to_owned());
 
     let candidates: Vec<SolandRelationState> = {
         let proj = state.projection.lock();

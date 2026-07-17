@@ -18,10 +18,10 @@ fn cross_signing_reset_event(
     event_id: &str,
     payload: Value,
 ) -> Value {
-    let realm_id = soland::test_support::principal_control_realm_for_did(actor);
+    let realm_id = soland_test_support::principal_control_realm_for_did(actor);
     signed_canonical_event(
         event_id,
-        "ak.cross_signing.reset",
+        "ak.test_cross_signing().reset",
         actor,
         device_id,
         &realm_id,
@@ -117,7 +117,7 @@ async fn seed_reset_recovery_policy(
         }
     }
     state
-        .persistence
+        .test_persistence()
         .recovery_policies()
         .insert(RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
@@ -149,7 +149,7 @@ async fn seed_verified_recovery_session_for_reset_test(
     let challenge = session["challenge"].as_str().unwrap().to_owned();
     let signature = sign_recovery_proof(signing, &session);
     let mut record = state
-        .persistence
+        .test_persistence()
         .recovery_sessions()
         .get(&session_id)
         .await
@@ -168,7 +168,7 @@ async fn seed_verified_recovery_session_for_reset_test(
         },
     }));
     state
-        .persistence
+        .test_persistence()
         .recovery_sessions()
         .update(record)
         .await
@@ -187,7 +187,7 @@ async fn seed_verified_reset_recovery_session(
     let now = chrono::Utc::now();
     let recovery_session_id = new_prefixed_uuid7("ak:recovery_session:");
     state
-        .persistence
+        .test_persistence()
         .recovery_sessions()
         .insert(RecoverySessionRecord {
             recovery_session_id: recovery_session_id.clone(),
@@ -466,7 +466,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
     .await;
     let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
     let challenge = session["challenge"].as_str().unwrap().to_owned();
-    let audience = state.service_id.clone();
+    let audience = state.service_id().clone();
     let signature = sign_trusted_recovery_service_proof(
         &service_key,
         &session,
@@ -515,7 +515,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
     assert_eq!(fetched["proof_summary"], body["proof_summary"]);
 
     let audit = state
-        .persistence
+        .test_persistence()
         .audit()
         .list_for_actor(&principal_id)
         .await
@@ -579,7 +579,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
     .await;
     let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
     let challenge = session["challenge"].as_str().unwrap().to_owned();
-    let audience = state.service_id.clone();
+    let audience = state.service_id().clone();
     let rejected_signature = sign_trusted_recovery_service_proof(
         &attacker_service_key,
         &session,
@@ -623,10 +623,10 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
         &session,
         &service_id,
         &service_vm,
-        &state.service_id,
+        &state.service_id(),
         None,
     );
-    let accepted_audience = state.service_id.clone();
+    let accepted_audience = state.service_id().clone();
     let accepted_body = serde_json::json!({
         "proof": {
             "kind": "trusted_recovery_service",
@@ -829,7 +829,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
 
     // The requesting device is now a verified device for the principal.
     let device = state
-        .persistence
+        .test_persistence()
         .devices()
         .get(&principal_id, &device_id)
         .await
@@ -1011,7 +1011,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     for (device_id, key) in [(device_a, &device_a_key), (device_b, &device_b_key)] {
         let now = chrono::Utc::now();
         state
-            .persistence
+            .test_persistence()
             .devices()
             .put(&DeviceInventoryRecord {
                 actor: principal_id.clone(),
@@ -1105,7 +1105,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
         ),
     ] {
         state
-            .persistence
+            .test_persistence()
             .device_messages()
             .append(DeviceMessageRecord {
                 idempotency_key: format!("reset-purge-{position}"),
@@ -1146,7 +1146,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
     assert_eq!(body["status"], "accepted", "body: {body}");
 
     let queued = state
-        .persistence
+        .test_persistence()
         .device_messages()
         .list_after(&principal_id, target_device, 0)
         .await
@@ -1169,7 +1169,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
     );
     assert_eq!(
         state
-            .persistence
+            .test_persistence()
             .device_messages()
             .lost_watermark(&principal_id, target_device)
             .await
@@ -1206,7 +1206,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_complete_rejected_after_cross_signing_reset() {
-    // A ak.cross_signing.reset advances the accepted generation fence. A
+    // A ak.test_cross_signing().reset advances the accepted generation fence. A
     // device-authorize binding for the retired generation must be rejected as
     // stale before its SSK signature is considered.
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
@@ -1240,7 +1240,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
     let content: arkret_sdk::CrossSigningResetPayload =
         serde_json::from_value(reset).expect("reset content");
     state
-        .cross_signing
+        .test_cross_signing()
         .lock()
         .record_cross_signing_reset(&content)
         .expect("record reset");

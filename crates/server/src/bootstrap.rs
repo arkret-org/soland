@@ -1315,6 +1315,7 @@ fn seed_public_multibase(seed: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use arkret_sdk::{InMemoryKeyStore, KeyStore};
+    use soland_storage::DeliveryPolicyStoreRegistry;
 
     use super::*;
 

@@ -58,7 +58,7 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
 }
 
 fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: u64) {
-    let mut manager = state.cross_signing.lock();
+    let mut manager = state.test_cross_signing().lock();
     for current in 1..=generation {
         manager
             .record_cross_signing_publish(cross_signing_publish(principal, current))
@@ -122,9 +122,9 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
     let now = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .contacts()
-        .put(&soland_storage::ContactRecord {
+        .put(&soland_domain::identity::ContactRecord {
             requester: "did:web:alice.example".to_owned(),
             target: BOB_DID.to_owned(),
             scope: "direct_message".to_owned(),
@@ -157,9 +157,9 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
     let alice = dev_token(state.clone()).await;
     let now = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .contacts()
-        .put(&soland_storage::ContactRecord {
+        .put(&soland_domain::identity::ContactRecord {
             requester: "did:web:alice.example".to_owned(),
             target: BOB_PAIRWISE_DID.to_owned(),
             scope: "direct_message".to_owned(),
@@ -175,13 +175,13 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         .await
         .unwrap();
     let grant_dot = "ak:event:0196419b-0000-7000-8000-000000000233".to_owned();
-    state.consent_cells.lock().insert(
-        soland_storage::ConsentCellKey {
+    state.test_consent_cells().lock().insert(
+        soland_domain::identity::ConsentCellKey {
             holder: BOB_PAIRWISE_DID.to_owned(),
             peer: "did:web:alice.example".to_owned(),
             scope: "direct_message".to_owned(),
         },
-        soland_storage::ConsentCellRecord {
+        soland_domain::identity::ConsentCellRecord {
             holder: BOB_PAIRWISE_DID.to_owned(),
             peer: "did:web:alice.example".to_owned(),
             scope: "direct_message".to_owned(),
@@ -210,7 +210,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "peer_unresolvable");
-    assert!(state.direct_conversation_bindings.lock().is_empty());
+    assert!(state.test_direct_conversation_bindings().lock().is_empty());
 }
 
 #[tokio::test]
@@ -220,9 +220,9 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
     let now = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .contacts()
-        .put(&soland_storage::ContactRecord {
+        .put(&soland_domain::identity::ContactRecord {
             requester: "did:web:alice.example".to_owned(),
             target: BOB_DID.to_owned(),
             scope: "direct_message".to_owned(),
@@ -288,7 +288,7 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "keypackage_unknown");
-    assert!(state.direct_conversation_bindings.lock().is_empty());
+    assert!(state.test_direct_conversation_bindings().lock().is_empty());
 }
 
 #[tokio::test]
@@ -380,7 +380,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
             .starts_with("ak:strand:")
     );
     let keypackages = state
-        .persistence
+        .test_persistence()
         .mls_key_packages()
         .snapshot_all()
         .await
@@ -392,7 +392,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     let mls_group_id = claimed.claimed_by_mls_group_id.clone().unwrap();
     assert!(mls_group_id.starts_with("ak:mls_group:"));
     let welcomes = state
-        .persistence
+        .test_persistence()
         .mls_welcomes()
         .snapshot_all()
         .await
@@ -402,7 +402,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     assert_eq!(welcomes[0].recipient_actor_id, BOB_DID);
     assert_eq!(welcomes[0].recipient_device_id, BOB_DEVICE);
     let device_messages = state
-        .persistence
+        .test_persistence()
         .device_messages()
         .list_after(BOB_DID, BOB_DEVICE, 0)
         .await
@@ -417,7 +417,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         "realm_id": created["realm_id"].as_str().unwrap(),
     });
     let genesis = state
-        .persistence
+        .test_persistence()
         .mls_commits()
         .get(&effective_scope, &mls_group_id)
         .await
@@ -516,5 +516,5 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
         1,
         "exactly one concurrent request should create the binding: {first} {second}"
     );
-    assert_eq!(state.direct_conversation_bindings.lock().len(), 1);
+    assert_eq!(state.test_direct_conversation_bindings().lock().len(), 1);
 }

@@ -1,8 +1,8 @@
+use soland_http::error::AppError;
 use soland_storage_postgres::Db;
 
 use super::*;
 use crate::config::{AppConfig, FederationFanoutTopology};
-use crate::error::AppError;
 use crate::state::AppState;
 
 const FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST: &str = "federation request authentication failed";
@@ -83,7 +83,7 @@ fn verify_actor_headers_reject_digest_mismatch() {
     )
     .expect_err("mismatched digest rejected");
 
-    assert_eq!(error.code, crate::error::ErrorCode::Unauthenticated);
+    assert_eq!(error.code, soland_http::error::ErrorCode::Unauthenticated);
     assert_eq!(error.wire_code(), "unauthenticated");
     assert_eq!(error.http_status(), StatusCode::UNAUTHORIZED);
     assert_eq!(error.message, FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST);
@@ -102,7 +102,7 @@ fn verify_actor_headers_reject_destination_mismatch() {
     )
     .expect_err("wrong destination rejected");
 
-    assert_eq!(error.code, crate::error::ErrorCode::Unauthenticated);
+    assert_eq!(error.code, soland_http::error::ErrorCode::Unauthenticated);
     assert_eq!(error.wire_code(), "unauthenticated");
     assert_eq!(error.http_status(), StatusCode::UNAUTHORIZED);
     assert_eq!(error.message, FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST);
@@ -498,7 +498,7 @@ fn validate_signature_params_rejects_already_expired() {
 }
 
 fn assert_signature_param_rejection_is_minimal(err: AppError) {
-    assert_eq!(err.code, crate::error::ErrorCode::Unauthenticated);
+    assert_eq!(err.code, soland_http::error::ErrorCode::Unauthenticated);
     assert_eq!(err.wire_code(), "unauthenticated");
     assert_eq!(err.http_status(), StatusCode::UNAUTHORIZED);
     assert_eq!(err.message, FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST);

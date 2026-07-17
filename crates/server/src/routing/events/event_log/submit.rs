@@ -17,6 +17,7 @@ use crate::invite_claim_proofs::{
 /// entries; two actors hashing to the same shard merely serialize together,
 /// which is a safe superset of the required per-actor exclusion.
 const ACTOR_SUBMIT_LOCK_SHARDS: usize = 1024;
+pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 
 static ACTOR_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 
@@ -90,6 +91,14 @@ pub(in crate::routing) struct SubmittedEventOutcome {
     pub event_id: String,
     pub duplicate: bool,
     pub outcome: EventsSubmitOutcome,
+}
+
+#[derive(Debug)]
+pub(in crate::routing) struct EventCommitIdempotency {
+    pub principal_id: String,
+    pub key: String,
+    pub service_id: String,
+    pub request_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -218,7 +227,7 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
         && error.code == "failed_precondition"
         && error.message != error.code
     {
-        crate::routing::system::util::render_error_with_top_level_reason(
+        soland_http::util::render_error_with_top_level_reason(
             res,
             error.status,
             &error.code,
@@ -283,8 +292,14 @@ pub(super) async fn submit_event_batch_outcome(
         let kind = event_string_field_from_value(&envelope, "kind");
         let realm_id = event_string_field_from_value(&envelope, "realm_id");
         let actor_id = event_string_field_from_value(&envelope, "actor_id");
-        match submit_event_value_with_context(state, session, envelope, &realm_bootstrap_contexts)
-            .await
+        match submit_event_value_with_context(
+            state,
+            session,
+            envelope,
+            &realm_bootstrap_contexts,
+            None,
+        )
+        .await
         {
             Ok(response) => {
                 accepted.push(response.event_id.clone());
@@ -755,6 +770,7 @@ use outcome::*;
 use post_commit::*;
 use preflight::*;
 pub(in crate::routing) use value::submit_event_value;
+pub(in crate::routing::events::event_log) use value::submit_event_value_with_idempotency;
 use value::*;
 
 #[cfg(test)]

@@ -75,9 +75,8 @@ pub async fn authenticated_session(
     }
     let token_hash = session_credential_hash(token, &state.service_id);
     let session = state
-        .persistence
-        .sessions()
-        .get(&token_hash)
+        .session_application()
+        .session(&token_hash)
         .await
         .map_err(|_| {
             (
@@ -85,7 +84,8 @@ pub async fn authenticated_session(
                 "internal_error",
                 "session store unavailable",
             )
-        })?;
+        })?
+        .map(crate::routing::identity::persistence_session_identity);
     let Some(session) = session else {
         return Err((
             StatusCode::UNAUTHORIZED,

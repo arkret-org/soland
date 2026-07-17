@@ -1,4 +1,4 @@
-use super::*;
+use super::{PersistenceError, PersistenceResult, Uuid, Value, async_trait, ids};
 /// Append-only audit log. Reads are always actor-scoped; the cursor is the
 /// `audit_id` of the last item the caller already saw.
 #[async_trait]
@@ -31,7 +31,9 @@ pub fn operation_uuid_index(value: Option<&str>) -> Option<Uuid> {
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use uuid::Uuid;
+
+    use super::{PersistenceError, audit_uuid_index, operation_uuid_index};
 
     #[test]
     fn operation_uuid_index_ignores_protocol_operation_id() {

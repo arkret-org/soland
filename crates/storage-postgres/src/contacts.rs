@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    Array, BTreeSet, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactRecord,
+    ContactStore, DirectConversationBindingRecord, DirectConversationBindingStore,
+    InviteReceivePolicyStore, Jsonb, Nullable, OptionalExtension, PersistenceError,
+    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid,
+    Value, async_trait, decode_grant_dots, encode_grant_dots, ids, pg_conn, sql_query,
+};
 // ── Pg-backed contact projection store ───────────────────────────────────
 // Durable backing for the holder↔peer `ContactStore`. Mirrors the
 // `MemoryContactStore` query shape onto the `contacts` table. Column order

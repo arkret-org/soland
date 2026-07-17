@@ -116,13 +116,13 @@ impl SolandDidResolver {
             .map(|cached| cached.document.clone())
     }
 
-    fn document_from_record(
+    fn document_from_parts(
         &self,
         did: &Did,
-        record: soland_storage::WebvhDocumentRecord,
+        did_document: Value,
+        seq: u64,
     ) -> Result<DidDocument, Error> {
-        let seq = record.seq;
-        let document: DidDocument = serde_json::from_value(record.did_document)
+        let document: DidDocument = serde_json::from_value(did_document)
             .map_err(|e| Error::Protocol(format!("local DID document decode failed: {e}")))?;
         if &document.id != did {
             return Err(Error::Protocol("local DID document id mismatch".to_owned()));
@@ -152,12 +152,28 @@ impl SolandDidResolver {
         Ok(document)
     }
 
+    fn document_from_record(
+        &self,
+        did: &Did,
+        record: soland_storage::WebvhDocumentRecord,
+    ) -> Result<DidDocument, Error> {
+        self.document_from_parts(did, record.did_document, record.seq)
+    }
+
     pub fn cache_webvh_record(
         &self,
         record: soland_storage::WebvhDocumentRecord,
     ) -> Result<DidDocument, Error> {
         let did = Did::new(record.did.clone()).map_err(Error::from)?;
         self.document_from_record(&did, record)
+    }
+
+    pub(crate) fn cache_application_webvh_record(
+        &self,
+        record: soland_application::identity::DidDocumentState,
+    ) -> Result<DidDocument, Error> {
+        let did = Did::new(record.did).map_err(Error::from)?;
+        self.document_from_parts(&did, record.did_document, record.seq)
     }
 
     pub async fn resolve_did_async(&self, did: &Did) -> Result<DidDocument, Error> {
@@ -337,7 +353,7 @@ mod tests {
     use arkret_sdk::Did;
     use arkret_sdk::identity::DidResolver;
     use serde_json::json;
-    use soland_storage::{PersistenceStore, WebvhDocumentRecord};
+    use soland_storage::{DeliveryPolicyStoreRegistry, WebvhDocumentRecord};
     use soland_storage_memory::SolandMemoryPersistenceStore;
 
     use super::*;

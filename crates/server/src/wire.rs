@@ -911,11 +911,12 @@ pub fn describe(
         // service-describe.schema.json requires `rate_limit_policy` or
         // `rate_limit_policy_id` (the legacy top-level `rate_limit` field was
         // removed). Derive the advertised per-class policy from the SAME runtime
-        // config the middleware enforces (`crate::ratelimit`) so wire and
+        // config the HTTP middleware enforces so wire and
         // enforcement can never drift — a conformant client budgeting against
         // this policy cannot trip a 429 it could not predict.
         rate_limit_policy: Some(
-            crate::ratelimit::RateLimiterConfig::from_env(development_mode).advertised_policy(),
+            soland_http::ratelimit::RateLimiterConfig::from_env(development_mode)
+                .advertised_policy(),
         ),
         rate_limit_policy_id: None,
         egress_network_policy: Some(arkret_sdk::EgressNetworkPolicy::deny_private_defaults()),

@@ -12,11 +12,11 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use soland_storage::{RecoverySessionRecord, key_backup_daily_download_limit};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
+use soland_storage::key_backup_daily_download_limit;
 
 use super::append_audit_log;
-use crate::error::{AppError, ErrorCode};
-use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -669,23 +669,23 @@ mod tests {
 
         // Unset → spec default (64).
         assert_eq!(
-            crate::state::clamp_key_backup_daily_download_limit(None),
+            soland_storage::clamp_key_backup_daily_download_limit(None),
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT
         );
         // In-range values are honored as-is.
         assert_eq!(
-            crate::state::clamp_key_backup_daily_download_limit(Some(100)),
+            soland_storage::clamp_key_backup_daily_download_limit(Some(100)),
             100
         );
         // Outside the spec-allowed [16, 256] range the value is clamped —
         // §7.8 forbids relaxing past the ceiling, and a sub-floor value
         // would break a single legitimate long-series restore.
         assert_eq!(
-            crate::state::clamp_key_backup_daily_download_limit(Some(1)),
+            soland_storage::clamp_key_backup_daily_download_limit(Some(1)),
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN
         );
         assert_eq!(
-            crate::state::clamp_key_backup_daily_download_limit(Some(100_000)),
+            soland_storage::clamp_key_backup_daily_download_limit(Some(100_000)),
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX
         );
     }

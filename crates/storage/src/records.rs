@@ -425,69 +425,6 @@ pub struct WebvhLogRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ContactRecord {
-    pub requester: String,
-    pub target: String,
-    pub scope: String,
-    pub status: String,
-    pub request_event_ref: Option<String>,
-    pub response_event_ref: Option<String>,
-    pub tombstone_event_ref: Option<String>,
-    /// Optional free-text greeting carried on `ak.contact.requested`
-    /// (spec 0015 §3.4). NFC-normalized, 1..2000 chars. `None` when the
-    /// request carried no message or the row originated from a consent
-    /// grant rather than an explicit request.
-    pub message: Option<String>,
-    /// Service DID of the Principal Server hosting the contact's *peer* end,
-    /// when learned from a cross-Principal-Server contact delivery
-    /// (`ak.peer.contacts.command.submit`, `source-service-id` header). `None` for
-    /// same-Principal-Server contacts. In-memory projection only — surfaced on
-    /// `contact_list_row.peer_service_id` so the holder can address
-    /// responses/invites back to the peer's home server.
-    pub peer_service_id: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ConsentCellKey {
-    pub holder: String,
-    pub peer: String,
-    pub scope: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConsentGrantDot {
-    pub dot: String,
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub granted_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConsentCellRecord {
-    pub holder: String,
-    pub peer: String,
-    pub scope: String,
-    pub cell_id: String,
-    pub requested_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub grant_dots: BTreeMap<String, ConsentGrantDot>,
-    pub revoked_dots: BTreeSet<String>,
-    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DirectConversationBindingRecord {
-    pub participants_unordered: Vec<String>,
-    pub realm_id: String,
-    pub main_strand_id: String,
-    pub binding_event_ref: String,
-    pub state: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
 /// Actor-private account data row (`ak.account_data.set` storage).
 ///
 /// One row per `(actor, data_type)`. `data_type` is the canonical wire key

@@ -98,7 +98,7 @@ async fn ephemeral_presence_requires_active_authorized_device_signature() {
     );
     assert!(
         state
-            .persistence
+            .test_persistence()
             .presence()
             .list_for_actor("did:web:alice.example")
             .await
@@ -136,14 +136,19 @@ async fn ephemeral_presence_requires_active_authorized_device_signature() {
     )
     .await;
     let mut device = state
-        .persistence
+        .test_persistence()
         .devices()
         .get(actor, device_id)
         .await
         .unwrap()
         .unwrap();
     device.revoked_at = Some(chrono::Utc::now());
-    state.persistence.devices().put(&device).await.unwrap();
+    state
+        .test_persistence()
+        .devices()
+        .put(&device)
+        .await
+        .unwrap();
 
     let mut revoked = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {sibling_token}"), true)
@@ -221,7 +226,7 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
             .is_none()
     );
     let stored_file_transfer_blob = state
-        .persistence
+        .test_persistence()
         .blobs()
         .get(file_transfer_blob["blob_ref"].as_str().unwrap())
         .await
@@ -254,15 +259,17 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
     let avatar_bytes = b"\x89PNG\r\n\x1a\navatar-bytes".to_vec();
     let avatar_sha256 = hex::encode(Sha256::digest(&avatar_bytes));
     let blob_ref = format!("ak:blob:sha256:{avatar_sha256}");
-    let storage_key = state.object_storage.object_key_for_sha256(&avatar_sha256);
+    let storage_key = state
+        .test_object_storage()
+        .object_key_for_sha256(&avatar_sha256);
     state
-        .object_storage
+        .test_object_storage()
         .put(&storage_key, avatar_bytes.clone())
         .await
         .unwrap();
     assert!(
         state
-            .persistence
+            .test_persistence()
             .blobs()
             .get(&blob_ref)
             .await
@@ -292,7 +299,7 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
     );
 
     let recovered = state
-        .persistence
+        .test_persistence()
         .blobs()
         .get(&blob_ref)
         .await
@@ -357,7 +364,7 @@ async fn push_profile_and_moderation_contracts_work() {
     );
 
     state
-        .persistence
+        .test_persistence()
         .presence()
         .put(PresenceRecord {
             actor: "did:web:alice.example".to_owned(),
@@ -418,7 +425,7 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(typing["kind"], "ak.typing");
 
     let active_typing = state
-        .persistence
+        .test_persistence()
         .typing()
         .list_for_realm(DEMO_REALM_ID)
         .await
@@ -443,7 +450,7 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(typing_stopped["accepted"], true);
 
     let cleared_typing = state
-        .persistence
+        .test_persistence()
         .typing()
         .list_for_realm(DEMO_REALM_ID)
         .await
@@ -552,7 +559,7 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(report["status"], "submitted", "report response: {report}");
     assert!(
         state
-            .persistence
+            .test_persistence()
             .audit()
             .snapshot_all()
             .await
@@ -564,7 +571,7 @@ async fn push_profile_and_moderation_contracts_work() {
     );
     assert!(
         state
-            .persistence
+            .test_persistence()
             .moderation()
             .list_actions()
             .await
@@ -603,7 +610,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     assert_eq!(plaintext_policy.status_code.unwrap().as_u16(), 400);
 
     state
-        .persistence
+        .test_persistence()
         .presence()
         .put(PresenceRecord {
             actor: "did:web:alice.example".to_owned(),
@@ -646,7 +653,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     assert_eq!(presence["accepted"], true);
     assert!(
         !state
-            .persistence
+            .test_persistence()
             .presence()
             .list_for_actor("did:web:alice.example")
             .await
@@ -673,7 +680,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         .unwrap();
     assert_eq!(typing["accepted"], true);
     let typing_records = state
-        .persistence
+        .test_persistence()
         .typing()
         .list_for_realm(DEMO_REALM_ID)
         .await
@@ -684,7 +691,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     );
 
     state
-        .persistence
+        .test_persistence()
         .account_data()
         .put(&soland_storage::AccountDataRecord {
             actor: "did:web:alice.example".to_owned(),
@@ -723,7 +730,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
     assert_eq!(hidden_presence["accepted"], true);
     assert!(
         state
-            .persistence
+            .test_persistence()
             .presence()
             .list_for_actor("did:web:alice.example")
             .await
@@ -748,7 +755,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         .unwrap();
     assert_eq!(hidden_typing["accepted"], true);
     let hidden_typing_records = state
-        .persistence
+        .test_persistence()
         .typing()
         .list_for_realm(DEMO_REALM_ID)
         .await
@@ -777,7 +784,7 @@ async fn typing_submit_rejects_unknown_strand_scope() {
         .await;
     assert_eq!(rejected_typing.status_code, Some(StatusCode::FORBIDDEN));
     let typing_after_reject = state
-        .persistence
+        .test_persistence()
         .typing()
         .list_for_realm(DEMO_REALM_ID)
         .await
@@ -807,7 +814,7 @@ async fn typing_submit_accepts_default_realm_strand_scope() {
     assert_eq!(typing["accepted"], true);
 
     let active_typing = state
-        .persistence
+        .test_persistence()
         .typing()
         .list_for_realm(DEMO_REALM_ID)
         .await
@@ -825,7 +832,7 @@ async fn typing_submit_wakes_account_subscribe_stream() {
     let token = ephemeral_test_token(state.clone()).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000004";
     insert_typing_scope_strand(state.clone(), strand_id, Some(true));
-    let mut wakeups = state.event_broadcast.subscribe();
+    let mut wakeups = state.test_event_broadcast().subscribe();
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
@@ -928,7 +935,7 @@ async fn typing_submit_rejects_disabled_discussion_strand_scope() {
         .await;
     assert_eq!(rejected_typing.status_code, Some(StatusCode::FORBIDDEN));
     let typing_after_reject = state
-        .persistence
+        .test_persistence()
         .typing()
         .list_for_realm(DEMO_REALM_ID)
         .await
@@ -942,7 +949,7 @@ async fn public_read_receipt_policy_rejected_for_world_readable_realm_without_op
     let token = dev_token(state.clone()).await;
     let now = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(
             DEMO_REALM_ID,
@@ -1079,7 +1086,7 @@ async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
     insert_typing_scope_strand(state.clone(), strand_id, Some(false));
     let now = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .typing()
         .put(soland_storage::TypingRecord {
             actor: "did:web:alice.example".to_owned(),
@@ -1112,7 +1119,7 @@ async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
 
 fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabled: Option<bool>) {
     let now = chrono::Utc::now();
-    state.projection.lock().strands.insert(
+    state.test_projection().lock().strands.insert(
         strand_id.to_owned(),
         soland_domain::reducer::StrandProjection {
             strand_id: strand_id.to_owned(),
@@ -1150,7 +1157,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
     // job).
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    state.authz.create_grant(
+    state.test_authz().create_grant(
         DEMO_REALM_ID.to_owned(),
         "did:web:alice.example".to_owned(),
         "did:web:alice.example".to_owned(),
@@ -1278,7 +1285,7 @@ async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_toke
     assert_eq!(first["registration_id"], repeated["registration_id"]);
 
     let after_repeat = state
-        .persistence
+        .test_persistence()
         .push_devices()
         .snapshot_all()
         .await
@@ -1295,7 +1302,7 @@ async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_toke
     assert_eq!(first["registration_id"], rotated["registration_id"]);
 
     let after_rotation = state
-        .persistence
+        .test_persistence()
         .push_devices()
         .snapshot_all()
         .await

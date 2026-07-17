@@ -13,127 +13,10 @@
 use arkret_sdk::{DeviceId, Did, SpaceId};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use salvo::http::{StatusCode, header};
+use salvo::http::header;
 use salvo::prelude::*;
 
-use crate::ids;
-// ── HTTP helpers ────────────────────────────────────────────────────────────
-
-/// Render a Arkret-shaped error envelope and stamp the response status.
-///
-/// Produces the spec-canonical SDK envelope:
-/// `{"ok": false, "error": {"code": <code>, "message": <message>},
-///  "request_id": <opaque>}`.
-pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {
-    let request_id = ids::generate_request_id();
-    res.status_code(status);
-    res.render(Json(
-        arkret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id),
-    ));
-}
-
-/// Variant of [`render_error`] that also stamps a free-form
-/// `error.details.reason_detail` diagnostic.
-///
-/// Round 2 — used by `AppError::with_reason_detail` to thread an
-/// unstable diagnostic string through the otherwise canonical
-/// envelope. Clients MUST NOT parse this value; the OpenAPI
-/// description on every error response notes the contract.
-pub fn render_error_with_detail(
-    res: &mut Response,
-    status: StatusCode,
-    code: &str,
-    message: &str,
-    reason_detail: &str,
-) {
-    let request_id = ids::generate_request_id();
-    res.status_code(status);
-    res.render(Json(
-        arkret_sdk::ErrorEnvelope::new(code, message)
-            .with_request_id(request_id)
-            .with_detail(
-                "reason_detail",
-                serde_json::Value::String(reason_detail.to_owned()),
-            ),
-    ));
-}
-
-/// Render a canonical error with a stable `error.details.reason_code` and an
-/// optional opaque diagnostic.
-pub fn render_error_with_reason_code(
-    res: &mut Response,
-    status: StatusCode,
-    code: &str,
-    message: &str,
-    reason_code: &str,
-    reason_detail: Option<&str>,
-) {
-    let request_id = ids::generate_request_id();
-    let mut envelope = arkret_sdk::ErrorEnvelope::new(code, message)
-        .with_request_id(request_id)
-        .with_detail(
-            "reason_code",
-            serde_json::Value::String(reason_code.to_owned()),
-        );
-    if let Some(reason_detail) = reason_detail {
-        envelope = envelope.with_detail(
-            "reason_detail",
-            serde_json::Value::String(reason_detail.to_owned()),
-        );
-    }
-    res.status_code(status);
-    res.render(Json(envelope));
-}
-
-/// Variant of [`render_error`] that stamps a **stable** top-level `reason`
-/// discriminator (and `error.reason` mirror) alongside the canonical envelope.
-///
-/// COT-03-001 / `applet-integration.md` §7.3.1: the inbound transaction-push
-/// signature failures pin the discriminator in `reason`, keeping `error.code`
-/// the generic `unauthenticated`. The discriminator is mirrored at both the
-/// top level (`reason`) and `error.reason` so callers can read either. An
-/// optional `reason_detail` is still threaded into `error.details.reason_detail`
-/// for opaque diagnostics.
-pub fn render_error_with_top_level_reason(
-    res: &mut Response,
-    status: StatusCode,
-    code: &str,
-    message: &str,
-    reason: &str,
-    reason_detail: Option<&str>,
-) {
-    let request_id = ids::generate_request_id();
-    let mut envelope = arkret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id);
-    if let Some(reason_detail) = reason_detail {
-        envelope = envelope.with_detail(
-            "reason_detail",
-            serde_json::Value::String(reason_detail.to_owned()),
-        );
-    }
-    let mut body = serde_json::to_value(&envelope).unwrap_or_else(|_| {
-        serde_json::json!({
-            "ok": false,
-            "error": { "code": code, "message": message },
-        })
-    });
-    if let Some(object) = body.as_object_mut() {
-        object.insert(
-            "reason".to_owned(),
-            serde_json::Value::String(reason.to_owned()),
-        );
-        if let Some(error) = object
-            .get_mut("error")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            error.insert(
-                "reason".to_owned(),
-                serde_json::Value::String(reason.to_owned()),
-            );
-        }
-    }
-    res.status_code(status);
-    res.render(Json(body));
-}
+pub use crate::error::{render_error, render_error_with_top_level_reason};
 
 /// Pull a single query-string value, decoding `+` to space and any
 /// `%XX` percent-escapes back to their raw byte form. Required for
@@ -268,7 +151,7 @@ pub fn is_valid_sync_token(token: &str) -> bool {
             .get("x")
             .and_then(|x| x.as_i64())
             .is_some_and(|x| x > 0)
-        && crate::routing::events::sync::validate_cursor_handle(handle).is_ok()
+        && crate::cursor::validate_cursor_handle(handle).is_ok()
 }
 
 /// `sha256:<64 lowercase hex>` shape.

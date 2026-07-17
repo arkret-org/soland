@@ -32,13 +32,12 @@ pub(super) async fn authorize_sidecar_ensure(
     realm_id: &str,
 ) -> Result<(), AppError> {
     let owner = state
-        .persistence
-        .realm_meta()
-        .get(realm_id)
+        .realm_query_application()
+        .realm_metadata(realm_id)
         .await
         .ok()
         .flatten()
-        .map(|meta| meta.owner);
+        .map(|meta| meta.owner_id);
     let members = realm_members_for_authz(state, realm_id);
     let verdict = state.authz.check(
         controller,
@@ -239,11 +238,12 @@ pub(super) async fn eligible_sidecar_agents(
     addressed_agents: &[String],
 ) -> Result<Vec<String>, AppError> {
     let records = state
-        .persistence
-        .agents()
-        .list_for_controller(controller)
+        .agent_pairing_application()
+        .agents_for_controller(controller)
         .await
-        .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
+        .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?
+        .into_iter()
+        .collect::<Vec<_>>();
     let mut eligible = BTreeSet::new();
     for record in records {
         if agent_record_is_sidecar_eligible(state, realm_id, controller, &record) {

@@ -17,13 +17,15 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_storage::{AccountDataRecord, AgentStore};
+use soland_application::identity::{
+    AccountDataState, FindAgentControllerQuery, IdentityApplicationService,
+};
+use soland_http::error::AppError;
 
 use super::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, fanout_actor_private_update,
 };
 use super::{AuthArgs, now};
-use crate::error::AppError;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -167,7 +169,7 @@ fn validate_data_type(data_type: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn entry_from(record: AccountDataRecord) -> AccountDataEntry {
+fn entry_from(record: AccountDataState) -> AccountDataEntry {
     AccountDataEntry {
         data_type: record.data_type,
         content: record.payload,
@@ -184,13 +186,15 @@ fn account_data_update_type(data_type: &str) -> &'static str {
 }
 
 async fn session_actor_is_agent_runtime(
-    agent_store: &dyn AgentStore,
+    identity: &IdentityApplicationService,
     actor: &str,
 ) -> Result<bool, AppError> {
-    agent_store
-        .get(actor)
+    identity
+        .find_agent_controller(FindAgentControllerQuery {
+            agent_id: actor.to_owned(),
+        })
         .await
-        .map(|record| record.is_some())
+        .map(|controller| controller.is_some())
         .map_err(|error| AppError::internal(format!("agent principal lookup failed: {error}")))
 }
 
@@ -219,7 +223,7 @@ async fn put_account_data(
     // controller-private; native agent principals cannot write them directly.
     if let Some(spec) = registered_account_data_type(&data_type)
         && spec.controller_private
-        && session_actor_is_agent_runtime(state.persistence.agents(), &session.actor).await?
+        && session_actor_is_agent_runtime(state.identity_application(), &session.actor).await?
     {
         return Err(AppError::capability_denied(format!(
             "{} is controller-private; agent runtimes cannot write it",
@@ -238,29 +242,27 @@ async fn put_account_data(
         > MAX_PAYLOAD_BYTES
     {
         return Err(AppError::new(
-            crate::error::ErrorCode::PayloadTooLarge,
+            soland_http::error::ErrorCode::PayloadTooLarge,
             "account_data payload exceeds 64 KiB",
         ));
     }
 
     let existed = state
-        .persistence
-        .account_data()
-        .get(&session.actor, &data_type)
+        .account_data_application()
+        .entry(&session.actor, &data_type)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
 
-    let record = AccountDataRecord {
-        actor: session.actor.clone(),
+    let record = AccountDataState {
+        actor_id: session.actor.clone(),
         data_type: data_type.clone(),
         payload: body.content,
         updated_at: now(),
     };
     state
-        .persistence
-        .account_data()
-        .put(&record)
+        .account_data_application()
+        .save_entry(record.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
@@ -310,9 +312,8 @@ async fn get_account_data(
     validate_registered_account_data_key(&data_type)?;
 
     match state
-        .persistence
-        .account_data()
-        .get(&session.actor, &data_type)
+        .account_data_application()
+        .entry(&session.actor, &data_type)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
@@ -335,9 +336,8 @@ async fn list_account_data(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let entries = state
-        .persistence
-        .account_data()
-        .list_for_actor(&session.actor)
+        .account_data_application()
+        .entries_for_actor(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
@@ -365,9 +365,8 @@ async fn delete_account_data(
     validate_registered_account_data_key(&data_type)?;
 
     state
-        .persistence
-        .account_data()
-        .delete(&session.actor, &data_type)
+        .account_data_application()
+        .delete_entry(&session.actor, &data_type)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
@@ -400,11 +399,78 @@ async fn delete_account_data(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
     use serde_json::{Value, json};
-    use soland_storage::PersistenceStore;
-    use soland_storage_memory::SolandMemoryPersistenceStore;
+    use soland_application::ApplicationResult;
+    use soland_application::identity::{
+        AccountIdentity, AccountLookupPort, AgentController, AgentDirectoryPort,
+        DeviceDirectoryPort, DeviceIdentity, SaveDeviceCommand,
+    };
 
     use super::*;
+
+    struct NoAccounts;
+    struct NoDevices;
+    struct AgentClassifier;
+
+    #[async_trait]
+    impl AccountLookupPort for NoAccounts {
+        async fn find_account_by_actor(
+            &self,
+            _actor_id: &str,
+        ) -> ApplicationResult<Option<AccountIdentity>> {
+            Ok(None)
+        }
+
+        async fn register_account(
+            &self,
+            _command: soland_application::identity::RegisterAccountCommand,
+        ) -> ApplicationResult<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl DeviceDirectoryPort for NoDevices {
+        async fn list_active_device_actors(&self) -> ApplicationResult<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        async fn find_device(
+            &self,
+            _actor_id: &str,
+            _device_id: &str,
+        ) -> ApplicationResult<Option<DeviceIdentity>> {
+            Ok(None)
+        }
+
+        async fn save_device(&self, _command: SaveDeviceCommand) -> ApplicationResult<()> {
+            Ok(())
+        }
+
+        async fn devices_for_actor(
+            &self,
+            _actor_id: &str,
+        ) -> ApplicationResult<Vec<DeviceIdentity>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[async_trait]
+    impl AgentDirectoryPort for AgentClassifier {
+        async fn find_agent_controller(
+            &self,
+            agent_id: &str,
+        ) -> ApplicationResult<Option<AgentController>> {
+            Ok(
+                (agent_id == "did:web:agent.alice.example").then(|| AgentController {
+                    controller_id: "did:web:alice.example".to_owned(),
+                }),
+            )
+        }
+    }
 
     fn encrypted_envelope(data_type: &str) -> Value {
         serde_json::to_value(
@@ -507,33 +573,20 @@ mod tests {
 
     #[tokio::test]
     async fn controller_private_writer_classifier_uses_agent_principal_projection() {
-        let store = SolandMemoryPersistenceStore::new();
+        let identity = IdentityApplicationService::new(
+            Arc::new(NoAccounts),
+            Arc::new(NoDevices),
+            Arc::new(AgentClassifier),
+        );
         let agent_id = "did:web:agent.alice.example";
 
         assert!(
-            !session_actor_is_agent_runtime(store.agents(), agent_id)
-                .await
-                .unwrap()
-        );
-
-        let mut record = soland_storage::AgentPrincipalRecord::new(
-            agent_id.to_owned(),
-            "did:web:alice.example".to_owned(),
-            "ak:realm:01964137-0000-7000-8000-000000000010".to_owned(),
-            format!("{agent_id}#managed-controller"),
-            "active".to_owned(),
-            chrono::Utc::now(),
-        );
-        record.display_name = Some("Alice Assistant".to_owned());
-        store.agents().put(record).await.unwrap();
-
-        assert!(
-            session_actor_is_agent_runtime(store.agents(), agent_id)
+            session_actor_is_agent_runtime(&identity, agent_id)
                 .await
                 .unwrap()
         );
         assert!(
-            !session_actor_is_agent_runtime(store.agents(), "did:web:alice.example")
+            !session_actor_is_agent_runtime(&identity, "did:web:alice.example")
                 .await
                 .unwrap()
         );

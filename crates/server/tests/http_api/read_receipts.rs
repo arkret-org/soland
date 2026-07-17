@@ -18,7 +18,7 @@ async fn set_demo_realm_visibility(
 ) {
     let now = chrono::Utc::now();
     let mut meta = state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .get(DEMO_REALM_ID)
         .await
@@ -36,10 +36,10 @@ async fn set_demo_realm_visibility(
             asset_privacy_policy_digest: None,
             encryption_profile: Some("none".to_owned()),
             plaintext_visible_services: std::collections::BTreeSet::from([state
-                .service_id
+                .service_id()
                 .clone()]),
             plaintext_visible_service_classes: std::collections::BTreeMap::from([(
-                state.service_id.clone(),
+                state.service_id().clone(),
                 std::collections::BTreeSet::from([
                     arkret_sdk::PlaintextDataClassKind::MessageContent,
                 ]),
@@ -51,14 +51,15 @@ async fn set_demo_realm_visibility(
     meta.discoverability = discoverability.to_owned();
     meta.history_visibility = history_visibility.to_owned();
     meta.encryption_profile = Some("none".to_owned());
-    meta.plaintext_visible_services = std::collections::BTreeSet::from([state.service_id.clone()]);
+    meta.plaintext_visible_services =
+        std::collections::BTreeSet::from([state.service_id().clone()]);
     meta.plaintext_visible_service_classes.insert(
-        state.service_id.clone(),
+        state.service_id().clone(),
         std::collections::BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = now;
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(DEMO_REALM_ID, &meta)
         .await

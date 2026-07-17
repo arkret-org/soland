@@ -199,12 +199,12 @@ pub(crate) async fn build_sync_snapshot(
     let mut to_device_next_cursor = None;
     let mut to_device_lost = None;
     let to_device = if let Some(session) = session {
-        let device_messages = state.persistence.device_messages();
         if let Err(error) = prune_device_messages_for_limits(state).await {
             tracing::error!(%error, "failed to prune to-device messages during sync snapshot");
         }
-        let lost_watermark = match device_messages
-            .lost_watermark(&session.actor, &session.device_id)
+        let lost_watermark = match state
+            .delivery_application()
+            .device_message_lost_watermark(&session.actor, &session.device_id)
             .await
         {
             Ok(watermark) => watermark,
@@ -219,8 +219,9 @@ pub(crate) async fn build_sync_snapshot(
                 to_device_position = to_device_position.max(lost_watermark);
             }
         }
-        let queued = device_messages
-            .list_after(&session.actor, &session.device_id, 0)
+        let queued = state
+            .delivery_application()
+            .device_messages_after(&session.actor, &session.device_id, 0)
             .await
             .unwrap_or_default();
         to_device_limited = queued.len() > TO_DEVICE_PAGE_LIMIT;
@@ -232,9 +233,8 @@ pub(crate) async fn build_sync_snapshot(
         if let Some(max_position) = page.iter().map(|message| message.position).max() {
             to_device_position = to_device_position.max(max_position);
             to_device_ack_token = state
-                .persistence
-                .device_messages()
-                .issue_ack_token(&session.actor, &session.device_id, max_position)
+                .delivery_application()
+                .issue_device_message_ack_token(&session.actor, &session.device_id, max_position)
                 .await
                 .ok()
                 .flatten();
@@ -314,9 +314,10 @@ async fn account_notification_delta(
         return (arkret_sdk::NotificationContainer::default(), 0);
     };
     let Some(account) = state
-        .persistence
-        .accounts()
-        .get(&session.actor)
+        .identity_application()
+        .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+            actor_id: session.actor.clone(),
+        })
         .await
         .ok()
         .flatten()
@@ -327,12 +328,13 @@ async fn account_notification_delta(
         );
     };
     let rows = state
-        .persistence
-        .notifications()
-        .list_for_account(
-            &account.id,
-            &state.service_id,
-            is_incremental.then_some(after_cursor.notification_position),
+        .delivery_application()
+        .list_account_deltas(
+            soland_application::delivery::ListAccountNotificationDeltasQuery {
+                controller_account_id: account.account_id,
+                recipient_service_id: state.service_id.clone(),
+                after_position: is_incremental.then_some(after_cursor.notification_position),
+            },
         )
         .await
         .unwrap_or_default();
@@ -978,9 +980,12 @@ async fn notification_account_data_events(
     session: &SessionRecord,
 ) -> Vec<arkret_sdk::Event> {
     let rows = state
-        .persistence
-        .notifications()
-        .list_for_recipient(&session.actor)
+        .delivery_application()
+        .list_recipient_notifications(
+            soland_application::delivery::ListRecipientNotificationsQuery {
+                recipient_id: session.actor.clone(),
+            },
+        )
         .await
         .unwrap_or_default();
     let mut events = Vec::new();

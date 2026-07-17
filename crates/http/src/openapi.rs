@@ -4,13 +4,16 @@ use salvo::oapi::{OpenApi, Operation, PathItemType, Response as OapiResponse};
 use salvo::prelude::*;
 use serde_json::json;
 
-use super::*;
+use crate::openapi_routes::{ArkretOpenApiDoc, pattern_matches_path, populate_known_routes};
 
 static ARKRET_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
 
-pub(crate) fn cached_arkret_openapi_doc(router: &Router) -> OpenApi {
+pub fn cached_arkret_openapi_doc(
+    router: &Router,
+    artifact_registry_summary: serde_json::Value,
+) -> OpenApi {
     let doc = ARKRET_OPENAPI_DOC
-        .get_or_init(|| arkret_openapi_doc(router))
+        .get_or_init(|| arkret_openapi_doc(router, artifact_registry_summary))
         .clone();
     // The same cached doc is also the source of truth for the
     // 404/405 known-routes table used by `api_not_found`.
@@ -18,7 +21,7 @@ pub(crate) fn cached_arkret_openapi_doc(router: &Router) -> OpenApi {
     doc
 }
 
-fn arkret_openapi_doc(router: &Router) -> OpenApi {
+fn arkret_openapi_doc(router: &Router, artifact_registry_summary: serde_json::Value) -> OpenApi {
     let mut doc = OpenApi::new("soland", "0.1.0")
         .add_extension(
             "x-operation-aliases",
@@ -32,7 +35,7 @@ fn arkret_openapi_doc(router: &Router) -> OpenApi {
         .add_extension(
             "x-arkret-artifacts",
             json!({
-                "registries": soland_domain::artifacts::registry_summary(),
+                "registries": artifact_registry_summary,
                 "openapi_source": "arkret-spec/spec/v1/artifacts/openapi/arkret-service-api.openapi.yaml",
                 // Round-6: the round-4 entity/view scaffold (FacetName /
                 // ViewRenderer / AllowedEntityFacetsConstraint /
@@ -58,7 +61,7 @@ fn register_soland_extension_operations(doc: &mut OpenApi) {
     }
 }
 
-pub(crate) fn soland_extension_operation_ids() -> Vec<String> {
+pub fn soland_extension_operation_ids() -> Vec<String> {
     let mut seen = std::collections::BTreeSet::new();
     SOLAND_EXTENSION_OPERATIONS
         .iter()
@@ -747,7 +750,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "arkret_openapi_yaml"))]
-pub(crate) async fn arkret_openapi_yaml(depot: &mut Depot, res: &mut Response) {
+pub async fn arkret_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     let doc = depot
         .get_typed::<ArkretOpenApiDoc>()
         .expect("openapi doc injected");

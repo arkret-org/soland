@@ -115,7 +115,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                 Ok(cursor) => Some(cursor.event_id),
                 Err(error) => {
                     let mapped = events_query_cursor_error(error);
-                    crate::error::render_error_code(mapped.code, res, &mapped.message);
+                    soland_http::error::render_error_code(mapped.code, res, &mapped.message);
                     return;
                 }
             }
@@ -533,29 +533,32 @@ struct EventsQueryParts {
     filters: Option<Value>,
 }
 
-fn validate_events_query_order(order: &str) -> Result<(), crate::error::AppError> {
+fn validate_events_query_order(order: &str) -> Result<(), soland_http::error::AppError> {
     match order {
         "default" | "ascending" | "descending" => Ok(()),
-        _ => Err(crate::error::AppError::invalid_param(
+        _ => Err(soland_http::error::AppError::invalid_param(
             "order must be default, ascending, or descending",
         )),
     }
 }
 
-fn events_query_filters_param(req: &Request) -> Result<Option<Value>, crate::error::AppError> {
+fn events_query_filters_param(
+    req: &Request,
+) -> Result<Option<Value>, soland_http::error::AppError> {
     query_param(req, "filters")
         .map(|value| {
-            serde_json::from_str(&value)
-                .map_err(|_| crate::error::AppError::invalid_param("filters must be a JSON value"))
+            serde_json::from_str(&value).map_err(|_| {
+                soland_http::error::AppError::invalid_param("filters must be a JSON value")
+            })
         })
         .transpose()
 }
 
 fn reject_events_query_filter_digest_pseudo_fields(
     filters: Option<&Value>,
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), soland_http::error::AppError> {
     if filters.is_some_and(value_contains_filter_digest_pseudo_field) {
-        return Err(crate::error::AppError::invalid_param(
+        return Err(soland_http::error::AppError::invalid_param(
             "filters must not contain cursor filter_digest fields",
         ));
     }
@@ -578,9 +581,9 @@ fn value_contains_filter_digest_pseudo_field(value: &Value) -> bool {
 
 fn reject_events_query_filter_digest_query_params(
     req: &Request,
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), soland_http::error::AppError> {
     if query_param(req, "_filter_digest").is_some() || query_param(req, "filter_digest").is_some() {
-        return Err(crate::error::AppError::invalid_param(
+        return Err(soland_http::error::AppError::invalid_param(
             "cursor filter_digest is server-derived",
         ));
     }
@@ -615,18 +618,21 @@ fn events_query_scope_digest(
     sync_filter_digest(Some(&binding))
 }
 
-fn events_query_cursor_error(error: SyncCursorError) -> crate::error::AppError {
+fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppError {
     match error {
-        SyncCursorError::Expired => crate::error::AppError::new(
-            crate::error::ErrorCode::CursorExpired,
+        SyncCursorError::Expired => soland_http::error::AppError::new(
+            soland_http::error::ErrorCode::CursorExpired,
             "cursor has expired",
         ),
-        SyncCursorError::Invalid(message) => crate::error::AppError::invalid_param(message),
+        SyncCursorError::Invalid(message) => soland_http::error::AppError::invalid_param(message),
         SyncCursorError::Mismatch(message) | SyncCursorError::Integrity(message) => {
-            crate::error::AppError::new(crate::error::ErrorCode::CursorIntegrityInvalid, message)
+            soland_http::error::AppError::new(
+                soland_http::error::ErrorCode::CursorIntegrityInvalid,
+                message,
+            )
         }
-        SyncCursorError::Revoked => crate::error::AppError::new(
-            crate::error::ErrorCode::CursorRevoked,
+        SyncCursorError::Revoked => soland_http::error::AppError::new(
+            soland_http::error::ErrorCode::CursorRevoked,
             "cursor authority has been revoked",
         ),
     }
@@ -637,7 +643,7 @@ async fn events_query_cursor_target(
     session: Option<&SessionRecord>,
     filter_digest: &str,
     cursor: Option<&str>,
-) -> Result<Option<String>, crate::error::AppError> {
+) -> Result<Option<String>, soland_http::error::AppError> {
     let Some(cursor) = cursor else {
         return Ok(None);
     };
@@ -711,7 +717,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 pub(crate) async fn events_query(
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<EventsQueryOutcome> {
+) -> soland_http::result::JsonResult<EventsQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     reject_events_query_filter_digest_query_params(req)?;
     let filters = events_query_filters_param(req)?;
@@ -741,7 +747,7 @@ pub(crate) async fn events_query_post(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<EventsQueryOutcome> {
+) -> soland_http::result::JsonResult<EventsQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let parts = EventsQueryParts {
@@ -774,18 +780,18 @@ async fn events_query_impl(
     state: &AppState,
     req: &Request,
     parts: EventsQueryParts,
-) -> crate::result::JsonResult<EventsQueryOutcome> {
+) -> soland_http::result::JsonResult<EventsQueryOutcome> {
     validate_events_query_order(&parts.order)?;
     reject_events_query_filter_digest_pseudo_fields(parts.filters.as_ref())?;
     if parts.realms.is_empty() && parts.actors.is_empty() {
-        return Err(crate::error::AppError::missing_param(
+        return Err(soland_http::error::AppError::missing_param(
             "events.query requires at least one of realms[] / actors[]",
         ));
     }
     let realms = normalize_scope_selectors(parts.realms.clone())?;
     for actor in &parts.actors {
         if validate_did(actor).is_err() {
-            return Err(crate::error::AppError::invalid_param(format!(
+            return Err(soland_http::error::AppError::invalid_param(format!(
                 "invalid actor: {actor}"
             )));
         }
@@ -795,7 +801,7 @@ async fn events_query_impl(
             authenticated_session(state, req)
                 .await
                 .map_err(|(status, code, message)| {
-                    crate::error::AppError::invalid_param(message)
+                    soland_http::error::AppError::invalid_param(message)
                         .with_status(status)
                         .with_wire_code(code)
                 })?,
@@ -808,7 +814,7 @@ async fn events_query_impl(
             Ok(session) => Some(session),
             Err((status, code, message)) => {
                 if request_presents_auth_material(req) {
-                    return Err(crate::error::AppError::invalid_param(message)
+                    return Err(soland_http::error::AppError::invalid_param(message)
                         .with_status(status)
                         .with_wire_code(code));
                 }
@@ -854,7 +860,7 @@ async fn events_query_impl(
             cursor_token.clone(),
         )
         .await;
-        return crate::result::json_ok(response);
+        return soland_http::result::json_ok(response);
     }
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
     // encryption-and-audit.md §2.10.8 — realms the caller may scan ONLY as a
@@ -896,7 +902,7 @@ async fn events_query_impl(
         }
     }
     if accessible_realms.is_empty() {
-        return Err(crate::error::AppError::not_found("not found"));
+        return Err(soland_http::error::AppError::not_found("not found"));
     }
     let limit = parts.limit;
 
@@ -948,7 +954,7 @@ async fn events_query_impl(
                     None => None,
                 };
                 let events = full_events_from_projection_json(state, &events).await;
-                return crate::result::json_ok(EventsQueryOutcome {
+                return soland_http::result::json_ok(EventsQueryOutcome {
                     events,
                     snapshot_bootstrap: None,
                     prev_cursor: cursor_token.clone(),
@@ -960,13 +966,15 @@ async fn events_query_impl(
             Ok(None) => {}
             Err(error) => {
                 if error.to_string().contains("invalid_cursor") {
-                    return Err(crate::error::AppError::invalid_param("cursor not found")
-                        .with_wire_code("invalid_cursor"));
+                    return Err(
+                        soland_http::error::AppError::invalid_param("cursor not found")
+                            .with_wire_code("invalid_cursor"),
+                    );
                 }
-                return Err(crate::error::AppError::internal(error.to_string()));
+                return Err(soland_http::error::AppError::internal(error.to_string()));
             }
         }
-        return crate::result::json_ok(EventsQueryOutcome {
+        return soland_http::result::json_ok(EventsQueryOutcome {
             events: Vec::new(),
             snapshot_bootstrap: None,
             prev_cursor: cursor_token.clone(),
@@ -1005,8 +1013,10 @@ async fn events_query_impl(
             Ok(None) => {}
             Err(error) => {
                 if error.to_string().contains("invalid_cursor") {
-                    return Err(crate::error::AppError::invalid_param("cursor not found")
-                        .with_wire_code("invalid_cursor"));
+                    return Err(
+                        soland_http::error::AppError::invalid_param("cursor not found")
+                            .with_wire_code("invalid_cursor"),
+                    );
                 }
                 continue;
             }
@@ -1038,7 +1048,7 @@ async fn events_query_impl(
         None => None,
     };
     let events = full_events_from_projection_json(state, &page_events).await;
-    crate::result::json_ok(EventsQueryOutcome {
+    soland_http::result::json_ok(EventsQueryOutcome {
         events,
         snapshot_bootstrap: None,
         prev_cursor: cursor_token.clone(),
@@ -1478,37 +1488,38 @@ async fn durable_events_query_from_parts(
 pub(super) async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<arkret_sdk::SnapshotManifest> {
+) -> soland_http::result::JsonResult<arkret_sdk::SnapshotManifest> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
-        .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
+        .ok_or_else(|| soland_http::error::AppError::missing_param("realm_id is required"))?;
     let realm_id = scope_selector_to_realm_id(&realm_id)?;
     let session = authenticated_session(state, req)
         .await
         .map_err(|(status, code, message)| {
-            crate::error::AppError::invalid_param(message)
+            soland_http::error::AppError::invalid_param(message)
                 .with_status(status)
                 .with_wire_code(code)
         })?;
     if is_realm_deleted(state, &realm_id).await
         || !realm_id_accessible(state, &realm_id, Some(&session)).await
     {
-        return Err(crate::error::AppError::not_found("not found"));
+        return Err(soland_http::error::AppError::not_found("not found"));
     }
     let manifest = snapshot_manifest_for_realm(state, &realm_id)
         .await
         .map_err(|error| {
             if matches!(
                 error.code,
-                crate::error::ErrorCode::NotFound | crate::error::ErrorCode::InternalError
+                soland_http::error::ErrorCode::NotFound
+                    | soland_http::error::ErrorCode::InternalError
             ) {
                 error
             } else {
-                crate::error::AppError::new(
-                    crate::error::ErrorCode::SnapshotUnavailable,
+                soland_http::error::AppError::new(
+                    soland_http::error::ErrorCode::SnapshotUnavailable,
                     error.message,
                 )
             }
         })?;
-    crate::result::json_ok(manifest)
+    soland_http::result::json_ok(manifest)
 }

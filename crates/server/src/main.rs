@@ -4,9 +4,9 @@ use salvo::conn::rustls::{Keycert, RustlsConfig};
 use salvo::prelude::*;
 use soland::config::AppConfig;
 use soland::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
-use soland::state::AppState;
 use soland::service;
-use soland_domain::artifacts;
+use soland::state::AppState;
+use soland_application::validate_embedded_artifacts;
 use soland_storage_postgres::Db;
 use tokio::signal;
 use tracing_subscriber::layer::SubscriberExt;
@@ -51,7 +51,7 @@ async fn run() -> anyhow::Result<()> {
 
     // Fail fast at startup if a bundled Arkret artifact is malformed instead
     // of crashing the first request that touches the offending OnceLock.
-    artifacts::validate_embedded_artifacts()?;
+    validate_embedded_artifacts()?;
 
     let mut config = AppConfig::from_env_and_args()?;
     if let Some(database_url) = &config.database_url {
@@ -172,7 +172,7 @@ async fn run() -> anyhow::Result<()> {
     // Fail fast at startup if either invariant is violated; the enclave
     // profile claim on `/server/describe` would otherwise be a lie.
     let enclave_assertion =
-        soland::routing::extensions::sovereign::assert_enclave_invariants(&state.config);
+        soland::routing::extensions::sovereign::assert_enclave_invariants(state.config());
     if !enclave_assertion.is_compliant() {
         anyhow::bail!(
             "SOLAND_SOVEREIGN_ENCLAVE=1 but enclave invariants are not satisfied: {}",
@@ -182,7 +182,7 @@ async fn run() -> anyhow::Result<()> {
     if enclave_assertion.enabled {
         tracing::info!(
             target: "sovereign_boundary_audit",
-            allowed_outbound_hosts = ?state.config.sovereign_enclave_allowed_outbound_hosts,
+            allowed_outbound_hosts = ?state.config().sovereign_enclave_allowed_outbound_hosts,
             "sovereign enclave profile enabled; outbound federation is disabled \
              and outbound HTTP must be on the allow-list",
         );
@@ -194,12 +194,12 @@ async fn run() -> anyhow::Result<()> {
     // unleased row, and aggregates via SDK `ThresholdAggregator`. Returns
     // a JoinHandle we drop on the floor — the task lives for the process
     // lifetime and shutdown_signal teardown closes the runtime.
-    let watchdog_config = MultisigWatchdogConfig::for_service(&state.service_id);
+    let watchdog_config = MultisigWatchdogConfig::for_service(state.service_id());
     let _watchdog = MultisigWatchdog::new(state.clone(), watchdog_config).spawn();
     tracing::info!(
         worker = "multisig_watchdog",
         enabled = true,
-        service_id = %state.service_id,
+        service_id = %state.service_id(),
         "background worker configured"
     );
 
@@ -212,8 +212,8 @@ async fn run() -> anyhow::Result<()> {
     let _compactor = soland::compactor::spawn(state.clone());
     tracing::info!(
         worker = "compactor",
-        enabled = state.config.compaction_prune_walk_interval_seconds > 0,
-        interval_seconds = state.config.compaction_prune_walk_interval_seconds,
+        enabled = state.config().compaction_prune_walk_interval_seconds > 0,
+        interval_seconds = state.config().compaction_prune_walk_interval_seconds,
         "background worker configured"
     );
 
@@ -244,14 +244,14 @@ async fn run() -> anyhow::Result<()> {
     let _federation_dispatcher = soland::routing::federation::outbox::spawn(state.clone());
     tracing::info!(
         worker = "federation_outbox",
-        enabled = state.config.federation_outbound_enabled,
+        enabled = state.config().federation_outbound_enabled,
         "background worker configured"
     );
     let _federation_frontier_exchange =
         soland::routing::federation::frontier_exchange::spawn(state.clone());
     tracing::info!(
         worker = "federation_frontier_exchange",
-        enabled = state.config.federation_outbound_enabled,
+        enabled = state.config().federation_outbound_enabled,
         "background worker configured"
     );
 
@@ -267,8 +267,8 @@ async fn run() -> anyhow::Result<()> {
     let _erasure_fanout_sweep = soland::routing::federation::erasure_fanout::spawn(state.clone());
     tracing::info!(
         worker = "erasure_fanout_sweep",
-        enabled = state.config.federation_outbound_enabled,
-        propagation_window_ms = state.config.erasure_propagation_window_ms,
+        enabled = state.config().federation_outbound_enabled,
+        propagation_window_ms = state.config().erasure_propagation_window_ms,
         "background worker configured"
     );
 
@@ -284,7 +284,7 @@ async fn run() -> anyhow::Result<()> {
         bind = %config.bind,
         metrics_bind = %config.metrics_bind,
         public_base_url = %config.public_base_url,
-        service_id = %state.service_id,
+        service_id = %state.service_id(),
         tls_enabled = config.tls_enabled(),
         tls_cert_path = ?config.tls_cert_path,
         tls_key_path = ?config.tls_key_path,
@@ -293,7 +293,7 @@ async fn run() -> anyhow::Result<()> {
         object_storage_backend = %config.object_storage.backend_name(),
         object_storage_target = %config.object_storage.log_target(),
         development_mode = config.development_mode,
-        storage = state.db.mode(),
+        storage = state.storage_mode(),
         "starting soland"
     );
     if config.tls_enabled() {
@@ -555,7 +555,7 @@ fn spawn_service_identity_supervisor(
         loop {
             interval.tick().await;
             match soland::bootstrap::retry_service_identity(
-                &state.config,
+                state.config(),
                 persistence.clone(),
                 key_store.clone(),
             )
@@ -568,18 +568,16 @@ fn spawn_service_identity_supervisor(
                             | arkret_sdk::ServiceIdentityState::WaitingProvider { .. }
                     );
                     if let Some(identity) = bootstrap.state.identity()
-                        && identity.service_id.as_str() != state.service_id
+                        && identity.service_id.as_str() != state.service_id()
                     {
                         tracing::error!(
-                            runtime_service_id = %state.service_id,
+                            runtime_service_id = %state.service_id(),
                             provider_service_id = %identity.service_id,
                             "service identity supervisor rejected a runtime identity switch"
                         );
                         break;
                     }
-                    state
-                        .service_identity
-                        .store(std::sync::Arc::new(bootstrap.state));
+                    state.replace_service_identity_state(bootstrap.state);
                     if !keep_retrying {
                         break;
                     }
@@ -638,7 +636,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                 match client.describe().await {
                     Ok(description)
                         if description.service_type == arkret_sdk::ServiceType::PrincipalServer
-                            && description.service_id.as_str() != state.service_id =>
+                            && description.service_id.as_str() != state.service_id() =>
                     {
                         let document_view = match client
                             .identity_document(description.service_id.as_str(), None)
@@ -750,16 +748,18 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             .federation_peer_verifying_key(description.service_id.as_str())
                             .as_ref()
                             != Some(&verifying_key);
-                        state.federation_peer_verifying_keys.rcu(|current| {
-                            let mut next = (**current).clone();
-                            if let Some(previous_service_id) = previous_service_id.as_deref()
-                                && previous_service_id != description.service_id.as_str()
-                            {
-                                next.remove(previous_service_id);
-                            }
-                            next.insert(description.service_id.to_string(), verifying_key);
-                            std::sync::Arc::new(next)
-                        });
+                        state
+                            .federation_peer_verifying_keys_handle()
+                            .rcu(|current| {
+                                let mut next = (**current).clone();
+                                if let Some(previous_service_id) = previous_service_id.as_deref()
+                                    && previous_service_id != description.service_id.as_str()
+                                {
+                                    next.remove(previous_service_id);
+                                }
+                                next.insert(description.service_id.to_string(), verifying_key);
+                                std::sync::Arc::new(next)
+                            });
                         if configured != discovered || key_changed {
                             tracing::info!(
                                 peer_endpoint = %endpoint,
@@ -787,7 +787,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                 retry_delay = retry_delay.saturating_mul(2).min(max_retry);
                 continue;
             }
-            state.settings.rcu(|current| {
+            state.runtime_settings_handle().rcu(|current| {
                 let mut next = (**current).clone();
                 for entry in &mut next.federation_peers {
                     if let Some(discovered) = resolved.get(entry) {

@@ -116,7 +116,8 @@ pub use effects::{MlsEffect, ProjectionEffect};
 pub(crate) use effects::{ObjectLifecycleTransition, SpaceContainerLifecycleTransition};
 pub(crate) use message_helpers::*;
 pub use message_helpers::{
-    message_id_from_payload_or_event_id, message_redaction_target_ref, poll_id_from_content,
+    message_id_from_event_id, message_id_from_payload_or_event_id, message_redaction_target_ref,
+    poll_id_from_content,
 };
 // Spec T07 fanout window const is `pub`.
 pub use patch_helpers::REALM_DESTROY_FANOUT_WINDOW_DAYS;

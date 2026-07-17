@@ -203,9 +203,8 @@ pub(super) async fn resolve_event_root_anchor_method(
     }
 
     let mut records = state
-        .persistence
-        .webvh()
-        .list_log_events(actor_id)
+        .did_application()
+        .log_events(actor_id)
         .await
         .map_err(|error| {
             event_validation_error(

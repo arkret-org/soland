@@ -1,6 +1,6 @@
 use arkret_sdk::StoredServiceIdentity;
 
-use super::*;
+use super::{PersistenceResult, async_trait};
 /// Persistence for the deployment's SDK-defined, verified service identity.
 ///
 /// The singleton row contains only public evidence and opaque `KeyRef`s. Secret

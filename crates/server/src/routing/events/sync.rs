@@ -36,10 +36,10 @@ pub(crate) use futures_util::stream::StreamExt;
 pub(crate) use salvo::http::{StatusCode, header};
 pub(crate) use salvo::prelude::*;
 pub(crate) use serde_json::{Value, json};
+pub(crate) use soland_application::sync::CursorState as SyncCursorRecord;
 pub(crate) use soland_domain::reducer::ProjectionState;
 pub(crate) use soland_storage::{
     DeviceInventoryRecord, PresenceRecord, ProjectionEventRecord, RealmMetaRecord, SessionRecord,
-    SyncCursorRecord,
 };
 pub(crate) use tokio::sync::broadcast::error::RecvError;
 
@@ -97,16 +97,20 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("snapshot/head").get(events_query::snapshot_head))
 }
 
-pub(crate) fn scope_selector_to_realm_id(value: &str) -> Result<String, crate::error::AppError> {
+pub(crate) fn scope_selector_to_realm_id(
+    value: &str,
+) -> Result<String, soland_http::error::AppError> {
     if RealmId::new(value.to_owned()).is_ok() {
         return Ok(value.to_owned());
     }
-    Err(crate::error::AppError::invalid_param("invalid realm_id"))
+    Err(soland_http::error::AppError::invalid_param(
+        "invalid realm_id",
+    ))
 }
 
 pub(crate) fn normalize_scope_selectors(
     values: Vec<String>,
-) -> Result<Vec<String>, crate::error::AppError> {
+) -> Result<Vec<String>, soland_http::error::AppError> {
     values
         .into_iter()
         .map(|value| scope_selector_to_realm_id(&value))

@@ -36,10 +36,10 @@
 
 use arkret_sdk::{Did, Ed25519MoveSigner, Hlc, RealmId, SealId};
 use salvo::http::StatusCode;
+use soland_http::error::AppError;
 
 use super::AuthArgs;
 use crate::app_error;
-use crate::error::AppError;
 use crate::state::AppState;
 
 mod bottom;

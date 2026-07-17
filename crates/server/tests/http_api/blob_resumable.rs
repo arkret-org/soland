@@ -192,7 +192,7 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
             .is_none()
     );
     let stored_resumable_blob = state
-        .persistence
+        .test_persistence()
         .blobs()
         .get(outcome["blob_ref"].as_str().unwrap())
         .await

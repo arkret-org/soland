@@ -54,9 +54,11 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
     if let Some(event_id) = claimed_device_authorize_event_id {
         EventId::new(event_id.to_owned()).map_err(|_| key_backup_untrusted_signature())?;
         let record = state
-            .persistence
-            .devices()
-            .get(actor_id, device_id)
+            .identity_application()
+            .find_device(soland_application::identity::FindDeviceQuery {
+                actor_id: actor_id.to_owned(),
+                device_id: device_id.to_owned(),
+            })
             .await
             .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
             .ok_or_else(key_backup_untrusted_signature)?;
@@ -190,7 +192,7 @@ pub(super) fn key_backup_canonical_digest_without_signature(
 }
 
 pub(super) fn recovery_session_proof_summary(
-    record: &RecoverySessionRecord,
+    record: &soland_application::identity::RecoverySessionState,
 ) -> Option<(String, String)> {
     let proof = record.proof_payload.as_ref()?.get("proof")?.as_object()?;
     let kind = proof.get("kind").and_then(Value::as_str)?;
@@ -435,9 +437,8 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
 ) -> Result<(), AppError> {
     let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
     let Some(record) = state
-        .persistence
-        .recovery_sessions()
-        .get(recovery_session_id)
+        .recovery_session_application()
+        .session(recovery_session_id)
         .await
         .map_err(|error| AppError::internal(format!("recovery session lookup failed: {error}")))?
     else {

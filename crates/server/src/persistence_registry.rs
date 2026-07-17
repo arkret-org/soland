@@ -9,6 +9,7 @@ use soland_storage_postgres::*;
 /// memory fallback, but contact, consent-cell, invite-receive-policy, and
 /// direct-conversation binding accessors are wired to Pg stores.
 pub struct PgPersistenceStore {
+    event_commits: PgEventCommitUnitOfWork,
     accounts: PgAccountStore,
     account_localparts: PgAccountLocalpartStore,
     account_lifecycle: PgAccountLifecycleStore,
@@ -69,6 +70,7 @@ pub struct PgPersistenceStore {
 impl PgPersistenceStore {
     pub fn new(pool: PgPool) -> Self {
         Self {
+            event_commits: PgEventCommitUnitOfWork::new(pool.clone()),
             accounts: PgAccountStore { pool: pool.clone() },
             account_localparts: PgAccountLocalpartStore { pool: pool.clone() },
             account_lifecycle: PgAccountLifecycleStore { pool: pool.clone() },
@@ -128,7 +130,17 @@ impl PgPersistenceStore {
     }
 }
 
-impl PersistenceStore for PgPersistenceStore {
+#[async_trait::async_trait]
+impl EventCommitUnitOfWork for PgPersistenceStore {
+    async fn commit_event(
+        &self,
+        request: EventCommitRequest,
+    ) -> PersistenceResult<EventCommitOutcome> {
+        self.event_commits.commit_event(request).await
+    }
+}
+
+impl IdentityStoreRegistry for PgPersistenceStore {
     fn accounts(&self) -> &dyn AccountStore {
         &self.accounts
     }
@@ -180,7 +192,9 @@ impl PersistenceStore for PgPersistenceStore {
     fn devices(&self) -> &dyn DeviceInventoryStore {
         &self.devices
     }
+}
 
+impl FederationGovernanceStoreRegistry for PgPersistenceStore {
     fn federation_transactions(&self) -> &dyn FederationTransactionStore {
         &self.federation_transactions
     }
@@ -228,7 +242,9 @@ impl PersistenceStore for PgPersistenceStore {
     fn audit(&self) -> &dyn AuditStore {
         &self.audit
     }
+}
 
+impl DeliveryPolicyStoreRegistry for PgPersistenceStore {
     fn moderation(&self) -> &dyn ModerationStore {
         &self.moderation
     }
@@ -288,7 +304,9 @@ impl PersistenceStore for PgPersistenceStore {
     fn realm_invites(&self) -> &dyn RealmInviteStore {
         &self.realm_invites
     }
+}
 
+impl EventProjectionStoreRegistry for PgPersistenceStore {
     fn events(&self) -> &dyn EventStore {
         &self.events
     }
@@ -332,7 +350,9 @@ impl PersistenceStore for PgPersistenceStore {
     fn morph_projections(&self) -> &dyn MorphProjectionStore {
         &self.morph_projections
     }
+}
 
+impl MlsAgentStoreRegistry for PgPersistenceStore {
     fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore {
         &self.mls_key_packages
     }
@@ -356,7 +376,9 @@ impl PersistenceStore for PgPersistenceStore {
     fn notifications(&self) -> &dyn NotificationStore {
         &self.notifications
     }
+}
 
+impl SyncStoreRegistry for PgPersistenceStore {
     fn sync_cursors(&self) -> &dyn SyncCursorStore {
         &self.sync_cursors
     }
@@ -365,3 +387,5 @@ impl PersistenceStore for PgPersistenceStore {
         &self.idempotency_keys
     }
 }
+
+impl PersistenceStore for PgPersistenceStore {}

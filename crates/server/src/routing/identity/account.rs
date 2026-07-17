@@ -40,10 +40,13 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_storage::{
-    AccountLifecycleRecord, AccountLocalpartRecord, AccountRecord, ContactRecord,
-    DeviceInventoryRecord, DirectConversationBindingRecord, ProjectionEventRecord,
+use soland_application::identity::{
+    AccountLocalpartState as AccountLocalpartRecord, AccountProfileState as AccountRecord,
+    DeviceIdentity,
 };
+use soland_domain::identity::{ContactRecord, DirectConversationBindingRecord};
+use soland_http::error::AppError;
+use soland_storage::{AccountLifecycleRecord, ProjectionEventRecord};
 
 use super::auth::{
     active_delegated_sessions_for_actor, purge_device_delivery_state, revoke_devices_for_actor,
@@ -59,7 +62,6 @@ use super::did::require_embedded_webvh_registration_bearer;
 use super::{
     AuthArgs, append_audit_log, bearer_token, normalize_localpart, now, sha256_hex, validate_did,
 };
-use crate::error::AppError;
 use crate::routing::validate_device_id;
 use crate::state::AppState;
 use crate::wire::SolandAccountRegisterOutcome;
@@ -67,12 +69,11 @@ use crate::wire::SolandAccountRegisterOutcome;
 pub(crate) async fn record_handle_release(
     state: &AppState,
     localpart: &str,
-) -> Result<(), soland_storage::PersistenceError> {
+) -> soland_application::ApplicationResult<()> {
     let released_at = chrono::Utc::now();
     state
-        .persistence
-        .handle_releases()
-        .put(localpart, released_at)
+        .identity_application()
+        .record_handle_release(localpart, released_at)
         .await?;
     let mut releases = state.handle_releases.lock();
     releases.insert(localpart.to_owned(), released_at);
@@ -143,9 +144,8 @@ pub(crate) async fn local_account_primary_handle_claim(
     audience: &str,
 ) -> Option<Value> {
     let account = state
-        .persistence
-        .accounts()
-        .get(subject)
+        .identity_application()
+        .account(subject)
         .await
         .ok()
         .flatten()?;
@@ -286,7 +286,7 @@ fn require_account_localparts_bearer(state: &AppState, req: &Request) -> Result<
         .filter(|value| !value.is_empty())
     else {
         return Err(AppError::new(
-            crate::error::ErrorCode::TemporarilyUnavailable,
+            soland_http::error::ErrorCode::TemporarilyUnavailable,
             "account localparts sync requires SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
         )
         .with_status(StatusCode::SERVICE_UNAVAILABLE));
@@ -333,21 +333,22 @@ fn normalize_account_localpart_for_request(
     Ok(localpart)
 }
 
-fn localpart_persistence_error(error: soland_storage::PersistenceError) -> AppError {
+fn localpart_persistence_error(error: soland_application::ApplicationError) -> AppError {
     match error {
-        soland_storage::PersistenceError::NotFound(message) => AppError::not_found(message),
-        soland_storage::PersistenceError::Conflict(message) => {
-            AppError::new(crate::error::ErrorCode::DuplicateConflict, message)
-        }
+        soland_application::ApplicationError::Storage(
+            soland_storage::PersistenceError::NotFound(message),
+        ) => AppError::not_found(message),
+        soland_application::ApplicationError::Storage(
+            soland_storage::PersistenceError::Conflict(message),
+        ) => AppError::new(soland_http::error::ErrorCode::DuplicateConflict, message),
         other => AppError::internal(other.to_string()),
     }
 }
 
 async fn account_exists(state: &AppState, account_did: &str) -> Result<(), AppError> {
     state
-        .persistence
-        .accounts()
-        .get(account_did)
+        .identity_application()
+        .account(account_did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .map(|_| ())
@@ -427,7 +428,7 @@ async fn reject_account_registration(
     did: &str,
     handle: Option<&str>,
     audit: AccountRegistrationAudit,
-    code: crate::error::ErrorCode,
+    code: soland_http::error::ErrorCode,
     message: &'static str,
 ) -> AppError {
     append_account_registration_audit(state, did, handle, &audit).await;
@@ -569,7 +570,7 @@ async fn enforce_account_registration_policy(
             did,
             handle,
             audit,
-            crate::error::ErrorCode::FailedPrecondition,
+            soland_http::error::ErrorCode::FailedPrecondition,
             "account registration is closed",
         )
         .await);
@@ -588,7 +589,7 @@ async fn enforce_account_registration_policy(
             did,
             handle,
             audit,
-            crate::error::ErrorCode::RateLimited,
+            soland_http::error::ErrorCode::RateLimited,
             "account registration rate limit exceeded",
         )
         .await);
@@ -611,7 +612,7 @@ async fn enforce_account_registration_policy(
             did,
             handle,
             audit,
-            crate::error::ErrorCode::FailedPrecondition,
+            soland_http::error::ErrorCode::FailedPrecondition,
             "registration verification code is required",
         )
         .await);
@@ -631,7 +632,7 @@ async fn enforce_account_registration_policy(
             did,
             handle,
             audit,
-            crate::error::ErrorCode::FailedPrecondition,
+            soland_http::error::ErrorCode::FailedPrecondition,
             "registration verification code is invalid",
         )
         .await);
@@ -648,7 +649,7 @@ async fn enforce_account_registration_policy(
             did,
             handle,
             audit,
-            crate::error::ErrorCode::FailedPrecondition,
+            soland_http::error::ErrorCode::FailedPrecondition,
             "principal is not allowed by the registration organization policy",
         )
         .await);
@@ -671,7 +672,7 @@ async fn enforce_account_registration_policy(
             did,
             handle,
             audit,
-            crate::error::ErrorCode::FailedPrecondition,
+            soland_http::error::ErrorCode::FailedPrecondition,
             "registration invitation token is required",
         )
         .await);
@@ -690,7 +691,7 @@ async fn enforce_account_registration_policy(
             did,
             handle,
             audit,
-            crate::error::ErrorCode::FailedPrecondition,
+            soland_http::error::ErrorCode::FailedPrecondition,
             "registration invitation token is invalid",
         )
         .await);
@@ -729,22 +730,20 @@ async fn local_account_register(
         ));
     }
     let account_exists = state
-        .persistence
-        .accounts()
-        .get(&did)
+        .identity_application()
+        .account(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
     let localpart_exists = state
-        .persistence
-        .account_localparts()
-        .owner_of(&localpart)
+        .identity_application()
+        .localpart_owner(&localpart)
         .await
         .map_err(localpart_persistence_error)?
         .is_some();
     if account_exists || localpart_exists {
         return Err(AppError::new(
-            crate::error::ErrorCode::DuplicateConflict,
+            soland_http::error::ErrorCode::DuplicateConflict,
             "account already exists",
         ));
     }
@@ -762,17 +761,16 @@ async fn local_account_register(
         created_at: now(),
     };
     state
-        .persistence
-        .accounts()
-        .put(&account)
+        .identity_application()
+        .register_account(soland_application::identity::RegisterAccountCommand {
+            account_id: account.id.clone(),
+            actor_id: did.clone(),
+            localpart: account.localpart.clone(),
+            display_name: account.display_name.clone(),
+            created_at: account.created_at,
+        })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    state
-        .persistence
-        .account_localparts()
-        .add(&did, &account.localpart, true)
-        .await
-        .map_err(localpart_persistence_error)?;
     if let Some(device_id) = body.device_id.as_deref() {
         let device_id = validate_device_id(device_id)
             .map_err(|_| AppError::invalid_param("invalid device_id"))?;
@@ -811,9 +809,8 @@ async fn local_account_me(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let account = state
-        .persistence
-        .accounts()
-        .get(&session.actor)
+        .identity_application()
+        .account(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
@@ -839,9 +836,8 @@ async fn list_account_localparts(
     validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
     account_exists(state, &account_did).await?;
     let records = state
-        .persistence
-        .account_localparts()
-        .list_for_account(&account_did)
+        .identity_application()
+        .account_localparts(&account_did)
         .await
         .map_err(localpart_persistence_error)?;
     let primary_localpart = records
@@ -876,16 +872,14 @@ async fn add_account_localpart(
     let body = body.into_inner();
     let localpart = normalize_account_localpart_for_request(state, &body.localpart)?;
     let existing = state
-        .persistence
-        .account_localparts()
-        .list_for_account(&account_did)
+        .identity_application()
+        .account_localparts(&account_did)
         .await
         .map_err(localpart_persistence_error)?;
     let primary = body.is_primary.unwrap_or(existing.is_empty()) || existing.is_empty();
     let record = state
-        .persistence
-        .account_localparts()
-        .add(&account_did, &localpart, primary)
+        .identity_application()
+        .add_localpart(&account_did, &localpart, primary)
         .await
         .map_err(localpart_persistence_error)?;
     append_audit_log(
@@ -932,9 +926,8 @@ async fn update_account_localpart(
         ));
     }
     let record = state
-        .persistence
-        .account_localparts()
-        .set_primary(&account_did, &localpart)
+        .identity_application()
+        .set_primary_localpart(&account_did, &localpart)
         .await
         .map_err(localpart_persistence_error)?;
     append_audit_log(
@@ -973,34 +966,30 @@ async fn delete_account_localpart(
     account_exists(state, &account_did).await?;
     let localpart = normalize_account_localpart_for_request(state, &localpart.into_inner())?;
     let before = state
-        .persistence
-        .account_localparts()
-        .list_for_account(&account_did)
+        .identity_application()
+        .account_localparts(&account_did)
         .await
         .map_err(localpart_persistence_error)?;
     let removed_primary = before
         .iter()
         .any(|record| record.localpart == localpart && record.is_primary);
     state
-        .persistence
-        .account_localparts()
-        .remove(&account_did, &localpart)
+        .identity_application()
+        .remove_localpart(&account_did, &localpart)
         .await
         .map_err(localpart_persistence_error)?;
     if removed_primary {
         if let Some(replacement) = state
-            .persistence
-            .account_localparts()
-            .list_for_account(&account_did)
+            .identity_application()
+            .account_localparts(&account_did)
             .await
             .map_err(localpart_persistence_error)?
             .into_iter()
             .next()
         {
             state
-                .persistence
-                .account_localparts()
-                .set_primary(&account_did, &replacement.localpart)
+                .identity_application()
+                .set_primary_localpart(&account_did, &replacement.localpart)
                 .await
                 .map_err(localpart_persistence_error)?;
         }
@@ -1037,9 +1026,8 @@ async fn account_viewer(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let account = state
-        .persistence
-        .accounts()
-        .get(&session.actor)
+        .identity_application()
+        .account(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
@@ -1099,9 +1087,8 @@ async fn gate_account_register(
         enforce_account_registration_policy(state, &did, None, body.policy_evidence.as_ref())
             .await?;
     let existing = state
-        .persistence
-        .accounts()
-        .get(&did)
+        .identity_application()
+        .account(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(existing_account) = existing {
@@ -1152,16 +1139,14 @@ async fn gate_account_register(
         created_at: now(),
     };
     state
-        .persistence
-        .accounts()
-        .put(&account)
+        .identity_application()
+        .save_account(account.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if !account.localpart.is_empty() {
         state
-            .persistence
-            .account_localparts()
-            .add(&did, &account.localpart, true)
+            .identity_application()
+            .add_localpart(&did, &account.localpart, true)
             .await
             .map_err(localpart_persistence_error)?;
     }
@@ -1181,8 +1166,8 @@ async fn gate_account_register(
         // Create an `unverified`, key-less placeholder so the session / device
         // list works until the real enrollment event lands (mirrors the
         // OAuth-introspection lazy-create path in `auth::ensure_oauth_device`).
-        let device = DeviceInventoryRecord {
-            actor: did.clone(),
+        let device = DeviceIdentity {
+            actor_id: did.clone(),
             device_id: device_id.as_str().to_owned(),
             display_name: account.display_name.clone(),
             verification_state: "unverified".to_owned(),
@@ -1197,9 +1182,13 @@ async fn gate_account_register(
             revoked_at: None,
         };
         state
-            .persistence
-            .devices()
-            .put(&device)
+            .identity_application()
+            .save_device(soland_application::identity::SaveDeviceCommand {
+                actor_id: did.clone(),
+                device_id: device.device_id.clone(),
+                display_name: device.display_name.clone(),
+                device,
+            })
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
@@ -1243,9 +1232,9 @@ async fn update_profile(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let accounts_store = state.persistence.accounts();
-    let mut current = accounts_store
-        .get(&session.actor)
+    let mut current = state
+        .identity_application()
+        .account(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("account not found"))?;
@@ -1268,8 +1257,9 @@ async fn update_profile(
     if let Some(avatar_blob_ref) = patch_blob_ref(&patch, "avatar_blob_ref")? {
         current.avatar_blob_ref = avatar_blob_ref;
     }
-    accounts_store
-        .put(&current)
+    state
+        .identity_application()
+        .save_account(current.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
@@ -1472,8 +1462,8 @@ async fn put_account_device_placeholder(
     // Device-identity B-model: account registration only creates an
     // unverified placeholder. `ak.device.authorize` is still the only path
     // that can attach a device public key and mark the device verified.
-    let device = DeviceInventoryRecord {
-        actor: actor.to_owned(),
+    let device = DeviceIdentity {
+        actor_id: actor.to_owned(),
         device_id: device_id.to_owned(),
         display_name: display_name.clone(),
         verification_state: "unverified".to_owned(),
@@ -1488,9 +1478,8 @@ async fn put_account_device_placeholder(
         revoked_at: None,
     };
     state
-        .persistence
-        .devices()
-        .put_if_absent(&device)
+        .identity_application()
+        .save_device_if_absent(device)
         .await
         .map(|_| ())
         .map_err(|error| AppError::internal(error.to_string()))
@@ -1501,15 +1490,14 @@ async fn account_device_summaries(
     actor: &str,
 ) -> Result<Vec<AccountDeviceSummary>, AppError> {
     let devices = state
-        .persistence
-        .devices()
-        .list_for_actor_including_revoked(actor)
+        .identity_application()
+        .devices_for_actor(actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     devices.into_iter().map(account_device_summary).collect()
 }
 
-fn account_device_summary(device: DeviceInventoryRecord) -> Result<AccountDeviceSummary, AppError> {
+fn account_device_summary(device: DeviceIdentity) -> Result<AccountDeviceSummary, AppError> {
     let device_id = DeviceId::new(device.device_id.clone()).map_err(|error| {
         AppError::internal(format!(
             "stored device_id `{}` is invalid: {error}",
@@ -1586,31 +1574,21 @@ mod tests {
 
     #[test]
     fn principal_realm_for_did_is_deterministic() {
-        let a = crate::routing::identity::recovery::principal_control_realm_for_did(
-            "did:web:alice.example",
-        );
-        let b = crate::routing::identity::recovery::principal_control_realm_for_did(
-            "did:web:alice.example",
-        );
+        let a = soland_domain::identity::principal_control_realm_for_did("did:web:alice.example");
+        let b = soland_domain::identity::principal_control_realm_for_did("did:web:alice.example");
         assert_eq!(a, b);
     }
 
     #[test]
     fn principal_realm_for_did_diverges_per_did() {
-        let a = crate::routing::identity::recovery::principal_control_realm_for_did(
-            "did:web:alice.example",
-        );
-        let c = crate::routing::identity::recovery::principal_control_realm_for_did(
-            "did:web:bob.example",
-        );
+        let a = soland_domain::identity::principal_control_realm_for_did("did:web:alice.example");
+        let c = soland_domain::identity::principal_control_realm_for_did("did:web:bob.example");
         assert_ne!(a, c);
     }
 
     #[test]
     fn principal_realm_for_did_is_realm_uuid7() {
-        let s = crate::routing::identity::recovery::principal_control_realm_for_did(
-            "did:web:alice.example",
-        );
+        let s = soland_domain::identity::principal_control_realm_for_did("did:web:alice.example");
         assert!(s.starts_with("ak:realm:"), "got {s}");
         let uuid_segment = s.strip_prefix("ak:realm:").unwrap();
         // Sections separated by '-'.

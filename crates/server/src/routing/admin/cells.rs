@@ -22,10 +22,10 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
 use super::util::query_param;
-use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

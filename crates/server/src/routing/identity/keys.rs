@@ -15,11 +15,11 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use soland_storage::DeviceInventoryRecord;
+use soland_application::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 
 use super::{bearer_token, is_device_revoked, now, sha256_hex};
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -73,9 +73,11 @@ async fn keys_upload(
         ));
     }
     let current_device = state
-        .persistence
-        .devices()
-        .get(&session.actor, &device_id)
+        .identity_application()
+        .find_device(FindDeviceQuery {
+            actor_id: session.actor.clone(),
+            device_id: device_id.clone(),
+        })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let current_facet =
@@ -122,9 +124,8 @@ async fn keys_upload(
         "updated_at": now(),
     });
     if let Err(error) = state
-        .persistence
-        .device_keys()
-        .put(
+        .key_material_application()
+        .save_bundle(
             session.actor.clone(),
             device_id.clone(),
             key_payload.clone(),
@@ -162,8 +163,8 @@ async fn keys_upload(
         map.insert("last_key_upload_at".to_owned(), json!(updated_at));
         map.insert("inventory".to_owned(), previous_payload.clone());
     }
-    let device = DeviceInventoryRecord {
-        actor: session.actor.clone(),
+    let device = DeviceIdentity {
+        actor_id: session.actor.clone(),
         device_id: device_id.clone(),
         display_name: current_device
             .as_ref()
@@ -181,16 +182,19 @@ async fn keys_upload(
         revoked_at: None,
     };
     state
-        .persistence
-        .devices()
-        .put(&device)
+        .identity_application()
+        .save_device(SaveDeviceCommand {
+            actor_id: session.actor.clone(),
+            device_id: device_id.clone(),
+            display_name: device.display_name.clone(),
+            device,
+        })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
     if let Err(error) = state
-        .persistence
-        .one_time_keys()
-        .put(
+        .key_material_application()
+        .save_one_time_keys(
             session.actor,
             device_id,
             one_time_keys
@@ -230,7 +234,6 @@ async fn keys_query(
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
-    let store = state.persistence.device_keys();
     let mut result = BTreeMap::new();
     let mut cross_signing = BTreeMap::new();
     let mut device_generations = BTreeMap::new();
@@ -281,9 +284,11 @@ async fn keys_query(
         let mut actor_keys = BTreeMap::new();
         for device_id in devices {
             let device_record = state
-                .persistence
-                .devices()
-                .get(actor.as_str(), device_id.as_str())
+                .identity_application()
+                .find_device(FindDeviceQuery {
+                    actor_id: actor.as_str().to_owned(),
+                    device_id: device_id.as_str().to_owned(),
+                })
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             if device_record.is_none() {
@@ -296,7 +301,11 @@ async fn keys_query(
             // upload stores one payload object per device, so it is surfaced as a
             // single `algorithms` map (key→value) rather than per-algorithm
             // key_records; the directory facet below is the real signing-key data.
-            let mut algorithms = match store.get(actor.as_str(), device_id.as_str()).await {
+            let mut algorithms = match state
+                .key_material_application()
+                .bundle(actor.as_str(), device_id.as_str())
+                .await
+            {
                 Ok(Some(value)) => value
                     .get("one_time_keys")
                     .cloned()
@@ -430,7 +439,7 @@ fn device_signature_kid_points_to_device_key(
 fn verify_keys_upload_device_signature(
     actor: &str,
     device_id: &str,
-    current_device: Option<&DeviceInventoryRecord>,
+    current_device: Option<&DeviceIdentity>,
     one_time_keys: &impl Serialize,
     fallback_keys: &impl Serialize,
     device_signature: &arkret_sdk::KeyOperationSignature,
@@ -501,7 +510,6 @@ async fn keys_claim(
     let _ = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
-    let store = state.persistence.one_time_keys();
     let mut claimed = BTreeMap::new();
     for (actor, devices) in body.one_time_keys {
         let mut device_map = BTreeMap::new();
@@ -516,7 +524,11 @@ async fn keys_claim(
             if !matches!(facet.status, DeviceStatus::Active) {
                 continue;
             }
-            if let Ok(Some(key)) = store.claim(actor.as_str(), device_id.as_str()).await {
+            if let Ok(Some(key)) = state
+                .key_material_application()
+                .claim_one_time_key(actor.as_str(), device_id.as_str())
+                .await
+            {
                 let key = serde_json::from_value(key).map_err(|error| {
                     AppError::internal(format!("stored one-time key is invalid: {error}"))
                 })?;
@@ -548,7 +560,7 @@ fn require_device_directory_bearer(state: &AppState, req: &Request) -> Result<()
         .filter(|value| !value.is_empty())
     else {
         return Err(AppError::new(
-            crate::error::ErrorCode::TemporarilyUnavailable,
+            soland_http::error::ErrorCode::TemporarilyUnavailable,
             "device signing-key directory read requires SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
         )
         .with_status(StatusCode::SERVICE_UNAVAILABLE));
@@ -594,9 +606,8 @@ async fn device_signing_keys_query(
     // (revoked devices are dropped below by the facet predicate either way).
     let device_ids: Vec<String> = if body.device_ids.is_empty() {
         state
-            .persistence
-            .devices()
-            .list_for_actor(principal_id.as_str())
+            .identity_application()
+            .devices_for_actor(principal_id.as_str())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
             .into_iter()

@@ -362,9 +362,9 @@ pub(crate) async fn validate_member_identity_proof(
         identity.proof.signature_algorithm,
         arkret_sdk::MemberIdentitySignatureAlgorithm::Ed25519
     ) {
-        let code = crate::error::ErrorCode::UnsupportedSignatureAlg;
+        let code = soland_http::error::ErrorCode::UnsupportedSignatureAlg;
         return Err(event_validation_error(
-            crate::error::error_http_status(code),
+            soland_http::error::error_http_status(code),
             code.as_str(),
             "only Ed25519 MemberIdentityProof.signature_algorithm is supported",
         ));

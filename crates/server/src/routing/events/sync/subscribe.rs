@@ -9,9 +9,9 @@ use crate::routing::spaces::space::presence_visible_to_session;
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
 pub(super) async fn account_describe(
     depot: &mut Depot,
-) -> crate::result::JsonResult<arkret_sdk::ServiceDescribe> {
+) -> soland_http::result::JsonResult<arkret_sdk::ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    crate::result::json_ok(crate::routing::system::describe::build_server_description(
+    soland_http::result::json_ok(crate::routing::system::describe::build_server_description(
         state,
     ))
 }
@@ -129,32 +129,32 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
         {
             Ok(cursor) => cursor,
             Err(SyncCursorError::Expired) => {
-                crate::error::render_error_code(
-                    crate::error::ErrorCode::CursorExpired,
+                soland_http::error::render_error_code(
+                    soland_http::error::ErrorCode::CursorExpired,
                     res,
                     "cursor has expired",
                 );
                 return;
             }
             Err(SyncCursorError::Invalid(message)) => {
-                crate::error::render_error_code(
-                    crate::error::ErrorCode::InvalidParam,
+                soland_http::error::render_error_code(
+                    soland_http::error::ErrorCode::InvalidParam,
                     res,
                     message,
                 );
                 return;
             }
             Err(SyncCursorError::Mismatch(message)) | Err(SyncCursorError::Integrity(message)) => {
-                crate::error::render_error_code(
-                    crate::error::ErrorCode::CursorIntegrityInvalid,
+                soland_http::error::render_error_code(
+                    soland_http::error::ErrorCode::CursorIntegrityInvalid,
                     res,
                     message,
                 );
                 return;
             }
             Err(SyncCursorError::Revoked) => {
-                crate::error::render_error_code(
-                    crate::error::ErrorCode::CursorRevoked,
+                soland_http::error::render_error_code(
+                    soland_http::error::ErrorCode::CursorRevoked,
                     res,
                     "cursor authority has been revoked",
                 );
@@ -170,9 +170,8 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     // (principal, device, filter) stream. Best-effort.
     if let Some(presented_issued_at_ms) = after_cursor.issued_at_ms {
         let _ = state
-            .persistence
-            .sync_cursors()
-            .prune_stream_superseded(
+            .sync_application()
+            .prune_superseded_cursors(
                 &session.actor,
                 &session.device_id,
                 &sync_filter_digest(filter_value.as_ref()),

@@ -41,10 +41,13 @@ pub async fn current_device_generation(
     principal_id: &str,
 ) -> Result<Option<DeviceGenerationView>, PersistenceError> {
     let records = state
-        .persistence
-        .events()
-        .list_for_actor(principal_id)
-        .await?;
+        .event_query_application()
+        .accepted_events_for_actor(principal_id)
+        .await
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?
+        .into_iter()
+        .map(persistence_event_record)
+        .collect::<Vec<_>>();
     generation_view_from_records(state, principal_id, &records).await
 }
 
@@ -151,10 +154,10 @@ async fn bootstrap_generation_ref(
         return Ok(None);
     }
     let mut entries = state
-        .persistence
-        .webvh()
-        .list_log_events(principal_id)
-        .await?;
+        .did_application()
+        .log_events(principal_id)
+        .await
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
     entries.sort_by_key(|entry| entry.seq);
     let is_external_enrollment_model = entries.first().is_some_and(|entry| {
         entry
@@ -224,10 +227,13 @@ pub async fn authorized_generation_for_event(
     record: &CanonicalEventRecord,
 ) -> Result<Option<String>, PersistenceError> {
     let records = state
-        .persistence
-        .events()
-        .list_for_actor(&record.actor_id)
-        .await?;
+        .event_query_application()
+        .accepted_events_for_actor(&record.actor_id)
+        .await
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?
+        .into_iter()
+        .map(persistence_event_record)
+        .collect::<Vec<_>>();
     let predecessor = record
         .envelope
         .get("prev_refs")
@@ -257,14 +263,34 @@ pub async fn quarantined_generation_event_digests(
     principal_id: &str,
 ) -> Result<BTreeSet<String>, PersistenceError> {
     let records = state
-        .persistence
-        .events()
-        .list_for_actor(principal_id)
-        .await?;
+        .event_query_application()
+        .accepted_events_for_actor(principal_id)
+        .await
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?
+        .into_iter()
+        .map(persistence_event_record)
+        .collect::<Vec<_>>();
     Ok(quarantined_generation_event_digests_from_records(
         principal_id,
         &records,
     ))
+}
+
+fn persistence_event_record(
+    record: soland_application::events::AcceptedEvent,
+) -> CanonicalEventRecord {
+    CanonicalEventRecord {
+        event_id: record.event_id,
+        actor_id: record.actor_id,
+        actor_seq: record.actor_seq,
+        realm_id: record.realm_id,
+        kind: record.kind,
+        schema_id: record.schema_id,
+        canonical_digest: record.canonical_digest,
+        canonical_bytes: record.canonical_bytes,
+        envelope: record.envelope,
+        received_at: record.received_at,
+    }
 }
 
 fn quarantined_generation_event_digests_from_records(

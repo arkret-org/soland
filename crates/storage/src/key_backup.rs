@@ -1,4 +1,4 @@
-use super::*;
+use super::{PersistenceResult, Value, async_trait};
 /// Encrypted key-backup envelopes (one row per `backup_id`).
 #[async_trait]
 pub trait KeyBackupStore: Send + Sync {

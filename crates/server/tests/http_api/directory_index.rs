@@ -191,7 +191,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
     let service_id = "did:webvh:zqmsolandlocal".to_owned();
     config.trust_domain = trust_domain_from_service_id(&service_id);
     let mut state = AppState::new(config, Db { pool: None });
-    state.service_id = service_id;
+    state.test_set_service_id(service_id);
     let did = "did:web:registered-handle.example";
     let device = "ak:device:01904100-0000-7000-8000-00000000a11c";
     seed_did_document_also_known_as(&state, did, &["acct:alice@local.host"]).await;
@@ -528,7 +528,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
     });
     let policy_digest = arkret_sdk::canonical::canonical_sha256(&policy).unwrap();
     let mut meta = state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .get(realm_id)
         .await
@@ -537,7 +537,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
     meta.preview_policy = Some(policy);
     meta.preview_policy_digest = Some(policy_digest.clone());
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(realm_id, &meta)
         .await
@@ -619,7 +619,7 @@ fn preview_token_for_address(
     descriptor.link_type = arkret_sdk::LinkType::Preview;
     let target_digest = arkret_sdk::target_digest(&descriptor).unwrap();
     let mut claim = serde_json::json!({
-        "iss": state.service_id.clone(),
+        "iss": state.service_id().clone(),
         "aud": "anonymous",
         "exp": (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
         "nonce": new_prefixed_uuid7("ak:nonce:"),
@@ -634,7 +634,7 @@ fn preview_token_for_address(
     claim["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",
-        "verification_method": format!("{}#preview-token", state.service_id),
+        "verification_method": format!("{}#preview-token", state.service_id()),
         "payload_digest": payload_digest,
         "jws": jws,
     });

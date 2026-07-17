@@ -1,4 +1,4 @@
-use super::*;
+use super::{PersistenceResult, PolicyDocumentRecord, async_trait};
 /// Per-owner policy documents.
 #[async_trait]
 pub trait PolicyDocumentStore: Send + Sync {

@@ -4786,12 +4786,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "soland",
+ "soland-application",
  "soland-contracts",
  "soland-domain",
+ "soland-http",
  "soland-storage",
  "soland-storage-memory",
  "soland-storage-postgres",
+ "soland-test-support",
  "subtle",
  "thiserror",
  "tokio",
@@ -4803,6 +4805,21 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "soland-application"
+version = "0.3.0"
+dependencies = [
+ "arkret",
+ "async-trait",
+ "chrono",
+ "serde_json",
+ "soland-domain",
+ "soland-storage",
+ "thiserror",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -4826,10 +4843,28 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror",
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "soland-http"
+version = "0.3.0"
+dependencies = [
+ "arkret",
+ "base64",
+ "chrono",
+ "ed25519-dalek",
+ "parking_lot",
+ "salvo",
+ "salvo-oapi",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tracing",
 ]
 
 [[package]]
@@ -4843,6 +4878,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "soland-domain",
  "thiserror",
  "uuid",
 ]
@@ -4881,6 +4917,14 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "soland-test-support"
+version = "0.3.0"
+dependencies = [
+ "soland",
+ "soland-domain",
 ]
 
 [[package]]

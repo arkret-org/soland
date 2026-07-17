@@ -16,13 +16,13 @@ fn test_session_credential_hash(token: &str, audience: &str) -> String {
 pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
     let now = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .sessions()
         .put(&soland_storage::SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.service_id),
+            token_hash: test_session_credential_hash(token, &state.service_id()),
             actor: actor.to_owned(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
-            audience: state.service_id.clone(),
+            audience: state.service_id().clone(),
             session_public_key: None,
             agent_session: None,
             expires_at: now + chrono::Duration::minutes(5),
@@ -32,7 +32,7 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
         .await
         .unwrap();
     state
-        .persistence
+        .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
             actor: actor.to_owned(),
@@ -58,7 +58,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     let generation_ref = "1-test-device-generation";
     let signing_key = SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED);
     state
-        .persistence
+        .test_persistence()
         .webvh()
         .append_log_event(soland_storage::WebvhLogRecord {
             event_digest: format!("sha256:{}", "1".repeat(64)),
@@ -79,7 +79,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         .await
         .unwrap();
 
-    let realm_id = soland::test_support::principal_control_realm_for_did(controller);
+    let realm_id = soland_test_support::principal_control_realm_for_did(controller);
     let bootstrap_id = new_prefixed_uuid7("ak:event:");
     let bootstrap = serde_json::json!({
         "event_id": bootstrap_id,
@@ -113,7 +113,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         let event_id = envelope["event_id"].as_str().unwrap().to_owned();
         let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
         state
-            .persistence
+            .test_persistence()
             .events()
             .put(soland_storage::CanonicalEventRecord {
                 event_id,
@@ -132,7 +132,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     }
 
     state
-        .persistence
+        .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
             actor: controller.to_owned(),
@@ -159,7 +159,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
     let now = chrono::Utc::now();
     let policy_id = new_prefixed_uuid7("ak:policy:");
     state
-        .persistence
+        .test_persistence()
         .recovery_policies()
         .insert(soland_storage::RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
@@ -186,15 +186,15 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         .await
         .unwrap();
 
-    let realm_id = soland::test_support::principal_control_realm_for_did(controller);
+    let realm_id = soland_test_support::principal_control_realm_for_did(controller);
     let typed_realm_id = arkret_sdk::RealmId::new(realm_id.clone()).unwrap();
     let mut entry = soland::state::RealmDirectoryEntry::new(typed_realm_id, "Principal Control");
     entry
         .members
         .insert(arkret_sdk::Did::new(controller.to_owned()).unwrap());
-    state.realms.lock().upsert(entry);
+    state.test_realms().lock().upsert(entry);
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(
             &realm_id,
@@ -262,7 +262,7 @@ async fn production_agent_provision_fails_closed_without_durable_fanout() {
     );
     assert!(
         state
-            .persistence
+            .test_persistence()
             .agents()
             .list_for_controller(controller)
             .await
@@ -427,7 +427,7 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation()
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
     let accountability_ref = state
-        .persistence
+        .test_persistence()
         .agents()
         .list_for_controller(controller)
         .await
@@ -438,7 +438,7 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation()
         .unwrap()
         .to_owned();
     let accountability = state
-        .persistence
+        .test_persistence()
         .events()
         .get(&accountability_ref)
         .await

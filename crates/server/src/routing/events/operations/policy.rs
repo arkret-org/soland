@@ -305,9 +305,8 @@ async fn validate_managed_agent_grant_ceiling(
         return Ok(());
     };
     let record = state
-        .persistence
-        .agents()
-        .get(subject)
+        .agent_pairing_application()
+        .agent(subject)
         .await
         .map_err(|_| "agent_grant_ceiling_lookup_failed")?;
     let Some(record) = record else {

@@ -25,10 +25,10 @@ use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::de::DeserializeOwned;
 use serde_json::json;
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 
 use super::AuthArgs;
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
 pub(crate) fn router() -> Router {

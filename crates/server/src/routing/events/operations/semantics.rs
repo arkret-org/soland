@@ -274,7 +274,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             // (`revision==1` or unset) is accepted unconditionally.
             // ERR-1 — wire-validator error strings embed the canonical
             // reason code as a prefix; the parallel const reference
-            // here pins them to `crate::error::reasons::*` so a rename
+            // here pins them to `soland_http::error::reasons::*` so a rename
             // would break compilation rather than silently diverge.
             const _SESSION_FOCUS_REASON: &str =
                 arkret_sdk::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED;

@@ -14,9 +14,9 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use soland_contracts::admin::seal::{MultisigPendingEntry, MultisigPendingOutcome};
+use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
-use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

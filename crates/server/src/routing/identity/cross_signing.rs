@@ -21,9 +21,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
-use soland_storage::RecoveryPolicyRecord;
+use soland_application::identity::{FindDeviceQuery, RecoveryPolicyState};
+use soland_http::error::{AppError, ErrorCode};
 
-use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 
 const CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS: i64 = 90_000;
@@ -305,9 +305,8 @@ async fn require_verified_reset_recovery_session(
     recovery_session_id: &str,
 ) -> Result<(), &'static str> {
     let record = state
-        .persistence
-        .recovery_sessions()
-        .get(recovery_session_id)
+        .recovery_session_application()
+        .session(recovery_session_id)
         .await
         .map_err(|_| "cross_signing_reset_recovery_session_unavailable")?
         .ok_or("cross_signing_reset_recovery_session_missing")?;
@@ -344,9 +343,8 @@ pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
     }
     remember_cross_signing_reset_replay(state, &content);
     if let Err(error) = state
-        .persistence
-        .device_messages()
-        .purge_cross_signing_reset_stale_messages(
+        .delivery_application()
+        .purge_stale_cross_signing_messages(
             content.principal_id().as_str(),
             content.new_generation(),
         )
@@ -367,11 +365,10 @@ async fn active_reset_recovery_policy(
     state: &AppState,
     content: &CrossSigningResetPayload,
     proof_kind: &str,
-) -> Result<RecoveryPolicyRecord, &'static str> {
+) -> Result<RecoveryPolicyState, &'static str> {
     let policy = state
-        .persistence
-        .recovery_policies()
-        .get_active_for_principal(content.principal_id().as_str())
+        .recovery_policy_application()
+        .active_policy(content.principal_id().as_str())
         .await
         .map_err(|_| "cross_signing_reset_proof_authority_invalid")?
         .ok_or("cross_signing_reset_recovery_ref_unknown")?;
@@ -426,9 +423,8 @@ async fn verify_device_quorum_reset(
     input: &[u8],
 ) -> Result<(), &'static str> {
     let devices = state
-        .persistence
-        .devices()
-        .list_for_actor_including_revoked(principal_id)
+        .identity_application()
+        .devices_for_actor(principal_id)
         .await
         .map_err(|_| "cross_signing_reset_quorum_insufficient")?;
     let mut seen_devices = BTreeSet::new();
@@ -486,7 +482,7 @@ fn device_quorum_method_matches(
 }
 
 fn policy_mentions_identifier(
-    policy: &RecoveryPolicyRecord,
+    policy: &RecoveryPolicyState,
     top_level_keys: &[&str],
     identifier: &str,
 ) -> bool {
@@ -511,7 +507,7 @@ fn value_mentions_identifier(value: &Value, identifier: &str) -> bool {
     }
 }
 
-fn policy_device_quorum_threshold(policy: &RecoveryPolicyRecord) -> Option<u32> {
+fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Option<u32> {
     [
         "/device_quorum/k",
         "/device_quorum/threshold",
@@ -530,7 +526,7 @@ fn policy_device_quorum_threshold(policy: &RecoveryPolicyRecord) -> Option<u32> 
     })
 }
 
-fn policy_requires_trusted_service_attestation(policy: &RecoveryPolicyRecord) -> bool {
+fn policy_requires_trusted_service_attestation(policy: &RecoveryPolicyState) -> bool {
     [
         "/trusted_recovery_service/attestation_required",
         "/trusted_recovery_services/attestation_required",
@@ -854,9 +850,11 @@ async fn verify_mls_welcome_claim_envelope_device_signature(
         return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let record = state
-        .persistence
-        .devices()
-        .get(envelope.requester_did.as_str(), requester_device_id)
+        .identity_application()
+        .find_device(FindDeviceQuery {
+            actor_id: envelope.requester_did.as_str().to_owned(),
+            device_id: requester_device_id.to_owned(),
+        })
         .await
         .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
         .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
@@ -1031,11 +1029,15 @@ pub(crate) async fn try_resolve_device_signing_directory_facet(
     device_id: &str,
 ) -> Result<DeviceSigningDirectoryFacet, soland_storage::PersistenceError> {
     let record = match state
-        .persistence
-        .devices()
-        .get(principal_id, device_id)
-        .await?
-    {
+        .identity_application()
+        .find_device(FindDeviceQuery {
+            actor_id: principal_id.to_owned(),
+            device_id: device_id.to_owned(),
+        })
+        .await
+        .map_err(|error| match error {
+            soland_application::ApplicationError::Storage(error) => error,
+        })? {
         Some(record) => record,
         None => return Ok(revoked_device_signing_directory_facet()),
     };

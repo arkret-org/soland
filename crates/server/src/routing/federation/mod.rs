@@ -28,7 +28,7 @@ use super::{
 /// never drift between sign and verify. Callers decide which bytes to feed (raw
 /// body vs canonical JSON); this only maps `bytes -> header string`.
 pub(crate) fn rfc9530_content_digest(bytes: &[u8]) -> String {
-    crate::routing::http_signature::rfc9530_content_digest(bytes)
+    soland_http::http_signature::rfc9530_content_digest(bytes)
 }
 
 /// DID verification method used by the service's persistent assertion key

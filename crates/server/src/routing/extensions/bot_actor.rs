@@ -24,8 +24,7 @@
 //! grants remain a follow-up).
 
 use arkret_sdk::Did;
-
-use crate::error::AppError;
+use soland_http::error::AppError;
 
 /// Validate that an extension actor DID is a bare DID scalar (no DID URL
 /// fragment) and well-formed, before it is recorded against an applet.

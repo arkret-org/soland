@@ -27,6 +27,20 @@ pub(super) fn recovery_store_error(error: PersistenceError) -> AppError {
     }
 }
 
+pub(super) fn recovery_application_error(error: soland_application::ApplicationError) -> AppError {
+    match error {
+        soland_application::ApplicationError::Storage(error) => recovery_store_error(error),
+    }
+}
+
+pub(super) fn recovery_policy_application_error(
+    error: soland_application::ApplicationError,
+) -> AppError {
+    match error {
+        soland_application::ApplicationError::Storage(error) => recovery_policy_store_error(error),
+    }
+}
+
 pub(super) fn recovery_policy_store_error(error: PersistenceError) -> AppError {
     match error {
         PersistenceError::Conflict(message) if message.contains("principal/version") => {

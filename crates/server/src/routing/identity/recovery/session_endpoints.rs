@@ -1,3 +1,6 @@
+use sha2::{Digest as _, Sha256};
+use soland_application::identity::RecoverySessionState as RecoverySessionApplicationState;
+
 use super::*;
 
 /// SOL-SEC-05 — constant-time string equality for recovery
@@ -41,7 +44,7 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 // Phase 4), and these ids identify accepted operations in the reducer/projection;
 // wiring them into the durable event-envelope read store is Phase 3.
 
-pub(super) fn recovery_session_summary(record: &RecoverySessionRecord) -> Value {
+pub(super) fn recovery_session_summary(record: &RecoverySessionApplicationState) -> Value {
     let mut out = json!({
         "schema": "ak.schema.recovery_session.v1",
         "recovery_session_id": record.recovery_session_id,
@@ -96,7 +99,7 @@ pub(super) fn recovery_session_summary(record: &RecoverySessionRecord) -> Value 
 /// session that has a recorded proof. `proof_digest` is the SHA-256 of the
 /// canonical recovery-proof transcript, deterministically recomputed from the
 /// stored session fields (no separate column needed).
-pub(super) fn recovery_proof_summary(record: &RecoverySessionRecord) -> Option<Value> {
+pub(super) fn recovery_proof_summary(record: &RecoverySessionApplicationState) -> Option<Value> {
     let proof = record.proof_payload.as_ref()?.get("proof")?.as_object()?;
     let kind = proof.get("kind").and_then(Value::as_str)?;
     let verification_method = proof.get("verification_method").and_then(Value::as_str);
@@ -111,7 +114,7 @@ pub(super) fn recovery_proof_summary(record: &RecoverySessionRecord) -> Option<V
 }
 
 fn recovery_proof_summary_transcript(
-    record: &RecoverySessionRecord,
+    record: &RecoverySessionApplicationState,
     proof: &Map<String, Value>,
 ) -> Option<Value> {
     let kind = proof.get("kind").and_then(Value::as_str)?;
@@ -141,14 +144,14 @@ fn recovery_proof_summary_transcript(
 }
 
 pub(super) fn typed_recovery_session_state(
-    record: &RecoverySessionRecord,
+    record: &RecoverySessionApplicationState,
 ) -> Result<RecoverySessionState, AppError> {
     serde_json::from_value(recovery_session_summary(record))
         .map_err(|error| stored_recovery_type_error("session state", error))
 }
 
 pub(super) fn typed_recovery_proof_summary(
-    record: &RecoverySessionRecord,
+    record: &RecoverySessionApplicationState,
 ) -> Result<Option<ProofSummary>, AppError> {
     recovery_proof_summary(record)
         .map(|value| {
@@ -159,13 +162,13 @@ pub(super) fn typed_recovery_proof_summary(
 }
 
 pub(super) fn recovery_session_state_from_record(
-    record: &RecoverySessionRecord,
+    record: &RecoverySessionApplicationState,
 ) -> Result<SessionState, AppError> {
     serde_json::from_value(Value::String(record.state.clone()))
         .map_err(|error| stored_recovery_type_error("session state enum", error))
 }
 
-fn recovery_model_generation_ref(record: &RecoverySessionRecord) -> Value {
+fn recovery_model_generation_ref(record: &RecoverySessionApplicationState) -> Value {
     match record.identity_model {
         RecoveryIdentityModel::CrossSigning => record
             .ssk_generation
@@ -184,15 +187,14 @@ pub(super) async fn load_owned_recovery_session(
     state: &AppState,
     req: &mut Request,
     recovery_session_id: &str,
-) -> Result<RecoverySessionRecord, AppError> {
+) -> Result<RecoverySessionApplicationState, AppError> {
     let session = aa.authenticated_session(state, req).await?;
     let principal = session.actor;
     let record = state
-        .persistence
-        .recovery_sessions()
-        .get(recovery_session_id)
+        .recovery_session_application()
+        .session(recovery_session_id)
         .await
-        .map_err(recovery_store_error)?
+        .map_err(recovery_application_error)?
         .ok_or_else(|| {
             AppError::not_found(format!(
                 "recovery session `{recovery_session_id}` not found"
@@ -257,11 +259,10 @@ pub(super) async fn recovery_session_create(
     // A session can only be opened against an accepted recovery policy — and the
     // requested trust_domain MUST match it (no domain confusion).
     let active = state
-        .persistence
-        .recovery_policies()
-        .get_active_for_principal(&principal)
+        .recovery_policy_application()
+        .active_policy(&principal)
         .await
-        .map_err(recovery_store_error)?
+        .map_err(recovery_application_error)?
         .ok_or_else(|| {
             AppError::conflict(format!(
                 "no accepted recovery policy for principal `{principal}`"
@@ -312,11 +313,10 @@ pub(super) async fn recovery_session_create(
         accepted_seal_frontier,
     ) = if let Some(generation) = device_generation {
         let mut entries = state
-            .persistence
-            .webvh()
-            .list_log_events(&principal)
+            .did_application()
+            .log_events(&principal)
             .await
-            .map_err(recovery_store_error)?;
+            .map_err(recovery_application_error)?;
         entries.sort_by_key(|entry| entry.seq);
         let registry_head = entries
             .last()
@@ -393,7 +393,7 @@ pub(super) async fn recovery_session_create(
     };
 
     let now = chrono::Utc::now();
-    let record = RecoverySessionRecord {
+    let record = RecoverySessionApplicationState {
         recovery_session_id: crate::ids::generate("recovery_session"),
         principal_id: principal.clone(),
         requesting_device_id,
@@ -415,11 +415,14 @@ pub(super) async fn recovery_session_create(
         expires_at: now + chrono::Duration::seconds(RECOVERY_SESSION_TTL_SECS),
     };
     state
-        .persistence
-        .recovery_sessions()
-        .insert(record.clone())
+        .recovery_session_application()
+        .create_session(record.clone())
         .await
-        .map_err(recovery_session_store_error)?;
+        .map_err(|error| match error {
+            soland_application::ApplicationError::Storage(error) => {
+                recovery_session_store_error(error)
+            }
+        })?;
 
     append_audit_log(
         state,
@@ -562,18 +565,21 @@ pub(super) async fn recovery_session_proof_submit(
     // Proof verified — advance `pending -> verified` and record the proof. The
     // server only reaches this point after a real cryptographic check.
     let now = chrono::Utc::now();
-    let updated = RecoverySessionRecord {
+    let updated = RecoverySessionApplicationState {
         state: "verified".to_owned(),
         proof_payload: Some(payload_value.clone()),
         updated_at: now,
         ..record
     };
     state
-        .persistence
-        .recovery_sessions()
-        .update(updated.clone())
+        .recovery_session_application()
+        .save_session(updated.clone())
         .await
-        .map_err(recovery_session_store_error)?;
+        .map_err(|error| match error {
+            soland_application::ApplicationError::Storage(error) => {
+                recovery_session_store_error(error)
+            }
+        })?;
 
     let proof_summary = recovery_proof_summary(&updated).unwrap_or(Value::Null);
     append_audit_log(
@@ -622,7 +628,7 @@ pub(super) async fn recovery_session_proof_submit(
 /// `recovery_evidence_unbound` guarantee for free.
 pub(super) async fn verify_principal_signing_proof(
     state: &AppState,
-    record: &RecoverySessionRecord,
+    record: &RecoverySessionApplicationState,
     proof: &Map<String, Value>,
 ) -> Result<(), AppError> {
     // recovery-session.schema.json $defs/principal_signing_proof requires `alg`.
@@ -684,7 +690,7 @@ pub(super) async fn verify_principal_signing_proof(
 
 pub(super) async fn verify_trusted_recovery_service_proof(
     state: &AppState,
-    record: &RecoverySessionRecord,
+    record: &RecoverySessionApplicationState,
     proof: &Map<String, Value>,
 ) -> Result<(), AppError> {
     let alg = required_proof_string(proof, "alg")?;
@@ -783,7 +789,7 @@ pub(super) async fn verify_trusted_recovery_service_proof(
 ///     verified in (b).
 pub(super) async fn verify_recovery_unlock_proof(
     _state: &AppState,
-    record: &RecoverySessionRecord,
+    record: &RecoverySessionApplicationState,
     proof: &Map<String, Value>,
 ) -> Result<(), AppError> {
     let alg = required_proof_string(proof, "alg")?;
@@ -1054,7 +1060,10 @@ fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
 /// Canonical recovery-proof transcript binding every session-defining field.
 /// Both the requesting device (when signing) and the server (when verifying)
 /// MUST construct this identically.
-pub(super) fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &str) -> Value {
+pub(super) fn recovery_proof_transcript(
+    record: &RecoverySessionApplicationState,
+    kind: &str,
+) -> Value {
     json!({
         "type": "ak.identity.recovery_proof.v1",
         "kind": kind,
@@ -1075,7 +1084,7 @@ pub(super) fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &s
 }
 
 pub(super) fn generic_recovery_proof_transcript(
-    record: &RecoverySessionRecord,
+    record: &RecoverySessionApplicationState,
     kind: &str,
     proof_body: Value,
 ) -> Value {
@@ -1152,11 +1161,10 @@ pub(super) async fn recovery_session_complete(
 
     let authorization_event_id = authorization_event_id_typed.as_str().to_owned();
     let authorization_record = state
-        .persistence
-        .events()
-        .get(&authorization_event_id)
+        .event_query_application()
+        .accepted_event(&authorization_event_id)
         .await
-        .map_err(recovery_store_error)?
+        .map_err(recovery_application_error)?
         .ok_or_else(|| {
             AppError::conflict("recovery authorization Event is not accepted")
                 .with_wire_code("recovery_control_event_not_found")
@@ -1301,11 +1309,10 @@ pub(super) async fn recovery_session_complete(
                 .expect("validated B-model completion has reanchor_event_id")
                 .as_str();
             let reanchor_record = state
-                .persistence
-                .events()
-                .get(reanchor_event_id)
+                .event_query_application()
+                .accepted_event(reanchor_event_id)
                 .await
-                .map_err(recovery_store_error)?
+                .map_err(recovery_application_error)?
                 .filter(|event| event.kind == "ak.device.reanchor")
                 .ok_or_else(|| {
                     AppError::conflict("re-anchor Event is not atomically accepted")
@@ -1355,12 +1362,23 @@ pub(super) async fn recovery_session_complete(
                 .as_ref()
                 .expect("validated B-model completion has receipt")
                 .as_str();
-            let receipt = state
-                .persistence
-                .events()
+            let receipts = state
+                .event_query_application()
                 .batch_receipts_for_event(reanchor_event_id)
                 .await
-                .map_err(recovery_store_error)?
+                .map_err(recovery_application_error)?;
+            let receipt = receipts
+                .into_iter()
+                .map(|receipt| {
+                    serde_json::from_value::<arkret_sdk::EventBatchReceipt>(receipt.value).map_err(
+                        |error| {
+                            AppError::internal(format!(
+                                "stored re-anchor receipt is invalid: {error}"
+                            ))
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .find(|receipt| receipt.receipt_id.as_str() == receipt_id)
                 .ok_or_else(|| {
@@ -1391,11 +1409,10 @@ pub(super) async fn recovery_session_complete(
                 .with_wire_code("device_reanchor_authorize_mismatch"));
             }
             let registry_digest = state
-                .persistence
-                .webvh()
-                .list_log_events(&record.principal_id)
+                .did_application()
+                .log_events(&record.principal_id)
                 .await
-                .map_err(recovery_store_error)?
+                .map_err(recovery_application_error)?
                 .into_iter()
                 .find(|entry| {
                     entry.operation.get("versionId").and_then(Value::as_str)
@@ -1409,11 +1426,10 @@ pub(super) async fn recovery_session_complete(
                 .with_wire_code("device_reanchor_entry_not_head"));
             }
             let mut entries = state
-                .persistence
-                .webvh()
-                .list_log_events(&record.principal_id)
+                .did_application()
+                .log_events(&record.principal_id)
                 .await
-                .map_err(recovery_store_error)?;
+                .map_err(recovery_application_error)?;
             entries.sort_by_key(|entry| entry.seq);
             let previous_registry_head = entries
                 .iter()
@@ -1450,11 +1466,13 @@ pub(super) async fn recovery_session_complete(
         })
         .unwrap_or(Value::Null);
     let existing_device = state
-        .persistence
-        .devices()
-        .get(&record.principal_id, &record.requesting_device_id)
+        .identity_application()
+        .find_device(soland_application::identity::FindDeviceQuery {
+            actor_id: record.principal_id.clone(),
+            device_id: record.requesting_device_id.clone(),
+        })
         .await
-        .map_err(recovery_store_error)?;
+        .map_err(recovery_application_error)?;
     if identity_model == RecoveryIdentityModel::EnrollmentAuthority && existing_device.is_none() {
         return Err(
             AppError::conflict("atomic re-anchor device projection is unavailable")
@@ -1488,38 +1506,45 @@ pub(super) async fn recovery_session_complete(
         "authorization_event_id".to_owned(),
         Value::String(authorization_event_id.clone()),
     );
-    let device = DeviceInventoryRecord {
-        actor: record.principal_id.clone(),
+    let device = soland_application::identity::SaveDeviceCommand {
+        actor_id: record.principal_id.clone(),
         device_id: record.requesting_device_id.clone(),
         display_name: None,
-        verification_state: "verified".to_owned(),
-        payload: device_payload,
-        created_at: existing_device
-            .as_ref()
-            .map_or(now, |device| device.created_at),
-        updated_at: now,
-        revoked_at: existing_device
-            .as_ref()
-            .and_then(|device| device.revoked_at),
+        device: soland_application::identity::DeviceIdentity {
+            actor_id: record.principal_id.clone(),
+            device_id: record.requesting_device_id.clone(),
+            display_name: None,
+            verification_state: "verified".to_owned(),
+            payload: device_payload,
+            created_at: existing_device
+                .as_ref()
+                .map_or(now, |device| device.created_at),
+            updated_at: now,
+            revoked_at: existing_device
+                .as_ref()
+                .and_then(|device| device.revoked_at),
+        },
     };
     state
-        .persistence
-        .devices()
-        .put(&device)
+        .identity_application()
+        .save_device(device)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 
-    let completed = RecoverySessionRecord {
+    let completed = RecoverySessionApplicationState {
         state: "completed".to_owned(),
         updated_at: now,
         ..record
     };
     state
-        .persistence
-        .recovery_sessions()
-        .update(completed.clone())
+        .recovery_session_application()
+        .save_session(completed.clone())
         .await
-        .map_err(recovery_session_store_error)?;
+        .map_err(|error| match error {
+            soland_application::ApplicationError::Storage(error) => {
+                recovery_session_store_error(error)
+            }
+        })?;
 
     append_audit_log(
         state,
@@ -1565,11 +1590,10 @@ pub(super) async fn resolve_control_event_payload(
     expected_kind: &str,
 ) -> Result<Value, AppError> {
     let record = state
-        .persistence
-        .events()
-        .get(event_id)
+        .event_query_application()
+        .accepted_event(event_id)
         .await
-        .map_err(recovery_store_error)?
+        .map_err(recovery_application_error)?
         .ok_or_else(|| {
             AppError::conflict(format!("control event `{event_id}` not found"))
                 .with_wire_code("recovery_control_event_not_found")
@@ -1596,22 +1620,25 @@ pub(super) async fn resolve_control_event_payload(
 /// the updated record. Terminal states are returned unchanged.
 pub(super) async fn expire_if_elapsed(
     state: &AppState,
-    record: RecoverySessionRecord,
-) -> Result<RecoverySessionRecord, AppError> {
+    record: RecoverySessionApplicationState,
+) -> Result<RecoverySessionApplicationState, AppError> {
     let now = chrono::Utc::now();
     let is_open = matches!(record.state.as_str(), "pending" | "verified");
     if is_open && now > record.expires_at {
-        let expired = RecoverySessionRecord {
+        let expired = RecoverySessionApplicationState {
             state: "expired".to_owned(),
             updated_at: now,
             ..record
         };
         state
-            .persistence
-            .recovery_sessions()
-            .update(expired.clone())
+            .recovery_session_application()
+            .save_session(expired.clone())
             .await
-            .map_err(recovery_session_store_error)?;
+            .map_err(|error| match error {
+                soland_application::ApplicationError::Storage(error) => {
+                    recovery_session_store_error(error)
+                }
+            })?;
         return Ok(expired);
     }
     Ok(record)

@@ -3,8 +3,8 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
+use soland_http::error::AppError;
 
-use crate::error::AppError;
 use crate::state::AppState;
 
 pub(super) fn federation_verify_actor_digest(
@@ -130,6 +130,9 @@ pub(super) async fn verify_federation_actor_signature(
 }
 
 fn actor_signature_error(message: impl Into<String>) -> AppError {
-    AppError::new(crate::error::ErrorCode::InvalidSignature, message.into())
-        .with_status(StatusCode::UNAUTHORIZED)
+    AppError::new(
+        soland_http::error::ErrorCode::InvalidSignature,
+        message.into(),
+    )
+    .with_status(StatusCode::UNAUTHORIZED)
 }

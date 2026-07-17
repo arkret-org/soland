@@ -34,9 +34,8 @@ pub(super) async fn provision_agent(
     let requested_scope = serde_json::to_value(&body.requested_scope)
         .map_err(|error| AppError::invalid_param(format!("requested_scope is invalid: {error}")))?;
     let active_recovery_policy = state
-        .persistence
-        .recovery_policies()
-        .get_active_for_principal(&controller_id)
+        .recovery_policy_application()
+        .active_policy(&controller_id)
         .await
         .map_err(|error| {
             AppError::internal(format!("controller recovery policy lookup failed: {error}"))
@@ -51,12 +50,11 @@ pub(super) async fn provision_agent(
     }
     let controller_realm = require_controller_principal_control_realm(state, &session).await?;
     let existing = state
-        .persistence
-        .agents()
-        .list_for_controller(&controller_id)
+        .agent_pairing_application()
+        .agents_for_controller(&controller_id)
         .await
         .map_err(|err| AppError::internal(format!("agent slug conflict check failed: {err}")))?;
-    let mut existing = existing;
+    let mut existing: Vec<_> = existing.into_iter().collect();
     for record in existing.iter_mut() {
         *record = lazily_expire_pairing(state, record.clone()).await?;
     }
@@ -123,9 +121,10 @@ pub(super) async fn provision_agent(
     )
     .await?;
     let controller_account = state
-        .persistence
-        .accounts()
-        .get(&session.actor)
+        .identity_application()
+        .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+            actor_id: session.actor.clone(),
+        })
         .await
         .map_err(|error| AppError::internal(format!("controller account lookup failed: {error}")))?
         .ok_or_else(|| AppError::internal("controller account is missing"))?;
@@ -137,8 +136,9 @@ pub(super) async fn provision_agent(
         "pending_runtime_key".to_owned(),
         now_utc,
     );
-    principal.controller_account_id =
-        Some(ids::typed_uuid_part_expect_internal(&controller_account.id));
+    principal.controller_account_id = Some(ids::typed_uuid_part_expect_internal(
+        &controller_account.account_id,
+    ));
     principal.recipient_service_id = Some(state.service_id.clone());
     principal.display_name = display_name.clone();
     principal.agent_slug = Some(agent_slug.clone());
@@ -152,9 +152,8 @@ pub(super) async fn provision_agent(
     principal.pairing_code = Some(pairing_code.clone());
     principal.pairing_expires_at = Some(expires_at);
     state
-        .persistence
-        .agents()
-        .put(principal)
+        .agent_pairing_application()
+        .save_agent(principal)
         .await
         .map_err(|err| AppError::internal(format!("agent persist failed: {err}")))?;
     append_audit_log(
@@ -257,13 +256,12 @@ pub(super) async fn renew_agent_pairing(
     let agent_slug = record.agent_slug.clone().unwrap_or_default();
     if !agent_slug.is_empty() {
         let siblings = state
-            .persistence
-            .agents()
-            .list_for_controller(&session.actor)
+            .agent_pairing_application()
+            .agents_for_controller(&session.actor)
             .await
-            .map_err(|err| {
-                AppError::internal(format!("agent slug conflict check failed: {err}"))
-            })?;
+            .map_err(|err| AppError::internal(format!("agent slug conflict check failed: {err}")))?
+            .into_iter()
+            .collect::<Vec<_>>();
         if siblings.iter().any(|sibling| {
             sibling.id != agent_id
                 && sibling.agent_slug.as_deref() == Some(agent_slug.as_str())
@@ -303,9 +301,8 @@ pub(super) async fn renew_agent_pairing(
     record.approval_notification_id = None;
     record.updated_at = now_utc;
     state
-        .persistence
-        .agents()
-        .put(record.clone())
+        .agent_pairing_application()
+        .save_agent(record.clone())
         .await
         .map_err(|err| AppError::internal(format!("agent persist failed: {err}")))?;
     if let Some(context) = terminal_notification {
@@ -367,11 +364,12 @@ pub(super) async fn list_agents(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let records = state
-        .persistence
-        .agents()
-        .list_for_controller(&session.actor)
+        .agent_pairing_application()
+        .agents_for_controller(&session.actor)
         .await
-        .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
+        .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?
+        .into_iter()
+        .collect::<Vec<_>>();
     // Lazily expire any agent past its pairing window before projecting, so
     // list reflects `pairing_expired` without changing Realm grants.
     let mut agents = Vec::with_capacity(records.len());
@@ -411,9 +409,8 @@ pub(super) async fn get_agent(
     let agent_id = agent_id.into_inner();
     validate_agent_id(&agent_id)?;
     let record = state
-        .persistence
-        .agents()
-        .get(&agent_id)
+        .agent_pairing_application()
+        .agent(&agent_id)
         .await
         .map_err(|err| AppError::internal(format!("agent get failed: {err}")))?
         .ok_or_else(|| AppError::not_found("agent not found"))?;
@@ -490,9 +487,8 @@ pub(super) async fn lazily_expire_pairing(
     record.approval_notification_id = None;
     record.updated_at = now;
     state
-        .persistence
-        .agents()
-        .put(record.clone())
+        .agent_pairing_application()
+        .save_agent(record.clone())
         .await
         .map_err(|error| {
             AppError::internal(format!("failed to persist expired Agent pairing: {error}"))
@@ -628,9 +624,8 @@ pub(super) async fn lifecycle_transition(
         updated_record.approval_notification_id = None;
     }
     state
-        .persistence
-        .agents()
-        .put(updated_record)
+        .agent_pairing_application()
+        .save_agent(updated_record)
         .await
         .map_err(|error| AppError::internal(format!("agent lifecycle persist failed: {error}")))?;
     if let Some(context) = terminal_notification {

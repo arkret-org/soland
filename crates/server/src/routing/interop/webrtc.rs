@@ -29,12 +29,12 @@ use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 use soland_storage::{CanonicalEventRecord, SessionRecord};
 
 use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
-use crate::error::{AppError, ErrorCode};
 use crate::ids;
-use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -609,7 +609,7 @@ async fn handle_rtc_token(
     session: &SessionRecord,
     body: CallMediaTokenExchangeRequestBody,
 ) -> JsonResult<CallMediaTokenExchangeOutcome> {
-    use crate::error::ErrorCode;
+    use soland_http::error::ErrorCode;
 
     // The request body is the SDK typed shape: `realm_id`/`call_id`/`actor_id`/
     // `device_id` arrive already validated as the corresponding scalar id types,

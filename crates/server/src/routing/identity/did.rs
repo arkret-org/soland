@@ -11,9 +11,8 @@
 //! - `POST /_arkret/root/identity/submit-did-operation` — submit a DID operation
 //! - `GET  /_arkret/root/identity/receipts`     — issuer receipts for the local key log
 //!
-//! All long-term state lives behind `state.persistence.webvh()`; the
-//! `did_resolver` is still an in-process resolver chain. Production must move it onto a
-//! durable store (see todo F2) — currently in-memory.
+//! Long-term DID state is accessed through the identity application service; the
+//! `did_resolver` remains an in-process bounded cache over durable records.
 
 use arkret_sdk::http::IdentityDocumentViewOutcome;
 use arkret_sdk::{
@@ -25,7 +24,12 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_storage::{WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord};
+use soland_application::identity::{
+    DidDocumentState as WebvhDocumentRecord, DidLogCommitResult as WebvhLogCommitOutcome,
+    DidLogEvent as WebvhLogRecord,
+};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 
 use super::webvh_validation::{
     WebvhLogEntry, derive_webvh_scid_from_skeleton, validate_log_chain,
@@ -33,8 +37,6 @@ use super::webvh_validation::{
     verify_scid_against_did, verify_webvh_log_proof, webvh_entry_hash_multibase,
 };
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
-use crate::error::{AppError, ErrorCode};
-use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 use crate::wire::{IdentityLogListOutcome, IdentityReceiptListOutcome, IdentityResolveRequestBody};
 

@@ -167,7 +167,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
     let token = dev_token(state.clone()).await;
     let now = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .blobs()
         .put(
             "ak:blob:test-1",
@@ -190,7 +190,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
         .await
         .unwrap();
     state
-        .persistence
+        .test_persistence()
         .blobs()
         .put(
             "ak:blob:test-2",

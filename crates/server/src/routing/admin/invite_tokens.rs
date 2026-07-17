@@ -9,10 +9,10 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_http::error::AppError;
 use soland_storage::RealmInviteRecord;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use crate::error::AppError;
 use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 

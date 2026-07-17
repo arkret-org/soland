@@ -118,13 +118,31 @@ pub(super) async fn enqueue_peer_event_fanout(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) {
+    for record in peer_event_fanout_records(state, parsed, envelope) {
+        if let Err(error) = state.persistence.federation_outbox().enqueue(&record).await {
+            tracing::warn!(
+                %error,
+                event_id = %parsed.event_id,
+                peer = %record.peer_url,
+                peer_did = %record.peer_did,
+                "failed to enqueue dynamic ak.peer.events.command.submit fanout"
+            );
+        }
+    }
+}
+
+pub(super) fn peer_event_fanout_records(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+) -> Vec<soland_storage::FederationOutboxRecord> {
     // Directed invite-create events carry their recipient service in the
     // operation payload rather than in the member projection. Pass the
     // original envelope through so the fanout target can be resolved before
     // the invitee has joined (federation.md section 5.1).
     let peers = dynamic_peer_event_targets(state, parsed, envelope);
     if peers.is_empty() {
-        return;
+        return Vec::new();
     }
     let event_id = parsed.event_id.as_str();
     let binding_payload = json!({
@@ -141,9 +159,11 @@ pub(super) async fn enqueue_peer_event_fanout(
                 event_id,
                 "failed to type checked peer fanout event envelope"
             );
-            return;
+            return Vec::new();
         }
     };
+    let now = chrono::Utc::now().timestamp();
+    let mut records = Vec::new();
     for peer in peers {
         let service_binding_ref = match service_binding_ref_for_target(
             parsed,
@@ -195,25 +215,22 @@ pub(super) async fn enqueue_peer_event_fanout(
         if peer.service_id == state.service_id {
             continue;
         }
-        if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
-            state,
-            peer.url.as_str(),
-            peer.service_id.as_str(),
-            "/_arkret/peer/events",
-            &idempotency_key,
-            &payload,
-        )
-        .await
-        {
-            tracing::warn!(
-                %error,
-                event_id,
-                peer = %peer.url,
-                peer_did = %peer.service_id,
-                "failed to enqueue dynamic ak.peer.events.command.submit fanout"
-            );
-        }
+        records.push(soland_storage::FederationOutboxRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            peer_did: peer.service_id,
+            peer_url: peer.url.trim_end_matches('/').to_owned(),
+            endpoint: "/_arkret/peer/events".to_owned(),
+            idempotency_key,
+            payload_json: payload,
+            attempts: 0,
+            next_attempt_at: now,
+            last_status: None,
+            last_response_excerpt: None,
+            created_at: now,
+            delivered_at: None,
+        });
     }
+    records
 }
 
 struct DynamicPeerEventTarget {

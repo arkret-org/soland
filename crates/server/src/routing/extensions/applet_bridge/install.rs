@@ -14,6 +14,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_domain::reducer::AppletProjection;
+use soland_http::error::AppError;
 use soland_storage::{MessageRecord, ProjectionEventRecord};
 
 use super::super::applet_manifest::{AppletManifest, VerifiedAppletManifest};
@@ -25,7 +26,6 @@ use super::types::{
     AppletManifestRegisterRequestBody, AppletPortalMessageOutcome, AppletRecord, AppletView,
     GhostActorRecord,
 };
-use crate::error::AppError;
 use crate::ids;
 use crate::routing::events::strand::strand_id_from_realm_id;
 use crate::state::AppState;

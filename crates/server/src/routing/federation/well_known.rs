@@ -6,8 +6,8 @@
 
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
+use soland_http::result::{JsonResult, json_ok};
 
-use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
 /// Build the `/.well-known/arkret` router. Mounted alongside the

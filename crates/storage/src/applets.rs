@@ -1,4 +1,4 @@
-use super::*;
+use super::{PersistenceError, PersistenceResult, Value, async_trait};
 #[async_trait]
 pub trait AppletStore: Send + Sync {
     async fn get(&self, applet_id: &str) -> PersistenceResult<Option<Value>>;

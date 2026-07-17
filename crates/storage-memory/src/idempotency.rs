@@ -1,8 +1,10 @@
-use super::*;
+use super::{
+    Arc, BTreeMap, IdempotencyRecord, IdempotencyStore, Mutex, PersistenceResult, Utc, async_trait,
+};
 /// In-memory `(principal_id, idempotency_key) -> IdempotencyRecord` table.
 /// Mirrors the `idempotency_keys` Pg table on the same composite key.
 pub(crate) struct MemoryIdempotencyStore {
-    data: Arc<Mutex<BTreeMap<(String, String), IdempotencyRecord>>>,
+    pub(crate) data: Arc<Mutex<BTreeMap<(String, String), IdempotencyRecord>>>,
 }
 impl MemoryIdempotencyStore {
     pub(crate) fn new() -> Self {

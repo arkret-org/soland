@@ -18,11 +18,11 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use soland_http::error::AppError;
+use soland_http::result::{EmptyResult, JsonResult, empty_ok, json_ok};
 
 use super::{AuthArgs, accept_local_operations};
-use crate::error::AppError;
 use crate::ids;
-use crate::result::{EmptyResult, JsonResult, empty_ok, json_ok};
 use crate::state::AppState;
 
 pub(crate) fn router() -> Router {
@@ -154,7 +154,7 @@ async fn put_realm_policy_server(
         .cloned()
         .ok_or_else(|| {
             AppError::new(
-                crate::error::ErrorCode::InternalError,
+                soland_http::error::ErrorCode::InternalError,
                 "policy_server projection vanished after accept",
             )
         })?;
@@ -215,7 +215,7 @@ async fn delete_realm_policy_server(
 }
 
 fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
-    AppError::new(crate::error::ErrorCode::FailedPrecondition, reason)
+    AppError::new(soland_http::error::ErrorCode::FailedPrecondition, reason)
         .with_status(salvo::http::StatusCode::UNPROCESSABLE_ENTITY)
         .with_wire_code(reason)
 }

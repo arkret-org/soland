@@ -2,7 +2,7 @@ use super::super::*;
 
 /// Wire-shape validators applied on the event ingest path.
 ///
-/// Each maps a [`crate::wire_validators::WireRejection`] to a
+/// Each maps a [`soland_http::wire_validators::WireRejection`] to a
 /// `schema_violation`-class [`EventValidationError`] carrying the precise
 /// reason code.
 pub(super) fn validate_pre_schema_wire_shape(
@@ -10,14 +10,16 @@ pub(super) fn validate_pre_schema_wire_shape(
     payload: &Value,
 ) -> Result<(), EventValidationError> {
     if kind == arkret_sdk::events::EventKind::MEMBER_IDENTITY_UPDATE {
-        crate::wire_validators::member_identity::validate_member_identity_update_payload(payload)
-            .map_err(wire_rejection_to_validation_error)?;
+        soland_http::wire_validators::member_identity::validate_member_identity_update_payload(
+            payload,
+        )
+        .map_err(wire_rejection_to_validation_error)?;
     }
     Ok(())
 }
 
 fn wire_rejection_to_validation_error(
-    rejection: crate::wire_validators::WireRejection,
+    rejection: soland_http::wire_validators::WireRejection,
 ) -> EventValidationError {
     event_validation_error(StatusCode::BAD_REQUEST, rejection.reason, rejection.message)
 }

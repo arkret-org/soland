@@ -43,7 +43,7 @@ fn test_config() -> AppConfig {
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: BTreeMap::new(),
         trust_domain: "ak:trust_domain:soland-mls-test.local".to_owned(),
-        ..AppConfig::test_default()
+        ..soland_test_support::app_config()
     }
 }
 
@@ -181,7 +181,7 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
 }
 
 fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: u64) {
-    let mut manager = state.cross_signing.lock();
+    let mut manager = state.test_cross_signing().lock();
     for current in 1..=generation {
         manager
             .record_cross_signing_publish(cross_signing_publish(principal, current))
@@ -259,7 +259,7 @@ async fn mls_lifecycle_end_to_end() {
     );
     assert!(
         state
-            .persistence
+            .test_persistence()
             .mls_key_packages()
             .get(keypackage_id)
             .await
@@ -268,7 +268,7 @@ async fn mls_lifecycle_end_to_end() {
         "publish must mirror into the store"
     );
     let published_row = state
-        .persistence
+        .test_persistence()
         .mls_key_packages()
         .get(keypackage_id)
         .await
@@ -441,7 +441,7 @@ async fn mls_lifecycle_end_to_end() {
     }
     assert_eq!(
         state
-            .persistence
+            .test_persistence()
             .mls_commits()
             .get(&effective_scope, group_id)
             .await
@@ -518,7 +518,7 @@ async fn mls_lifecycle_end_to_end() {
     }
     assert_eq!(
         state
-            .persistence
+            .test_persistence()
             .mls_welcomes()
             .snapshot_all()
             .await
@@ -568,7 +568,7 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(commit_resp.status_code, Some(StatusCode::OK));
     assert_eq!(
         state
-            .persistence
+            .test_persistence()
             .mls_commits()
             .get(&effective_scope, group_id)
             .await

@@ -376,7 +376,18 @@ pub async fn persist_projected_operation(
     let Some(pool) = state.db.pool.as_ref() else {
         return Ok(());
     };
-    soland_storage_postgres::persist_projected_operation_to_pg(pool, origin, operation)
-        .await
-        .map_err(Into::into)
+    let event_type = soland_domain::kinds::canonical_kind_string(operation);
+    let is_message_create = soland_domain::kinds::operation_is_message_create(operation);
+    let is_membership_or_realm_lifecycle = soland_domain::kinds::operation_is_membership(operation)
+        || soland_domain::kinds::operation_is_realm_lifecycle(operation);
+    soland_storage_postgres::persist_projected_operation_to_pg(
+        pool,
+        origin,
+        operation,
+        &event_type,
+        is_message_create,
+        is_membership_or_realm_lifecycle,
+    )
+    .await
+    .map_err(Into::into)
 }

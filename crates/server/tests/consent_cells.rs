@@ -16,7 +16,7 @@ fn test_config() -> AppConfig {
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "peer".to_owned()],
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
-        ..AppConfig::test_default()
+        ..soland_test_support::app_config()
     }
 }
 
@@ -167,7 +167,7 @@ async fn assert_requester_consent_revoked(
 
 async fn assert_auto_revoke_audit(state: &AppState, actor: &str, reason: &str) {
     let entries = state
-        .persistence
+        .test_persistence()
         .audit()
         .list_for_actor(actor)
         .await
@@ -784,7 +784,7 @@ async fn expired_contact_respond_revokes_requester_side_consent_and_fails_closed
     let requested = request_contact(&app, &alice_token, bob, "invite").await;
     let request_id = requested["request_event_ref"].as_str().unwrap();
     let mut contact = state
-        .persistence
+        .test_persistence()
         .contacts()
         .get_scoped(alice, bob, "invite")
         .await
@@ -792,7 +792,12 @@ async fn expired_contact_respond_revokes_requester_side_consent_and_fails_closed
         .expect("stored contact request");
     contact.created_at = Utc::now() - Duration::days(15);
     contact.updated_at = contact.created_at;
-    state.persistence.contacts().put(&contact).await.unwrap();
+    state
+        .test_persistence()
+        .contacts()
+        .put(&contact)
+        .await
+        .unwrap();
 
     let mut response = TestClient::post("http://server/_arkret/self/contacts/respond")
         .add_header("Authorization", format!("Bearer {bob_token}"), true)

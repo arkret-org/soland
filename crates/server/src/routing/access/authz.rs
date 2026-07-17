@@ -23,11 +23,11 @@ use arkret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, query_param};
 use crate::authz::{Constraint, GrantDecisionVerdict};
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
 use crate::routing::spaces::space::realm_has_member_by_id;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -339,7 +339,7 @@ async fn effective_grants(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<GrantList> {
+) -> soland_http::result::JsonResult<GrantList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
@@ -374,7 +374,7 @@ async fn effective_grants(
             .map(capability_grant_from_authz_grant)
             .collect::<Result<Vec<_>, _>>()?
     };
-    crate::result::json_ok(GrantList {
+    soland_http::result::json_ok(GrantList {
         grants,
         state_digest: Some(
             Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
@@ -641,7 +641,7 @@ async fn invites(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<AuthzInviteList> {
+) -> soland_http::result::JsonResult<AuthzInviteList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
@@ -683,7 +683,7 @@ async fn invites(
         }
         invite_list.push(invite_record_to_sdk(invite)?);
     }
-    crate::result::json_ok(AuthzInviteList {
+    soland_http::result::json_ok(AuthzInviteList {
         invites: invite_list,
         next_cursor: None,
         has_more: false,

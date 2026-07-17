@@ -398,7 +398,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
     let now = chrono::Utc::now();
 
     {
-        let mut projection = state.projection.lock();
+        let mut projection = state.test_projection().lock();
         projection.circles.insert(
             circle_id.to_owned(),
             soland_domain::reducer::CircleProjection {
@@ -780,7 +780,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
     };
 
     {
-        let mut projection = state.projection.lock();
+        let mut projection = state.test_projection().lock();
         let mut fields = std::collections::BTreeMap::new();
         fields.insert(
             "document".to_owned(),
@@ -1107,7 +1107,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     assert_eq!(r["status"], "accepted");
 
     let space_row = state
-        .persistence
+        .test_persistence()
         .space_container_projections()
         .get(container_space_id)
         .await
@@ -1118,7 +1118,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
 
     // list_for_realm + snapshot_all reach the same row.
     let by_space = state
-        .persistence
+        .test_persistence()
         .space_container_projections()
         .list_for_realm(DEMO_REALM_ID)
         .await
@@ -1130,7 +1130,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "list_for_realm MUST surface the persisted space container"
     );
     let snapshot = state
-        .persistence
+        .test_persistence()
         .space_container_projections()
         .snapshot_all()
         .await
@@ -1166,7 +1166,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .unwrap();
     assert_eq!(r["status"], "accepted");
     let strand_row = state
-        .persistence
+        .test_persistence()
         .strand_projections()
         .get(strand_id)
         .await
@@ -1194,7 +1194,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .unwrap();
     assert_eq!(r["status"], "accepted");
     let strand_row = state
-        .persistence
+        .test_persistence()
         .strand_projections()
         .get(strand_id)
         .await
@@ -1248,7 +1248,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .unwrap();
     assert_eq!(r["status"], "accepted");
     let morph_row = state
-        .persistence
+        .test_persistence()
         .morph_projections()
         .get(morph_id)
         .await

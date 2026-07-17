@@ -128,9 +128,8 @@ async fn resolve_enrollment_authority_designation(
     principal_did: &str,
 ) -> Option<EnrollmentAuthorityDesignation> {
     let record = state
-        .persistence
-        .webvh()
-        .get_document(principal_did)
+        .did_application()
+        .document(principal_did)
         .await
         .ok()
         .flatten()?;

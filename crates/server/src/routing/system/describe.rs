@@ -316,7 +316,7 @@ async fn server_describe(
     if let Some(service_type) = service_type.into_inner()
         && service_type != arkret_sdk::ServiceType::PrincipalServer.as_str()
     {
-        return Err(crate::error::AppError::invalid_param(format!(
+        return Err(soland_http::error::AppError::invalid_param(format!(
             "service_type {service_type:?} is not available on this binding"
         )));
     }

@@ -14,12 +14,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_storage::{DeviceInventoryRecord, DeviceMessageRecord};
+use soland_application::delivery::DeviceMessageState;
+use soland_application::identity::DeviceIdentity;
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 
 use super::{SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync};
-use crate::error::{AppError, ErrorCode};
 use crate::ids;
-use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -34,14 +35,11 @@ pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 
 pub(crate) async fn prune_device_messages_for_limits(
     state: &AppState,
-) -> soland_storage::PersistenceResult<()> {
-    let device_messages = state.persistence.device_messages();
-    let now = now();
-    device_messages.prune_expired(now).await?;
-    device_messages
-        .prune_over_capacity(state.config.to_device_queue_capacity, now)
-        .await?;
-    Ok(())
+) -> soland_application::ApplicationResult<()> {
+    state
+        .delivery_application()
+        .prune_device_messages(state.config.to_device_queue_capacity, now())
+        .await
 }
 
 pub(super) fn protocol_router() -> Router {
@@ -76,15 +74,16 @@ async fn send_device_messages(
         .unwrap_or_else(ids::generate_request_id);
     let body = body.into_inner();
     let sender_device = state
-        .persistence
-        .devices()
-        .get(&session.actor, &session.device_id)
+        .identity_application()
+        .find_device(soland_application::identity::FindDeviceQuery {
+            actor_id: session.actor.clone(),
+            device_id: session.device_id.clone(),
+        })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let sender_verified = device_is_active_verified(sender_device.as_ref());
     let mut deliverable_targets = BTreeSet::new();
     let mut unknown_devices = BTreeMap::new();
-    let devices_store = state.persistence.devices();
     for (recipient, devices) in &body.messages {
         for (device_id, target) in devices {
             let recipient = recipient.to_string();
@@ -92,8 +91,12 @@ async fn send_device_messages(
             let same_principal = recipient == session.actor;
             let verification_bootstrap = target.kind.starts_with("ak.key.verification.");
             let secret_message = target.kind.starts_with("ak.secret.");
-            let target_record = devices_store
-                .get(&recipient, &device_id)
+            let target_record = state
+                .identity_application()
+                .find_device(soland_application::identity::FindDeviceQuery {
+                    actor_id: recipient.clone(),
+                    device_id: device_id.clone(),
+                })
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             let target_active = device_is_active(target_record.as_ref());
@@ -120,9 +123,9 @@ async fn send_device_messages(
             deliverable_targets.insert((recipient, device_id));
         }
     }
-    let device_messages = state.persistence.device_messages();
-    let registered = device_messages
-        .try_register_txn(format!("{}:{idempotency_key}", session.actor))
+    let registered = state
+        .delivery_application()
+        .register_device_message_transaction(format!("{}:{idempotency_key}", session.actor))
         .await
         .unwrap_or(false);
     if !registered {
@@ -148,8 +151,9 @@ async fn send_device_messages(
             if let Some(object) = content.as_object_mut() {
                 object.insert("sender_device_id".to_owned(), json!(session.device_id));
             }
-            if let Err(error) = device_messages
-                .append(DeviceMessageRecord {
+            if let Err(error) = state
+                .delivery_application()
+                .append_device_message(DeviceMessageState {
                     idempotency_key: idempotency_key.clone(),
                     sender: session.actor.clone(),
                     recipient: recipient_key.clone(),
@@ -186,9 +190,8 @@ pub(crate) async fn fanout_actor_private_update(
     content: Value,
 ) -> usize {
     let devices = state
-        .persistence
-        .devices()
-        .list_for_actor(actor)
+        .identity_application()
+        .devices_for_actor(actor)
         .await
         .unwrap_or_default();
     let mut delivered = 0;
@@ -206,9 +209,8 @@ pub(crate) async fn fanout_actor_private_update(
             "created_at": created_at,
         });
         match state
-            .persistence
-            .device_messages()
-            .append(DeviceMessageRecord {
+            .delivery_application()
+            .append_device_message(DeviceMessageState {
                 idempotency_key,
                 sender: actor.to_owned(),
                 recipient: actor.to_owned(),
@@ -261,9 +263,8 @@ async fn get_device_messages(
                 // Best-effort.
                 if let Some(presented_issued_at_ms) = cursor.issued_at_ms {
                     let _ = state
-                        .persistence
-                        .sync_cursors()
-                        .prune_stream_superseded(
+                        .sync_application()
+                        .prune_superseded_cursors(
                             &session.actor,
                             &session.device_id,
                             &crate::routing::events::sync::sync_filter_digest(None),
@@ -302,17 +303,18 @@ async fn get_device_messages(
         Some(limit) => (limit as usize).min(TO_DEVICE_PAGE_LIMIT),
         None => TO_DEVICE_PAGE_LIMIT,
     };
-    let device_messages = state.persistence.device_messages();
     prune_device_messages_for_limits(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let lost_watermark = device_messages
-        .lost_watermark(&session.actor, &session.device_id)
+    let lost_watermark = state
+        .delivery_application()
+        .device_message_lost_watermark(&session.actor, &session.device_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let lost = lost_watermark.is_some_and(|position| position > cursor_position);
-    let queued = device_messages
-        .list_after(&session.actor, &session.device_id, cursor_position)
+    let queued = state
+        .delivery_application()
+        .device_messages_after(&session.actor, &session.device_id, cursor_position)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let has_more = queued.len() > page_limit;
@@ -330,8 +332,9 @@ async fn get_device_messages(
     let ack_token = if page.is_empty() {
         None
     } else {
-        device_messages
-            .issue_ack_token(&session.actor, &session.device_id, delivered_position)
+        state
+            .delivery_application()
+            .issue_device_message_ack_token(&session.actor, &session.device_id, delivered_position)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
     };
@@ -381,9 +384,8 @@ async fn ack_device_messages(
         return Err(AppError::invalid_param("invalid_ack_token"));
     }
     let Some(pruned_count) = state
-        .persistence
-        .device_messages()
-        .ack_with_token(&session.actor, &session.device_id, ack_token)
+        .delivery_application()
+        .acknowledge_device_messages(&session.actor, &session.device_id, ack_token)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     else {
@@ -396,7 +398,7 @@ async fn ack_device_messages(
 }
 
 pub(crate) fn device_message_envelopes_after(
-    messages: &[DeviceMessageRecord],
+    messages: &[DeviceMessageState],
 ) -> Vec<DeviceMessageEnvelope> {
     messages
         .iter()
@@ -404,11 +406,11 @@ pub(crate) fn device_message_envelopes_after(
         .collect()
 }
 
-fn device_is_active(record: Option<&DeviceInventoryRecord>) -> bool {
+fn device_is_active(record: Option<&DeviceIdentity>) -> bool {
     record.is_some_and(|record| record.revoked_at.is_none())
 }
 
-fn device_is_active_verified(record: Option<&DeviceInventoryRecord>) -> bool {
+fn device_is_active_verified(record: Option<&DeviceIdentity>) -> bool {
     record.is_some_and(|record| {
         record.revoked_at.is_none() && record.verification_state == "verified"
     })
@@ -430,7 +432,7 @@ fn note_unknown_device(
 }
 
 fn device_message_envelope_from_record(
-    message: &DeviceMessageRecord,
+    message: &DeviceMessageState,
 ) -> Option<DeviceMessageEnvelope> {
     let kind = arkret_sdk::ProtocolKind::new(
         message

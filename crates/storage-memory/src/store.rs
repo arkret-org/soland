@@ -1,6 +1,40 @@
 //! In-memory implementation of [`PersistenceStore`].
 
-use super::*;
+use super::{
+    AccountDataStore, AccountLifecycleStore, AccountLocalpartStore, AccountRecord, AccountStore,
+    AgentParticipationStore, AgentStore, AppletStore, AuditStore, BlobStore, CallSignalRelayStore,
+    ConsentCellStore, ContactStore, DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore,
+    DirectConversationBindingStore, EventStore, FederationFrontierExchangeStore,
+    FederationOperationsStore, FederationOutboxStore, FederationTransactionStore,
+    HandleReleaseStore, IdempotencyStore, InviteReceivePolicyStore, KeyBackupStore,
+    MemoryAccountDataStore, MemoryAccountLifecycleStore, MemoryAccountLocalpartStore,
+    MemoryAccountStore, MemoryAgentParticipationStore, MemoryAgentStore, MemoryAppletStore,
+    MemoryAuditStore, MemoryBlobStore, MemoryCallSignalRelayStore, MemoryConsentCellStore,
+    MemoryContactStore, MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
+    MemoryDirectConversationBindingStore, MemoryEventStore, MemoryFederationFrontierExchangeStore,
+    MemoryFederationOperationsStore, MemoryFederationOutboxStore, MemoryFederationTransactionStore,
+    MemoryHandleReleaseStore, MemoryIdempotencyStore, MemoryInviteReceivePolicyStore,
+    MemoryKeyBackupStore, MemoryMessageStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore,
+    MemoryMlsWelcomeStore, MemoryModerationStore, MemoryMorphProjectionStore,
+    MemoryMultisigPendingStore, MemoryNotificationStore, MemoryOneTimeKeyStore,
+    MemoryOrganizationPolicyStore, MemoryOrganizationStore, MemoryPolicyDocumentStore,
+    MemoryPresenceStore, MemoryProjectionEventStore, MemoryPushBridgeCacheStore,
+    MemoryPushDeviceStore, MemoryReadReceiptRelayStore, MemoryRealmInviteStore,
+    MemoryRealmMetaStore, MemoryRealmModerationPolicyStore, MemoryRealmOrganizationStatementStore,
+    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoveryReceiptStore,
+    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
+    MemoryServiceIdentityStore, MemorySessionStore, MemorySpaceContainerProjectionStore,
+    MemoryStrandProjectionStore, MemorySyncCursorStore, MemoryTypingStore, MemoryWebvhStore,
+    MessageStore, MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore, ModerationStore,
+    MorphProjectionStore, MultisigPendingStore, NotificationStore, OneTimeKeyStore,
+    OrganizationPolicyStore, OrganizationStore, PersistenceStore, PolicyDocumentStore,
+    PresenceStore, ProjectionEventStore, PushBridgeCacheStore, PushDeviceStore,
+    ReadReceiptRelayStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore,
+    RealmModerationPolicyStore, RealmOrganizationStatementStore, RealmOrganizationStore,
+    RecoveryPolicyStore, RecoveryReceiptStore, RecoverySessionStore, RetentionPolicyStore,
+    RetentionTombstoneStore, ServiceIdentityStore, SessionStore, SpaceContainerProjectionStore,
+    StrandProjectionStore, SyncCursorStore, TypingStore, WebvhStore,
+};
 
 /// In-memory implementation of persistence store.
 pub struct SolandMemoryPersistenceStore {
@@ -18,7 +52,7 @@ pub struct SolandMemoryPersistenceStore {
     blobs: MemoryBlobStore,
     devices: MemoryDeviceInventoryStore,
     federation_transactions: MemoryFederationTransactionStore,
-    federation_outbox: MemoryFederationOutboxStore,
+    pub(crate) federation_outbox: MemoryFederationOutboxStore,
     federation_frontier_exchange: MemoryFederationFrontierExchangeStore,
     handle_releases: MemoryHandleReleaseStore,
     retention_policies: MemoryRetentionPolicyStore,
@@ -44,8 +78,8 @@ pub struct SolandMemoryPersistenceStore {
     webvh: MemoryWebvhStore,
     service_identity: MemoryServiceIdentityStore,
     realm_invites: MemoryRealmInviteStore,
-    events: MemoryEventStore,
-    projection_events: MemoryProjectionEventStore,
+    pub(crate) events: MemoryEventStore,
+    pub(crate) projection_events: MemoryProjectionEventStore,
     applets: MemoryAppletStore,
     device_messages: MemoryDeviceMessageStore,
     device_keys: MemoryDeviceKeyStore,
@@ -63,7 +97,7 @@ pub struct SolandMemoryPersistenceStore {
     agents: MemoryAgentStore,
     notifications: MemoryNotificationStore,
     sync_cursors: MemorySyncCursorStore,
-    idempotency_keys: MemoryIdempotencyStore,
+    pub(crate) idempotency_keys: MemoryIdempotencyStore,
 }
 
 impl SolandMemoryPersistenceStore {
@@ -179,7 +213,7 @@ impl Default for SolandMemoryPersistenceStore {
     }
 }
 
-impl PersistenceStore for SolandMemoryPersistenceStore {
+impl soland_storage::IdentityStoreRegistry for SolandMemoryPersistenceStore {
     fn accounts(&self) -> &dyn AccountStore {
         &self.accounts
     }
@@ -231,7 +265,9 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
     fn devices(&self) -> &dyn DeviceInventoryStore {
         &self.devices
     }
+}
 
+impl soland_storage::FederationGovernanceStoreRegistry for SolandMemoryPersistenceStore {
     fn federation_transactions(&self) -> &dyn FederationTransactionStore {
         &self.federation_transactions
     }
@@ -279,7 +315,9 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
     fn audit(&self) -> &dyn AuditStore {
         &self.audit
     }
+}
 
+impl soland_storage::DeliveryPolicyStoreRegistry for SolandMemoryPersistenceStore {
     fn moderation(&self) -> &dyn ModerationStore {
         &self.moderation
     }
@@ -339,7 +377,9 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
     fn realm_invites(&self) -> &dyn RealmInviteStore {
         &self.realm_invites
     }
+}
 
+impl soland_storage::EventProjectionStoreRegistry for SolandMemoryPersistenceStore {
     fn events(&self) -> &dyn EventStore {
         &self.events
     }
@@ -383,7 +423,9 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
     fn morph_projections(&self) -> &dyn MorphProjectionStore {
         &self.morph_projections
     }
+}
 
+impl soland_storage::MlsAgentStoreRegistry for SolandMemoryPersistenceStore {
     // G3.S1: MLS lifecycle stores.
     fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore {
         &self.mls_key_packages
@@ -408,7 +450,9 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
     fn notifications(&self) -> &dyn NotificationStore {
         &self.notifications
     }
+}
 
+impl soland_storage::SyncStoreRegistry for SolandMemoryPersistenceStore {
     fn sync_cursors(&self) -> &dyn SyncCursorStore {
         &self.sync_cursors
     }
@@ -417,3 +461,5 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
         &self.idempotency_keys
     }
 }
+
+impl PersistenceStore for SolandMemoryPersistenceStore {}

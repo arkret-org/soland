@@ -34,9 +34,10 @@ pub trait EventSealCommitStore: Send + Sync {
     ) -> StoreResult<bool>;
 }
 
-pub fn build_state_resolution_stores(pool: Option<PgPool>) -> StateResolutionStores {
-    let cell_registry: Arc<dyn CellRegistry> =
-        Arc::new(soland_domain::reducer::lattice_kinds::build_sdk_cell_registry());
+pub fn build_state_resolution_stores(
+    pool: Option<PgPool>,
+    cell_registry: Arc<dyn CellRegistry>,
+) -> StateResolutionStores {
     if let Some(pool) = pool {
         return StateResolutionStores {
             move_store: Arc::new(PgMoveStore { pool: pool.clone() }),
@@ -1188,11 +1189,15 @@ impl CellStore for PgCellStore {
 mod event_seal_commit_tests {
     use std::sync::{Arc, Barrier};
 
-    use arkret_sdk::{Hlc, LatticeOpType, MoveSignature, NotarySig, SealKind};
+    use arkret_sdk::{Hlc, LatticeOpType, MoveSignature, NotarySig, SealKind, SealStore};
     use chrono::Utc;
     use serde_json::json;
 
-    use super::*;
+    use super::{
+        BTreeSet, CellRef, CellRegistry, CellStore, EventSealCommitStore, Hash, LatticeOp,
+        MemoryEventSealCommitStore, MoveId, RealmId, Seal, SealId, SealedOp, compute_state_root,
+        effective_state_with_new_ops,
+    };
 
     fn competing_seal(
         cell_store: &dyn CellStore,

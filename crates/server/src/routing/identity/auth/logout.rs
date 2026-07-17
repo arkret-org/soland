@@ -133,32 +133,18 @@ fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> A
 /// device authorization remains active across logout and re-login.
 async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOutcome, AppError> {
     let token_hash = session_credential_hash(token, &state.service_id);
-    let revoked_session = match state
-        .persistence
-        .sessions()
-        .get(&token_hash)
+    let revoked_session = state
+        .session_application()
+        .revoke_session(&token_hash, now())
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        Some(mut session) if session.revoked_at.is_none() => {
-            session.revoked_at = Some(now());
-            state
-                .persistence
-                .sessions()
-                .put(&session)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            Some(session)
-        }
-        _ => None,
-    };
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let revoked = revoked_session.is_some();
     if let Some(session) = revoked_session {
         let delivery_purge =
-            purge_device_delivery_state(state, &session.actor, &session.device_id).await;
+            purge_device_delivery_state(state, &session.actor_id, &session.device_id).await;
         append_audit_log(
             state,
-            Some(&session.actor),
+            Some(&session.actor_id),
             "auth.logout",
             json!({
                 "device_id": session.device_id,
@@ -323,26 +309,11 @@ async fn revoke_sessions_for_actor_device(
     device_id: &str,
 ) -> Result<usize, AppError> {
     let revoked_at = now();
-    let sessions = state
-        .persistence
-        .sessions()
-        .snapshot_all()
+    state
+        .session_application()
+        .revoke_actor_device_sessions(actor, device_id, revoked_at)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let mut count = 0usize;
-    for mut session in sessions.into_iter().filter(|session| {
-        session.actor == actor && session.device_id == device_id && session.revoked_at.is_none()
-    }) {
-        session.revoked_at = Some(revoked_at);
-        state
-            .persistence
-            .sessions()
-            .put(&session)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        count += 1;
-    }
-    Ok(count)
+        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 /// `POST /_arkret/gate/account/session-grants/revoke` — spec
@@ -420,34 +391,19 @@ pub(super) async fn session_revoke(
     }
     let revoked_at = now();
     let revoked_count: usize = if body.all_sessions == Some(true) {
-        revoke_sessions_for_actor(state, &session.actor)
+        state
+            .session_application()
+            .revoke_actor_sessions(&session.actor, revoked_at)
             .await
-            .map_err(AppError::internal)?
+            .map_err(|error| AppError::internal(error.to_string()))?
     } else if let Some(target_device_id) = body.target_device_id.as_ref() {
         // Sessions are filtered by the calling actor, so a device owned by
         // another principal can never be revoked through this path.
-        let sessions = state
-            .persistence
-            .sessions()
-            .snapshot_all()
+        state
+            .session_application()
+            .revoke_actor_device_sessions(&session.actor, target_device_id.as_str(), revoked_at)
             .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        let mut count = 0usize;
-        for mut record in sessions.into_iter().filter(|record| {
-            record.actor == session.actor
-                && record.device_id == target_device_id.as_str()
-                && record.revoked_at.is_none()
-        }) {
-            record.revoked_at = Some(revoked_at);
-            state
-                .persistence
-                .sessions()
-                .put(&record)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            count += 1;
-        }
-        count
+            .map_err(|error| AppError::internal(error.to_string()))?
     } else if body.target_grant_id.is_some() {
         // Session grants are issued by coauth; soland only ever sees the
         // grant JWT during the exchange and keeps no grant_id -> session
@@ -456,25 +412,14 @@ pub(super) async fn session_revoke(
     } else {
         // No selector: revoke the calling session only. Unlike `logout`,
         // device authorization stays untouched per the spec contract.
-        match state
-            .persistence
-            .sessions()
-            .get(&session.token_hash)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?
-        {
-            Some(mut record) if record.revoked_at.is_none() => {
-                record.revoked_at = Some(revoked_at);
-                state
-                    .persistence
-                    .sessions()
-                    .put(&record)
-                    .await
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-                1
-            }
-            _ => 0,
-        }
+        usize::from(
+            state
+                .session_application()
+                .revoke_session(&session.token_hash, revoked_at)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .is_some(),
+        )
     };
     append_audit_log(
         state,

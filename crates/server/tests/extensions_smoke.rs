@@ -35,14 +35,14 @@ fn test_config() -> AppConfig {
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         seed_demo_data: true,
-        ..AppConfig::test_default()
+        ..soland_test_support::app_config()
     }
 }
 
 async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
-    let service_id = state.service_id.clone();
+    let service_id = state.service_id().clone();
     let mut meta = state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .get(realm_id)
         .await
@@ -55,7 +55,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
     );
     meta.updated_at = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(realm_id, &meta)
         .await
@@ -138,7 +138,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     assert_eq!(bot_actor_id, package.bot_actor_id.to_string());
 
     let projection_events = state
-        .persistence
+        .test_persistence()
         .projection_events()
         .snapshot_all()
         .await
@@ -153,7 +153,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     );
 
     let stored_applet = state
-        .persistence
+        .test_persistence()
         .applets()
         .get(&applet_id)
         .await
@@ -247,7 +247,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     assert_eq!(authorization_ref, accountability_grant_ref);
 
     let profile_event = state
-        .persistence
+        .test_persistence()
         .events()
         .get(profile_event_ref)
         .await
@@ -289,7 +289,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     );
 
     let grant_event = state
-        .persistence
+        .test_persistence()
         .events()
         .get(accountability_grant_ref)
         .await
@@ -311,7 +311,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     );
 
     let projection_events = state
-        .persistence
+        .test_persistence()
         .projection_events()
         .snapshot_all()
         .await
@@ -686,7 +686,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         "transaction response: {transaction}"
     );
     let messages = state
-        .persistence
+        .test_persistence()
         .messages()
         .list_for_realm(&realm_id, 10)
         .await
@@ -893,12 +893,15 @@ async fn ingest_applet_service_id_document(state: &AppState, package: &AppletPac
         updated_at: now,
     };
     state
-        .persistence
+        .test_persistence()
         .webvh()
         .put_document(record.clone())
         .await
         .unwrap();
-    state.did_resolver.cache_webvh_record(record).unwrap();
+    state
+        .test_did_resolver()
+        .cache_webvh_record(record)
+        .unwrap();
 }
 
 async fn install_applet_package(

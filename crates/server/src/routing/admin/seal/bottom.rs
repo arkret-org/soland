@@ -13,9 +13,9 @@ use soland_contracts::admin::seal::{
     BottomCandidateHead, BottomEntry, BottomRepairRequestBody, BottomRepairStrategy,
     SubmitControlMoveOutcome,
 };
+use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, admin_signer_for, fresh_hlc, pick_admin_seal_basis};
-use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 

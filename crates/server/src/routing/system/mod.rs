@@ -2,7 +2,6 @@ use salvo::prelude::*;
 
 pub(crate) mod describe;
 pub(crate) mod extract;
-pub(crate) mod util;
 
 use super::identity::auth;
 

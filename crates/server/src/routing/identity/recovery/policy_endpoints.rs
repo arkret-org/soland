@@ -25,7 +25,9 @@ pub(super) async fn resolve_recovery_read_principal(
     Ok(principal)
 }
 
-pub(super) fn recovery_policy_summary(record: &RecoveryPolicyRecord) -> Value {
+pub(super) fn recovery_policy_summary(
+    record: &soland_application::identity::RecoveryPolicyState,
+) -> Value {
     json!({
         "policy_id": record.policy_id,
         "principal_id": record.principal_id,
@@ -41,10 +43,46 @@ pub(super) fn recovery_policy_summary(record: &RecoveryPolicyRecord) -> Value {
 }
 
 pub(super) fn typed_recovery_policy_summary(
-    record: &RecoveryPolicyRecord,
+    record: &soland_application::identity::RecoveryPolicyState,
 ) -> Result<RecoveryPolicySummary, AppError> {
     serde_json::from_value(recovery_policy_summary(record))
         .map_err(|error| stored_recovery_type_error("policy summary", error))
+}
+
+fn application_recovery_policy(
+    record: RecoveryPolicyRecord,
+) -> soland_application::identity::RecoveryPolicyState {
+    soland_application::identity::RecoveryPolicyState {
+        policy_id: record.policy_id,
+        principal_id: record.principal_id,
+        version: record.version,
+        trust_domain: record.trust_domain,
+        allowed_proof_kinds: record.allowed_proof_kinds,
+        supersedes: record.supersedes,
+        expires_at: record.expires_at,
+        issued_at: record.issued_at,
+        raw_payload: record.raw_payload,
+        accepted_at: record.accepted_at,
+        verification_method: record.verification_method,
+    }
+}
+
+fn persistence_recovery_policy(
+    policy: soland_application::identity::RecoveryPolicyState,
+) -> RecoveryPolicyRecord {
+    RecoveryPolicyRecord {
+        policy_id: policy.policy_id,
+        principal_id: policy.principal_id,
+        version: policy.version,
+        trust_domain: policy.trust_domain,
+        allowed_proof_kinds: policy.allowed_proof_kinds,
+        supersedes: policy.supersedes,
+        expires_at: policy.expires_at,
+        issued_at: policy.issued_at,
+        raw_payload: policy.raw_payload,
+        accepted_at: policy.accepted_at,
+        verification_method: policy.verification_method,
+    }
 }
 
 pub(super) fn recovery_policy_ref_from_summary(
@@ -76,11 +114,10 @@ pub(super) async fn recovery_policy_get(
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
     let active = state
-        .persistence
-        .recovery_policies()
-        .get_active_for_principal(&principal)
+        .recovery_policy_application()
+        .active_policy(&principal)
         .await
-        .map_err(recovery_store_error)?;
+        .map_err(recovery_application_error)?;
     let active_policy = active
         .as_ref()
         .map(typed_recovery_policy_summary)
@@ -118,11 +155,10 @@ pub(super) async fn recovery_policies_get(
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
     let policies = state
-        .persistence
-        .recovery_policies()
-        .list_for_principal(&principal)
+        .recovery_policy_application()
+        .policy_history(&principal)
         .await
-        .map_err(recovery_store_error)?;
+        .map_err(recovery_application_error)?;
     let policies = policies
         .iter()
         .map(typed_recovery_policy_summary)
@@ -162,52 +198,65 @@ pub(super) async fn recovery_policy_put(
         .with_wire_code("recovery_principal_isolation"));
     }
     let existing = state
-        .persistence
-        .recovery_policies()
-        .get_active_for_principal(&record.principal_id)
+        .recovery_policy_application()
+        .active_policy(&record.principal_id)
         .await
-        .map_err(recovery_store_error)?;
+        .map_err(recovery_application_error)?;
+    let existing_record = existing.clone().map(persistence_recovery_policy);
 
-    verify_recovery_policy_auth_signature(state, &payload, &record, &session, existing.as_ref())
-        .await?;
+    verify_recovery_policy_auth_signature(
+        state,
+        &payload,
+        &record,
+        &session,
+        existing_record.as_ref(),
+    )
+    .await?;
 
     // Per-principal monotonicity check (spec
     // recovery-policy.schema.json §version: receivers MUST reject a
     // publish whose version is not strictly greater than the currently
     // accepted policy).
-    if let Some(existing) = existing {
-        if record.version <= existing.version {
+    let accepted_at = chrono::Utc::now();
+    record.accepted_at = accepted_at;
+    let publish_result = state
+        .recovery_policy_application()
+        .publish_policy(soland_application::identity::PublishRecoveryPolicyCommand {
+            policy: application_recovery_policy(record),
+        })
+        .await
+        .map_err(recovery_policy_application_error)?;
+    let record = match publish_result {
+        soland_application::identity::PublishRecoveryPolicyResult::Accepted(policy) => {
+            persistence_recovery_policy(policy)
+        }
+        soland_application::identity::PublishRecoveryPolicyResult::GenesisVersionInvalid {
+            actual,
+        } => {
+            return Err(AppError::invalid_param(format!(
+                "genesis policy MUST have version=1; got {actual}"
+            ))
+            .with_wire_code("recovery_policy_genesis_not_v1"));
+        }
+        soland_application::identity::PublishRecoveryPolicyResult::VersionNotMonotonic {
+            actual,
+            current,
+        } => {
             return Err(AppError::conflict(format!(
-                "policy_version {} is not strictly greater than current {}",
-                record.version, existing.version
+                "policy_version {actual} is not strictly greater than current {current}"
             ))
             .with_wire_code("recovery_policy_version_not_monotonic"));
         }
-        // Schema constraint: when version > 1, supersedes MUST name
-        // the predecessor.
-        if record.supersedes.as_deref() != Some(existing.policy_id.as_str()) {
+        soland_application::identity::PublishRecoveryPolicyResult::SupersedesInvalid {
+            actual,
+            current_policy_id,
+        } => {
             return Err(AppError::conflict(format!(
-                "supersedes {:?} does not match current policy_id `{}`",
-                record.supersedes, existing.policy_id
+                "supersedes {actual:?} does not match current policy_id `{current_policy_id}`"
             ))
             .with_wire_code("recovery_policy_supersedes_invalid"));
         }
-    } else if record.version != 1 {
-        return Err(AppError::invalid_param(format!(
-            "genesis policy MUST have version=1; got {}",
-            record.version
-        ))
-        .with_wire_code("recovery_policy_genesis_not_v1"));
-    }
-
-    let accepted_at = chrono::Utc::now();
-    record.accepted_at = accepted_at;
-    state
-        .persistence
-        .recovery_policies()
-        .insert(record.clone())
-        .await
-        .map_err(recovery_policy_store_error)?;
+    };
 
     append_audit_log(
         state,

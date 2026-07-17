@@ -26,8 +26,7 @@ use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-
-use crate::error::{AppError, ErrorCode};
+use soland_http::error::{AppError, ErrorCode};
 
 #[cfg(test)]
 const ED25519_MULTICODEC_PREFIX: [u8; 2] = [0xed, 0x01];

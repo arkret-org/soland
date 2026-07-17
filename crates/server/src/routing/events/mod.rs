@@ -49,7 +49,7 @@ pub fn router() -> Router {
 pub(crate) fn require_agent_session_scope(
     session: &SessionRecord,
     required_scope: &str,
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), soland_http::error::AppError> {
     let Some(agent_session) = session.agent_session.as_ref() else {
         return Ok(());
     };
@@ -60,7 +60,7 @@ pub(crate) fn require_agent_session_scope(
     {
         return Ok(());
     }
-    Err(crate::error::AppError::capability_denied(format!(
+    Err(soland_http::error::AppError::capability_denied(format!(
         "agent session scope {required_scope} is required"
     )))
 }

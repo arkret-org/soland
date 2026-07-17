@@ -20,9 +20,9 @@ use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use soland_http::error::AppError;
 
 use super::AuthArgs;
-use crate::error::AppError;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 

@@ -27,9 +27,9 @@ use serde_json::{Value, json};
 use soland_contracts::admin::covered_seals::{
     CoveredSealsAdvanceOutcome, CoveredSealsSnapshot as CoveredSealsSnapshotOutcome,
 };
+use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use crate::error::AppError;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 

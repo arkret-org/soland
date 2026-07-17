@@ -5,10 +5,10 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use soland_http::error::AppError;
+use soland_http::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 
 use super::wire::FederationTrustHeaders;
-use crate::error::AppError;
-use crate::routing::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 use crate::state::AppState;
 
 pub(super) const FEDERATION_AUTH_FAILURE_MESSAGE: &str = "federation request authentication failed";
@@ -148,7 +148,7 @@ fn verify_inbound_federation_http_signature_inner(
 ) -> Result<(), AppError> {
     let body_digests = http_signature::canonical_body_digests(body_value, |error| {
         AppError::new(
-            crate::error::ErrorCode::SchemaViolation,
+            soland_http::error::ErrorCode::SchemaViolation,
             format!("federation request body is not canonical JSON: {error}"),
         )
         .with_status(StatusCode::BAD_REQUEST)
@@ -275,7 +275,7 @@ fn verify_inbound_peer_http_signature_inner(
         Some(value) => {
             let body_digests = http_signature::canonical_body_digests(value, |error| {
                 AppError::new(
-                    crate::error::ErrorCode::SchemaViolation,
+                    soland_http::error::ErrorCode::SchemaViolation,
                     format!("peer request body is not canonical JSON: {error}"),
                 )
                 .with_status(StatusCode::BAD_REQUEST)

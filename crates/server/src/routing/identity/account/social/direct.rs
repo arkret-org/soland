@@ -5,9 +5,10 @@ pub(crate) async fn ensure_direct_peer_resolvable(
     peer: &str,
 ) -> Result<(), AppError> {
     let account = state
-        .persistence
-        .accounts()
-        .get(peer)
+        .identity_application()
+        .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+            actor_id: peer.to_owned(),
+        })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
@@ -244,9 +245,8 @@ pub(crate) async fn create_direct_binding_with_realm(
     let active_binding = activate_reserved_direct_binding(state, pair_key, &reserved)?;
 
     if let Err(error) = state
-        .persistence
-        .direct_conversation_bindings()
-        .put(pair_key, &active_binding)
+        .contact_application()
+        .save_direct_binding(pair_key, active_binding.clone())
         .await
     {
         let removed = {
@@ -271,9 +271,8 @@ pub(crate) async fn create_direct_binding_with_realm(
     }
     if let Err(error) = publish_reserved_direct_binding(state, pair_key, &active_binding) {
         if let Err(delete_error) = state
-            .persistence
-            .direct_conversation_bindings()
-            .delete(pair_key)
+            .contact_application()
+            .delete_direct_binding(pair_key)
             .await
         {
             tracing::warn!(
@@ -337,7 +336,7 @@ pub(crate) async fn create_direct_binding_with_realm(
         state,
         ProjectionEventRecord {
             event_id: reserved.binding_event_ref.clone(),
-            realm_id: crate::routing::identity::recovery::principal_control_realm_for_did(actor),
+            realm_id: soland_domain::identity::principal_control_realm_for_did(actor),
             event_kind: "ak.direct_conversation.bound".to_owned(),
             operation_type: "direct_conversation_binding_fact".to_owned(),
             operation_id: None,
@@ -490,9 +489,8 @@ pub(super) async fn rollback_reserved_direct_binding(
     };
     if removed
         && let Err(error) = state
-            .persistence
-            .direct_conversation_bindings()
-            .delete(pair_key)
+            .contact_application()
+            .delete_direct_binding(pair_key)
             .await
     {
         tracing::warn!(%error, pair_key, "failed to delete rolled-back direct binding");

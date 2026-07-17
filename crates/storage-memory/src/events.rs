@@ -1,4 +1,11 @@
-use super::*;
+use super::{
+    Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord, EventBatchReceipt,
+    EventStore, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
+    MessageRecord, MessageStore, Mutex, PeerEventsPageQuery, PersistenceError, PersistenceResult,
+    RealmEventStats, async_trait, event_position_cmp, identity_anchor_slot_conflicts,
+    peer_page_record_after_cursor, peer_page_record_matches, receipt_covers_event,
+    record_is_peer_authz_state_record, stage_identity_anchor_events,
+};
 // In-memory message store
 pub(crate) struct MemoryMessageStore {
     data: Arc<Mutex<Vec<MessageRecord>>>,
@@ -63,16 +70,11 @@ impl MessageStore for MemoryMessageStore {
     }
 }
 pub(crate) struct MemoryEventStore {
-    data: Mutex<BTreeMap<String, CanonicalEventRecord>>,
+    pub(crate) data: Mutex<BTreeMap<String, CanonicalEventRecord>>,
     devices: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
     receipts: Mutex<BTreeMap<String, EventBatchReceipt>>,
 }
 impl MemoryEventStore {
-    #[cfg(test)]
-    pub(crate) fn new() -> Self {
-        Self::with_devices(Arc::new(Mutex::new(BTreeMap::new())))
-    }
-
     pub(crate) fn with_devices(
         devices: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
     ) -> Self {

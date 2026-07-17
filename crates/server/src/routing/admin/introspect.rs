@@ -28,9 +28,9 @@ use arkret_sdk::{
 use parking_lot::Mutex;
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
+use soland_http::error::{AppError, ErrorCode};
 use soland_storage::SessionRecord;
 
-use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 
 const INTROSPECTION_CACHE_TTL: Duration = Duration::from_secs(30);

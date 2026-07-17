@@ -3,6 +3,8 @@
 //! dropped/resync frame helper. Shared with sibling routing modules through
 //! `sync.rs` re-exports.
 
+pub use soland_http::cursor::validate_cursor_handle;
+
 use super::*;
 
 #[derive(Debug, Default)]
@@ -352,7 +354,7 @@ pub fn spawn_sync_cursor_ttl_sweeper(
             ticker.tick().await;
             let now = chrono::Utc::now();
             let now_ms = now.timestamp_millis();
-            match state.persistence.sync_cursors().prune_expired(now_ms).await {
+            match state.sync_application().prune_expired_cursors(now_ms).await {
                 Ok(0) => {}
                 Ok(pruned) => tracing::debug!(
                     worker = "sync_cursor_ttl_sweep",
@@ -369,9 +371,8 @@ pub fn spawn_sync_cursor_ttl_sweeper(
             // this periodic sweep so its mapping table stays bounded by the
             // per-record TTL instead of growing with every keyed write.
             match state
-                .persistence
-                .idempotency_keys()
-                .prune_expired(now)
+                .jobs_application()
+                .prune_expired_idempotency(now)
                 .await
             {
                 Ok(0) => {}
@@ -398,7 +399,7 @@ pub fn spawn_sync_cursor_ttl_sweeper(
 /// next `after=` presentation fails handle lookup and the client recovers
 /// through the spec's full-resync path (client-sync.md §12.3).
 async fn upsert_sync_cursor_record(state: &AppState, record: SyncCursorRecord) {
-    if let Err(error) = state.persistence.sync_cursors().upsert(&record).await {
+    if let Err(error) = state.sync_application().upsert_cursor(&record).await {
         tracing::warn!(%error, handle = %record.handle, "sync cursor handle upsert failed");
     }
 }
@@ -416,9 +417,8 @@ async fn stored_sync_cursor_record_by_handle(
     handle: &str,
 ) -> Result<SyncCursorRecord, SyncCursorError> {
     state
-        .persistence
-        .sync_cursors()
-        .get(handle)
+        .sync_application()
+        .cursor(handle)
         .await
         .map_err(|error| {
             tracing::warn!(%error, handle, "sync cursor handle lookup failed");
@@ -548,7 +548,7 @@ pub async fn parse_and_validate_sync_cursor(
         .and_then(|expires_at| expires_at.as_i64())
         .is_none_or(|expires_at| expires_at <= now_ms)
     {
-        let _ = state.persistence.sync_cursors().delete(handle).await;
+        let _ = state.sync_application().delete_cursor(handle).await;
         return Err(SyncCursorError::Integrity("sync cursor handle has expired"));
     }
     let ctx = stored
@@ -700,7 +700,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
     }
     let record = stored_sync_cursor_record_by_handle(state, handle).await?;
     if record.expires_at_ms <= now_ms {
-        let _ = state.persistence.sync_cursors().delete(handle).await;
+        let _ = state.sync_application().delete_cursor(handle).await;
         return Err(SyncCursorError::Integrity("sync cursor handle has expired"));
     }
     if record.purpose.as_str() != STREAM_CURSOR_PURPOSE {
@@ -859,8 +859,8 @@ pub(super) async fn account_cursor_revoke(
     body: salvo::oapi::extract::JsonBody<arkret_sdk::AccountCursorRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<arkret_sdk::AccountCursorRevokeOutcome> {
-    use crate::error::AppError;
+) -> soland_http::result::JsonResult<arkret_sdk::AccountCursorRevokeOutcome> {
+    use soland_http::error::AppError;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -887,7 +887,7 @@ pub(super) async fn account_cursor_revoke(
     } else {
         Some(session.device_id.clone())
     };
-    let record = soland_storage::CursorRevocation {
+    let application_record = soland_application::sync::CursorRevocationState {
         cursor_digest: sha256_hex(cursor.as_bytes()),
         principal_id: session.actor.clone(),
         device_id,
@@ -902,14 +902,22 @@ pub(super) async fn account_cursor_revoke(
     // write succeeds do we update the in-memory cache that
     // `cursor_authority_revoked` consults.
     state
-        .persistence
-        .sync_cursors()
-        .record_revocation(&record)
+        .sync_application()
+        .record_cursor_revocation(&application_record)
         .await
         .map_err(|error| {
             AppError::internal(format!("failed to persist cursor revocation: {error}"))
         })?;
     {
+        let record = soland_storage::CursorRevocation {
+            cursor_digest: application_record.cursor_digest,
+            principal_id: application_record.principal_id,
+            device_id: application_record.device_id,
+            scope: application_record.scope,
+            reason_code: application_record.reason_code,
+            revoked_at: application_record.revoked_at,
+            expires_at: application_record.expires_at,
+        };
         let now_ms = revoked_at.timestamp_millis();
         let mut revocations = state.sync_cursor_revocations.lock();
         revocations.retain(|entry| entry.expires_at.timestamp_millis() > now_ms);
@@ -948,46 +956,4 @@ fn cursor_authority_revoked(
         }),
         _ => false,
     })
-}
-
-/// Spec T03 — minimum length of a base64url cursor handle to supply
-/// ≥128-bit entropy. Spec tightened `h.minLength` from 16 → 22.
-pub const CURSOR_HANDLE_MIN_LENGTH: usize = 22;
-
-/// Validate an inbound cursor handle (post-base64url-decode is callers'
-/// responsibility). Spec T03 — rejects shorter than 22 chars.
-pub fn validate_cursor_handle(handle: &str) -> Result<(), (crate::error::ErrorCode, &'static str)> {
-    if handle.len() < CURSOR_HANDLE_MIN_LENGTH {
-        return Err((
-            crate::error::ErrorCode::CursorIntegrityInvalid,
-            "cursor handle MUST be at least 22 base64url characters \
-             (≥128-bit entropy); spec tightening",
-        ));
-    }
-    if !handle
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
-    {
-        return Err((
-            crate::error::ErrorCode::CursorIntegrityInvalid,
-            "cursor handle MUST be base64url (no padding)",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod cursor_frame_tests {
-    use super::*;
-
-    #[test]
-    fn cursor_handle_minimum_length_enforced() {
-        // 22-char handle should pass.
-        let ok = "a".repeat(22);
-        validate_cursor_handle(&ok).unwrap();
-        // 21-char handle must fail.
-        let bad = "a".repeat(21);
-        let err = validate_cursor_handle(&bad).unwrap_err();
-        assert_eq!(err.0, crate::error::ErrorCode::CursorIntegrityInvalid);
-    }
 }

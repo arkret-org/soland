@@ -534,8 +534,7 @@ async fn validate_unit_relationships(
             "identity anchor unit Events must share actor_id and principal-control realm_id",
         ));
     }
-    let expected_realm =
-        crate::routing::identity::recovery::principal_control_realm_for_did(&first.actor_id);
+    let expected_realm = soland_domain::identity::principal_control_realm_for_did(&first.actor_id);
     if first.realm_id != expected_realm {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
@@ -813,9 +812,8 @@ async fn validate_reanchor_entry_delegation(
             )
         })?;
     let entries = state
-        .persistence
-        .webvh()
-        .list_log_events(reanchor.principal_id.as_str())
+        .did_application()
+        .log_events(reanchor.principal_id.as_str())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -917,9 +915,8 @@ async fn validate_reanchor_recovery_session(
         ));
     }
     let mut entries = state
-        .persistence
-        .webvh()
-        .list_log_events(reanchor.principal_id.as_str())
+        .did_application()
+        .log_events(reanchor.principal_id.as_str())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -1176,9 +1173,8 @@ async fn build_reanchor_batch_receipt(
 ) -> Result<arkret_sdk::EventBatchReceipt, SubmitOneError> {
     let payload = typed_device_reanchor_payload(reanchor_envelope)?;
     let registry_head = state
-        .persistence
-        .webvh()
-        .list_log_events(&reanchor.actor_id)
+        .did_application()
+        .log_events(&reanchor.actor_id)
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -1437,7 +1433,7 @@ mod tests {
         let principal =
             arkret_sdk::Did::new("did:webvh:z6mkfixture:users.example:alice".to_owned()).unwrap();
         let realm_id = arkret_sdk::RealmId::new(
-            crate::routing::identity::recovery::principal_control_realm_for_did(principal.as_str()),
+            soland_domain::identity::principal_control_realm_for_did(principal.as_str()),
         )
         .unwrap();
         let created_at = "2026-07-15T00:00:00Z".parse().unwrap();

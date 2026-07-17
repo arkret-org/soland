@@ -10,14 +10,10 @@ pub(super) async fn enforce_recovery_policy_ref_typed(
     };
 
     let active = state
-        .persistence
-        .recovery_policies()
-        .get_active_for_principal(actor_id)
+        .recovery_policy_application()
+        .active_policy(actor_id)
         .await
-        .map_err(|error| match error {
-            soland_storage::PersistenceError::NotFound(message) => AppError::not_found(message),
-            other => AppError::internal(format!("recovery policy lookup failed: {other}")),
-        })?
+        .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
         .ok_or_else(|| {
             AppError::conflict(format!(
                 "no accepted recovery policy for principal `{actor_id}`"
@@ -57,9 +53,11 @@ pub(super) async fn ensure_key_backup_writer_device_authorized(
         return Err(unauthorized());
     }
     let device = state
-        .persistence
-        .devices()
-        .get(actor_id, session_device_id)
+        .identity_application()
+        .find_device(soland_application::identity::FindDeviceQuery {
+            actor_id: actor_id.to_owned(),
+            device_id: session_device_id.to_owned(),
+        })
         .await
         .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
         .ok_or_else(unauthorized)?;
@@ -76,16 +74,19 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
 ) -> Result<(), AppError> {
     let series_id = backup.series_id.as_str();
     let series_seq = backup.series_seq;
-    let store = state.persistence.key_backups();
     let mut max_existing_seq: Option<u64> = None;
     let mut predecessor: Option<Value> = None;
     let supersedes = backup
         .supersedes
         .as_ref()
         .map(|backup_id| backup_id.as_str().to_owned());
-    let snapshot = store.list_for_actor(actor_id).await.map_err(|error| {
-        AppError::internal(format!("key backup series chain lookup failed: {error}"))
-    })?;
+    let snapshot = state
+        .key_backup_application()
+        .backups_for_actor(actor_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("key backup series chain lookup failed: {error}"))
+        })?;
     for existing in snapshot {
         if existing.get("series_id").and_then(Value::as_str) != Some(series_id) {
             continue;
@@ -239,9 +240,8 @@ pub(super) async fn owned_key_backup_snapshot(
     // deletion eligibility checks and could let a useful recovery envelope be
     // deleted.
     let snapshot = state
-        .persistence
-        .key_backups()
-        .list_for_actor(actor_id)
+        .key_backup_application()
+        .backups_for_actor(actor_id)
         .await
         .map_err(|error| {
             AppError::internal(format!("key backup snapshot lookup failed: {error}"))
@@ -306,9 +306,9 @@ pub(super) async fn put_key_backup(
     .await?;
     let ciphertext_digest = backup.ciphertext_digest.clone();
     let backup_value = key_backup_to_value(&backup)?;
-    let store = state.persistence.key_backups();
-    let existing = store
-        .get(&backup_id)
+    let existing = state
+        .key_backup_application()
+        .backup(&backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?;
     let duplicate = key_backup_idempotent_retry(existing.as_ref(), &session.actor, &backup_value)?;
@@ -320,15 +320,18 @@ pub(super) async fn put_key_backup(
         });
     }
     enforce_key_backup_series_chain_typed(state, &session.actor, &backup).await?;
-    store
-        .put(backup_id.clone(), backup_value)
+    state
+        .key_backup_application()
+        .store_backup(backup_id.clone(), backup_value)
         .await
         .map_err(|error| match error {
             // SOL-02-004 — the UNIQUE(series_actor_id, series_id, series_seq)
             // constraint rejected a concurrent successor double-write. The
             // storage layer is now the authoritative race guard for §7.6
             // monotonicity; the loser is told the seq is already taken.
-            soland_storage::PersistenceError::Conflict(message) => AppError::new(
+            soland_application::ApplicationError::Storage(
+                soland_storage::PersistenceError::Conflict(message),
+            ) => AppError::new(
                 ErrorCode::SchemaViolation,
                 format!("series_seq_not_monotonic: {message}"),
             )
@@ -394,9 +397,8 @@ pub(super) async fn list_key_backups(
         )));
     }
     let mut backups: Vec<Value> = state
-        .persistence
-        .key_backups()
-        .list_for_actor(&session.actor)
+        .key_backup_application()
+        .backups_for_actor(&session.actor)
         .await
         .map_err(|error| {
             tracing::error!(%error, actor = %session.actor, "failed to list encrypted key backups");
@@ -457,9 +459,8 @@ pub(super) async fn unlock_key_backup(
         AppError::internal(format!("key backup unlock proof serialize: {error}"))
     })?;
     let Some(backup) = state
-        .persistence
-        .key_backups()
-        .get(&backup_id)
+        .key_backup_application()
+        .backup(&backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?
     else {
@@ -534,9 +535,9 @@ pub(super) async fn delete_key_backup(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
-    let store = state.persistence.key_backups();
-    let owned_backup = store
-        .get(&backup_id)
+    let owned_backup = state
+        .key_backup_application()
+        .backup(&backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?
         .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor));
@@ -548,8 +549,9 @@ pub(super) async fn delete_key_backup(
     };
     verify_delete_ownership_proof(state, req, &backup_id, &session.actor).await?;
     ensure_key_backup_delete_allowed(state, &session.actor, &backup).await?;
-    let deleted = store
-        .delete(&backup_id)
+    let deleted = state
+        .key_backup_application()
+        .delete_backup(&backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup delete failed: {error}")))?;
     if !deleted {

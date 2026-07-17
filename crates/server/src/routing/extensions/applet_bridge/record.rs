@@ -2,11 +2,11 @@
 
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_http::error::AppError;
+use soland_http::util::sha256_hex;
 
 use super::super::applet_manifest::AppletManifest;
 use super::types::{AppletRecord, GhostActorRecord};
-use crate::error::AppError;
-use crate::routing::system::util::sha256_hex;
 use crate::state::AppState;
 
 pub(super) fn extension_actor_id_document(

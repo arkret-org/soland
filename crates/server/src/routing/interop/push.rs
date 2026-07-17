@@ -20,6 +20,8 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use sha2::Sha256;
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 use soland_storage::{DriftResult, SessionRecord};
 use subtle::ConstantTimeEq;
 
@@ -27,8 +29,6 @@ use super::audit::append_audit_log;
 use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
 use super::push_outbound::{derive_push_gateway_service_base_url, join_push_gateway_url};
 use super::{authenticated_session, now, sha256_hex};
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -219,8 +219,8 @@ pub(super) async fn push_register(
 /// `authenticated_session` + `push_register_session_grant_bridge` to a
 /// canonical `ErrorCode`. The lookup is fast and lossless because both call
 /// sites only emit a small closed set.
-fn canonical_error_code(wire: &str) -> crate::error::ErrorCode {
-    use crate::error::ErrorCode;
+fn canonical_error_code(wire: &str) -> soland_http::error::ErrorCode {
+    use soland_http::error::ErrorCode;
     match wire {
         "missing_auth" | "unauthenticated" => ErrorCode::Unauthenticated,
         "invalid_param" | "missing_param" => ErrorCode::InvalidParam,

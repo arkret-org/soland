@@ -1,4 +1,9 @@
-use super::*;
+use soland_domain::identity::{
+    ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord,
+    DirectConversationBindingRecord,
+};
+
+use super::{BTreeMap, PersistenceResult, Value, async_trait};
 /// Trait for contact storage operations.
 #[async_trait]
 pub trait ContactStore: Send + Sync {

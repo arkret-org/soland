@@ -1,3 +1,8 @@
+use soland_application::identity::{
+    DeviceIdentity, FindAccountByActorQuery, RegisterAccountCommand, SaveDeviceCommand,
+    SessionIdentityState,
+};
+
 use super::*;
 
 fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> {
@@ -133,9 +138,10 @@ pub(super) async fn dev_login(
         return Err(error);
     }
     let account = state
-        .persistence
-        .accounts()
-        .get(actor_str)
+        .identity_application()
+        .find_account_by_actor(FindAccountByActorQuery {
+            actor_id: actor_str.to_owned(),
+        })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(error) = account_new_session_error(state, actor_str) {
@@ -147,32 +153,24 @@ pub(super) async fn dev_login(
             .display_name
             .clone()
             .unwrap_or_else(|| synthetic_handle.trim_start_matches('@').to_owned());
-        let record = AccountRecord {
-            id: crate::ids::generate_account_id(),
-            did: actor_str.to_owned(),
-            localpart: normalize_localpart(&synthetic_handle),
+        let localpart = normalize_localpart(&synthetic_handle);
+        let record = RegisterAccountCommand {
+            account_id: crate::ids::generate_account_id(),
+            actor_id: actor_str.to_owned(),
+            localpart: localpart.clone(),
             display_name: Some(synthetic_display),
-            bio: None,
-            avatar_blob_ref: None,
             created_at: now(),
         };
         state
-            .persistence
-            .accounts()
-            .put(&record)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        state
-            .persistence
-            .account_localparts()
-            .add(actor_str, &record.localpart, true)
+            .identity_application()
+            .register_account(record)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
         append_audit_log(
             state,
             Some(actor_str),
             "account.register",
-            json!({"handle": record.handle(), "via": "dev_login"}),
+            json!({"handle": format!("@{localpart}"), "via": "dev_login"}),
             "accepted",
         )
         .await;
@@ -181,9 +179,9 @@ pub(super) async fn dev_login(
     let expires_at = now() + Duration::hours(12);
     let token = token_for(actor_str, device_id_str, expires_at.timestamp_millis());
     let token_hash = session_credential_hash(&token, &state.service_id);
-    let session = SessionRecord {
+    let session = SessionIdentityState {
         token_hash,
-        actor: actor_str.to_owned(),
+        actor_id: actor_str.to_owned(),
         device_id: device_id_str.to_owned(),
         audience: state.service_id.clone(),
         // dev-login does not carry a ak.session.grant signing key; bearer-only.
@@ -194,16 +192,14 @@ pub(super) async fn dev_login(
         revoked_at: None,
     };
     state
-        .persistence
-        .sessions()
-        .put(&session)
+        .session_application()
+        .create_session(session)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let seen_at = now();
     let existing_devices = state
-        .persistence
-        .devices()
-        .list_for_actor(actor_str)
+        .identity_application()
+        .devices_for_actor(actor_str)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let device = session_device_inventory_record(
@@ -214,9 +210,13 @@ pub(super) async fn dev_login(
         seen_at,
     );
     state
-        .persistence
-        .devices()
-        .put(&device)
+        .identity_application()
+        .save_device(SaveDeviceCommand {
+            actor_id: actor_str.to_owned(),
+            device_id: device_id_str.to_owned(),
+            display_name: device.display_name.clone(),
+            device,
+        })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
@@ -243,12 +243,12 @@ pub(super) async fn dev_login(
 /// used by integration clients to obtain a bearer for an already-authorized
 /// device, so it must not erase keys, authority bindings, or generation fences.
 fn session_device_inventory_record(
-    existing_devices: &[DeviceInventoryRecord],
+    existing_devices: &[DeviceIdentity],
     actor: &str,
     device_id: &str,
     display_name: Option<String>,
     seen_at: chrono::DateTime<chrono::Utc>,
-) -> DeviceInventoryRecord {
+) -> DeviceIdentity {
     let existing = existing_devices
         .iter()
         .find(|device| device.device_id == device_id);
@@ -277,8 +277,8 @@ fn session_device_inventory_record(
     );
     object.insert("last_seen_at".to_owned(), json!(seen_at));
 
-    DeviceInventoryRecord {
-        actor: actor.to_owned(),
+    DeviceIdentity {
+        actor_id: actor.to_owned(),
         device_id: device_id.to_owned(),
         display_name: display_name
             .or_else(|| existing.and_then(|device| device.display_name.clone())),
@@ -298,8 +298,8 @@ mod tests {
     fn session_refresh_preserves_authorized_device_identity_material() {
         let created_at = now() - Duration::hours(1);
         let seen_at = now();
-        let existing = DeviceInventoryRecord {
-            actor: "did:example:alice".to_owned(),
+        let existing = DeviceIdentity {
+            actor_id: "did:example:alice".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
             display_name: Some("Original".to_owned()),
             verification_state: "verified".to_owned(),
@@ -315,7 +315,7 @@ mod tests {
 
         let refreshed = session_device_inventory_record(
             std::slice::from_ref(&existing),
-            &existing.actor,
+            &existing.actor_id,
             &existing.device_id,
             Some("Refreshed".to_owned()),
             seen_at,

@@ -1,4 +1,4 @@
-use super::*;
+use super::{BlobRecord, PersistenceResult, async_trait};
 /// Trait for blob storage operations.
 #[async_trait]
 pub trait BlobStore: Send + Sync {

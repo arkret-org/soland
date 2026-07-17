@@ -51,7 +51,7 @@ pub(crate) fn test_config() -> AppConfig {
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         seed_demo_data: true,
-        ..AppConfig::test_default()
+        ..soland_test_support::app_config()
     }
 }
 

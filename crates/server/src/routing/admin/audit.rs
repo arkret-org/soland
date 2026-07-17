@@ -19,13 +19,13 @@ use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
+use soland_http::util::query_param;
 
 use super::{now, realm_has_member};
-use crate::error::AppError;
 use crate::ids;
-use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::routing::system::util::query_param;
 use crate::state::AppState;
 use crate::wire::OkOutcome;
 
@@ -430,7 +430,11 @@ pub async fn append_audit_log(
         "outcome": outcome,
         "created_at": now(),
     });
-    if let Err(error) = state.persistence.audit().append(entry).await {
+    if let Err(error) = state
+        .governance_application()
+        .append_audit_entry(soland_application::governance::AppendAuditEntryCommand { entry })
+        .await
+    {
         // Spec: C.3.7 — every audit-append failure MUST surface to
         // operators. We escalate to ERROR (was previously implicit
         // here) and bump the `soland_audit_append_failures_total`

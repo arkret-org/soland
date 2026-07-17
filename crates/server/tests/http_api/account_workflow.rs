@@ -327,7 +327,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
     assert_eq!(first.status_code.unwrap(), StatusCode::OK);
 
     let placeholder = state
-        .persistence
+        .test_persistence()
         .devices()
         .get(did, device_id)
         .await
@@ -335,7 +335,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
         .unwrap();
     let generation_ref = "1-QmCurrentGeneration";
     state
-        .persistence
+        .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
             verification_state: "verified".to_owned(),
@@ -367,7 +367,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
     assert_eq!(repeated.status_code.unwrap(), StatusCode::OK);
 
     let preserved = state
-        .persistence
+        .test_persistence()
         .devices()
         .get(did, device_id)
         .await
@@ -1071,7 +1071,12 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .unwrap();
     assert_eq!(logout["revoked"], true);
     let bob_device_id = {
-        let sessions = state.persistence.sessions().snapshot_all().await.unwrap();
+        let sessions = state
+            .test_persistence()
+            .sessions()
+            .snapshot_all()
+            .await
+            .unwrap();
         assert!(!sessions.iter().any(|session| session.token_hash == bob));
         let bob_session = sessions
             .iter()
@@ -1086,7 +1091,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         bob_session.device_id.clone()
     };
     let bob_device = state
-        .persistence
+        .test_persistence()
         .devices()
         .get("did:web:bob.example", &bob_device_id)
         .await
@@ -1103,7 +1108,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(revoked_me.status_code.unwrap().as_u16(), 401);
 
     let audit_actions: std::collections::BTreeSet<_> = state
-        .persistence
+        .test_persistence()
         .audit()
         .snapshot_all()
         .await

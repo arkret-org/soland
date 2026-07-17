@@ -45,7 +45,7 @@ async fn account_register_requires_account_authority_bearer() {
 async fn account_registration_policy_rejects_closed_and_audits() {
     let state = AppState::new(test_config(), Db { pool: None });
     {
-        let mut policy = state.account_registration_policy.lock();
+        let mut policy = state.test_account_registration_policy().lock();
         policy.enabled = false;
     }
 
@@ -70,7 +70,7 @@ async fn account_registration_policy_rejects_closed_and_audits() {
     );
 
     let audit = state
-        .persistence
+        .test_persistence()
         .audit()
         .list_for_actor("did:web:closed-register.example")
         .await
@@ -87,7 +87,7 @@ async fn account_registration_policy_rejects_closed_and_audits() {
 async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     let state = AppState::new(test_config(), Db { pool: None });
     {
-        let mut policy = state.account_registration_policy.lock();
+        let mut policy = state.test_account_registration_policy().lock();
         *policy = arkret_sdk::AccountRegistrationPolicy {
             verification_code: arkret_sdk::AccountRegistrationVerificationPolicy {
                 required: true,
@@ -225,7 +225,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
 
     let rate_limited_state = AppState::new(test_config(), Db { pool: None });
     {
-        let mut policy = rate_limited_state.account_registration_policy.lock();
+        let mut policy = rate_limited_state.test_account_registration_policy().lock();
         policy.rate_limit = Some(arkret_sdk::AccountRegistrationRateLimitPolicy {
             max_attempts: 1,
             window_seconds: 60,
@@ -390,7 +390,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
     let _token_b = dev_token_for_device(state.clone(), actor, device_b, "Alice Tablet").await;
 
     state
-        .persistence
+        .test_persistence()
         .push_devices()
         .register(serde_json::json!({
             "registration_id": "ak:push:device-a-main",
@@ -403,7 +403,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .await
         .unwrap();
     state
-        .persistence
+        .test_persistence()
         .push_devices()
         .register(serde_json::json!({
             "registration_id": "ak:push:device-a-voip",
@@ -416,7 +416,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .await
         .unwrap();
     state
-        .persistence
+        .test_persistence()
         .push_devices()
         .register(serde_json::json!({
             "registration_id": "ak:push:device-b-main",
@@ -429,7 +429,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .await
         .unwrap();
     state
-        .persistence
+        .test_persistence()
         .device_messages()
         .append(DeviceMessageRecord {
             idempotency_key: "logout-device-a".to_owned(),
@@ -443,7 +443,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .await
         .unwrap();
     state
-        .persistence
+        .test_persistence()
         .device_messages()
         .append(DeviceMessageRecord {
             idempotency_key: "logout-device-b".to_owned(),
@@ -467,7 +467,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
     assert_eq!(body["revoked"], true);
 
     let push_devices = state
-        .persistence
+        .test_persistence()
         .push_devices()
         .snapshot_all()
         .await
@@ -475,14 +475,14 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
     assert_eq!(push_devices.len(), 1);
     assert_eq!(push_devices[0]["device_id"], device_b);
     let device_a_messages = state
-        .persistence
+        .test_persistence()
         .device_messages()
         .list_after(actor, device_a, 0)
         .await
         .unwrap();
     assert!(device_a_messages.is_empty());
     let device_b_messages = state
-        .persistence
+        .test_persistence()
         .device_messages()
         .list_after(actor, device_b, 0)
         .await

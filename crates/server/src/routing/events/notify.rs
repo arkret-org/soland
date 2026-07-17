@@ -216,7 +216,11 @@ async fn put_notification(
     if let Some(preview) = preview {
         record["preview"] = preview;
     }
-    if let Err(error) = state.persistence.notifications().put(record).await {
+    if let Err(error) = state
+        .delivery_application()
+        .store_notification(soland_application::delivery::StoreNotificationCommand { record })
+        .await
+    {
         tracing::warn!(%error, "failed to persist notification");
     }
 }
@@ -357,7 +361,13 @@ pub(crate) async fn dispatch_message_notifications(
             }
         }
         // AKP-0016 §9.4.5 — agent third-party mention gate.
-        if let Ok(Some(agent_record)) = state.persistence.agents().get(&subject).await {
+        if let Ok(Some(agent_record)) = state
+            .identity_application()
+            .find_agent_controller(soland_application::identity::FindAgentControllerQuery {
+                agent_id: subject.clone(),
+            })
+            .await
+        {
             let controller = agent_record.controller_id.as_str();
             if sender != controller
                 && !agent_accepts_third_party_mention(
@@ -1060,10 +1070,7 @@ mod tests {
         seed_strand(&state, realm_id, strand_id);
 
         let operation = relation_create(realm_id, "000000009994", alice, strand_id, bob);
-        state
-            .projection
-            .lock()
-            .apply_relation_create(&operation, chrono::Utc::now());
+        state.projection.lock().apply(&operation, &state.hlc);
         dispatch_assignment_notifications(&state, &operation).await;
 
         let notifications = state
@@ -1096,10 +1103,7 @@ mod tests {
         seed_realm_members(&state, realm_id, &[alice, bob, carol]);
         seed_strand(&state, realm_id, strand_id);
         let assignment = relation_create(realm_id, "000000009997", alice, strand_id, bob);
-        state
-            .projection
-            .lock()
-            .apply_relation_create(&assignment, chrono::Utc::now());
+        state.projection.lock().apply(&assignment, &state.hlc);
         seed_strand_watch(&state, strand_id, carol, "all");
 
         let operation = schedule_update(realm_id, "000000009998", alice, strand_id);

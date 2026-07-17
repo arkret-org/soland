@@ -12,15 +12,33 @@ use arkret_sdk::{
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use soland_application::delivery::DeliveryApplicationService;
+use soland_application::events::{
+    EventApplicationService, EventQueryApplicationService, MlsCommitQueryApplicationService,
+    MlsKeyPackageApplicationService, RealmQueryApplicationService,
+};
+use soland_application::federation::FederationApplicationService;
+use soland_application::governance::GovernanceApplicationService;
+use soland_application::identity::{
+    AccountDataApplicationService, AgentPairingApplicationService,
+    AgentParticipationApplicationService, ConsentApplicationService, ContactApplicationService,
+    DidApplicationService, IdentityApplicationService, KeyBackupApplicationService,
+    KeyMaterialApplicationService, RecoveryPolicyApplicationService,
+    RecoveryReceiptApplicationService, RecoverySessionApplicationService,
+    SessionApplicationService,
+};
+use soland_application::jobs::JobsApplicationService;
+use soland_application::sync::SyncApplicationService;
 use soland_domain::hlc::ServerHlc;
+use soland_domain::identity::{ConsentCellKey, ConsentCellRecord, DirectConversationBindingRecord};
 use soland_domain::reducer::ProjectionState;
 use soland_storage::{
     ACCOUNT_LOCKOUT_DURATION, ACCOUNT_LOCKOUT_THRESHOLD, ACCOUNT_LOCKOUT_WINDOW,
-    AccountLifecycleRecord, AccountRecord, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord,
-    CursorRevocation, DirectConversationBindingRecord, FailedLoginRecord,
-    KEY_BACKUP_DOWNLOAD_TRACKER_MAX_ENTRIES, KEY_BACKUP_DOWNLOAD_WINDOW, KeyBackupDownloadOutcome,
-    KeyBackupDownloadRecord, MODERATION_FRANKING_REPLAY_MAX_ENTRIES,
-    MODERATION_FRANKING_REPLAY_WINDOW_SECS, MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW,
+    AccountLifecycleRecord, AccountRecord, CanonicalEventRecord, CursorRevocation,
+    FailedLoginRecord, FederationOutboxRecord, KEY_BACKUP_DOWNLOAD_TRACKER_MAX_ENTRIES,
+    KEY_BACKUP_DOWNLOAD_WINDOW, KeyBackupDownloadOutcome, KeyBackupDownloadRecord,
+    MODERATION_FRANKING_REPLAY_MAX_ENTRIES, MODERATION_FRANKING_REPLAY_WINDOW_SECS,
+    MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW,
     MODERATION_REPORT_MAX_PER_REPORTER_TARGET_WINDOW, MODERATION_REPORT_MAX_PER_REPORTER_WINDOW,
     MODERATION_REPORT_MAX_PER_SOURCE_IP_WINDOW, MODERATION_REPORT_MAX_PER_SOURCE_SERVICE_WINDOW,
     MODERATION_REPORT_RATE_TRACKER_MAX_ENTRIES, MODERATION_REPORT_RATE_WINDOW_SECS,
@@ -54,45 +72,68 @@ use hydration::*;
 /// DID resolver service, `ProjectionState`).
 #[derive(Clone)]
 pub struct AppState {
-    pub config: AppConfig,
+    pub(crate) config: AppConfig,
     /// Runtime-authoritative service DID. It is resolved from durable identity
     /// state before construction and is never loaded from configuration.
-    pub service_id: String,
+    pub(crate) service_id: String,
     /// Full service-identity lifecycle state used by readiness, doctor, and
     /// identity-mutation gates.
-    pub service_identity: Arc<ArcSwap<ServiceIdentityState>>,
+    pub(crate) service_identity: Arc<ArcSwap<ServiceIdentityState>>,
     /// Mutable operational overlay (admin allowlist, rate-limit ceilings,
     /// federation peers, feature toggles). Seeded from `config` at boot,
     /// overlaid by the `server_settings` DB row in [`AppState::hydrate`], and
     /// hot-swapped by the admin settings endpoint. Read a consistent snapshot
     /// via [`AppState::settings`]. See [`crate::runtime_settings`].
-    pub settings: Arc<ArcSwap<crate::runtime_settings::RuntimeSettings>>,
-    pub db: Db,
-    pub persistence: Arc<dyn PersistenceStore>,
-    pub object_storage: Arc<dyn ObjectStorage>,
-    pub hlc: ServerHlc,
-    pub projection: Arc<Mutex<ProjectionState>>,
-    pub authz: SolandAuthzEngine,
-    pub realms: Arc<Mutex<RealmDirectoryIndex>>,
+    pub(crate) settings: Arc<ArcSwap<crate::runtime_settings::RuntimeSettings>>,
+    pub(crate) db: Db,
+    pub(crate) persistence: Arc<dyn PersistenceStore>,
+    event_application: EventApplicationService,
+    event_query_application: EventQueryApplicationService,
+    mls_commit_query_application: MlsCommitQueryApplicationService,
+    mls_key_package_application: MlsKeyPackageApplicationService,
+    realm_query_application: RealmQueryApplicationService,
+    delivery_application: DeliveryApplicationService,
+    identity_application: IdentityApplicationService,
+    account_data_application: AccountDataApplicationService,
+    key_material_application: KeyMaterialApplicationService,
+    consent_application: ConsentApplicationService,
+    contact_application: ContactApplicationService,
+    agent_pairing_application: AgentPairingApplicationService,
+    agent_participation_application: AgentParticipationApplicationService,
+    key_backup_application: KeyBackupApplicationService,
+    session_application: SessionApplicationService,
+    recovery_policy_application: RecoveryPolicyApplicationService,
+    recovery_receipt_application: RecoveryReceiptApplicationService,
+    recovery_session_application: RecoverySessionApplicationService,
+    did_application: DidApplicationService,
+    federation_application: FederationApplicationService,
+    governance_application: GovernanceApplicationService,
+    sync_application: SyncApplicationService,
+    jobs_application: JobsApplicationService,
+    pub(crate) object_storage: Arc<dyn ObjectStorage>,
+    pub(crate) hlc: ServerHlc,
+    pub(crate) projection: Arc<Mutex<ProjectionState>>,
+    pub(crate) authz: SolandAuthzEngine,
+    pub(crate) realms: Arc<Mutex<RealmDirectoryIndex>>,
     /// Cross-signing state machine (PSK→SSK/USK publishes + device trust
     /// chains), per spec crypto-media/device-lifecycle.md §5. Fed by the
     /// projector when `ak.cross_signing.publish` lands, and read when verifying
     /// a `ak.device.authorize` `cross_signing_binding`. In-memory like the other
     /// reducer projections; durable rehydration rides on the durable event
     /// store (control-realm Phase 3).
-    pub cross_signing: Arc<Mutex<arkret_sdk::DeviceManager>>,
+    pub(crate) cross_signing: Arc<Mutex<arkret_sdk::DeviceManager>>,
     /// Process-local replay fence for consumed cross-signing reset
     /// `(principal_id, previous_generation)` tuples.
-    pub cross_signing_reset_replays:
+    pub(crate) cross_signing_reset_replays:
         Arc<Mutex<BTreeMap<(String, u64), chrono::DateTime<chrono::Utc>>>>,
     /// Handle release ledger keyed by bare localpart. The map is hydrated
     /// from `persistence.handle_releases()` and write-through updates keep
     /// post-release grace state durable across restarts.
-    pub handle_releases: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
+    pub(crate) handle_releases: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
     /// Account lifecycle state projection keyed by actor DID. Missing rows
     /// mean `active`; non-active rows gate auth/session issuance and directory
     /// visibility. Hydrated from `persistence.account_lifecycle()` at boot.
-    pub account_lifecycle: Arc<Mutex<BTreeMap<String, AccountLifecycleRecord>>>,
+    pub(crate) account_lifecycle: Arc<Mutex<BTreeMap<String, AccountLifecycleRecord>>>,
     /// In-memory failed-auth counter, keyed by actor DID. Once an actor
     /// crosses `ACCOUNT_LOCKOUT_THRESHOLD` (5) within the active window it is
     /// locked out for `ACCOUNT_LOCKOUT_DURATION` (15 min); a successful login
@@ -107,53 +148,55 @@ pub struct AppState {
     /// remaining reader — dev-login — authenticates nothing. See
     /// `docs/account-lifecycle.md` and `review_code.md`; do not treat this
     /// counter as live protection.
-    pub failed_login_attempts: Arc<Mutex<BTreeMap<String, FailedLoginRecord>>>,
+    pub(crate) failed_login_attempts: Arc<Mutex<BTreeMap<String, FailedLoginRecord>>>,
     /// Deployment-local account registration policy. It uses the canonical
     /// account-operation DTO so the HTTP handler, audit payload, tests, and a
     /// future admin policy cell all speak the same wire vocabulary.
-    pub account_registration_policy: Arc<Mutex<AccountRegistrationPolicy>>,
+    pub(crate) account_registration_policy: Arc<Mutex<AccountRegistrationPolicy>>,
     /// Process-local registration attempt counters keyed by principal DID.
     /// This is the account-registration-specific quota; the generic HTTP rate
     /// limiter still protects the route by source address.
-    pub account_registration_rate_tracker:
+    pub(crate) account_registration_rate_tracker:
         Arc<Mutex<BTreeMap<String, (chrono::DateTime<chrono::Utc>, u32)>>>,
     /// SEC-09 — per-`(requester_did, holder_did)` PSI / contact-discovery
     /// probe counters; backs the timing-side-channel rate limit in
     /// `directory::private_contact_discovery`.
-    pub psi_probe_tracker: Arc<Mutex<BTreeMap<(String, String), PsiProbeRecord>>>,
+    pub(crate) psi_probe_tracker: Arc<Mutex<BTreeMap<(String, String), PsiProbeRecord>>>,
     /// Spec `identity/key-management.md` §7.8 — per-principal rolling-24h
     /// counter of full-ciphertext key-backup downloads; backs the
     /// anti-bulk-dump quota in `identity::key_backup::unlock_key_backup`.
     /// In-memory like the other limiters; a restart resets the window.
-    pub key_backup_download_tracker: Arc<Mutex<BTreeMap<String, KeyBackupDownloadRecord>>>,
+    pub(crate) key_backup_download_tracker: Arc<Mutex<BTreeMap<String, KeyBackupDownloadRecord>>>,
     /// Per-scope moderation report quotas keyed by bucket labels. The
     /// canonical report endpoint is an abuse-amplifiable write path, so it
     /// carries a local rolling limiter in addition to the generic HTTP class
     /// limiter.
-    pub moderation_report_rate_tracker: Arc<Mutex<BTreeMap<String, ModerationReportRateRecord>>>,
+    pub(crate) moderation_report_rate_tracker:
+        Arc<Mutex<BTreeMap<String, ModerationReportRateRecord>>>,
     /// Bounded franking proof replay nonce ledger. Entries are process-local
     /// and intentionally finite; stale or excess nonces are evicted before new
     /// inserts.
-    pub moderation_franking_replay_nonces:
+    pub(crate) moderation_franking_replay_nonces:
         Arc<Mutex<BTreeMap<String, ModerationFrankingReplayRecord>>>,
     /// Process-local single-use approval nonce ledger for native-agent
     /// act-on-behalf publishes. Durable controller approval state lives in the
     /// projection; this table prevents replay within the approval TTL.
-    pub agent_approval_nonces: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
+    pub(crate) agent_approval_nonces: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
     /// Per-actor notifications read marker. `mark_all_read(actor)` writes
     /// `Utc::now()`; the notifications read-side filter uses it to flag
     /// rows as read. Same in-memory shape as the other two.
-    pub notification_read_cursors: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
+    pub(crate) notification_read_cursors:
+        Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
     /// Domain-separated HMAC key for the deterministic stateful sync-cursor
     /// handle (`routing/events/sync.rs::derive_cursor_handle`). The handle
     /// binding rows themselves live in the durable
     /// `persistence.sync_cursors()` table, so a restart no longer invalidates
     /// every client's resume cursor.
-    pub sync_cursor_hmac_key: [u8; 32],
+    pub(crate) sync_cursor_hmac_key: [u8; 32],
     /// Domain-separated root key for service-scoped push target pseudonyms.
     /// Per-epoch keys are derived from this root inside the push routing
     /// module; only public epoch labels are exposed on describe.
-    pub push_target_hmac_key: [u8; 32],
+    pub(crate) push_target_hmac_key: [u8; 32],
     /// Revoked cursor authorities (`ak.self.account.command.revoke_cursor`). High-assurance
     /// optional endpoint: a revoked cursor returns `cursor_revoked` and MUST NOT
     /// advance to-device ack, account-subscribe resume position, wait-for barrier
@@ -164,17 +207,17 @@ pub struct AppState {
     /// (`sync_cursor_revocations` table): the revoke endpoint writes the
     /// ledger first (fail-closed) and [`AppState::hydrate`] reloads active
     /// rows at boot, so a restart cannot resurrect a revoked cursor.
-    pub sync_cursor_revocations: Arc<Mutex<Vec<CursorRevocation>>>,
+    pub(crate) sync_cursor_revocations: Arc<Mutex<Vec<CursorRevocation>>>,
     /// Monotonic position allocator for to-device queues. Cursor ack uses
     /// numeric `position <= ack_position` pruning, so positions must advance
     /// even when multiple fanout writes land in the same wall-clock microsecond.
-    pub to_device_position_counter: Arc<AtomicI64>,
+    pub(crate) to_device_position_counter: Arc<AtomicI64>,
     /// Holder-private consent cell projection keyed by
     /// `(holder_did, peer_did, scope)`. This is the minimal G3.S4
     /// reducer cache that backs `/_soland/self/consent/cells/*` and the contact
     /// gate; durable Move/Seal cell hydration can replace the backing map
     /// without changing the routing contract.
-    pub consent_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
+    pub(crate) consent_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
     /// Per-subject private `invite_receive_policy` overrides keyed by the
     /// subject (holder) DID. Spec `sync/invite-addressing.md` §5 — the policy
     /// is subject/private state and MUST NOT enter the durable Realm event
@@ -182,31 +225,33 @@ pub struct AppState {
     /// state hydration lands. Subjects without an entry fall back to the
     /// recommended default policy. `ak.self.contact.command.tombstone(block_peer)`
     /// writes the peer DID into the holder entry's `blocked_subjects`.
-    pub invite_receive_policies: Arc<Mutex<BTreeMap<String, arkret_sdk::InviteReceivePolicy>>>,
+    pub(crate) invite_receive_policies:
+        Arc<Mutex<BTreeMap<String, arkret_sdk::InviteReceivePolicy>>>,
     /// Direct conversation binding projection keyed by sorted participant DID
     /// pair. This is the bounded server-side fallback for
     /// `ak.self.direct_conversation.command.resolve` until signed
     /// `ak.direct_conversation.bound` event projection is fully wired.
-    pub direct_conversation_bindings: Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
+    pub(crate) direct_conversation_bindings:
+        Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
     /// Runtime state for sovereign-main / enclave deployment handshakes,
     /// trust-root decisions, boundary audit, and store-and-forward queues.
     /// The P2-056 implementation keeps this in memory so the dual-soland
     /// conformance harness can exercise the protocol shape locally; a durable
     /// store can replace the backing map without changing the HTTP contract.
-    pub sovereign_deployment: Arc<Mutex<SovereignDeploymentState>>,
+    pub(crate) sovereign_deployment: Arc<Mutex<SovereignDeploymentState>>,
     /// Per-Realm retention policy projection. Hydrated from durable
     /// `retention_policies` rows and write-through on accepted Realm events
     /// or admin updates.
-    pub retention_policies: Arc<Mutex<BTreeMap<String, RetentionPolicyRecord>>>,
+    pub(crate) retention_policies: Arc<Mutex<BTreeMap<String, RetentionPolicyRecord>>>,
     /// Retention tombstones keyed by event_id. Tombstoned events keep their
     /// stable event_id and remain in the canonical/projection stores; render
     /// paths redact the content to `[expired]`.
-    pub retention_tombstones: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
+    pub(crate) retention_tombstones: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
     /// Local organization directory rows keyed by organization DID/id.
     /// Hydrated from durable organization projection rows.
-    pub organizations: Arc<Mutex<BTreeMap<String, OrganizationRecord>>>,
+    pub(crate) organizations: Arc<Mutex<BTreeMap<String, OrganizationRecord>>>,
     /// Current organization moderation policy per organization.
-    pub organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
+    pub(crate) organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
     /// SOL-ORG-05 — Realm -> `owning_organizations` DECLARED HINTS, sourced
     /// from `ak.realm.create.owning_organizations` or the local organization
     /// link endpoint. These are NOT verified relationships and MUST NOT drive
@@ -214,35 +259,35 @@ pub struct AppState {
     /// a verified `ak.realm.organization` statement does (see the reducer
     /// `realm_organization_statements` projection). Retained as a discovery /
     /// display hint surface only.
-    pub realm_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
+    pub(crate) realm_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
     /// Organization -> member Realm ids. This is the read-side fanout index:
     /// policy updates do not rewrite per-Realm rows.
-    pub organization_realms: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
+    pub(crate) organization_realms: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
     /// Accepted Realm-level moderation-policy overrides keyed by Realm id.
-    pub realm_moderation_policies: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
-    pub did_resolver: Arc<did_resolver_chain::SolandDidResolver>,
+    pub(crate) realm_moderation_policies: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
+    pub(crate) did_resolver: Arc<did_resolver_chain::SolandDidResolver>,
     /// Runtime-only verification keys learned from endpoint-discovered
     /// federation peer DID documents. Configuration contains endpoints, not
     /// copied service DIDs or public-key pins; discovery validates the
     /// document's Principal Server endpoint binding before publishing a key.
-    pub federation_peer_verifying_keys: Arc<ArcSwap<BTreeMap<String, VerifyingKey>>>,
+    pub(crate) federation_peer_verifying_keys: Arc<ArcSwap<BTreeMap<String, VerifyingKey>>>,
     /// Move/Seal/Lattice runtime stores. Pg-backed in database mode,
     /// SDK memory-backed in explicitly in-memory test mode.
-    pub move_store: Arc<dyn MoveStore>,
-    pub seal_store: Arc<dyn SealStore>,
-    pub cell_store: Arc<dyn CellStore>,
-    pub cell_registry: Arc<dyn CellRegistry>,
+    pub(crate) move_store: Arc<dyn MoveStore>,
+    pub(crate) seal_store: Arc<dyn SealStore>,
+    pub(crate) cell_store: Arc<dyn CellStore>,
+    pub(crate) cell_registry: Arc<dyn CellRegistry>,
     pub(crate) event_seal_committer: Arc<dyn soland_storage_postgres::EventSealCommitStore>,
     /// Live event notification bus for `ak.self.events.stream.subscribe`.
     /// Memory mode uses the local broadcast channel; PostgreSQL mode also
     /// publishes over LISTEN/NOTIFY so subscribers connected to another
     /// replica receive the same live frames.
-    pub event_broadcast: EventBroadcast,
+    pub(crate) event_broadcast: EventBroadcast,
     /// Server-enforced reconnect windows advertised by subscribe control
     /// frames. This prevents a faulty or overloaded client from immediately
     /// re-opening the same subscribe scope after `dropped` /
     /// `resync_required`.
-    pub subscribe_reconnect_gate: Arc<Mutex<SubscribeReconnectGate>>,
+    pub(crate) subscribe_reconnect_gate: Arc<Mutex<SubscribeReconnectGate>>,
     /// Persistent Ed25519 signing key for NotaryWorker + admin endpoints.
     /// Production construction receives the exact seed resolved and
     /// key-bound by service-identity bootstrap; AppState never re-resolves or
@@ -255,11 +300,11 @@ pub struct AppState {
     /// historical signing-key-only rotation path is fail-closed because it
     /// cannot atomically update WebVH, the DID document, durable identity,
     /// KeyStore, and recovery bundle.
-    pub notary_signing_key: Arc<ArcSwap<SigningKey>>,
+    pub(crate) notary_signing_key: Arc<ArcSwap<SigningKey>>,
     /// The origin tag rotates with the key. Stored alongside it
     /// behind a [`Mutex`] (one-shot writes from the rotation path are not
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
-    pub notary_signing_key_origin: Arc<Mutex<NotarySigningKeyOrigin>>,
+    pub(crate) notary_signing_key_origin: Arc<Mutex<NotarySigningKeyOrigin>>,
     /// Per-admin signing keys: SDK
     /// [`arkret_sdk::AdminKeyStore`] keyed by the `application_id`
     /// `soland.<service_id>`. Each admin DID in
@@ -269,7 +314,7 @@ pub struct AppState {
     /// built via `admin_signer_for(state, admin_did)` — this replaces the
     /// service-wide `service_admin_signer` shortcut for endpoints that
     /// want operator attribution in the audit chain.
-    pub admin_keystore: Arc<arkret_sdk::AdminKeyStore>,
+    pub(crate) admin_keystore: Arc<arkret_sdk::AdminKeyStore>,
     /// G4.T3 — verified-profile descriptors loaded from the artifact path in
     /// `SOLAND_VERIFIED_PROFILES_ARTIFACT` at startup. Filtered to entries
     /// whose `service_role == "principal_server"` and additionally
@@ -277,7 +322,7 @@ pub struct AppState {
     /// `describe.rs::apply_claim_level_partition`. Empty when the env var
     /// is unset / file missing / file malformed — that's the dev-mode
     /// invariant in service-surface.md §3.0.
-    pub verified_profiles: Arc<Vec<VerifiedProfileDescriptor>>,
+    pub(crate) verified_profiles: Arc<Vec<VerifiedProfileDescriptor>>,
     /// MID-1..6 (R3.1 spec-sync 2026-05-27, arkret-spec @ 7157ee8) — in-
     /// memory registry of `ak.member.identity.update` events. Reducer
     /// dispatch (`apply_member_identity_update`) and the sync roster
@@ -288,7 +333,7 @@ pub struct AppState {
     /// event ingest; encrypted/non-Ed25519 proof forms are refused
     /// fail-closed. Reducer-shape validation (digest binding, segment
     /// whitelist) IS real per MID-2.
-    pub member_identity: Arc<Mutex<MemberIdentityRegistry>>,
+    pub(crate) member_identity: Arc<Mutex<MemberIdentityRegistry>>,
 }
 
 fn development_fixture_service_identity(config: &AppConfig) -> ServiceIdentityState {
@@ -343,9 +388,37 @@ fn evict_oldest_entries<K, V, O>(
 }
 
 impl AppState {
+    pub fn config(&self) -> &AppConfig {
+        &self.config
+    }
+
+    pub fn service_id(&self) -> &String {
+        &self.service_id
+    }
+
+    pub fn storage_mode(&self) -> &'static str {
+        self.db.mode()
+    }
+
+    pub fn runtime_settings_handle(
+        &self,
+    ) -> &Arc<ArcSwap<crate::runtime_settings::RuntimeSettings>> {
+        &self.settings
+    }
+
+    pub fn federation_peer_verifying_keys_handle(
+        &self,
+    ) -> &Arc<ArcSwap<BTreeMap<String, VerifyingKey>>> {
+        &self.federation_peer_verifying_keys
+    }
+
     /// Snapshot the current service-identity lifecycle state.
     pub fn service_identity_state(&self) -> Arc<ServiceIdentityState> {
         self.service_identity.load_full()
+    }
+
+    pub fn replace_service_identity_state(&self, state: ServiceIdentityState) {
+        self.service_identity.store(Arc::new(state));
     }
 
     /// Snapshot the persistent Ed25519 signing key shared by
@@ -562,8 +635,10 @@ impl AppState {
         }
         let admin_keystore = Arc::new(admin_keystore);
 
+        let cell_registry =
+            Arc::new(soland_domain::reducer::lattice_kinds::build_sdk_cell_registry());
         let state_resolution_stores =
-            soland_storage_postgres::build_state_resolution_stores(db.pool.clone());
+            soland_storage_postgres::build_state_resolution_stores(db.pool.clone(), cell_registry);
 
         // Space-container/Strand/Morph projections are hydrated from durable
         // persistence in [`AppState::hydrate`] (an explicit async boot step)
@@ -584,6 +659,75 @@ impl AppState {
             crate::runtime_settings::RuntimeSettings::from_config(&config),
         ));
 
+        let event_application =
+            EventApplicationService::new(Arc::new(PersistenceEventCommitter(persistence.clone())));
+        let event_query_application = EventQueryApplicationService::new(Arc::new(
+            PersistenceEventReader(persistence.clone()),
+        ));
+        let mls_commit_query_application = MlsCommitQueryApplicationService::new(Arc::new(
+            PersistenceMlsCommitReader(persistence.clone()),
+        ));
+        let mls_key_package_application = MlsKeyPackageApplicationService::new(Arc::new(
+            PersistenceMlsKeyPackageMaintenance(persistence.clone()),
+        ));
+        let realm_query_application = RealmQueryApplicationService::new(Arc::new(
+            PersistenceRealmMetadata(persistence.clone()),
+        ));
+        let delivery_application = DeliveryApplicationService::new(
+            Arc::new(PersistenceNotificationWriter(persistence.clone())),
+            Arc::new(PersistenceDeviceDelivery(persistence.clone())),
+            Arc::new(PersistenceDeviceMessages(persistence.clone())),
+        );
+        let identity_application = IdentityApplicationService::new(
+            Arc::new(PersistenceAccountLookup(persistence.clone())),
+            Arc::new(PersistenceDeviceDirectory(persistence.clone())),
+            Arc::new(PersistenceAgentDirectory(persistence.clone())),
+        );
+        let account_data_application = AccountDataApplicationService::new(Arc::new(
+            PersistenceAccountData(persistence.clone()),
+        ));
+        let key_material_application = KeyMaterialApplicationService::new(
+            Arc::new(PersistenceDeviceKeys(persistence.clone())),
+            Arc::new(PersistenceOneTimeKeys(persistence.clone())),
+        );
+        let consent_application =
+            ConsentApplicationService::new(Arc::new(PersistenceConsentCells(persistence.clone())));
+        let contact_application = ContactApplicationService::new(
+            Arc::new(PersistenceContacts(persistence.clone())),
+            Arc::new(PersistenceInviteReceivePolicies(persistence.clone())),
+            Arc::new(PersistenceDirectConversationBindings(persistence.clone())),
+        );
+        let agent_pairing_application = AgentPairingApplicationService::new(Arc::new(
+            PersistenceAgentPairing(persistence.clone()),
+        ));
+        let agent_participation_application = AgentParticipationApplicationService::new(Arc::new(
+            PersistenceAgentParticipation(persistence.clone()),
+        ));
+        let key_backup_application =
+            KeyBackupApplicationService::new(Arc::new(PersistenceKeyBackups(persistence.clone())));
+        let session_application =
+            SessionApplicationService::new(Arc::new(PersistenceSessions(persistence.clone())));
+        let recovery_policy_application = RecoveryPolicyApplicationService::new(Arc::new(
+            PersistenceRecoveryPolicies(persistence.clone()),
+        ));
+        let recovery_receipt_application = RecoveryReceiptApplicationService::new(Arc::new(
+            PersistenceRecoveryReceipts(persistence.clone()),
+        ));
+        let recovery_session_application = RecoverySessionApplicationService::new(Arc::new(
+            PersistenceRecoverySessions(persistence.clone()),
+        ));
+        let did_application =
+            DidApplicationService::new(Arc::new(PersistenceDidDocuments(persistence.clone())));
+        let federation_application = FederationApplicationService::new(Arc::new(
+            PersistenceFederationOutbox(persistence.clone()),
+        ));
+        let governance_application =
+            GovernanceApplicationService::new(Arc::new(PersistenceAuditLog(persistence.clone())));
+        let sync_application =
+            SyncApplicationService::new(Arc::new(PersistenceCursorStore(persistence.clone())));
+        let jobs_application =
+            JobsApplicationService::new(Arc::new(PersistenceMaintenance(persistence.clone())));
+
         Self {
             config,
             service_id: service_id.clone(),
@@ -594,6 +738,29 @@ impl AppState {
             authz: SolandAuthzEngine::new(),
             db,
             persistence,
+            event_application,
+            event_query_application,
+            mls_commit_query_application,
+            mls_key_package_application,
+            realm_query_application,
+            delivery_application,
+            identity_application,
+            account_data_application,
+            key_material_application,
+            consent_application,
+            contact_application,
+            agent_pairing_application,
+            agent_participation_application,
+            key_backup_application,
+            session_application,
+            recovery_policy_application,
+            recovery_receipt_application,
+            recovery_session_application,
+            did_application,
+            federation_application,
+            governance_application,
+            sync_application,
+            jobs_application,
             object_storage,
             realms: Arc::new(Mutex::new(realms)),
             cross_signing: Arc::new(Mutex::new(arkret_sdk::DeviceManager::new())),
@@ -659,6 +826,98 @@ impl AppState {
     #[inline]
     pub fn settings(&self) -> Arc<crate::runtime_settings::RuntimeSettings> {
         self.settings.load_full()
+    }
+
+    pub(crate) fn event_application(&self) -> &EventApplicationService {
+        &self.event_application
+    }
+
+    pub(crate) fn event_query_application(&self) -> &EventQueryApplicationService {
+        &self.event_query_application
+    }
+
+    pub(crate) fn mls_commit_query_application(&self) -> &MlsCommitQueryApplicationService {
+        &self.mls_commit_query_application
+    }
+
+    pub(crate) fn mls_key_package_application(&self) -> &MlsKeyPackageApplicationService {
+        &self.mls_key_package_application
+    }
+
+    pub(crate) fn realm_query_application(&self) -> &RealmQueryApplicationService {
+        &self.realm_query_application
+    }
+
+    pub(crate) fn delivery_application(&self) -> &DeliveryApplicationService {
+        &self.delivery_application
+    }
+
+    pub(crate) fn identity_application(&self) -> &IdentityApplicationService {
+        &self.identity_application
+    }
+
+    pub(crate) fn account_data_application(&self) -> &AccountDataApplicationService {
+        &self.account_data_application
+    }
+
+    pub(crate) fn key_material_application(&self) -> &KeyMaterialApplicationService {
+        &self.key_material_application
+    }
+
+    pub(crate) fn consent_application(&self) -> &ConsentApplicationService {
+        &self.consent_application
+    }
+
+    pub(crate) fn contact_application(&self) -> &ContactApplicationService {
+        &self.contact_application
+    }
+
+    pub(crate) fn did_application(&self) -> &DidApplicationService {
+        &self.did_application
+    }
+
+    pub(crate) fn agent_pairing_application(&self) -> &AgentPairingApplicationService {
+        &self.agent_pairing_application
+    }
+
+    pub(crate) fn agent_participation_application(&self) -> &AgentParticipationApplicationService {
+        &self.agent_participation_application
+    }
+
+    pub(crate) fn key_backup_application(&self) -> &KeyBackupApplicationService {
+        &self.key_backup_application
+    }
+
+    pub(crate) fn session_application(&self) -> &SessionApplicationService {
+        &self.session_application
+    }
+
+    pub(crate) fn recovery_policy_application(&self) -> &RecoveryPolicyApplicationService {
+        &self.recovery_policy_application
+    }
+
+    pub(crate) fn recovery_receipt_application(&self) -> &RecoveryReceiptApplicationService {
+        &self.recovery_receipt_application
+    }
+
+    pub(crate) fn recovery_session_application(&self) -> &RecoverySessionApplicationService {
+        &self.recovery_session_application
+    }
+
+    pub(crate) fn federation_application(&self) -> &FederationApplicationService {
+        &self.federation_application
+    }
+
+    pub(crate) fn governance_application(&self) -> &GovernanceApplicationService {
+        &self.governance_application
+    }
+
+    pub(crate) fn sync_application(&self) -> &SyncApplicationService {
+        &self.sync_application
+    }
+
+    pub(crate) fn jobs_application(&self) -> &JobsApplicationService {
+        &self.jobs_application
     }
 
     /// Runtime-authoritative admin-allowlist check. Reads the live overlay,
@@ -994,15 +1253,14 @@ impl AppState {
         // a revoked cursor MUST keep returning `cursor_revoked` and MUST NOT
         // advance to-device ack / resume / wait-for / dropped-recovery
         // state). Built off-lock first; merge under a short critical section.
-        match self
-            .persistence
-            .sync_cursors()
-            .active_revocations(now)
-            .await
-        {
+        match self.sync_application().active_cursor_revocations(now).await {
             Ok(revocations) => {
                 let mut cache = self.sync_cursor_revocations.lock();
-                cache.extend(revocations);
+                cache.extend(
+                    revocations
+                        .into_iter()
+                        .map(persistence_cursor_revocation_owned),
+                );
             }
             Err(error) => {
                 tracing::warn!(%error, "failed to hydrate cursor revocations from persistence store");
@@ -1386,6 +1644,2266 @@ impl AppState {
     }
 }
 
+impl AppState {
+    #[doc(hidden)]
+    pub fn test_set_service_id(&mut self, service_id: String) {
+        self.service_id = service_id;
+    }
+
+    #[doc(hidden)]
+    pub fn test_persistence(&self) -> &Arc<dyn PersistenceStore> {
+        &self.persistence
+    }
+
+    #[doc(hidden)]
+    pub fn test_projection(&self) -> &Arc<Mutex<ProjectionState>> {
+        &self.projection
+    }
+
+    #[doc(hidden)]
+    pub fn test_realms(&self) -> &Arc<Mutex<RealmDirectoryIndex>> {
+        &self.realms
+    }
+
+    #[doc(hidden)]
+    pub fn test_hlc(&self) -> &ServerHlc {
+        &self.hlc
+    }
+
+    #[doc(hidden)]
+    pub fn test_authz(&self) -> &SolandAuthzEngine {
+        &self.authz
+    }
+
+    #[doc(hidden)]
+    pub fn test_object_storage(&self) -> &Arc<dyn ObjectStorage> {
+        &self.object_storage
+    }
+
+    #[doc(hidden)]
+    pub fn test_event_broadcast(&self) -> &EventBroadcast {
+        &self.event_broadcast
+    }
+
+    #[doc(hidden)]
+    pub fn test_did_resolver(&self) -> &Arc<did_resolver_chain::SolandDidResolver> {
+        &self.did_resolver
+    }
+
+    #[doc(hidden)]
+    pub fn test_cross_signing(&self) -> &Arc<Mutex<arkret_sdk::DeviceManager>> {
+        &self.cross_signing
+    }
+
+    #[doc(hidden)]
+    pub fn test_account_registration_policy(&self) -> &Arc<Mutex<AccountRegistrationPolicy>> {
+        &self.account_registration_policy
+    }
+
+    #[doc(hidden)]
+    pub fn test_consent_cells(&self) -> &Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>> {
+        &self.consent_cells
+    }
+
+    #[doc(hidden)]
+    pub fn test_direct_conversation_bindings(
+        &self,
+    ) -> &Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>> {
+        &self.direct_conversation_bindings
+    }
+}
+
+#[derive(Clone)]
+struct PersistenceEventCommitter(Arc<dyn PersistenceStore>);
+
+struct PersistenceEventReader(Arc<dyn PersistenceStore>);
+
+struct PersistenceMlsCommitReader(Arc<dyn PersistenceStore>);
+
+struct PersistenceMlsKeyPackageMaintenance(Arc<dyn PersistenceStore>);
+
+struct PersistenceRealmMetadata(Arc<dyn PersistenceStore>);
+
+struct PersistenceNotificationWriter(Arc<dyn PersistenceStore>);
+
+struct PersistenceDeviceDelivery(Arc<dyn PersistenceStore>);
+
+struct PersistenceDeviceMessages(Arc<dyn PersistenceStore>);
+
+struct PersistenceAccountLookup(Arc<dyn PersistenceStore>);
+
+struct PersistenceAccountData(Arc<dyn PersistenceStore>);
+
+struct PersistenceDeviceKeys(Arc<dyn PersistenceStore>);
+
+struct PersistenceOneTimeKeys(Arc<dyn PersistenceStore>);
+
+struct PersistenceConsentCells(Arc<dyn PersistenceStore>);
+
+struct PersistenceContacts(Arc<dyn PersistenceStore>);
+
+struct PersistenceInviteReceivePolicies(Arc<dyn PersistenceStore>);
+
+struct PersistenceDirectConversationBindings(Arc<dyn PersistenceStore>);
+
+struct PersistenceDeviceDirectory(Arc<dyn PersistenceStore>);
+
+struct PersistenceAgentDirectory(Arc<dyn PersistenceStore>);
+
+struct PersistenceAgentPairing(Arc<dyn PersistenceStore>);
+
+struct PersistenceAgentParticipation(Arc<dyn PersistenceStore>);
+
+struct PersistenceKeyBackups(Arc<dyn PersistenceStore>);
+
+struct PersistenceSessions(Arc<dyn PersistenceStore>);
+
+struct PersistenceRecoveryPolicies(Arc<dyn PersistenceStore>);
+
+struct PersistenceRecoveryReceipts(Arc<dyn PersistenceStore>);
+
+struct PersistenceRecoverySessions(Arc<dyn PersistenceStore>);
+
+struct PersistenceDidDocuments(Arc<dyn PersistenceStore>);
+
+struct PersistenceFederationOutbox(Arc<dyn PersistenceStore>);
+
+struct PersistenceAuditLog(Arc<dyn PersistenceStore>);
+
+struct PersistenceCursorStore(Arc<dyn PersistenceStore>);
+
+struct PersistenceMaintenance(Arc<dyn PersistenceStore>);
+
+fn federation_delivery_record(
+    record: soland_application::federation::FederationDeliveryRecord,
+) -> FederationOutboxRecord {
+    FederationOutboxRecord {
+        id: record.id,
+        peer_did: record.peer_did,
+        peer_url: record.peer_url,
+        endpoint: record.endpoint,
+        idempotency_key: record.idempotency_key,
+        payload_json: record.payload_json,
+        attempts: 0,
+        next_attempt_at: record.created_at,
+        last_status: None,
+        last_response_excerpt: None,
+        created_at: record.created_at,
+        delivered_at: None,
+    }
+}
+
+fn application_delivery_record(
+    record: &FederationOutboxRecord,
+) -> soland_application::federation::FederationDeliveryRecord {
+    soland_application::federation::FederationDeliveryRecord {
+        id: record.id.clone(),
+        peer_did: record.peer_did.clone(),
+        peer_url: record.peer_url.clone(),
+        endpoint: record.endpoint.clone(),
+        idempotency_key: record.idempotency_key.clone(),
+        payload_json: record.payload_json.clone(),
+        created_at: record.created_at,
+    }
+}
+
+fn application_pending_delivery(
+    record: FederationOutboxRecord,
+) -> soland_application::federation::PendingFederationDelivery {
+    soland_application::federation::PendingFederationDelivery {
+        delivery: application_delivery_record(&record),
+        attempts: record.attempts,
+        next_attempt_at: record.next_attempt_at,
+        last_status: record.last_status,
+        last_response_excerpt: record.last_response_excerpt,
+        delivered_at: record.delivered_at,
+    }
+}
+
+fn persistence_pending_delivery(
+    record: &soland_application::federation::PendingFederationDelivery,
+) -> FederationOutboxRecord {
+    FederationOutboxRecord {
+        id: record.delivery.id.clone(),
+        peer_did: record.delivery.peer_did.clone(),
+        peer_url: record.delivery.peer_url.clone(),
+        endpoint: record.delivery.endpoint.clone(),
+        idempotency_key: record.delivery.idempotency_key.clone(),
+        payload_json: record.delivery.payload_json.clone(),
+        attempts: record.attempts,
+        next_attempt_at: record.next_attempt_at,
+        last_status: record.last_status,
+        last_response_excerpt: record.last_response_excerpt.clone(),
+        created_at: record.delivery.created_at,
+        delivered_at: record.delivered_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::federation::FederationOutboxPort for PersistenceFederationOutbox {
+    async fn enqueue(
+        &self,
+        delivery: &soland_application::federation::FederationDeliveryRecord,
+    ) -> soland_application::ApplicationResult<bool> {
+        Ok(self
+            .0
+            .federation_outbox()
+            .enqueue(&federation_delivery_record(delivery.clone()))
+            .await?)
+    }
+
+    async fn find(
+        &self,
+        peer_did: &str,
+        idempotency_key: &str,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_application::federation::FederationDeliveryRecord>,
+    > {
+        Ok(self
+            .0
+            .federation_outbox()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .find(|row| row.peer_did == peer_did && row.idempotency_key == idempotency_key)
+            .map(|row| application_delivery_record(&row)))
+    }
+
+    async fn pending_due(
+        &self,
+        now: i64,
+        limit: usize,
+    ) -> soland_application::ApplicationResult<
+        Vec<soland_application::federation::PendingFederationDelivery>,
+    > {
+        Ok(self
+            .0
+            .federation_outbox()
+            .pending_due(now, limit)
+            .await?
+            .into_iter()
+            .map(application_pending_delivery)
+            .collect())
+    }
+
+    async fn update(
+        &self,
+        delivery: &soland_application::federation::PendingFederationDelivery,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .federation_outbox()
+            .update(&persistence_pending_delivery(delivery))
+            .await?;
+        Ok(())
+    }
+
+    async fn insert_dead_letter(
+        &self,
+        record: &soland_application::federation::FederationDeadLetter,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .federation_outbox()
+            .insert_dead_letter(&soland_storage::FederationOutboxDeadLetterRecord {
+                id: record.id.clone(),
+                outbox_id: record.outbox_id.clone(),
+                peer_did: record.peer_did.clone(),
+                endpoint: record.endpoint.clone(),
+                idempotency_key: record.idempotency_key.clone(),
+                terminal_status: record.terminal_status,
+                attempts: record.attempts,
+                response_excerpt: record.response_excerpt.clone(),
+                failed_at: record.failed_at,
+                reason: record.reason.clone(),
+            })
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::governance::AuditLogPort for PersistenceAuditLog {
+    async fn append(&self, entry: Value) -> soland_application::ApplicationResult<()> {
+        self.0.audit().append(entry).await?;
+        Ok(())
+    }
+
+    async fn entries_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<Value>> {
+        Ok(self.0.audit().list_for_actor(actor_id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::jobs::MaintenancePort for PersistenceMaintenance {
+    async fn prune_expired_idempotency(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> soland_application::ApplicationResult<usize> {
+        Ok(self.0.idempotency_keys().prune_expired(now).await?)
+    }
+}
+
+fn application_cursor_state(
+    record: soland_storage::SyncCursorRecord,
+) -> soland_application::sync::CursorState {
+    soland_application::sync::CursorState {
+        handle: record.handle,
+        principal_id: record.principal_id,
+        device_id: record.device_id,
+        service_id: record.service_id,
+        filter_digest: record.filter_digest,
+        purpose: record.purpose,
+        positions: record.positions,
+        target: record.target,
+        issued_at_ms: record.issued_at_ms,
+        expires_at_ms: record.expires_at_ms,
+    }
+}
+
+fn persistence_cursor_state(
+    record: &soland_application::sync::CursorState,
+) -> soland_storage::SyncCursorRecord {
+    soland_storage::SyncCursorRecord {
+        handle: record.handle.clone(),
+        principal_id: record.principal_id.clone(),
+        device_id: record.device_id.clone(),
+        service_id: record.service_id.clone(),
+        filter_digest: record.filter_digest.clone(),
+        purpose: record.purpose.clone(),
+        positions: record.positions.clone(),
+        target: record.target.clone(),
+        issued_at_ms: record.issued_at_ms,
+        expires_at_ms: record.expires_at_ms,
+    }
+}
+
+fn application_cursor_revocation(
+    record: CursorRevocation,
+) -> soland_application::sync::CursorRevocationState {
+    soland_application::sync::CursorRevocationState {
+        cursor_digest: record.cursor_digest,
+        principal_id: record.principal_id,
+        device_id: record.device_id,
+        scope: record.scope,
+        reason_code: record.reason_code,
+        revoked_at: record.revoked_at,
+        expires_at: record.expires_at,
+    }
+}
+
+fn persistence_cursor_revocation(
+    record: &soland_application::sync::CursorRevocationState,
+) -> CursorRevocation {
+    CursorRevocation {
+        cursor_digest: record.cursor_digest.clone(),
+        principal_id: record.principal_id.clone(),
+        device_id: record.device_id.clone(),
+        scope: record.scope.clone(),
+        reason_code: record.reason_code.clone(),
+        revoked_at: record.revoked_at,
+        expires_at: record.expires_at,
+    }
+}
+
+fn persistence_cursor_revocation_owned(
+    record: soland_application::sync::CursorRevocationState,
+) -> CursorRevocation {
+    persistence_cursor_revocation(&record)
+}
+
+#[async_trait::async_trait]
+impl soland_application::sync::CursorStorePort for PersistenceCursorStore {
+    async fn get(
+        &self,
+        handle: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_application::sync::CursorState>> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .get(handle)
+            .await?
+            .map(application_cursor_state))
+    }
+
+    async fn upsert(
+        &self,
+        record: &soland_application::sync::CursorState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .sync_cursors()
+            .upsert(&persistence_cursor_state(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn delete(&self, handle: &str) -> soland_application::ApplicationResult<bool> {
+        Ok(self.0.sync_cursors().delete(handle).await?)
+    }
+
+    async fn prune_stream_superseded(
+        &self,
+        principal_id: &str,
+        device_id: &str,
+        filter_digest: &str,
+        presented_issued_at_ms: i64,
+    ) -> soland_application::ApplicationResult<usize> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .prune_stream_superseded(
+                principal_id,
+                device_id,
+                filter_digest,
+                presented_issued_at_ms,
+            )
+            .await?)
+    }
+
+    async fn prune_expired(&self, now_ms: i64) -> soland_application::ApplicationResult<usize> {
+        Ok(self.0.sync_cursors().prune_expired(now_ms).await?)
+    }
+
+    async fn record_revocation(
+        &self,
+        record: &soland_application::sync::CursorRevocationState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .sync_cursors()
+            .record_revocation(&persistence_cursor_revocation(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn active_revocations(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::sync::CursorRevocationState>>
+    {
+        Ok(self
+            .0
+            .sync_cursors()
+            .active_revocations(now)
+            .await?
+            .into_iter()
+            .map(application_cursor_revocation)
+            .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::AccountLookupPort for PersistenceAccountLookup {
+    async fn find_account_by_actor(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_application::identity::AccountIdentity>>
+    {
+        Ok(self.0.accounts().get(actor_id).await?.map(|account| {
+            soland_application::identity::AccountIdentity {
+                account_id: account.id,
+            }
+        }))
+    }
+
+    async fn register_account(
+        &self,
+        command: soland_application::identity::RegisterAccountCommand,
+    ) -> soland_application::ApplicationResult<()> {
+        let account = soland_storage::AccountRecord {
+            id: command.account_id,
+            did: command.actor_id.clone(),
+            localpart: command.localpart.clone(),
+            display_name: command.display_name,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: command.created_at,
+        };
+        self.0.accounts().put(&account).await?;
+        self.0
+            .account_localparts()
+            .add(&command.actor_id, &command.localpart, true)
+            .await?;
+        Ok(())
+    }
+
+    async fn account(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_application::identity::AccountProfileState>,
+    > {
+        Ok(self
+            .0
+            .accounts()
+            .get(actor_id)
+            .await?
+            .map(application_account_profile))
+    }
+
+    async fn save_account(
+        &self,
+        account: soland_application::identity::AccountProfileState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .accounts()
+            .put(&persistence_account_profile(account))
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_account(&self, actor_id: &str) -> soland_application::ApplicationResult<()> {
+        self.0.accounts().delete(actor_id).await?;
+        Ok(())
+    }
+
+    async fn account_localparts(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<
+        Vec<soland_application::identity::AccountLocalpartState>,
+    > {
+        Ok(self
+            .0
+            .account_localparts()
+            .list_for_account(actor_id)
+            .await?
+            .into_iter()
+            .map(application_account_localpart)
+            .collect())
+    }
+
+    async fn localpart_owner(
+        &self,
+        localpart: &str,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_application::identity::AccountLocalpartState>,
+    > {
+        Ok(self
+            .0
+            .account_localparts()
+            .owner_of(localpart)
+            .await?
+            .map(application_account_localpart))
+    }
+
+    async fn add_localpart(
+        &self,
+        actor_id: &str,
+        localpart: &str,
+        primary: bool,
+    ) -> soland_application::ApplicationResult<soland_application::identity::AccountLocalpartState>
+    {
+        Ok(application_account_localpart(
+            self.0
+                .account_localparts()
+                .add(actor_id, localpart, primary)
+                .await?,
+        ))
+    }
+
+    async fn set_primary_localpart(
+        &self,
+        actor_id: &str,
+        localpart: &str,
+    ) -> soland_application::ApplicationResult<soland_application::identity::AccountLocalpartState>
+    {
+        Ok(application_account_localpart(
+            self.0
+                .account_localparts()
+                .set_primary(actor_id, localpart)
+                .await?,
+        ))
+    }
+
+    async fn remove_localpart(
+        &self,
+        actor_id: &str,
+        localpart: &str,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .account_localparts()
+            .remove(actor_id, localpart)
+            .await?;
+        Ok(())
+    }
+
+    async fn clear_localparts(&self, actor_id: &str) -> soland_application::ApplicationResult<()> {
+        self.0
+            .account_localparts()
+            .clear_for_account(actor_id)
+            .await?;
+        Ok(())
+    }
+
+    async fn record_handle_release(
+        &self,
+        localpart: &str,
+        released_at: chrono::DateTime<chrono::Utc>,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0.handle_releases().put(localpart, released_at).await?;
+        Ok(())
+    }
+
+    async fn save_account_lifecycle(
+        &self,
+        actor_id: &str,
+        lifecycle: soland_application::identity::AccountLifecycleState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .account_lifecycle()
+            .put(
+                actor_id,
+                &soland_storage::AccountLifecycleRecord {
+                    state: lifecycle.state,
+                    reason: lifecycle.reason,
+                    changed_by: lifecycle.changed_by,
+                    changed_at: lifecycle.changed_at,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_account_lifecycle(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0.account_lifecycle().delete(actor_id).await?;
+        Ok(())
+    }
+}
+
+fn application_account_profile(
+    account: soland_storage::AccountRecord,
+) -> soland_application::identity::AccountProfileState {
+    soland_application::identity::AccountProfileState {
+        id: account.id,
+        did: account.did,
+        localpart: account.localpart,
+        display_name: account.display_name,
+        bio: account.bio,
+        avatar_blob_ref: account.avatar_blob_ref,
+        created_at: account.created_at,
+    }
+}
+
+fn persistence_account_profile(
+    account: soland_application::identity::AccountProfileState,
+) -> soland_storage::AccountRecord {
+    soland_storage::AccountRecord {
+        id: account.id,
+        did: account.did,
+        localpart: account.localpart,
+        display_name: account.display_name,
+        bio: account.bio,
+        avatar_blob_ref: account.avatar_blob_ref,
+        created_at: account.created_at,
+    }
+}
+
+fn application_account_localpart(
+    record: soland_storage::AccountLocalpartRecord,
+) -> soland_application::identity::AccountLocalpartState {
+    soland_application::identity::AccountLocalpartState {
+        id: record.id,
+        account_did: record.account_did,
+        localpart: record.localpart,
+        is_primary: record.is_primary,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::AccountDataPort for PersistenceAccountData {
+    async fn entry(
+        &self,
+        actor_id: &str,
+        data_type: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_application::identity::AccountDataState>>
+    {
+        Ok(self
+            .0
+            .account_data()
+            .get(actor_id, data_type)
+            .await?
+            .map(application_account_data))
+    }
+
+    async fn entries_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::identity::AccountDataState>>
+    {
+        Ok(self
+            .0
+            .account_data()
+            .list_for_actor(actor_id)
+            .await?
+            .into_iter()
+            .map(application_account_data)
+            .collect())
+    }
+
+    async fn save_entry(
+        &self,
+        entry: soland_application::identity::AccountDataState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .account_data()
+            .put(&soland_storage::AccountDataRecord {
+                actor: entry.actor_id,
+                data_type: entry.data_type,
+                payload: entry.payload,
+                updated_at: entry.updated_at,
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_entry(
+        &self,
+        actor_id: &str,
+        data_type: &str,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0.account_data().delete(actor_id, data_type).await?;
+        Ok(())
+    }
+}
+
+fn application_account_data(
+    record: soland_storage::AccountDataRecord,
+) -> soland_application::identity::AccountDataState {
+    soland_application::identity::AccountDataState {
+        actor_id: record.actor,
+        data_type: record.data_type,
+        payload: record.payload,
+        updated_at: record.updated_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::ConsentCellPort for PersistenceConsentCells {
+    async fn save_cell(
+        &self,
+        cell: soland_domain::identity::ConsentCellRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0.consent_cells().put(&cell).await?;
+        Ok(())
+    }
+
+    async fn cells(
+        &self,
+    ) -> soland_application::ApplicationResult<
+        Vec<(
+            soland_domain::identity::ConsentCellKey,
+            soland_domain::identity::ConsentCellRecord,
+        )>,
+    > {
+        Ok(self.0.consent_cells().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::ContactPort for PersistenceContacts {
+    async fn contact_any(
+        &self,
+        requester: &str,
+        target: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_domain::identity::ContactRecord>> {
+        Ok(self.0.contacts().get(requester, target).await?)
+    }
+
+    async fn contact(
+        &self,
+        requester: &str,
+        target: &str,
+        scope: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_domain::identity::ContactRecord>> {
+        Ok(self
+            .0
+            .contacts()
+            .get_scoped(requester, target, scope)
+            .await?)
+    }
+
+    async fn contacts_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_domain::identity::ContactRecord>> {
+        Ok(self.0.contacts().list_for_actor(actor_id).await?)
+    }
+
+    async fn save_contact(
+        &self,
+        contact: soland_domain::identity::ContactRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0.contacts().put(&contact).await?;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolicies {
+    async fn save_policy(
+        &self,
+        policy: arkret_sdk::InviteReceivePolicy,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0.invite_receive_policies().put(&policy).await?;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::DirectConversationBindingPort
+    for PersistenceDirectConversationBindings
+{
+    async fn save_binding(
+        &self,
+        pair_key: &str,
+        binding: soland_domain::identity::DirectConversationBindingRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .direct_conversation_bindings()
+            .put(pair_key, &binding)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_binding(&self, pair_key: &str) -> soland_application::ApplicationResult<()> {
+        self.0
+            .direct_conversation_bindings()
+            .delete(pair_key)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::DeviceKeyPort for PersistenceDeviceKeys {
+    async fn save_bundle(
+        &self,
+        actor_id: String,
+        device_id: String,
+        payload: Value,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .device_keys()
+            .put(actor_id, device_id, payload)
+            .await?;
+        Ok(())
+    }
+
+    async fn bundle(
+        &self,
+        actor_id: &str,
+        device_id: &str,
+    ) -> soland_application::ApplicationResult<Option<Value>> {
+        Ok(self.0.device_keys().get(actor_id, device_id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::OneTimeKeyPort for PersistenceOneTimeKeys {
+    async fn save_keys(
+        &self,
+        actor_id: String,
+        device_id: String,
+        keys: Vec<Value>,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .one_time_keys()
+            .put(actor_id, device_id, keys)
+            .await?;
+        Ok(())
+    }
+
+    async fn claim_key(
+        &self,
+        actor_id: &str,
+        device_id: &str,
+    ) -> soland_application::ApplicationResult<Option<Value>> {
+        Ok(self.0.one_time_keys().claim(actor_id, device_id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::DeviceDirectoryPort for PersistenceDeviceDirectory {
+    async fn list_active_device_actors(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<String>> {
+        Ok(self
+            .0
+            .devices()
+            .list()
+            .await?
+            .into_iter()
+            .filter(|device| device.revoked_at.is_none())
+            .map(|device| device.actor)
+            .collect())
+    }
+
+    async fn find_device(
+        &self,
+        actor_id: &str,
+        device_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_application::identity::DeviceIdentity>>
+    {
+        Ok(self
+            .0
+            .devices()
+            .get(actor_id, device_id)
+            .await?
+            .map(|device| soland_application::identity::DeviceIdentity {
+                actor_id: device.actor,
+                device_id: device.device_id,
+                display_name: device.display_name,
+                verification_state: device.verification_state,
+                payload: device.payload,
+                created_at: device.created_at,
+                updated_at: device.updated_at,
+                revoked_at: device.revoked_at,
+            }))
+    }
+
+    async fn save_device(
+        &self,
+        command: soland_application::identity::SaveDeviceCommand,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .devices()
+            .put(&soland_storage::DeviceInventoryRecord {
+                actor: command.actor_id,
+                device_id: command.device_id,
+                display_name: command.display_name,
+                verification_state: command.device.verification_state,
+                payload: command.device.payload,
+                created_at: command.device.created_at,
+                updated_at: command.device.updated_at,
+                revoked_at: command.device.revoked_at,
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn save_device_if_absent(
+        &self,
+        device: soland_application::identity::DeviceIdentity,
+    ) -> soland_application::ApplicationResult<bool> {
+        Ok(self
+            .0
+            .devices()
+            .put_if_absent(&soland_storage::DeviceInventoryRecord {
+                actor: device.actor_id,
+                device_id: device.device_id,
+                display_name: device.display_name,
+                verification_state: device.verification_state,
+                payload: device.payload,
+                created_at: device.created_at,
+                updated_at: device.updated_at,
+                revoked_at: device.revoked_at,
+            })
+            .await?)
+    }
+
+    async fn devices_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::identity::DeviceIdentity>>
+    {
+        Ok(self
+            .0
+            .devices()
+            .list_for_actor_including_revoked(actor_id)
+            .await?
+            .into_iter()
+            .map(|device| soland_application::identity::DeviceIdentity {
+                actor_id: device.actor,
+                device_id: device.device_id,
+                display_name: device.display_name,
+                verification_state: device.verification_state,
+                payload: device.payload,
+                created_at: device.created_at,
+                updated_at: device.updated_at,
+                revoked_at: device.revoked_at,
+            })
+            .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::AgentDirectoryPort for PersistenceAgentDirectory {
+    async fn find_agent_controller(
+        &self,
+        agent_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_application::identity::AgentController>>
+    {
+        Ok(self.0.agents().get(agent_id).await?.map(|agent| {
+            soland_application::identity::AgentController {
+                controller_id: agent.controller_id,
+            }
+        }))
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::AgentPairingPort for PersistenceAgentPairing {
+    async fn pairing_record(
+        &self,
+        pairing_request_id: &str,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_application::identity::AgentPairingState>,
+    > {
+        Ok(self
+            .0
+            .agents()
+            .get_by_pairing_request_id(pairing_request_id)
+            .await?
+            .map(application_agent_pairing))
+    }
+
+    async fn agent(
+        &self,
+        agent_id: &str,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_application::identity::AgentPairingState>,
+    > {
+        Ok(self
+            .0
+            .agents()
+            .get(agent_id)
+            .await?
+            .map(application_agent_pairing))
+    }
+
+    async fn agents_for_controller(
+        &self,
+        controller_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::identity::AgentPairingState>>
+    {
+        Ok(self
+            .0
+            .agents()
+            .list_for_controller(controller_id)
+            .await?
+            .into_iter()
+            .map(application_agent_pairing)
+            .collect())
+    }
+
+    async fn save_agent(
+        &self,
+        agent: soland_application::identity::AgentPairingState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .agents()
+            .put(persistence_agent_pairing(agent))
+            .await?;
+        Ok(())
+    }
+
+    async fn store_runtime_approval(
+        &self,
+        command: &soland_application::identity::StoreAgentRuntimeApprovalCommand,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_application::identity::AgentPairingState>,
+    > {
+        let write = soland_storage::AgentRuntimeApprovalWrite {
+            agent_id: command.agent_id.clone(),
+            pairing_request_id: command.pairing_request_id.clone(),
+            approval_request_id: command.approval_request_id.clone(),
+            approval_notification_id: command.approval_notification_id.clone(),
+            approval_requested_at: command.approval_requested_at,
+            controller_account_id: command.controller_account_id.clone(),
+            recipient_service_id: command.recipient_service_id.clone(),
+            runtime_key_binding_digest: command.runtime_key_binding_digest.clone(),
+            runtime_public_key_digest: command.runtime_public_key_digest.clone(),
+            runtime_attestation_digest: command.runtime_attestation_digest.clone(),
+            runtime_key_request: command.runtime_key_request.clone(),
+        };
+        Ok(self
+            .0
+            .agents()
+            .put_runtime_approval_if_compatible(&write)
+            .await?
+            .map(application_agent_pairing))
+    }
+
+    async fn activate_runtime_if_current(
+        &self,
+        command: &soland_application::identity::ActivateAgentRuntimeCommand,
+    ) -> soland_application::ApplicationResult<bool> {
+        let activation = soland_storage::AgentRuntimeActivation {
+            agent_id: command.agent_id.clone(),
+            approval_request_id: command.approval_request_id.clone(),
+            runtime_key_binding_digest: command.runtime_key_binding_digest.clone(),
+            pairing_request_id: command.pairing_request_id.clone(),
+            paired_request_digest: command.paired_request_digest.clone(),
+            authorized_event_ref: command.authorized_event_ref.clone(),
+            authorized_verification_method: command.authorized_verification_method.clone(),
+            authorized_public_key_digest: command.authorized_public_key_digest.clone(),
+            authorized_at: command.authorized_at,
+        };
+        Ok(self
+            .0
+            .agents()
+            .activate_runtime_if_current(&activation)
+            .await?)
+    }
+
+    async fn clear_approval_notification_if_current(
+        &self,
+        agent_id: &str,
+        approval_request_id: &str,
+    ) -> soland_application::ApplicationResult<bool> {
+        Ok(self
+            .0
+            .agents()
+            .clear_runtime_approval_notification_if_current(agent_id, approval_request_id)
+            .await?)
+    }
+}
+
+fn application_agent_pairing(
+    record: soland_storage::AgentPrincipalRecord,
+) -> soland_application::identity::AgentPairingState {
+    soland_application::identity::AgentPairingState {
+        id: record.id,
+        controller_id: record.controller_id,
+        principal_control_realm_id: record.principal_control_realm_id,
+        controller_authorization_ref: record.controller_authorization_ref,
+        display_name: record.display_name,
+        agent_slug: record.agent_slug,
+        avatar_blob_ref: record.avatar_blob_ref,
+        state: record.state,
+        requested_scope: record.requested_scope,
+        accountability: record.accountability,
+        provision_event_refs: record.provision_event_refs,
+        pairing_request_id: record.pairing_request_id,
+        paired_pairing_request_id: record.paired_pairing_request_id,
+        paired_request_digest: record.paired_request_digest,
+        pairing_code: record.pairing_code,
+        pairing_expires_at: record.pairing_expires_at,
+        approval_request_id: record.approval_request_id,
+        controller_account_id: record.controller_account_id,
+        recipient_service_id: record.recipient_service_id,
+        runtime_key_binding_digest: record.runtime_key_binding_digest,
+        runtime_public_key_digest: record.runtime_public_key_digest,
+        runtime_attestation_digest: record.runtime_attestation_digest,
+        approval_notification_id: record.approval_notification_id,
+        runtime_key_request: record.runtime_key_request,
+        approval_requested_at: record.approval_requested_at,
+        authorized_event_ref: record.authorized_event_ref,
+        authorized_verification_method: record.authorized_verification_method,
+        authorized_public_key_digest: record.authorized_public_key_digest,
+        state_changed_at: record.state_changed_at,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    }
+}
+
+fn persistence_agent_pairing(
+    record: soland_application::identity::AgentPairingState,
+) -> soland_storage::AgentPrincipalRecord {
+    soland_storage::AgentPrincipalRecord {
+        id: record.id,
+        controller_id: record.controller_id,
+        principal_control_realm_id: record.principal_control_realm_id,
+        controller_authorization_ref: record.controller_authorization_ref,
+        display_name: record.display_name,
+        agent_slug: record.agent_slug,
+        avatar_blob_ref: record.avatar_blob_ref,
+        state: record.state,
+        requested_scope: record.requested_scope,
+        accountability: record.accountability,
+        provision_event_refs: record.provision_event_refs,
+        pairing_request_id: record.pairing_request_id,
+        paired_pairing_request_id: record.paired_pairing_request_id,
+        paired_request_digest: record.paired_request_digest,
+        pairing_code: record.pairing_code,
+        pairing_expires_at: record.pairing_expires_at,
+        approval_request_id: record.approval_request_id,
+        controller_account_id: record.controller_account_id,
+        recipient_service_id: record.recipient_service_id,
+        runtime_key_binding_digest: record.runtime_key_binding_digest,
+        runtime_public_key_digest: record.runtime_public_key_digest,
+        runtime_attestation_digest: record.runtime_attestation_digest,
+        approval_notification_id: record.approval_notification_id,
+        runtime_key_request: record.runtime_key_request,
+        approval_requested_at: record.approval_requested_at,
+        authorized_event_ref: record.authorized_event_ref,
+        authorized_verification_method: record.authorized_verification_method,
+        authorized_public_key_digest: record.authorized_public_key_digest,
+        state_changed_at: record.state_changed_at,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::AgentParticipationPort for PersistenceAgentParticipation {
+    async fn store_selection(
+        &self,
+        selection: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .agent_participation()
+            .put_selection(selection)
+            .await?;
+        Ok(())
+    }
+
+    async fn selections(
+        &self,
+        agent_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self
+            .0
+            .agent_participation()
+            .list_selections(agent_id)
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::KeyBackupPort for PersistenceKeyBackups {
+    async fn backup(
+        &self,
+        backup_id: &str,
+    ) -> soland_application::ApplicationResult<Option<serde_json::Value>> {
+        Ok(self.0.key_backups().get(backup_id).await?)
+    }
+
+    async fn backups_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self.0.key_backups().list_for_actor(actor_id).await?)
+    }
+
+    async fn store_backup(
+        &self,
+        backup_id: String,
+        payload: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0.key_backups().put(backup_id, payload).await?;
+        Ok(())
+    }
+
+    async fn delete_backup(&self, backup_id: &str) -> soland_application::ApplicationResult<bool> {
+        Ok(self.0.key_backups().delete(backup_id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::SessionIdentityPort for PersistenceSessions {
+    async fn session(
+        &self,
+        token_hash: &str,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_application::identity::SessionIdentityState>,
+    > {
+        Ok(self
+            .0
+            .sessions()
+            .get(token_hash)
+            .await?
+            .map(application_session_identity))
+    }
+
+    async fn sessions(
+        &self,
+    ) -> soland_application::ApplicationResult<
+        Vec<soland_application::identity::SessionIdentityState>,
+    > {
+        Ok(self
+            .0
+            .sessions()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(application_session_identity)
+            .collect())
+    }
+
+    async fn save_session(
+        &self,
+        session: soland_application::identity::SessionIdentityState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .sessions()
+            .put(&persistence_session_identity(session))
+            .await?;
+        Ok(())
+    }
+
+    async fn revoke_session(
+        &self,
+        token_hash: &str,
+        revoked_at: chrono::DateTime<chrono::Utc>,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_application::identity::SessionIdentityState>,
+    > {
+        let Some(mut session) = self.0.sessions().get(token_hash).await? else {
+            return Ok(None);
+        };
+        if session.revoked_at.is_some() {
+            return Ok(None);
+        }
+        session.revoked_at = Some(revoked_at);
+        self.0.sessions().put(&session).await?;
+        Ok(Some(application_session_identity(session)))
+    }
+
+    async fn revoke_actor_sessions(
+        &self,
+        actor_id: &str,
+        revoked_at: chrono::DateTime<chrono::Utc>,
+    ) -> soland_application::ApplicationResult<usize> {
+        self.revoke_matching_sessions(actor_id, None, revoked_at)
+            .await
+    }
+
+    async fn revoke_actor_device_sessions(
+        &self,
+        actor_id: &str,
+        device_id: &str,
+        revoked_at: chrono::DateTime<chrono::Utc>,
+    ) -> soland_application::ApplicationResult<usize> {
+        self.revoke_matching_sessions(actor_id, Some(device_id), revoked_at)
+            .await
+    }
+}
+
+impl PersistenceSessions {
+    async fn revoke_matching_sessions(
+        &self,
+        actor_id: &str,
+        device_id: Option<&str>,
+        revoked_at: chrono::DateTime<chrono::Utc>,
+    ) -> soland_application::ApplicationResult<usize> {
+        let sessions = self.0.sessions().snapshot_all().await?;
+        let mut count = 0;
+        for mut session in sessions.into_iter().filter(|session| {
+            session.actor == actor_id
+                && session.revoked_at.is_none()
+                && device_id.is_none_or(|device_id| session.device_id == device_id)
+        }) {
+            session.revoked_at = Some(revoked_at);
+            self.0.sessions().put(&session).await?;
+            count += 1;
+        }
+        Ok(count)
+    }
+}
+
+fn application_session_identity(
+    session: soland_storage::SessionRecord,
+) -> soland_application::identity::SessionIdentityState {
+    soland_application::identity::SessionIdentityState {
+        token_hash: session.token_hash,
+        actor_id: session.actor,
+        device_id: session.device_id,
+        audience: session.audience,
+        session_public_key: session.session_public_key,
+        agent_session: session.agent_session.map(|agent| {
+            soland_application::identity::AgentSessionState {
+                granted_scope: agent.granted_scope,
+                scope_details: agent.scope_details,
+                freshness_state: agent.freshness_state,
+            }
+        }),
+        expires_at: session.expires_at,
+        created_at: session.created_at,
+        revoked_at: session.revoked_at,
+    }
+}
+
+fn persistence_session_identity(
+    session: soland_application::identity::SessionIdentityState,
+) -> soland_storage::SessionRecord {
+    soland_storage::SessionRecord {
+        token_hash: session.token_hash,
+        actor: session.actor_id,
+        device_id: session.device_id,
+        audience: session.audience,
+        session_public_key: session.session_public_key,
+        agent_session: session
+            .agent_session
+            .map(|agent| soland_storage::AgentSessionRecord {
+                granted_scope: agent.granted_scope,
+                scope_details: agent.scope_details,
+                freshness_state: agent.freshness_state,
+            }),
+        expires_at: session.expires_at,
+        created_at: session.created_at,
+        revoked_at: session.revoked_at,
+    }
+}
+
+fn application_recovery_policy(
+    record: soland_storage::RecoveryPolicyRecord,
+) -> soland_application::identity::RecoveryPolicyState {
+    soland_application::identity::RecoveryPolicyState {
+        policy_id: record.policy_id,
+        principal_id: record.principal_id,
+        version: record.version,
+        trust_domain: record.trust_domain,
+        allowed_proof_kinds: record.allowed_proof_kinds,
+        supersedes: record.supersedes,
+        expires_at: record.expires_at,
+        issued_at: record.issued_at,
+        raw_payload: record.raw_payload,
+        accepted_at: record.accepted_at,
+        verification_method: record.verification_method,
+    }
+}
+
+fn persistence_recovery_policy(
+    policy: soland_application::identity::RecoveryPolicyState,
+) -> soland_storage::RecoveryPolicyRecord {
+    soland_storage::RecoveryPolicyRecord {
+        policy_id: policy.policy_id,
+        principal_id: policy.principal_id,
+        version: policy.version,
+        trust_domain: policy.trust_domain,
+        allowed_proof_kinds: policy.allowed_proof_kinds,
+        supersedes: policy.supersedes,
+        expires_at: policy.expires_at,
+        issued_at: policy.issued_at,
+        raw_payload: policy.raw_payload,
+        accepted_at: policy.accepted_at,
+        verification_method: policy.verification_method,
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::RecoveryPolicyPort for PersistenceRecoveryPolicies {
+    async fn active_policy(
+        &self,
+        principal_id: &str,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_application::identity::RecoveryPolicyState>,
+    > {
+        Ok(self
+            .0
+            .recovery_policies()
+            .get_active_for_principal(principal_id)
+            .await?
+            .map(application_recovery_policy))
+    }
+
+    async fn policy_history(
+        &self,
+        principal_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::identity::RecoveryPolicyState>>
+    {
+        Ok(self
+            .0
+            .recovery_policies()
+            .list_for_principal(principal_id)
+            .await?
+            .into_iter()
+            .map(application_recovery_policy)
+            .collect())
+    }
+
+    async fn insert_policy(
+        &self,
+        policy: soland_application::identity::RecoveryPolicyState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .recovery_policies()
+            .insert(persistence_recovery_policy(policy))
+            .await?;
+        Ok(())
+    }
+}
+
+fn application_recovery_receipt(
+    record: soland_storage::RecoveryReceiptRecord,
+) -> soland_application::identity::RecoveryReceiptState {
+    soland_application::identity::RecoveryReceiptState {
+        receipt_id: record.receipt_id,
+        principal_id: record.principal_id,
+        recovery_session_id: record.recovery_session_id,
+        policy_id: record.policy_id,
+        policy_version: record.policy_version,
+        trust_domain: record.trust_domain,
+        new_device_id: record.new_device_id,
+        proof_digest: record.proof_digest,
+        outcome: record.outcome,
+        started_at: record.started_at,
+        completed_at: record.completed_at,
+        raw_payload: record.raw_payload,
+        verification_method: record.verification_method,
+        accepted_at: record.accepted_at,
+    }
+}
+
+fn persistence_recovery_receipt(
+    receipt: soland_application::identity::RecoveryReceiptState,
+) -> soland_storage::RecoveryReceiptRecord {
+    soland_storage::RecoveryReceiptRecord {
+        receipt_id: receipt.receipt_id,
+        principal_id: receipt.principal_id,
+        recovery_session_id: receipt.recovery_session_id,
+        policy_id: receipt.policy_id,
+        policy_version: receipt.policy_version,
+        trust_domain: receipt.trust_domain,
+        new_device_id: receipt.new_device_id,
+        proof_digest: receipt.proof_digest,
+        outcome: receipt.outcome,
+        started_at: receipt.started_at,
+        completed_at: receipt.completed_at,
+        raw_payload: receipt.raw_payload,
+        verification_method: receipt.verification_method,
+        accepted_at: receipt.accepted_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::RecoveryReceiptPort for PersistenceRecoveryReceipts {
+    async fn receipt_history(
+        &self,
+        principal_id: &str,
+    ) -> soland_application::ApplicationResult<
+        Vec<soland_application::identity::RecoveryReceiptState>,
+    > {
+        Ok(self
+            .0
+            .recovery_receipts()
+            .list_for_principal(principal_id)
+            .await?
+            .into_iter()
+            .map(application_recovery_receipt)
+            .collect())
+    }
+
+    async fn insert_receipt(
+        &self,
+        receipt: soland_application::identity::RecoveryReceiptState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .recovery_receipts()
+            .insert(persistence_recovery_receipt(receipt))
+            .await?;
+        Ok(())
+    }
+}
+
+fn application_recovery_session(
+    record: soland_storage::RecoverySessionRecord,
+) -> soland_application::identity::RecoverySessionState {
+    soland_application::identity::RecoverySessionState {
+        recovery_session_id: record.recovery_session_id,
+        principal_id: record.principal_id,
+        requesting_device_id: record.requesting_device_id,
+        trust_domain: record.trust_domain,
+        policy_id: record.policy_id,
+        policy_version: record.policy_version,
+        identity_model: record.identity_model,
+        ssk_generation: record.ssk_generation,
+        current_device_generation_ref: record.current_device_generation_ref,
+        device_generation_status: record.device_generation_status,
+        registry_head: record.registry_head,
+        accepted_seal_frontier: record.accepted_seal_frontier,
+        policy_payload: record.policy_payload,
+        challenge: record.challenge,
+        state: record.state,
+        proof_payload: record.proof_payload,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+        expires_at: record.expires_at,
+    }
+}
+
+fn persistence_recovery_session(
+    session: soland_application::identity::RecoverySessionState,
+) -> soland_storage::RecoverySessionRecord {
+    soland_storage::RecoverySessionRecord {
+        recovery_session_id: session.recovery_session_id,
+        principal_id: session.principal_id,
+        requesting_device_id: session.requesting_device_id,
+        trust_domain: session.trust_domain,
+        policy_id: session.policy_id,
+        policy_version: session.policy_version,
+        identity_model: session.identity_model,
+        ssk_generation: session.ssk_generation,
+        current_device_generation_ref: session.current_device_generation_ref,
+        device_generation_status: session.device_generation_status,
+        registry_head: session.registry_head,
+        accepted_seal_frontier: session.accepted_seal_frontier,
+        policy_payload: session.policy_payload,
+        challenge: session.challenge,
+        state: session.state,
+        proof_payload: session.proof_payload,
+        created_at: session.created_at,
+        updated_at: session.updated_at,
+        expires_at: session.expires_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::RecoverySessionPort for PersistenceRecoverySessions {
+    async fn session(
+        &self,
+        recovery_session_id: &str,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_application::identity::RecoverySessionState>,
+    > {
+        Ok(self
+            .0
+            .recovery_sessions()
+            .get(recovery_session_id)
+            .await?
+            .map(application_recovery_session))
+    }
+
+    async fn insert_session(
+        &self,
+        session: soland_application::identity::RecoverySessionState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .recovery_sessions()
+            .insert(persistence_recovery_session(session))
+            .await?;
+        Ok(())
+    }
+
+    async fn update_session(
+        &self,
+        session: soland_application::identity::RecoverySessionState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .recovery_sessions()
+            .update(persistence_recovery_session(session))
+            .await?;
+        Ok(())
+    }
+}
+
+fn application_did_document(
+    record: soland_storage::WebvhDocumentRecord,
+) -> soland_application::identity::DidDocumentState {
+    soland_application::identity::DidDocumentState {
+        did: record.did,
+        did_document: record.did_document,
+        key_log_head: record.key_log_head,
+        seq: record.seq,
+        method_evidence: record.method_evidence,
+        fetched_at: record.fetched_at,
+        expires_at: record.expires_at,
+        updated_at: record.updated_at,
+    }
+}
+
+fn persistence_did_document(
+    record: soland_application::identity::DidDocumentState,
+) -> soland_storage::WebvhDocumentRecord {
+    soland_storage::WebvhDocumentRecord {
+        did: record.did,
+        did_document: record.did_document,
+        key_log_head: record.key_log_head,
+        seq: record.seq,
+        method_evidence: record.method_evidence,
+        fetched_at: record.fetched_at,
+        expires_at: record.expires_at,
+        updated_at: record.updated_at,
+    }
+}
+
+fn application_did_log_event(
+    record: soland_storage::WebvhLogRecord,
+) -> soland_application::identity::DidLogEvent {
+    soland_application::identity::DidLogEvent {
+        event_digest: record.event_digest,
+        did: record.did,
+        seq: record.seq,
+        operation: record.operation,
+        created_at: record.created_at,
+    }
+}
+
+fn persistence_did_log_event(
+    record: soland_application::identity::DidLogEvent,
+) -> soland_storage::WebvhLogRecord {
+    soland_storage::WebvhLogRecord {
+        event_digest: record.event_digest,
+        did: record.did,
+        seq: record.seq,
+        operation: record.operation,
+        created_at: record.created_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::identity::DidDocumentPort for PersistenceDidDocuments {
+    async fn document(
+        &self,
+        did: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_application::identity::DidDocumentState>>
+    {
+        Ok(self
+            .0
+            .webvh()
+            .get_document(did)
+            .await?
+            .map(application_did_document))
+    }
+
+    async fn embedded_document(
+        &self,
+        local_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_application::identity::DidDocumentState>>
+    {
+        Ok(self
+            .0
+            .webvh()
+            .get_embedded_webvh_document_by_local_id(local_id)
+            .await?
+            .map(application_did_document))
+    }
+
+    async fn log_events(
+        &self,
+        did: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::identity::DidLogEvent>> {
+        Ok(self
+            .0
+            .webvh()
+            .list_log_events(did)
+            .await?
+            .into_iter()
+            .map(application_did_log_event)
+            .collect())
+    }
+
+    async fn store_document(
+        &self,
+        document: soland_application::identity::DidDocumentState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .webvh()
+            .put_document(persistence_did_document(document))
+            .await?;
+        Ok(())
+    }
+
+    async fn append_log_event(
+        &self,
+        event: soland_application::identity::DidLogEvent,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .webvh()
+            .append_log_event(persistence_did_log_event(event))
+            .await?;
+        Ok(())
+    }
+
+    async fn service_registration(
+        &self,
+        key: &arkret_sdk::ServiceRegistrationKey,
+    ) -> soland_application::ApplicationResult<Option<arkret_sdk::ServiceRegistrationOutcome>> {
+        Ok(self.0.webvh().get_service_registration(key).await?)
+    }
+
+    async fn commit_service_registration(
+        &self,
+        key: arkret_sdk::ServiceRegistrationKey,
+        outcome: arkret_sdk::ServiceRegistrationOutcome,
+        document: soland_application::identity::DidDocumentState,
+        event: soland_application::identity::DidLogEvent,
+    ) -> soland_application::ApplicationResult<
+        soland_application::identity::ServiceRegistrationCommitResult,
+    > {
+        Ok(
+            match self
+                .0
+                .webvh()
+                .commit_service_registration(
+                    key,
+                    outcome,
+                    persistence_did_document(document),
+                    persistence_did_log_event(event),
+                )
+                .await?
+            {
+                soland_storage::ServiceRegistrationCommitOutcome::Created(outcome) => {
+                    soland_application::identity::ServiceRegistrationCommitResult::Created(outcome)
+                }
+                soland_storage::ServiceRegistrationCommitOutcome::Existing(outcome) => {
+                    soland_application::identity::ServiceRegistrationCommitResult::Existing(outcome)
+                }
+                soland_storage::ServiceRegistrationCommitOutcome::Conflict => {
+                    soland_application::identity::ServiceRegistrationCommitResult::Conflict
+                }
+            },
+        )
+    }
+
+    async fn commit_log_operation(
+        &self,
+        expected_current_head: Option<String>,
+        document: soland_application::identity::DidDocumentState,
+        event: soland_application::identity::DidLogEvent,
+    ) -> soland_application::ApplicationResult<soland_application::identity::DidLogCommitResult>
+    {
+        Ok(
+            match self
+                .0
+                .webvh()
+                .commit_log_operation(
+                    expected_current_head,
+                    persistence_did_document(document),
+                    persistence_did_log_event(event),
+                )
+                .await?
+            {
+                soland_storage::WebvhLogCommitOutcome::Accepted => {
+                    soland_application::identity::DidLogCommitResult::Accepted
+                }
+                soland_storage::WebvhLogCommitOutcome::Duplicate => {
+                    soland_application::identity::DidLogCommitResult::Duplicate
+                }
+                soland_storage::WebvhLogCommitOutcome::Conflict => {
+                    soland_application::identity::DidLogCommitResult::Conflict
+                }
+            },
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::delivery::NotificationWritePort for PersistenceNotificationWriter {
+    async fn store_notification(&self, record: Value) -> soland_application::ApplicationResult<()> {
+        self.0.notifications().put(record).await?;
+        Ok(())
+    }
+
+    async fn store_account_delta(
+        &self,
+        record: Value,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0.notifications().put_account_delta(record).await?;
+        Ok(())
+    }
+
+    async fn list_for_account(
+        &self,
+        controller_account_id: &str,
+        recipient_service_id: &str,
+        after_position: Option<i64>,
+    ) -> soland_application::ApplicationResult<Vec<Value>> {
+        Ok(self
+            .0
+            .notifications()
+            .list_for_account(controller_account_id, recipient_service_id, after_position)
+            .await?)
+    }
+
+    async fn list_for_recipient(
+        &self,
+        recipient_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<Value>> {
+        Ok(self
+            .0
+            .notifications()
+            .list_for_recipient(recipient_id)
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
+    async fn purge_device_delivery(
+        &self,
+        actor_id: &str,
+        device_id: &str,
+    ) -> soland_application::ApplicationResult<
+        soland_application::delivery::DeviceDeliveryPurgeResult,
+    > {
+        let to_device_messages_dropped = match self
+            .0
+            .device_messages()
+            .purge(actor_id, device_id)
+            .await
+        {
+            Ok(count) => count,
+            Err(error) => {
+                tracing::error!(%error, actor_id, device_id, "failed to purge to-device messages");
+                0
+            }
+        };
+        let push_registrations_removed = match self
+            .0
+            .push_devices()
+            .unregister(actor_id, device_id, None, None)
+            .await
+        {
+            Ok(count) => count,
+            Err(error) => {
+                tracing::error!(%error, actor_id, device_id, "failed to unregister push devices");
+                0
+            }
+        };
+        Ok(soland_application::delivery::DeviceDeliveryPurgeResult {
+            to_device_messages_dropped,
+            push_registrations_removed,
+        })
+    }
+
+    async fn purge_stale_cross_signing_messages(
+        &self,
+        actor_id: &str,
+        new_generation: u64,
+    ) -> soland_application::ApplicationResult<usize> {
+        Ok(self
+            .0
+            .device_messages()
+            .purge_cross_signing_reset_stale_messages(actor_id, new_generation)
+            .await?)
+    }
+}
+
+fn application_device_message(
+    record: soland_storage::DeviceMessageRecord,
+) -> soland_application::delivery::DeviceMessageState {
+    soland_application::delivery::DeviceMessageState {
+        idempotency_key: record.idempotency_key,
+        sender: record.sender,
+        recipient: record.recipient,
+        device_id: record.device_id,
+        position: record.position,
+        content: record.content,
+        created_at: record.created_at,
+    }
+}
+
+fn persistence_device_message(
+    message: soland_application::delivery::DeviceMessageState,
+) -> soland_storage::DeviceMessageRecord {
+    soland_storage::DeviceMessageRecord {
+        idempotency_key: message.idempotency_key,
+        sender: message.sender,
+        recipient: message.recipient,
+        device_id: message.device_id,
+        position: message.position,
+        content: message.content,
+        created_at: message.created_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::delivery::DeviceMessagePort for PersistenceDeviceMessages {
+    async fn append(
+        &self,
+        message: soland_application::delivery::DeviceMessageState,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0
+            .device_messages()
+            .append(persistence_device_message(message))
+            .await?;
+        Ok(())
+    }
+
+    async fn register_transaction(
+        &self,
+        key: String,
+    ) -> soland_application::ApplicationResult<bool> {
+        Ok(self.0.device_messages().try_register_txn(key).await?)
+    }
+
+    async fn issue_ack_token(
+        &self,
+        recipient: &str,
+        device_id: &str,
+        queue_position: i64,
+    ) -> soland_application::ApplicationResult<Option<String>> {
+        Ok(self
+            .0
+            .device_messages()
+            .issue_ack_token(recipient, device_id, queue_position)
+            .await?)
+    }
+
+    async fn acknowledge(
+        &self,
+        recipient: &str,
+        device_id: &str,
+        ack_token: &str,
+    ) -> soland_application::ApplicationResult<Option<usize>> {
+        Ok(self
+            .0
+            .device_messages()
+            .ack_with_token(recipient, device_id, ack_token)
+            .await?)
+    }
+
+    async fn messages_after(
+        &self,
+        recipient: &str,
+        device_id: &str,
+        queue_position: i64,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::delivery::DeviceMessageState>>
+    {
+        Ok(self
+            .0
+            .device_messages()
+            .list_after(recipient, device_id, queue_position)
+            .await?
+            .into_iter()
+            .map(application_device_message)
+            .collect())
+    }
+
+    async fn prune(
+        &self,
+        per_device_capacity: usize,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> soland_application::ApplicationResult<()> {
+        self.0.device_messages().prune_expired(now).await?;
+        self.0
+            .device_messages()
+            .prune_over_capacity(per_device_capacity, now)
+            .await?;
+        Ok(())
+    }
+
+    async fn lost_watermark(
+        &self,
+        recipient: &str,
+        device_id: &str,
+    ) -> soland_application::ApplicationResult<Option<i64>> {
+        Ok(self
+            .0
+            .device_messages()
+            .lost_watermark(recipient, device_id)
+            .await?)
+    }
+}
+
+fn application_accepted_event(
+    record: soland_storage::CanonicalEventRecord,
+) -> soland_application::events::AcceptedEvent {
+    soland_application::events::AcceptedEvent {
+        event_id: record.event_id,
+        actor_id: record.actor_id,
+        actor_seq: record.actor_seq,
+        realm_id: record.realm_id,
+        kind: record.kind,
+        schema_id: record.schema_id,
+        canonical_digest: record.canonical_digest,
+        canonical_bytes: record.canonical_bytes,
+        envelope: record.envelope,
+        received_at: record.received_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::EventReadPort for PersistenceEventReader {
+    async fn accepted_event(
+        &self,
+        event_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_application::events::AcceptedEvent>>
+    {
+        Ok(self
+            .0
+            .events()
+            .get(event_id)
+            .await?
+            .map(application_accepted_event))
+    }
+
+    async fn accepted_events(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::events::AcceptedEvent>> {
+        Ok(self
+            .0
+            .events()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(application_accepted_event)
+            .collect())
+    }
+
+    async fn projected_events(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::events::ProjectedEvent>>
+    {
+        Ok(self
+            .0
+            .projection_events()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(|event| soland_application::events::ProjectedEvent {
+                event_id: event.event_id,
+                realm_id: event.realm_id,
+                event_kind: event.event_kind,
+                operation_type: event.operation_type,
+                operation_id: event.operation_id,
+                sender: event.sender,
+                payload: event.payload,
+                created_at: event.created_at,
+                received_at: event.received_at,
+            })
+            .collect())
+    }
+
+    async fn accepted_events_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::events::AcceptedEvent>> {
+        Ok(self
+            .0
+            .events()
+            .list_for_actor(actor_id)
+            .await?
+            .into_iter()
+            .map(application_accepted_event)
+            .collect())
+    }
+
+    async fn max_actor_sequence(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<Option<u64>> {
+        Ok(self.0.events().max_actor_seq(actor_id).await?)
+    }
+
+    async fn batch_receipts_for_event(
+        &self,
+        event_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::events::AcceptedBatchReceipt>>
+    {
+        self.0
+            .events()
+            .batch_receipts_for_event(event_id)
+            .await?
+            .into_iter()
+            .map(|receipt| {
+                serde_json::to_value(receipt)
+                    .map(|value| soland_application::events::AcceptedBatchReceipt { value })
+                    .map_err(|error| {
+                        soland_storage::PersistenceError::Internal(format!(
+                            "event batch receipt serialization failed: {error}"
+                        ))
+                        .into()
+                    })
+            })
+            .collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::MlsCommitReadPort for PersistenceMlsCommitReader {
+    async fn commits(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::events::MlsCommitState>>
+    {
+        Ok(self
+            .0
+            .mls_commits()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(|commit| soland_application::events::MlsCommitState {
+                group_id: commit.group_id,
+                effective_scope: commit.effective_scope,
+                epoch: commit.epoch,
+                frontier_contested: commit.frontier_contested,
+            })
+            .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::MlsKeyPackageMaintenancePort
+    for PersistenceMlsKeyPackageMaintenance
+{
+    async fn retire_actor_keypackages(
+        &self,
+        actor_id: &str,
+        retired_at: i64,
+    ) -> soland_application::ApplicationResult<usize> {
+        let rows = self.0.mls_key_packages().snapshot_all().await?;
+        let mut retired = 0;
+        for row in rows.into_iter().filter(|row| {
+            row.actor_id == actor_id
+                && row.claimed_by_mls_group_id.is_none()
+                && row.consumed_at.is_none()
+        }) {
+            if self
+                .0
+                .mls_key_packages()
+                .try_claim(&row.id, "revoked", None, None, None, retired_at)
+                .await?
+                .is_some()
+            {
+                retired += 1;
+            }
+        }
+        Ok(retired)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::RealmMetadataPort for PersistenceRealmMetadata {
+    async fn realm_metadata(
+        &self,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_application::events::RealmMetadata>>
+    {
+        Ok(self.0.realm_meta().get(realm_id).await?.map(|metadata| {
+            soland_application::events::RealmMetadata {
+                realm_id: realm_id.to_owned(),
+                owner_id: metadata.owner,
+                discoverability: metadata.discoverability,
+                history_visibility: metadata.history_visibility,
+                deleted: metadata.deleted,
+                created_at: metadata.created_at,
+                updated_at: metadata.updated_at,
+            }
+        }))
+    }
+
+    async fn realm_metadata_list(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_application::events::RealmMetadata>> {
+        Ok(self
+            .0
+            .realm_meta()
+            .list()
+            .await?
+            .into_iter()
+            .map(
+                |(realm_id, metadata)| soland_application::events::RealmMetadata {
+                    realm_id,
+                    owner_id: metadata.owner,
+                    discoverability: metadata.discoverability,
+                    history_visibility: metadata.history_visibility,
+                    deleted: metadata.deleted,
+                    created_at: metadata.created_at,
+                    updated_at: metadata.updated_at,
+                },
+            )
+            .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_storage::EventCommitUnitOfWork for PersistenceEventCommitter {
+    async fn commit_event(
+        &self,
+        request: soland_storage::EventCommitRequest,
+    ) -> soland_storage::PersistenceResult<soland_storage::EventCommitOutcome> {
+        self.0.commit_event(request).await
+    }
+}
+
 fn account_lifecycle_status_from_wire(value: &str) -> AccountStatus {
     match value {
         "erased" => AccountStatus::ErasurePending,
@@ -1406,6 +3924,7 @@ pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
 #[cfg(test)]
 mod membership_hydration_tests {
     use arkret_sdk::{Did, RealmId};
+    use soland_storage::{IdentityStoreRegistry, MlsAgentStoreRegistry};
 
     use super::*;
 
@@ -1532,7 +4051,7 @@ mod membership_hydration_tests {
     // commit is rejected for "no genesis").
     #[tokio::test]
     async fn mls_projections_rehydrate_from_durable_stores() {
-        use soland_storage::{MlsKeyPackageRow, PersistenceStore};
+        use soland_storage::MlsKeyPackageRow;
 
         let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
         let group_id = "ak:mls_group:019f0dd3-aaaa";
@@ -1607,7 +4126,6 @@ mod membership_hydration_tests {
 
     #[tokio::test]
     async fn realm_owner_rehydrates_for_capability_upper_bound_checks() {
-        use soland_storage::PersistenceStore;
         use soland_storage_memory::SolandMemoryPersistenceStore;
 
         let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";

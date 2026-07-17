@@ -35,6 +35,8 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_domain::{artifacts, kinds};
+use soland_http::error::{AppError, ErrorCode, error_http_status};
+use soland_http::result::{JsonResult, json_ok};
 use soland_storage::{CanonicalEventRecord, SessionRecord};
 
 use super::projection::{
@@ -48,8 +50,6 @@ use super::{
     validate_agent_reply_participation, validate_content_encryption_floor, validate_did,
     validate_operation_policy, validate_operation_semantics, validate_space_id,
 };
-use crate::error::{AppError, ErrorCode, error_http_status};
-use crate::result::{JsonResult, json_ok};
 use crate::routing::organizations;
 use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::routing::system::extract::AuthArgs;
@@ -91,9 +91,10 @@ mod submit;
 pub(in crate::routing) use submit::submit_event_value;
 pub(super) use submit::submit_federation_events;
 use submit::{
-    EventValidationError, RealmBootstrapBatchContext, SubmitOneError, SubmittedEventOutcome,
-    ValidatedEventEnvelope, event_validation_error, events_submit_outcome, render_submit_one_error,
-    submit_event_batch, submit_event_batch_outcome,
+    EventCommitIdempotency, EventValidationError, IDEMPOTENCY_KEY_TTL_SECONDS,
+    RealmBootstrapBatchContext, SubmitOneError, SubmittedEventOutcome, ValidatedEventEnvelope,
+    event_validation_error, events_submit_outcome, render_submit_one_error, submit_event_batch,
+    submit_event_batch_outcome, submit_event_value_with_idempotency,
 };
 
 mod validation;

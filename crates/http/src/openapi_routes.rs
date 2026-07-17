@@ -3,10 +3,8 @@ use std::sync::OnceLock;
 use salvo::http::Method;
 use salvo::oapi::{OpenApi, PathItemType};
 use salvo::prelude::*;
-#[cfg(test)]
-use serde_json::Value;
 
-use super::*;
+use crate::util::{is_valid_sync_token, render_error};
 
 #[derive(Clone)]
 pub struct ArkretOpenApiDoc(pub OpenApi);
@@ -24,7 +22,7 @@ pub struct ArkretOpenApiDoc(pub OpenApi);
 /// disambiguation here using the registered OpenAPI route table (see
 /// [`KNOWN_ROUTES`] / [`allow_methods_for_path`]).
 #[handler]
-pub(crate) async fn api_not_found(req: &mut Request, res: &mut Response) {
+pub async fn api_not_found(req: &mut Request, res: &mut Response) {
     let path = req.uri().path();
     if let Some(methods) = allow_methods_for_path(path) {
         let allow = methods
@@ -65,7 +63,7 @@ pub(crate) async fn api_not_found(req: &mut Request, res: &mut Response) {
 /// pattern without any regex compilation.
 static KNOWN_ROUTES: OnceLock<Vec<(String, Vec<Method>)>> = OnceLock::new();
 
-pub(crate) fn populate_known_routes(doc: &OpenApi) {
+pub fn populate_known_routes(doc: &OpenApi) {
     let _ = KNOWN_ROUTES.get_or_init(|| {
         let mut out: Vec<(String, Vec<Method>)> = Vec::new();
         for (path, item) in doc.paths.iter() {
@@ -168,7 +166,7 @@ const METHOD_HEADER_ORDER: &[Method] = &[
 /// Catchall wildcards (`{**rest}`) intentionally do not appear in the
 /// route map — they're only used by the unrecognized-endpoint catch-all
 /// itself and so should never participate in 405 disambiguation.
-pub(crate) fn pattern_matches_path(pattern: &str, path: &str) -> bool {
+pub fn pattern_matches_path(pattern: &str, path: &str) -> bool {
     let pattern_parts: Vec<&str> = pattern.trim_matches('/').split('/').collect();
     let path_parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     if pattern_parts.len() != path_parts.len() {
@@ -250,7 +248,7 @@ pub async fn error_catcher(res: &mut Response, ctrl: &mut FlowCtrl) {
 }
 
 #[handler]
-pub(crate) async fn wait_for_sync_token(
+pub async fn wait_for_sync_token(
     req: &mut Request,
     depot: &mut Depot,
     res: &mut Response,
@@ -308,5 +306,5 @@ pub(crate) async fn wait_for_sync_token(
 /// is covered by the integration test
 /// `framework_errors_use_arkret_error_envelope` in `tests/http_api/auth.rs`.
 #[cfg(test)]
-#[path = "routing_framework_error_routing_tests.rs"]
+#[path = "openapi_routes_tests.rs"]
 mod framework_error_routing_tests;

@@ -80,7 +80,7 @@ pub(crate) async fn seed_verified_device_with_public_key(
 ) {
     let now = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
             actor: actor.to_owned(),

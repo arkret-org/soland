@@ -8,10 +8,10 @@
 use salvo::oapi::ToParameters;
 use salvo::prelude::Request;
 use serde::Deserialize;
+use soland_http::error::AppError;
 use soland_storage::SessionRecord;
 
 use super::auth::authenticated_session as authenticated_session_inner;
-use crate::error::AppError;
 use crate::state::AppState;
 
 /// Authentication header bundle. Carries the raw `Authorization: Bearer ...`
@@ -61,9 +61,9 @@ impl AuthArgs {
                 // via `wire_code_override` so the response carries the
                 // spec-precise `error.code` rather than the registered
                 // fallback.
-                let typed = crate::error::ErrorCode::from_wire(code);
+                let typed = soland_http::error::ErrorCode::from_wire(code);
                 let mut err = AppError::new(
-                    typed.unwrap_or(crate::error::ErrorCode::Unauthenticated),
+                    typed.unwrap_or(soland_http::error::ErrorCode::Unauthenticated),
                     message,
                 )
                 .with_status(status);

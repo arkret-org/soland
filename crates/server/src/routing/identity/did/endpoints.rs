@@ -372,9 +372,8 @@ pub(crate) async fn embedded_webvh_register(
                 .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
     if state
-        .persistence
-        .webvh()
-        .get_embedded_webvh_document_by_local_id(&local_id)
+        .did_application()
+        .embedded_document(&local_id)
         .await
         .ok()
         .flatten()
@@ -475,8 +474,7 @@ pub(crate) async fn embedded_webvh_register(
         updated_at: now,
     };
     let commit = state
-        .persistence
-        .webvh()
+        .did_application()
         .commit_log_operation(
             None,
             document_record.clone(),
@@ -496,7 +494,10 @@ pub(crate) async fn embedded_webvh_register(
             "embedded did:webvh inception conflicts with existing history",
         ));
     }
-    if let Err(error) = state.did_resolver.cache_webvh_record(document_record) {
+    if let Err(error) = state
+        .did_resolver
+        .cache_application_webvh_record(document_record)
+    {
         tracing::warn!(%error, "failed to cache embedded webvh DID document");
     }
     append_audit_log(
@@ -612,9 +613,8 @@ pub(crate) async fn embedded_webvh_rotate(
 
     // Load the existing log; the rotation MUST extend a known history.
     let mut events = state
-        .persistence
-        .webvh()
-        .list_log_events(&did)
+        .did_application()
+        .log_events(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if events.is_empty() {
@@ -661,8 +661,7 @@ pub(crate) async fn embedded_webvh_rotate(
         updated_at: submitted_at,
     };
     let commit = state
-        .persistence
-        .webvh()
+        .did_application()
         .commit_log_operation(
             expected_current_head,
             document_record.clone(),
@@ -682,7 +681,10 @@ pub(crate) async fn embedded_webvh_rotate(
             "did:webvh rotation lost the current head comparison",
         ));
     }
-    if let Err(error) = state.did_resolver.cache_webvh_record(document_record) {
+    if let Err(error) = state
+        .did_resolver
+        .cache_application_webvh_record(document_record)
+    {
         tracing::warn!(%error, "failed to cache rotated webvh DID document");
     }
     events.push(WebvhLogRecord {
@@ -751,9 +753,8 @@ pub(crate) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
         return;
     };
     let events = state
-        .persistence
-        .webvh()
-        .list_log_events(&record.did)
+        .did_application()
+        .log_events(&record.did)
         .await
         .unwrap_or_default();
     if events.is_empty() {
@@ -789,7 +790,7 @@ pub(crate) async fn identity_resolve(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let did = body.did.as_str();
-    if let Ok(Some(record)) = state.persistence.webvh().get_document(did).await {
+    if let Ok(Some(record)) = state.did_application().document(did).await {
         // G3.S3: every did:webvh resolution MUST first re-validate the
         // log chain, SCID derivation, configured witness quorum, and
         // rotation control authorisation. Rotation entries fail closed
@@ -945,9 +946,8 @@ pub(crate) async fn identity_log(
         return Err(AppError::invalid_param("invalid did"));
     }
     let records = state
-        .persistence
-        .webvh()
-        .list_log_events(&did)
+        .did_application()
+        .log_events(&did)
         .await
         .unwrap_or_default();
     let mut previous_digest = None;
@@ -1010,13 +1010,7 @@ pub(crate) async fn identity_receipts(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let record = state
-        .persistence
-        .webvh()
-        .get_document(&did)
-        .await
-        .ok()
-        .flatten();
+    let record = state.did_application().document(&did).await.ok().flatten();
     json_ok(IdentityReceiptListOutcome {
         receipts: Vec::new(),
         threshold_met: Some(record.is_none()),
@@ -1088,15 +1082,13 @@ pub(crate) async fn identity_submit_did_operation(
     ensure_webvh_document_id(&did, &document)?;
     let event_digest = did_log_event_digest(&operation)?;
     let existing = state
-        .persistence
-        .webvh()
-        .get_document(&did)
+        .did_application()
+        .document(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let events = state
-        .persistence
-        .webvh()
-        .list_log_events(&did)
+        .did_application()
+        .log_events(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(existing_event) = events.iter().find(|event| {
@@ -1180,8 +1172,7 @@ pub(crate) async fn identity_submit_did_operation(
         updated_at: submitted_at,
     };
     let commit = state
-        .persistence
-        .webvh()
+        .did_application()
         .commit_log_operation(
             current_head,
             document_record.clone(),
@@ -1207,7 +1198,10 @@ pub(crate) async fn identity_submit_did_operation(
         }
         WebvhLogCommitOutcome::Accepted => {}
     }
-    if let Err(error) = state.did_resolver.cache_webvh_record(document_record) {
+    if let Err(error) = state
+        .did_resolver
+        .cache_application_webvh_record(document_record)
+    {
         tracing::warn!(%error, "failed to cache submitted DID document");
     }
     append_audit_log(

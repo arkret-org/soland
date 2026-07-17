@@ -4,6 +4,9 @@ members = [
     "xtask",
     "crates/contracts",
     "crates/domain",
+    "crates/application",
+    "crates/http",
+    "crates/test-support",
     "crates/storage",
     "crates/storage-memory",
     "crates/storage-postgres",
@@ -58,6 +61,9 @@ serde_json = "1.0.150"
 sha2 = "0.11.0"
 soland-contracts = { version = "0.3.0", path = "crates/contracts" }
 soland-domain = { version = "0.3.0", path = "crates/domain" }
+soland-application = { version = "0.3.0", path = "crates/application" }
+soland-http = { version = "0.3.0", path = "crates/http" }
+soland-test-support = { version = "0.3.0", path = "crates/test-support" }
 soland-storage = { version = "0.3.0", path = "crates/storage" }
 soland-storage-memory = { version = "0.3.0", path = "crates/storage-memory" }
 soland-storage-postgres = { version = "0.3.0", path = "crates/storage-postgres" }

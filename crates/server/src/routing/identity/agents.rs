@@ -54,16 +54,17 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_storage::{AgentPrincipalRecord, SessionRecord};
+use soland_application::identity::AgentPairingState as AgentPrincipalRecord;
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
+use soland_http::util::bearer_token;
+use soland_storage::SessionRecord;
 use subtle::ConstantTimeEq as _;
 
 use super::{AuthArgs, append_audit_log, now, validate_did};
-use crate::error::{AppError, ErrorCode};
 use crate::ids;
-use crate::result::{JsonResult, json_ok};
 use crate::routing::accept_local_operations;
 use crate::routing::events::event_log::submit_event_value;
-use crate::routing::system::util::bearer_token;
 use crate::state::AppState;
 
 mod dev_fanout;

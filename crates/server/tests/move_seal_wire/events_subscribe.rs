@@ -201,7 +201,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     let first_event_id = "ak:event:01984101-0000-7000-8000-00000000d0c5";
     let first_received_at = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .projection_events()
         .append(soland_storage::ProjectionEventRecord {
             event_id: first_event_id.to_owned(),
@@ -221,7 +221,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     let notifier = tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         notifier_state
-            .event_broadcast
+            .test_event_broadcast()
             .send(soland::state::EventNotification::event(
                 demo_realm_id().to_owned(),
                 first_event_id.to_owned(),
@@ -268,7 +268,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
 
     let second_event_id = "ak:event:01984101-0000-7000-8000-00000000d0c6";
     state
-        .persistence
+        .test_persistence()
         .projection_events()
         .append(soland_storage::ProjectionEventRecord {
             event_id: second_event_id.to_owned(),

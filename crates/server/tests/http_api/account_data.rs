@@ -14,7 +14,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
     let fresh = dev_token_for_device(state.clone(), FRESH_DID, FRESH_DEVICE, "Fresh").await;
     let bob = dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob").await;
 
-    let principal_realm = soland::test_support::principal_control_realm_for_did(FRESH_DID);
+    let principal_realm = soland_test_support::principal_control_realm_for_did(FRESH_DID);
     assert!(
         principal_realm.starts_with("ak:realm:"),
         "principal realm response: {principal_realm}"

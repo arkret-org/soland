@@ -39,11 +39,11 @@ use soland_domain::reducer::RealmLinkState;
 use soland_domain::reducer::realm_links::{
     check_realm_link_admissible, effective_policy_for_realm,
 };
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 
 use super::{AuthArgs, accept_local_operations};
-use crate::error::AppError;
 use crate::ids;
-use crate::result::{JsonResult, json_ok};
 use crate::routing::organizations;
 use crate::state::AppState;
 
@@ -360,9 +360,9 @@ async fn post_realm_link(
 /// Map a reducer rejection reason code into the protocol error family.
 fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
     let code = if reason == arkret_sdk::ReasonCode::REALM_LINK_SELF_REFERENCE {
-        crate::error::ErrorCode::SchemaViolation
+        soland_http::error::ErrorCode::SchemaViolation
     } else {
-        crate::error::ErrorCode::FailedPrecondition
+        soland_http::error::ErrorCode::FailedPrecondition
     };
     AppError::new(code, reason)
         .with_status(StatusCode::UNPROCESSABLE_ENTITY)

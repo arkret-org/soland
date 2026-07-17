@@ -10,14 +10,14 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 use soland_storage::{CanonicalEventRecord, PeerEventsPageQuery, RealmMetaRecord};
 
 use super::{
     is_realm_deleted, is_valid_hash_digest, now, query_param, query_param_all, render_error,
     validate_did,
 };
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
@@ -196,7 +196,7 @@ async fn peer_events_resolve(
     let source_service_id = source_service_id_from_request(req)?;
     if request.event_ids.len() + request.event_digests.len() > MAX_PEER_EVENTS_RESOLVE {
         return Err(AppError::new(
-            crate::error::ErrorCode::PayloadTooLarge,
+            soland_http::error::ErrorCode::PayloadTooLarge,
             "too many events requested",
         )
         .with_status(StatusCode::PAYLOAD_TOO_LARGE)
@@ -401,7 +401,7 @@ async fn peer_snapshot_head(
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, None).await?;
     Err(AppError::new(
-        crate::error::ErrorCode::NotImplemented,
+        soland_http::error::ErrorCode::NotImplemented,
         "ak.peer.snapshot.query.manifest_head is not implemented: this deployment cannot \
          produce a signed ak.schema.snapshot.v1 manifest",
     ))
@@ -1322,16 +1322,18 @@ async fn peer_events_query_cursor_event_id(
 
 fn peer_events_query_cursor_error(error: super::sync::SyncCursorError) -> AppError {
     match error {
-        super::sync::SyncCursorError::Expired => {
-            AppError::new(crate::error::ErrorCode::CursorExpired, "cursor has expired")
-        }
+        super::sync::SyncCursorError::Expired => AppError::new(
+            soland_http::error::ErrorCode::CursorExpired,
+            "cursor has expired",
+        ),
         super::sync::SyncCursorError::Invalid(message) => AppError::invalid_param(message),
         super::sync::SyncCursorError::Mismatch(message)
-        | super::sync::SyncCursorError::Integrity(message) => {
-            AppError::new(crate::error::ErrorCode::CursorIntegrityInvalid, message)
-        }
+        | super::sync::SyncCursorError::Integrity(message) => AppError::new(
+            soland_http::error::ErrorCode::CursorIntegrityInvalid,
+            message,
+        ),
         super::sync::SyncCursorError::Revoked => AppError::new(
-            crate::error::ErrorCode::CursorRevoked,
+            soland_http::error::ErrorCode::CursorRevoked,
             "cursor authority has been revoked",
         ),
     }

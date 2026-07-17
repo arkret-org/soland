@@ -32,9 +32,9 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
+use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
-use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -66,21 +66,19 @@ struct DeviceGenerationEventSealContext {
 /// causal / state-machine conflict so `409` is the historical wire status
 /// here. Call sites that need a different status can override after
 /// conversion via `.with_status(...)`.
-impl From<SealReject> for AppError {
-    fn from(reject: SealReject) -> Self {
-        let code = match &reject {
-            SealReject::UnknownPredecessor
-            | SealReject::DeltaAlreadyCovered
-            | SealReject::Structural(_)
-            | SealReject::MissingMove { .. }
-            | SealReject::MoveRejected { .. }
-            | SealReject::ControlEventSetRootMismatch { .. }
-            | SealReject::CoveredSetMismatch
-            | SealReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,
-            SealReject::Store(_) => ErrorCode::InternalError,
-        };
-        AppError::new(code, reject.to_string()).with_status(StatusCode::CONFLICT)
-    }
+fn app_error_from_seal_reject(reject: SealReject) -> AppError {
+    let code = match &reject {
+        SealReject::UnknownPredecessor
+        | SealReject::DeltaAlreadyCovered
+        | SealReject::Structural(_)
+        | SealReject::MissingMove { .. }
+        | SealReject::MoveRejected { .. }
+        | SealReject::ControlEventSetRootMismatch { .. }
+        | SealReject::CoveredSetMismatch
+        | SealReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,
+        SealReject::Store(_) => ErrorCode::InternalError,
+    };
+    AppError::new(code, reject.to_string()).with_status(StatusCode::CONFLICT)
 }
 
 pub(super) fn router() -> Router {
@@ -162,8 +160,7 @@ async fn device_generation_event_seal_context(
     }
     let bootstrap = bootstrap[0];
     let principal_id = bootstrap.actor_id.clone();
-    let expected_realm =
-        crate::routing::identity::recovery::principal_control_realm_for_did(&principal_id);
+    let expected_realm = soland_domain::identity::principal_control_realm_for_did(&principal_id);
     if expected_realm != realm_id.as_str() {
         return Err(seal_admission_error(
             "principal-control bootstrap is stored under a non-deterministic Realm",
@@ -445,7 +442,7 @@ async fn try_apply_device_generation_event_seal(
     }
     let predecessor_coverage =
         union_predecessor_covered_events(&seal.predecessor_refs, state.seal_store.as_ref())
-            .map_err(AppError::from)?;
+            .map_err(app_error_from_seal_reject)?;
     if seal
         .delta
         .iter()
@@ -467,7 +464,8 @@ async fn try_apply_device_generation_event_seal(
             "B-model Event Seal covered_event_digests must equal predecessor coverage plus delta",
         ));
     }
-    let expected_control_root = control_event_set_root(&target).map_err(AppError::from)?;
+    let expected_control_root =
+        control_event_set_root(&target).map_err(app_error_from_seal_reject)?;
     if seal.control_event_set_root != expected_control_root
         || seal.completeness_root != expected_control_root
     {
@@ -805,7 +803,7 @@ async fn try_apply_device_generation_event_seal(
 pub(crate) async fn apply_managed_agent_event_seal(
     state: &AppState,
     seal: &Seal,
-    agent_record: &soland_storage::AgentPrincipalRecord,
+    agent_record: &soland_application::identity::AgentPairingState,
     session_device_id: &str,
 ) -> Result<SealEffect, AppError> {
     seal.validate_id()
@@ -878,7 +876,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         ));
     }
     let current = union_predecessor_covered_events(&leaves, state.seal_store.as_ref())
-        .map_err(AppError::from)?;
+        .map_err(app_error_from_seal_reject)?;
 
     let records = state
         .persistence
@@ -955,7 +953,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
             "managed Agent PCR Seal coverage differs from canonical Event history",
         ));
     }
-    let expected_root = control_event_set_root(&target).map_err(AppError::from)?;
+    let expected_root = control_event_set_root(&target).map_err(app_error_from_seal_reject)?;
     if seal.control_event_set_root != expected_root || seal.completeness_root != expected_root {
         return Err(seal_admission_error(
             "managed Agent PCR Seal control/completeness root mismatch",
@@ -1117,7 +1115,7 @@ pub(crate) async fn apply_inbound_seal(
         state.cell_registry.as_ref(),
         verifier,
     )
-    .map_err(AppError::from)
+    .map_err(app_error_from_seal_reject)
 }
 
 /// Response from `POST /_soland/peer/moves`.

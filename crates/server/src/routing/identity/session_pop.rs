@@ -29,11 +29,11 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use salvo::prelude::*;
 use sha2::{Digest, Sha256};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::util::bearer_token;
 
-use crate::error::{AppError, ErrorCode};
 use crate::routing::federation::{signature_authority, signature_target_uri};
 use crate::routing::identity::auth::session_credential_hash;
-use crate::routing::system::util::bearer_token;
 use crate::state::AppState;
 
 /// Maximum PoP signature validity window in seconds (federation.md §3.2 /
@@ -204,9 +204,8 @@ async fn session_signing_key_jwk(
     }
     let token_hash = session_credential_hash(token, &state.service_id);
     let session = state
-        .persistence
-        .sessions()
-        .get(&token_hash)
+        .session_application()
+        .session(&token_hash)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::unauthenticated("session not found for PoP presentation"))?;

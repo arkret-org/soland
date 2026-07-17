@@ -99,7 +99,7 @@ async fn recovery_receipt_rejects_revoked_recovered_device() {
     let (policy_id, device_id) =
         authorize_device_via_recovery(&state, &signing, &principal_id, &vm).await;
     let mut device = state
-        .persistence
+        .test_persistence()
         .devices()
         .get(&principal_id, &device_id)
         .await
@@ -108,7 +108,12 @@ async fn recovery_receipt_rejects_revoked_recovered_device() {
     let now = chrono::Utc::now();
     device.revoked_at = Some(now);
     device.updated_at = now;
-    state.persistence.devices().put(&device).await.unwrap();
+    state
+        .test_persistence()
+        .devices()
+        .put(&device)
+        .await
+        .unwrap();
     let token = dev_token(state.clone()).await;
 
     let receipt = signed_device_recovery_receipt(

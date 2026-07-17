@@ -20,7 +20,7 @@ fn test_config() -> AppConfig {
         development_mode: true,
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
-        ..AppConfig::test_default()
+        ..soland_test_support::app_config()
     }
 }
 
@@ -78,9 +78,9 @@ async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> S
     let mut entry = RealmDirectoryEntry::new(typed_realm_id, title);
     entry.description = Some("G3.S6 account-private sync fixture".to_owned());
     entry.members.insert(owner);
-    state.realms.lock().upsert(entry);
+    state.test_realms().lock().upsert(entry);
     state
-        .persistence
+        .test_persistence()
         .realm_meta()
         .put(
             &realm_id,
@@ -118,7 +118,7 @@ async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> S
 async fn add_realm_member(state: AppState, _token: &str, realm_id: &str, member: &str) {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
-    let mut realms = state.realms.lock();
+    let mut realms = state.test_realms().lock();
     let entry = realms
         .get(&typed_realm_id)
         .cloned()
@@ -218,7 +218,7 @@ fn read_cursor_payload(
 }
 
 fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>) -> Vec<Value> {
-    let projection = state.projection.lock();
+    let projection = state.test_projection().lock();
     projection
         .read_cursors
         .values()
@@ -358,7 +358,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         "encrypted blocklist event: {put}"
     );
     let stored_account_data = state
-        .persistence
+        .test_persistence()
         .account_data()
         .list_for_actor("did:web:alice.example")
         .await

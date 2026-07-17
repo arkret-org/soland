@@ -8,13 +8,13 @@ use crate::wire::now;
 pub(crate) async fn snapshot_manifest_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Result<arkret_sdk::SnapshotManifest, crate::error::AppError> {
+) -> Result<arkret_sdk::SnapshotManifest, soland_http::error::AppError> {
     let realm_id_value = arkret_sdk::RealmId::new(realm_id.to_owned())
-        .map_err(|_| crate::error::AppError::invalid_param("invalid realm_id"))?;
+        .map_err(|_| soland_http::error::AppError::invalid_param("invalid realm_id"))?;
     {
         let realms = state.realms.lock();
         if realms.get(&realm_id_value).is_none() {
-            return Err(crate::error::AppError::not_found("not found"));
+            return Err(soland_http::error::AppError::not_found("not found"));
         }
     }
 
@@ -23,7 +23,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
         .events()
         .snapshot_all()
         .await
-        .map_err(|error| crate::error::AppError::internal(error.to_string()))?
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?
         .into_iter()
         .filter(|record| record.realm_id.as_deref() == Some(realm_id))
         .collect::<Vec<_>>();
@@ -40,16 +40,16 @@ pub(crate) async fn snapshot_manifest_for_realm(
         .map(snapshot_item_from_event)
         .collect::<Result<Vec<_>, _>>()?;
     let state_digest = arkret_sdk::state_digest_from_items(&items)
-        .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let snapshot_id = arkret_sdk::SnapshotId::new(crate::ids::generate_snapshot_id())
-        .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let built_chunks = arkret_sdk::build_snapshot_chunks(
         &snapshot_id,
         arkret_sdk::SNAPSHOT_REDUCER_PROFILE_V1,
         items.clone(),
         arkret_sdk::DEFAULT_SNAPSHOT_CHUNK_BYTES,
     )
-    .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+    .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     persist_snapshot_chunk_blobs(state, realm_id, &built_chunks).await?;
     let chunk_descriptors = built_chunks
         .iter()
@@ -66,11 +66,11 @@ pub(crate) async fn snapshot_manifest_for_realm(
         &event_set_entries,
         frontier_event_ids.clone(),
     )
-    .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+    .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let created_at = now();
     let timeline_hlc = snapshot_timeline_hlc(state, &events, created_at)?;
     let service_id = arkret_sdk::Did::new(state.service_id.clone())
-        .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let auth_state_digest =
         snapshot_auth_state_digest(&state.service_id, realm_id, &frontier_event_ids, created_at)?;
     let verification_method = format!("{}#snapshot-key-1", state.service_id);
@@ -112,7 +112,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
         signature: arkret_sdk::DetachedJwsProof::eddsa(
             verification_method.clone(),
             arkret_sdk::Hash::new(arkret_sdk::EMPTY_SHA256_DIGEST.to_owned())
-                .map_err(|error| crate::error::AppError::internal(error.to_string()))?,
+                .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
             created_at,
             "header..signature".to_owned(),
         ),
@@ -123,7 +123,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
         verification_method,
         created_at,
     )
-    .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+    .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     Ok(manifest)
 }
 
@@ -131,11 +131,11 @@ async fn persist_snapshot_chunk_blobs(
     state: &AppState,
     realm_id: &str,
     chunks: &[arkret_sdk::BuiltSnapshotChunk],
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), soland_http::error::AppError> {
     for chunk in chunks {
         let blob_ref = chunk.descriptor.chunk_ref.as_str();
         let Some(sha256) = chunk.descriptor.digest.as_str().strip_prefix("sha256:") else {
-            return Err(crate::error::AppError::internal(
+            return Err(soland_http::error::AppError::internal(
                 "snapshot chunk digest is not sha256",
             ));
         };
@@ -144,7 +144,7 @@ async fn persist_snapshot_chunk_blobs(
             .object_storage
             .put(&storage_key, chunk.canonical_bytes.clone())
             .await
-            .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
         let record = BlobRecord {
             sha256: sha256.to_owned(),
             size_bytes: chunk.canonical_bytes.len() as i64,
@@ -165,16 +165,16 @@ async fn persist_snapshot_chunk_blobs(
             .blobs()
             .put(blob_ref, &record)
             .await
-            .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     }
     Ok(())
 }
 
 fn snapshot_item_from_event(
     record: &CanonicalEventRecord,
-) -> Result<arkret_sdk::SnapshotMaterializedItem, crate::error::AppError> {
+) -> Result<arkret_sdk::SnapshotMaterializedItem, soland_http::error::AppError> {
     let event_id = arkret_sdk::EventId::new(record.event_id.clone())
-        .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     Ok(arkret_sdk::SnapshotMaterializedItem {
         kind: "ak.event.accepted".to_owned(),
         id: record.event_id.clone(),
@@ -196,14 +196,14 @@ fn snapshot_item_from_event(
 fn snapshot_event_set_leaf(
     state: &AppState,
     record: &CanonicalEventRecord,
-) -> Result<arkret_sdk::EventSetLeaf, crate::error::AppError> {
+) -> Result<arkret_sdk::EventSetLeaf, soland_http::error::AppError> {
     Ok(arkret_sdk::EventSetLeaf {
         event_id: arkret_sdk::EventId::new(record.event_id.clone())
-            .map_err(|error| crate::error::AppError::internal(error.to_string()))?,
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
         event_digest: arkret_sdk::Hash::new(record.canonical_digest.clone())
-            .map_err(|error| crate::error::AppError::internal(error.to_string()))?,
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
         actor_id: arkret_sdk::Did::new(record.actor_id.clone())
-            .map_err(|error| crate::error::AppError::internal(error.to_string()))?,
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
         actor_seq: record.actor_seq,
         hlc: event_hlc_or_received_at(state, record)?,
     })
@@ -211,7 +211,7 @@ fn snapshot_event_set_leaf(
 
 fn snapshot_frontier_event_ids(
     events: &[CanonicalEventRecord],
-) -> Result<Vec<arkret_sdk::EventId>, crate::error::AppError> {
+) -> Result<Vec<arkret_sdk::EventId>, soland_http::error::AppError> {
     let mut by_actor: std::collections::BTreeMap<&str, &CanonicalEventRecord> =
         std::collections::BTreeMap::new();
     for record in events {
@@ -230,7 +230,7 @@ fn snapshot_frontier_event_ids(
         .values()
         .map(|record| {
             arkret_sdk::EventId::new(record.event_id.clone())
-                .map_err(|error| crate::error::AppError::internal(error.to_string()))
+                .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
         })
         .collect()
 }
@@ -239,7 +239,7 @@ fn snapshot_timeline_hlc(
     state: &AppState,
     events: &[CanonicalEventRecord],
     fallback: chrono::DateTime<chrono::Utc>,
-) -> Result<arkret_sdk::Hlc, crate::error::AppError> {
+) -> Result<arkret_sdk::Hlc, soland_http::error::AppError> {
     let max_received_at = events
         .iter()
         .map(|record| record.received_at)
@@ -251,7 +251,7 @@ fn snapshot_timeline_hlc(
 fn event_hlc_or_received_at(
     state: &AppState,
     record: &CanonicalEventRecord,
-) -> Result<arkret_sdk::Hlc, crate::error::AppError> {
+) -> Result<arkret_sdk::Hlc, soland_http::error::AppError> {
     if let Some(hlc) = record.envelope.get("hlc").and_then(Value::as_str)
         && let Ok(parsed) = arkret_sdk::Hlc::new(hlc.to_owned())
     {
@@ -263,11 +263,11 @@ fn event_hlc_or_received_at(
 fn received_at_hlc(
     state: &AppState,
     at: chrono::DateTime<chrono::Utc>,
-) -> Result<arkret_sdk::Hlc, crate::error::AppError> {
+) -> Result<arkret_sdk::Hlc, soland_http::error::AppError> {
     let node_hash = sha256_hex(state.service_id.as_bytes());
     let node = &node_hash[..8];
     arkret_sdk::Hlc::new(format!("{:012x}-0000-{node}", at.timestamp_millis()))
-        .map_err(|error| crate::error::AppError::internal(error.to_string()))
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
 }
 
 fn snapshot_auth_state_digest(
@@ -275,7 +275,7 @@ fn snapshot_auth_state_digest(
     realm_id: &str,
     frontier_event_ids: &[arkret_sdk::EventId],
     checked_at: chrono::DateTime<chrono::Utc>,
-) -> Result<arkret_sdk::Hash, crate::error::AppError> {
+) -> Result<arkret_sdk::Hash, soland_http::error::AppError> {
     let commitment = json!({
         "profile": "ak.snapshot.auth_state.issuer_local.v1",
         "issuer": service_id,
@@ -284,9 +284,9 @@ fn snapshot_auth_state_digest(
         "checked_at": checked_at,
     });
     let bytes = arkret_sdk::canonical::canonical_json_bytes(&commitment)
-        .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     arkret_sdk::Hash::new(arkret_sdk::canonical::sha256_digest(&bytes))
-        .map_err(|error| crate::error::AppError::internal(error.to_string()))
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
 }
 
 pub(crate) fn device_inventory_to_json(device: &DeviceInventoryRecord) -> serde_json::Value {

@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    PersistenceError, PersistenceResult, Value, WebvhDocumentRecord, WebvhLogRecord, async_trait,
+};
 /// DID documents + their key-log events. The two are coupled: every accepted
 /// `submit_did_operation` writes a document and appends a log entry.
 #[async_trait]

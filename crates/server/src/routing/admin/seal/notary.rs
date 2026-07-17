@@ -9,9 +9,9 @@ use serde_json::Value;
 use soland_contracts::admin::seal::{
     AdminNotaryValue, NotaryReconfigRequestBody, SubmitControlMoveOutcome,
 };
+use soland_http::error::AppError;
 
 use super::{AuthArgs, admin_signer_for, fresh_hlc, notary_cell_for, pick_admin_seal_basis};
-use crate::error::AppError;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 

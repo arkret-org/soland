@@ -28,7 +28,7 @@ pub(super) async fn submit_ephemeral(
     body: salvo::oapi::extract::JsonBody<arkret_sdk::EphemeralEnvelope>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<EphemeralSubmitOutcome> {
+) -> soland_http::result::JsonResult<EphemeralSubmitOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let envelope = body.into_inner();
@@ -39,12 +39,12 @@ pub(super) async fn submit_ephemeral(
     let realm_id_str = realm_id.as_str();
     let actor_id = envelope.actor_id.to_string();
     if actor_id != session.actor {
-        return Err(crate::error::AppError::capability_denied(
+        return Err(soland_http::error::AppError::capability_denied(
             "ephemeral actor_id must match the bearer session actor",
         ));
     }
     if !realm_has_member(state, realm_id_str, &session.actor).await {
-        return Err(crate::error::AppError::capability_denied(
+        return Err(soland_http::error::AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
     }
@@ -83,7 +83,7 @@ pub(super) async fn submit_ephemeral(
             )
             .await
             {
-                return Err(crate::error::AppError::capability_denied(
+                return Err(soland_http::error::AppError::capability_denied(
                     "actor does not hold the ak.call.signal.send capability for this realm",
                 ));
             }
@@ -95,7 +95,7 @@ pub(super) async fn submit_ephemeral(
             true
         }
         _ => {
-            return Err(crate::error::AppError::invalid_param(
+            return Err(soland_http::error::AppError::invalid_param(
                 "unsupported ephemeral kind",
             ));
         }
@@ -108,7 +108,7 @@ pub(super) async fn submit_ephemeral(
         ));
     }
 
-    crate::result::json_ok(EphemeralSubmitOutcome {
+    soland_http::result::json_ok(EphemeralSubmitOutcome {
         accepted: true,
         kind: envelope.kind,
         realm_id,
@@ -127,7 +127,7 @@ async fn relay_ephemeral_call_signal(
     realm_id: &str,
     payload: &arkret_sdk::CallSignalPayload,
     envelope: &arkret_sdk::EphemeralEnvelope,
-) -> Result<u64, crate::error::AppError> {
+) -> Result<u64, soland_http::error::AppError> {
     let record = soland_storage::CallSignalRelayRecord {
         realm_id: realm_id.to_owned(),
         sender_actor: session.actor.clone(),
@@ -140,7 +140,7 @@ async fn relay_ephemeral_call_signal(
     };
     if let Err(error) = state.persistence.call_signal_relay().append(record).await {
         tracing::error!(%error, "failed to relay ephemeral ak.call.signal");
-        return Err(crate::error::AppError::internal(
+        return Err(soland_http::error::AppError::internal(
             "failed to relay ak.call.signal for realm broadcast",
         ));
     }
@@ -155,12 +155,12 @@ async fn relay_ephemeral_call_signal(
 
 fn validate_ephemeral_envelope(
     envelope: &arkret_sdk::EphemeralEnvelope,
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), soland_http::error::AppError> {
     if !matches!(
         envelope.kind.as_str(),
         "ak.call.signal" | "ak.presence" | "ak.typing" | "ak.receipt.read" | "ak.realm_key.request"
     ) {
-        return Err(crate::error::AppError::invalid_param(
+        return Err(soland_http::error::AppError::invalid_param(
             "unsupported ephemeral kind",
         ));
     }
@@ -170,12 +170,12 @@ fn validate_ephemeral_envelope(
         .num_milliseconds();
     if window_ms <= 0 || (window_ms as u64) > arkret_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS as u64
     {
-        return Err(crate::error::AppError::invalid_param(
+        return Err(soland_http::error::AppError::invalid_param(
             "ephemeral expires_at must be after sent_at and within the hard TTL ceiling",
         ));
     }
     if envelope.expires_at <= chrono::Utc::now() {
-        return Err(crate::error::AppError::invalid_param(
+        return Err(soland_http::error::AppError::invalid_param(
             "ephemeral signal is already expired",
         ));
     }
@@ -199,7 +199,7 @@ async fn persist_ephemeral_typing(
     actor: &str,
     realm_id: &str,
     envelope: &arkret_sdk::EphemeralEnvelope,
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), soland_http::error::AppError> {
     // ephemeral-envelope.schema.json ak.typing branch: `track_name` is optional
     // but const "discussion" in v1 (mirrors message.schema.json); when omitted
     // receivers resolve it to "discussion".
@@ -235,7 +235,7 @@ async fn persist_ephemeral_typing(
             .filter(|value| !value.trim().is_empty())
             .map(ToOwned::to_owned)
             .ok_or_else(|| {
-                crate::error::AppError::invalid_param("ak.typing payload requires strand_id")
+                soland_http::error::AppError::invalid_param("ak.typing payload requires strand_id")
             })?;
         typing_scope_allows_actor(state, realm_id, actor, Some(strand_id.as_str())).await?;
         state
@@ -272,7 +272,7 @@ async fn persist_ephemeral_presence(
     state: &AppState,
     session: &SessionRecord,
     envelope: &arkret_sdk::EphemeralEnvelope,
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), soland_http::error::AppError> {
     let actor = session.actor.as_str();
     // Fail-closed field admission (profiles-presence.md Â§3.2/Â§3.3):
     // validate the payload before consulting the visibility policy so a
@@ -282,16 +282,16 @@ async fn persist_ephemeral_presence(
         None | Some(Value::Null) => None,
         Some(Value::String(message)) => {
             arkret_sdk::validate_status_message(message).map_err(|error| {
-                crate::error::AppError::new(
-                    crate::error::ErrorCode::SchemaViolation,
+                soland_http::error::AppError::new(
+                    soland_http::error::ErrorCode::SchemaViolation,
                     format!("ak.presence status_message rejected: {error}"),
                 )
             })?;
             Some(message.clone())
         }
         Some(_) => {
-            return Err(crate::error::AppError::new(
-                crate::error::ErrorCode::SchemaViolation,
+            return Err(soland_http::error::AppError::new(
+                soland_http::error::ErrorCode::SchemaViolation,
                 "ak.presence status_message must be a string",
             ));
         }
@@ -300,8 +300,8 @@ async fn persist_ephemeral_presence(
         None | Some(Value::Null) => None,
         Some(Value::String(value)) => {
             arkret_sdk::validate_last_active_at(value).map_err(|error| {
-                crate::error::AppError::new(
-                    crate::error::ErrorCode::SchemaViolation,
+                soland_http::error::AppError::new(
+                    soland_http::error::ErrorCode::SchemaViolation,
                     format!("ak.presence last_active_at rejected: {error}"),
                 )
             })?;
@@ -310,8 +310,8 @@ async fn persist_ephemeral_presence(
             // second-precision timestamp is a policy violation, not a
             // schema one.
             if !value.contains('/') {
-                return Err(crate::error::AppError::new(
-                    crate::error::ErrorCode::PolicyViolation,
+                return Err(soland_http::error::AppError::new(
+                    soland_http::error::ErrorCode::PolicyViolation,
                     "ak.presence last_active_at must be bucketed; precise timestamps require an explicit disclosure policy",
                 )
                 .with_status(StatusCode::FORBIDDEN));
@@ -319,8 +319,8 @@ async fn persist_ephemeral_presence(
             Some(value.clone())
         }
         Some(_) => {
-            return Err(crate::error::AppError::new(
-                crate::error::ErrorCode::SchemaViolation,
+            return Err(soland_http::error::AppError::new(
+                soland_http::error::ErrorCode::SchemaViolation,
                 "ak.presence last_active_at must be a string",
             ));
         }
@@ -361,9 +361,9 @@ async fn persist_ephemeral_presence(
     Ok(())
 }
 
-fn ephemeral_channel_unavailable(action: &str) -> crate::error::AppError {
-    crate::error::AppError::new(
-        crate::error::ErrorCode::EphemeralChannelUnavailable,
+fn ephemeral_channel_unavailable(action: &str) -> soland_http::error::AppError {
+    soland_http::error::AppError::new(
+        soland_http::error::ErrorCode::EphemeralChannelUnavailable,
         format!("ephemeral channel unavailable while attempting to {action}"),
     )
 }
@@ -373,19 +373,19 @@ fn ephemeral_channel_unavailable(action: &str) -> crate::error::AppError {
 /// into a nearby state (`unavailable` / `busy` are not v1 wire values).
 fn presence_state_from_payload(
     payload: &BTreeMap<String, Value>,
-) -> Result<arkret_sdk::PresenceStatus, crate::error::AppError> {
+) -> Result<arkret_sdk::PresenceStatus, soland_http::error::AppError> {
     let state = payload
         .get("state")
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            crate::error::AppError::new(
-                crate::error::ErrorCode::SchemaViolation,
+            soland_http::error::AppError::new(
+                soland_http::error::ErrorCode::SchemaViolation,
                 "ak.presence payload requires state",
             )
         })?;
     arkret_sdk::PresenceStatus::parse_wire(state).ok_or_else(|| {
-        crate::error::AppError::new(
-            crate::error::ErrorCode::SchemaViolation,
+        soland_http::error::AppError::new(
+            soland_http::error::ErrorCode::SchemaViolation,
             "ak.presence state is not in the closed v1 set {online, idle, dnd, offline}",
         )
     })
@@ -396,7 +396,7 @@ async fn admit_ephemeral_read_receipt(
     session: &SessionRecord,
     realm_id: &str,
     envelope: &arkret_sdk::EphemeralEnvelope,
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), soland_http::error::AppError> {
     if envelope
         .payload
         .get("event_id")
@@ -404,7 +404,7 @@ async fn admit_ephemeral_read_receipt(
         .filter(|value| !value.trim().is_empty())
         .is_none()
     {
-        return Err(crate::error::AppError::invalid_param(
+        return Err(soland_http::error::AppError::invalid_param(
             "ak.receipt.read payload requires event_id",
         ));
     }
@@ -414,8 +414,8 @@ async fn admit_ephemeral_read_receipt(
             .await
             .unwrap_or_default();
     if policy.disclosure == arkret_sdk::ReadReceiptDisclosure::Disabled {
-        return Err(crate::error::AppError::new(
-            crate::error::ErrorCode::PolicyViolation,
+        return Err(soland_http::error::AppError::new(
+            soland_http::error::ErrorCode::PolicyViolation,
             format!(
                 "Realm '{realm_id}' read_receipt_policy.disclosure=disabled; ak.receipt.read dropped"
             ),
@@ -430,8 +430,8 @@ async fn admit_ephemeral_read_receipt(
             if history_visibility == "world_readable"
                 && !policy.allow_public_receipts_on_world_readable
             {
-                return Err(crate::error::AppError::new(
-                    crate::error::ErrorCode::PolicyViolation,
+                return Err(soland_http::error::AppError::new(
+                    soland_http::error::ErrorCode::PolicyViolation,
                     "read_receipt_policy.visibility=public is rejected for world_readable history unless allow_public_receipts_on_world_readable=true",
                 )
                 .with_status(StatusCode::FORBIDDEN)
@@ -441,8 +441,8 @@ async fn admit_ephemeral_read_receipt(
                 && policy.disclosure == arkret_sdk::ReadReceiptDisclosure::Required
                 && !policy.allow_forced_public_world_readable_receipts
             {
-                return Err(crate::error::AppError::new(
-                    crate::error::ErrorCode::PolicyViolation,
+                return Err(soland_http::error::AppError::new(
+                    soland_http::error::ErrorCode::PolicyViolation,
                     "read_receipt_policy.disclosure=required with visibility=public is rejected for world_readable history unless allow_forced_public_world_readable_receipts=true",
                 )
                 .with_status(StatusCode::FORBIDDEN)
@@ -478,9 +478,9 @@ async fn admit_ephemeral_read_receipt(
 /// so malformed call signals never enter the ephemeral fan-out.
 fn admit_ephemeral_call_signal(
     envelope: &arkret_sdk::EphemeralEnvelope,
-) -> Result<arkret_sdk::CallSignalPayload, crate::error::AppError> {
+) -> Result<arkret_sdk::CallSignalPayload, soland_http::error::AppError> {
     let payload = arkret_sdk::validate_call_signal_envelope(envelope).map_err(|error| {
-        crate::error::AppError::invalid_param(format!(
+        soland_http::error::AppError::invalid_param(format!(
             "ak.call.signal envelope failed structural validation: {error}"
         ))
     })?;
@@ -498,30 +498,30 @@ fn admit_ephemeral_call_signal(
 /// verification rules after this shared structural gate.
 fn validate_ephemeral_broadcast_proof_shape(
     envelope: &arkret_sdk::EphemeralEnvelope,
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), soland_http::error::AppError> {
     let kind = envelope.kind.as_str();
     let device_id = &envelope.device_id;
     let proof = &envelope.proof;
     proof.validate_production().map_err(|error| {
-        crate::error::AppError::invalid_param(format!(
+        soland_http::error::AppError::invalid_param(format!(
             "{kind} proof is not production-grade: {error}"
         ))
     })?;
     let expected_vm = format!("{}#{}", envelope.actor_id, device_id.as_str());
     if proof.verification_method != expected_vm {
-        return Err(crate::error::AppError::invalid_param(format!(
+        return Err(soland_http::error::AppError::invalid_param(format!(
             "{kind} proof.verification_method must be {{actor_id}}#{{device_id}}"
         )));
     }
     let parts = proof.jws.split('.').collect::<Vec<_>>();
     if parts.len() != 3 || !parts[1].is_empty() {
-        return Err(crate::error::AppError::invalid_param(format!(
+        return Err(soland_http::error::AppError::invalid_param(format!(
             "{kind} proof.jws must be detached header..signature"
         )));
     }
     // The digest covers the canonical envelope without `proof`.
     let mut without_proof = serde_json::to_value(envelope).map_err(|error| {
-        crate::error::AppError::invalid_param(format!(
+        soland_http::error::AppError::invalid_param(format!(
             "{kind} envelope is not serialisable: {error}"
         ))
     })?;
@@ -531,13 +531,13 @@ fn validate_ephemeral_broadcast_proof_shape(
         .remove("proof");
     let canonical =
         arkret_sdk::canonical::canonical_json_bytes(&without_proof).map_err(|error| {
-            crate::error::AppError::invalid_param(format!(
+            soland_http::error::AppError::invalid_param(format!(
                 "{kind} envelope canonicalization failed: {error}"
             ))
         })?;
     let expected = arkret_sdk::canonical::sha256_digest(&canonical);
     if proof.event_digest.as_str() != expected {
-        return Err(crate::error::AppError::invalid_param(format!(
+        return Err(soland_http::error::AppError::invalid_param(format!(
             "{kind} proof.event_digest does not match the envelope without proof"
         )));
     }
@@ -553,7 +553,7 @@ fn validate_ephemeral_broadcast_proof_shape(
 async fn verify_ephemeral_device_proof(
     state: &AppState,
     envelope: &arkret_sdk::EphemeralEnvelope,
-) -> Result<(), crate::error::AppError> {
+) -> Result<(), soland_http::error::AppError> {
     let device_id = &envelope.device_id;
     let facet =
         crate::routing::identity::cross_signing::try_resolve_device_signing_directory_facet(
@@ -588,8 +588,8 @@ async fn verify_ephemeral_device_proof(
     })
 }
 
-fn ephemeral_proof_invalid(message: impl Into<String>) -> crate::error::AppError {
-    crate::error::AppError::invalid_param(message)
+fn ephemeral_proof_invalid(message: impl Into<String>) -> soland_http::error::AppError {
+    soland_http::error::AppError::invalid_param(message)
         .with_reason_code(arkret_sdk::ReasonCode::PROOF_INVALID)
 }
 
@@ -602,7 +602,7 @@ mod tests {
         let error = ephemeral_channel_unavailable("persist presence state");
         assert_eq!(
             error.code,
-            crate::error::ErrorCode::EphemeralChannelUnavailable
+            soland_http::error::ErrorCode::EphemeralChannelUnavailable
         );
         assert_eq!(error.http_status(), StatusCode::SERVICE_UNAVAILABLE);
     }

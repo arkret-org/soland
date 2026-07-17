@@ -23,9 +23,8 @@ pub(super) async fn run_webvh_resolution_checks(
     did: &str,
 ) -> Result<(), AppError> {
     let events = state
-        .persistence
-        .webvh()
-        .list_log_events(did)
+        .did_application()
+        .log_events(did)
         .await
         .map_err(|error| {
             tracing::error!(%error, %did, "failed to read webvh log during resolution checks");
@@ -84,9 +83,8 @@ pub(in crate::routing) async fn identity_document_record(
         };
     }
     let record = state
-        .persistence
-        .webvh()
-        .get_document(did)
+        .did_application()
+        .document(did)
         .await
         .ok()
         .flatten()

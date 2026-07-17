@@ -808,7 +808,6 @@ impl AppConfig {
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
 impl AppConfig {
     /// Single source of truth for test configs. Defaults take the
     /// production posture (`development_mode = false`, replay-window

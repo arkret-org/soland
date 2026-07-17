@@ -41,7 +41,7 @@ pub fn message_redaction_target_ref(payload: &Value) -> Option<String> {
     })
 }
 
-pub(crate) fn message_id_from_event_id(value: &str) -> String {
+pub fn message_id_from_event_id(value: &str) -> String {
     value
         .strip_prefix("ak:event:")
         .map(|suffix| format!("ak:message:{suffix}"))

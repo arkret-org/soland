@@ -316,7 +316,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(blob["upload_receipt"]["content_digest"], ciphertext_digest);
     assert!(blob["upload_receipt"].get("encrypted_attachment").is_none());
     let stored_blob = state
-        .persistence
+        .test_persistence()
         .blobs()
         .get(blob["blob_ref"].as_str().unwrap())
         .await
@@ -384,7 +384,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "did:web:blob-bob.example",
     );
 
-    let service_id = state.service_id.clone();
+    let service_id = state.service_id().clone();
     let shared_plaintext_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
@@ -420,7 +420,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert!(plaintext_blob["upload_receipt"].get("realm_id").is_none());
     assert!(plaintext_blob["upload_receipt"].get("filename").is_none());
     let stored_plaintext_blob = state
-        .persistence
+        .test_persistence()
         .blobs()
         .get(plaintext_blob["blob_ref"].as_str().unwrap())
         .await
@@ -656,14 +656,19 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     // Revoke member A's device, then re-query: the entry remains as revoked
     // status telemetry, but carries no signing key.
     let mut revoked = state
-        .persistence
+        .test_persistence()
         .devices()
         .get(alice, alice_device)
         .await
         .unwrap()
         .unwrap();
     revoked.revoked_at = Some(chrono::Utc::now());
-    state.persistence.devices().put(&revoked).await.unwrap();
+    state
+        .test_persistence()
+        .devices()
+        .put(&revoked)
+        .await
+        .unwrap();
 
     let post_revoke: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -698,7 +703,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
 
     // Exercise the delegated-authority (A-model) projection directly. The
     // accepted authorize must carry exactly one trust binding.
-    let control_realm = soland::test_support::principal_control_realm_for_did(alice);
+    let control_realm = soland_test_support::principal_control_realm_for_did(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
     let expected_authorize_event_id = operation_id.replacen("ak:operation:", "ak:event:", 1);
     let operation = Operation::create(
@@ -726,10 +731,10 @@ async fn device_authorize_projects_public_key_into_devices_table() {
             }
         }),
     );
-    soland::test_support::project_accepted_operations(&state, alice, &[operation]).await;
+    soland_test_support::project_accepted_operations(&state, alice, &[operation]).await;
 
     let device = state
-        .persistence
+        .test_persistence()
         .devices()
         .get(alice, alice_device)
         .await
@@ -755,7 +760,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
     let generation_ref = "1-QmBootstrapGeneration";
     let now = chrono::Utc::now();
     state
-        .persistence
+        .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
             actor: alice.to_owned(),
@@ -776,7 +781,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
     let device_key = SigningKey::from_bytes(&[203u8; 32]);
     let operation = Operation::create(
         OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
-        RealmId::new(soland::test_support::principal_control_realm_for_did(alice)).unwrap(),
+        RealmId::new(soland_test_support::principal_control_realm_for_did(alice)).unwrap(),
         "ak.device.authorize",
         serde_json::json!({
             "principal_id": alice,
@@ -794,10 +799,10 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
         }),
     );
 
-    soland::test_support::project_accepted_operations(&state, alice, &[operation]).await;
+    soland_test_support::project_accepted_operations(&state, alice, &[operation]).await;
 
     let projected = state
-        .persistence
+        .test_persistence()
         .devices()
         .get(alice, alice_device)
         .await
@@ -817,7 +822,7 @@ async fn keys_query_exposes_service_attested_device_anchor() {
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000004";
     let device_key = SigningKey::from_bytes(&[203u8; 32]);
     let multibase = test_ed25519_multibase_public(&device_key);
-    let control_realm = soland::test_support::principal_control_realm_for_did(alice);
+    let control_realm = soland_test_support::principal_control_realm_for_did(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
     let expected_authorize_event_id = operation_id.replacen("ak:operation:", "ak:event:", 1);
     let operation = Operation::create(
@@ -844,7 +849,7 @@ async fn keys_query_exposes_service_attested_device_anchor() {
             }
         }),
     );
-    soland::test_support::project_accepted_operations(&state, alice, &[operation]).await;
+    soland_test_support::project_accepted_operations(&state, alice, &[operation]).await;
 
     let token = dev_token_for_device(
         state.clone(),
@@ -880,7 +885,7 @@ async fn keys_query_exposes_service_attested_device_anchor() {
     );
 }
 
-/// Build a real, fully-signed `(ak.cross_signing.publish payload,
+/// Build a real, fully-signed `(ak.test_cross_signing().publish payload,
 /// ak.device.authorize cross_signing_binding)` pair for `principal` / `device`
 /// using the supplied PSK / SSK keypairs and the SDK canonical-input
 /// constructors (the same ones the server's `check_device_cross_signing_binding`
@@ -1021,11 +1026,11 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     // Project the cross_signing.publish (records PSK→{SSK,USK} into the
     // DeviceManager) and the device.authorize (persists device_public_key +
     // cross_signing_binding into the devices table) through the real pipeline.
-    let control_realm = soland::test_support::principal_control_realm_for_did(alice);
+    let control_realm = soland_test_support::principal_control_realm_for_did(alice);
     let publish_op = Operation::create(
         OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
         RealmId::new(control_realm.clone()).unwrap(),
-        "ak.cross_signing.publish",
+        "ak.test_cross_signing().publish",
         publish_payload,
     );
     let authorize_op = Operation::create(
@@ -1034,7 +1039,7 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
         "ak.device.authorize",
         authorize_payload,
     );
-    soland::test_support::project_accepted_operations(&state, alice, &[publish_op, authorize_op])
+    soland_test_support::project_accepted_operations(&state, alice, &[publish_op, authorize_op])
         .await;
 
     // Member B queries A's directory.

@@ -19,10 +19,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use soland_http::ratelimit::RateLimiterConfig;
 use soland_storage_postgres::PgPool;
 
 use crate::config::{AppConfig, FederationFanoutTopology};
-use crate::ratelimit::RateLimiterConfig;
 
 /// Rate-limit ceilings, per endpoint class, as a serializable snapshot.
 /// Mirrors the fields of [`RateLimiterConfig`] but is `Serialize`/

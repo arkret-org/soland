@@ -42,9 +42,8 @@ async fn authorize_account_device_pair(
         .with_wire_code("cannot_pair_current_device"));
     }
     if let Some(existing) = state
-        .persistence
-        .devices()
-        .list_for_actor_including_revoked(&session.actor)
+        .identity_application()
+        .devices_for_actor(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
@@ -73,36 +72,40 @@ async fn authorize_account_device_pair(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let device = DeviceInventoryRecord {
-        actor: session.actor.clone(),
+    let device = soland_application::identity::SaveDeviceCommand {
+        actor_id: session.actor.clone(),
         device_id: device_id.clone(),
         display_name: display_name.clone(),
-        verification_state: "verified".to_owned(),
-        payload: json!({
-            "device_id": device_id.clone(),
-            "device_public_key": pair_pubkey.device_public_key.clone(),
-            "device_authorize_projected": true,
-            "device_authorize_event_id": authorized_event_ref.clone(),
-            "authorization": {
-                "event_kind": "ak.device.authorize",
-                "authorized_event_ref": authorized_event_ref.clone(),
-                "authorized_by_device_id": session.device_id.clone(),
-                "authorized_at": authorized_at,
-                "pairing_code": pairing_code,
-                "challenge_signature": body.challenge_signature,
-                "new_device_pubkey": body.new_device_pubkey,
-                "device_public_key": pair_pubkey.device_public_key,
-                "device_metadata": body.device_metadata,
-            }
-        }),
-        created_at: authorized_at,
-        updated_at: authorized_at,
-        revoked_at: None,
+        device: soland_application::identity::DeviceIdentity {
+            actor_id: session.actor.clone(),
+            device_id: device_id.clone(),
+            display_name: display_name.clone(),
+            verification_state: "verified".to_owned(),
+            payload: json!({
+                "device_id": device_id.clone(),
+                "device_public_key": pair_pubkey.device_public_key.clone(),
+                "device_authorize_projected": true,
+                "device_authorize_event_id": authorized_event_ref.clone(),
+                "authorization": {
+                    "event_kind": "ak.device.authorize",
+                    "authorized_event_ref": authorized_event_ref.clone(),
+                    "authorized_by_device_id": session.device_id.clone(),
+                    "authorized_at": authorized_at,
+                    "pairing_code": pairing_code,
+                    "challenge_signature": body.challenge_signature,
+                    "new_device_pubkey": body.new_device_pubkey,
+                    "device_public_key": pair_pubkey.device_public_key,
+                    "device_metadata": body.device_metadata,
+                }
+            }),
+            created_at: authorized_at,
+            updated_at: authorized_at,
+            revoked_at: None,
+        },
     };
     state
-        .persistence
-        .devices()
-        .put(&device)
+        .identity_application()
+        .save_device(device)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
@@ -119,7 +122,7 @@ async fn authorize_account_device_pair(
     .await;
 
     let device_id =
-        DeviceId::new(device.device_id).map_err(|error| AppError::internal(error.to_string()))?;
+        DeviceId::new(device_id).map_err(|error| AppError::internal(error.to_string()))?;
     let authorized_event_ref = EventId::new(authorized_event_ref)
         .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(AccountDevicePairOutcome {
@@ -131,7 +134,7 @@ async fn authorize_account_device_pair(
 }
 
 pub(crate) fn initial_session_device_verification_state<'a>(
-    existing_devices: &'a [DeviceInventoryRecord],
+    existing_devices: &'a [soland_application::identity::DeviceIdentity],
     device_id: &str,
 ) -> &'a str {
     if existing_devices.is_empty()
@@ -150,9 +153,11 @@ async fn ensure_authorizing_device_verified(
     session: &SessionRecord,
 ) -> Result<(), AppError> {
     let device = state
-        .persistence
-        .devices()
-        .get(&session.actor, &session.device_id)
+        .identity_application()
+        .find_device(soland_application::identity::FindDeviceQuery {
+            actor_id: session.actor.clone(),
+            device_id: session.device_id.clone(),
+        })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {

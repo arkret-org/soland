@@ -31,13 +31,13 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_http::error::AppError;
 use soland_storage::{
     SovereignAuditRecord, SovereignEnclaveRecord, SovereignExternalAccountRecord,
     SovereignExternalInviteRecord, SovereignRealmRecord, SovereignStoreForwardRecord,
 };
 
 use crate::config::AppConfig;
-use crate::error::AppError;
 use crate::routing::admin::{RequireAdmin, require_admin_principal};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;

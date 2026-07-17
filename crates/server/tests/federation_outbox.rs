@@ -85,7 +85,7 @@ fn outbox_test_config() -> AppConfig {
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: BTreeMap::new(),
         trust_domain: "ak:trust_domain:soland-outbox.local".to_owned(),
-        ..AppConfig::test_default()
+        ..soland_test_support::app_config()
     }
 }
 
@@ -110,7 +110,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
     assert!(
         lower.contains(&format!(
             "source-service-id: {}",
-            captured.state.service_id.to_ascii_lowercase()
+            captured.state.service_id().to_ascii_lowercase()
         )),
         "captured request missing Source-Service-ID binding; got: {}",
         captured.captured
@@ -140,7 +140,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
             && lower.contains("\"@authority\"")
             && lower.contains(&format!(
                 "keyid=\"{}#federation-fanout-key\"",
-                captured.state.service_id.to_ascii_lowercase()
+                captured.state.service_id().to_ascii_lowercase()
             )),
         "captured request missing RFC 9421 Signature-Input; got: {}",
         captured.captured
@@ -165,7 +165,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
     // Outbox row must be marked delivered with the mock's 2xx status.
     let updated = captured
         .state
-        .persistence
+        .test_persistence()
         .federation_outbox()
         .get(&captured.row_id)
         .await
@@ -233,7 +233,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
         .expect("mock peer should have received request");
 
     let updated = state
-        .persistence
+        .test_persistence()
         .federation_outbox()
         .get(&row.id)
         .await
@@ -244,7 +244,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
     assert_eq!(updated.attempts, 1);
 
     let dead_letters = state
-        .persistence
+        .test_persistence()
         .federation_outbox()
         .dead_letters_snapshot()
         .await
@@ -321,7 +321,7 @@ async fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
         "same peer + idempotency key must return the original outbox row"
     );
     let snapshot = state
-        .persistence
+        .test_persistence()
         .federation_outbox()
         .snapshot_all()
         .await

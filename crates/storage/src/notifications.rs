@@ -1,4 +1,4 @@
-use super::*;
+use super::{PersistenceResult, Value, async_trait};
 /// AKP-0016 §9.4.5 — per-recipient notification projection (mention
 /// fanout output). Native agents are gated by their effective
 /// accept_third_party_mention bit before a row is written here.

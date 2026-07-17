@@ -75,9 +75,8 @@ pub(super) async fn require_agent_controller(
 ) -> Result<AgentPrincipalRecord, AppError> {
     validate_agent_id(agent_id)?;
     let record = state
-        .persistence
-        .agents()
-        .get(agent_id)
+        .agent_pairing_application()
+        .agent(agent_id)
         .await
         .map_err(|err| AppError::internal(format!("agent controller lookup failed: {err}")))?
         .ok_or_else(|| AppError::capability_denied("agent principal has no controller binding"))?;

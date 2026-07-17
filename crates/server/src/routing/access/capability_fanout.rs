@@ -9,10 +9,10 @@ use serde_json::{Value, json};
 use soland_contracts::integration::capability_fanout::{
     CapabilityFanoutAuthzState, CapabilityFanoutBody, CapabilityFanoutResponse,
 };
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
+use soland_http::util::{bearer_token, sha256_hex};
 
-use crate::error::AppError;
-use crate::result::{JsonResult, json_ok};
-use crate::routing::system::util::{bearer_token, sha256_hex};
 use crate::state::AppState;
 
 const FANOUT_KIND: &str = "ak.coauth.collaboration_capability.fanout.v1";
@@ -113,7 +113,7 @@ fn require_fanout_bearer(state: &AppState, req: &Request) -> Result<(), AppError
         .filter(|value| !value.is_empty())
     else {
         return Err(AppError::new(
-            crate::error::ErrorCode::TemporarilyUnavailable,
+            soland_http::error::ErrorCode::TemporarilyUnavailable,
             "capability fanout requires SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
         )
         .with_status(StatusCode::SERVICE_UNAVAILABLE));

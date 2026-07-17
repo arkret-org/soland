@@ -21,9 +21,9 @@ use std::sync::Arc;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Map, Value};
+use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
-use crate::error::{AppError, ErrorCode};
 use crate::runtime_settings::{self, RuntimeSettings};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};

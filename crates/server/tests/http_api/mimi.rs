@@ -622,7 +622,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let second_event_id = msg_resp_2["event_ref"].as_str().expect("event_ref missing");
 
     let second_record = state
-        .persistence
+        .test_persistence()
         .events()
         .get(second_event_id)
         .await

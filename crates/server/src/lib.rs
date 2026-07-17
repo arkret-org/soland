@@ -10,7 +10,6 @@ pub mod authz;
 pub mod bootstrap;
 pub mod compactor;
 pub mod config;
-pub mod error;
 pub mod gc;
 pub mod ids;
 mod invite_claim_proofs;
@@ -22,21 +21,21 @@ pub mod object_storage;
 pub mod otel;
 mod persistence_registry;
 pub mod push_rule_core;
-pub mod ratelimit;
 pub mod realm_alias;
-pub mod result;
 pub mod routing;
 pub mod runtime_settings;
 pub mod security;
 pub mod state;
 pub mod verified_profiles;
 pub mod wire;
-pub mod wire_validators;
 
-pub use error::AppError;
-pub use result::{AppResult, EmptyOutcome, EmptyResult, JsonResult, empty_ok, json_ok};
 pub use routing::{
     router, router_with_rate_limiter_and_request_size_config, router_with_rate_limiter_config,
+};
+pub use soland_http::app_error;
+pub use soland_http::error::AppError;
+pub use soland_http::result::{
+    AppResult, EmptyOutcome, EmptyResult, JsonResult, empty_ok, json_ok,
 };
 
 /// Canonical-JSON digest of a value: SHA-256 over the SDK canonical byte
@@ -53,16 +52,14 @@ pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String
 /// identity helpers live in `pub(crate)` modules; surface them here (hidden
 /// from the rendered API) so the device-identity directory tests can drive the
 /// `ak.device.authorize` projection without a full signed-envelope ingest.
-#[cfg(feature = "test-util")]
 #[doc(hidden)]
 pub mod test_support {
     pub use crate::routing::events::projection::project_accepted_operations;
-    pub use crate::routing::identity::recovery::principal_control_realm_for_did;
 }
 use salvo::catcher::Catcher;
 use salvo::prelude::{CatchPanic, Service};
+use soland_http::ratelimit::RateLimiterConfig;
 
-use crate::ratelimit::RateLimiterConfig;
 use crate::routing::{cors_handler_for_origin_spec, error_catcher};
 use crate::state::AppState;
 

@@ -10,7 +10,11 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_storage::{ServiceRegistrationCommitOutcome, WebvhDocumentRecord, WebvhLogRecord};
+use soland_application::identity::{
+    DidDocumentState, DidLogEvent, ServiceRegistrationCommitResult,
+};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 
 use super::did::require_embedded_webvh_registration_bearer;
 use super::webvh_validation::{
@@ -18,8 +22,6 @@ use super::webvh_validation::{
     validate_witness_policy_for_log, verify_log_subject, verify_scid_against_did,
     verify_webvh_log_proof,
 };
-use crate::error::{AppError, ErrorCode};
-use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
 #[endpoint(
@@ -58,7 +60,7 @@ pub(crate) async fn ensure(
     let service_id = outcome.service_id.to_string();
     let document_value = serde_json::to_value(&outcome.did_document)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let document = WebvhDocumentRecord {
+    let document = DidDocumentState {
         did: service_id.clone(),
         did_document: document_value,
         key_log_head: Some(event_digest.clone()),
@@ -74,7 +76,7 @@ pub(crate) async fn ensure(
         expires_at: issued_at,
         updated_at: issued_at,
     };
-    let event = WebvhLogRecord {
+    let event = DidLogEvent {
         event_digest,
         did: service_id,
         seq: 1,
@@ -83,20 +85,19 @@ pub(crate) async fn ensure(
     };
 
     match state
-        .persistence
-        .webvh()
+        .did_application()
         .commit_service_registration(key, outcome, document.clone(), event)
         .await
         .map_err(provider_unavailable)?
     {
-        ServiceRegistrationCommitOutcome::Created(outcome) => {
-            if let Err(error) = state.did_resolver.cache_webvh_record(document) {
+        ServiceRegistrationCommitResult::Created(outcome) => {
+            if let Err(error) = state.did_resolver.cache_application_webvh_record(document) {
                 tracing::warn!(%error, "failed to cache newly registered service DID document");
             }
             json_ok(outcome)
         }
-        ServiceRegistrationCommitOutcome::Existing(outcome) => json_ok(outcome),
-        ServiceRegistrationCommitOutcome::Conflict => Err(AppError::new(
+        ServiceRegistrationCommitResult::Existing(outcome) => json_ok(outcome),
+        ServiceRegistrationCommitResult::Conflict => Err(AppError::new(
             ErrorCode::ServiceIdentityConflict,
             "service registration key, DID, or control root is already bound differently",
         )),
@@ -124,9 +125,8 @@ pub(crate) async fn get(
     let key = ServiceRegistrationKey::new(service_type, public_base)
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
     let outcome = state
-        .persistence
-        .webvh()
-        .get_service_registration(&key)
+        .did_application()
+        .service_registration(&key)
         .await
         .map_err(provider_unavailable)?
         .ok_or_else(|| {

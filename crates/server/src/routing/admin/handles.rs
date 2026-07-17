@@ -29,9 +29,9 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use crate::error::AppError;
 use crate::state::{AppState, HandleClaimEvidenceRecord};
 
 const DESTRUCTIVE_REASON_MAX_CHARS: usize = 512;

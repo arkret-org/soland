@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    Arc, BTreeMap, MorphProjectionRecord, MorphProjectionStore, Mutex, PersistenceResult,
+    ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, RealmMetaRecord,
+    RealmMetaStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
+    StrandProjectionRecord, StrandProjectionStore, async_trait,
+};
 // In-memory Realm meta store
 pub(crate) struct MemoryRealmMetaStore {
     data: Arc<Mutex<BTreeMap<String, RealmMetaRecord>>>,
@@ -183,7 +188,7 @@ impl MorphProjectionStore for MemoryMorphProjectionStore {
 }
 #[derive(Default)]
 pub(crate) struct MemoryProjectionEventStore {
-    data: Mutex<Vec<ProjectionEventRecord>>,
+    pub(crate) data: Mutex<Vec<ProjectionEventRecord>>,
 }
 impl MemoryProjectionEventStore {
     pub(crate) fn new() -> Self {

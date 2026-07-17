@@ -5,9 +5,9 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
+use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
-use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

@@ -47,7 +47,23 @@ pub(in crate::routing) async fn submit_event_value(
             "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
         ));
     }
-    submit_event_value_with_context(state, session, envelope, &[]).await
+    submit_event_value_with_context(state, session, envelope, &[], None).await
+}
+
+pub(in crate::routing) async fn submit_event_value_with_idempotency(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: Value,
+    idempotency: EventCommitIdempotency,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    if batch_contains_identity_anchor(std::slice::from_ref(&envelope)) {
+        return Err(SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
+        ));
+    }
+    submit_event_value_with_context(state, session, envelope, &[], Some(idempotency)).await
 }
 
 pub(super) async fn submit_event_value_with_context(
@@ -55,6 +71,7 @@ pub(super) async fn submit_event_value_with_context(
     session: &SessionRecord,
     mut envelope: Value,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
+    commit_idempotency: Option<EventCommitIdempotency>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
@@ -640,8 +657,21 @@ pub(super) async fn submit_event_value_with_context(
     }
 
     let envelope_for_bootstrap = envelope.clone();
-    if let Err(error) = store
-        .put(CanonicalEventRecord {
+    let projected_event = projection_operation.as_ref().map(|operation| {
+        crate::routing::events::projection::projection_event_from_operation(
+            operation,
+            Some(&parsed.actor_id),
+        )
+    });
+    let outbox = if session.token_hash.starts_with("federation:") {
+        Vec::new()
+    } else {
+        peer_event_fanout_records(state, &parsed, &envelope_for_bootstrap)
+    };
+    let accepted_response =
+        event_submit_response(state, EventsSubmitStatus::Accepted, parsed.event_id.clone()).await;
+    let command = soland_application::events::CommitAcceptedEventCommand {
+        event: soland_application::events::AcceptedEvent {
             event_id: parsed.event_id.clone(),
             actor_id: parsed.actor_id.clone(),
             actor_seq: parsed.actor_seq,
@@ -652,7 +682,51 @@ pub(super) async fn submit_event_value_with_context(
             canonical_bytes: parsed.canonical_bytes.clone(),
             envelope,
             received_at,
-        })
+        },
+        projections: projected_event
+            .iter()
+            .map(|event| soland_application::events::ProjectedEvent {
+                event_id: event.event_id.clone(),
+                realm_id: event.realm_id.clone(),
+                event_kind: event.event_kind.clone(),
+                operation_type: event.operation_type.clone(),
+                operation_id: event.operation_id.clone(),
+                sender: event.sender.clone(),
+                payload: event.payload.clone(),
+                created_at: event.created_at,
+                received_at: event.received_at,
+            })
+            .collect(),
+        idempotency: commit_idempotency.map(|record| {
+            let created_at = now();
+            soland_application::events::IdempotentResponse {
+                principal_id: record.principal_id,
+                key: record.key,
+                service_id: record.service_id,
+                request_hash: record.request_hash,
+                status: StatusCode::OK.as_u16() as i32,
+                body: serde_json::to_value(&accepted_response.outcome)
+                    .unwrap_or_else(|_| json!({"status": "accepted"})),
+                created_at,
+                expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
+            }
+        }),
+        deliveries: outbox
+            .into_iter()
+            .map(|record| soland_application::events::FederationDelivery {
+                id: record.id,
+                peer_did: record.peer_did,
+                peer_url: record.peer_url,
+                endpoint: record.endpoint,
+                idempotency_key: record.idempotency_key,
+                payload_json: record.payload_json,
+                created_at: record.created_at,
+            })
+            .collect(),
+    };
+    if let Err(soland_application::ApplicationError::Storage(error)) = state
+        .event_application()
+        .commit_accepted_event(command)
         .await
     {
         if parsed.kind == arkret_sdk::events::EventKind::REALM_CREATE
@@ -676,8 +750,14 @@ pub(super) async fn submit_event_value_with_context(
         )
         .await;
     }
-    if !session.token_hash.starts_with("federation:") {
-        enqueue_peer_event_fanout(state, &parsed, &envelope_for_bootstrap).await;
+    if let Some(event) = projected_event {
+        let _ = state
+            .event_broadcast
+            .send(crate::state::EventNotification::event(
+                event.realm_id.clone(),
+                event.event_id.clone(),
+                crate::routing::events::projection::projection_event_json(&event),
+            ));
     }
     if let Some(payload) = strand_status_audit_payload {
         append_audit_log(
@@ -715,5 +795,5 @@ pub(super) async fn submit_event_value_with_context(
         "accepted",
     )
     .await;
-    Ok(event_submit_response(state, EventsSubmitStatus::Accepted, parsed.event_id).await)
+    Ok(accepted_response)
 }

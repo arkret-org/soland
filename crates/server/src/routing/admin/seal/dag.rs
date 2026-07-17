@@ -8,9 +8,9 @@ use soland_contracts::admin::seal::{
     CompactionOutcome, CompactionRequestBody, SealDagSnapshot, SealLeaf, SealPruneDiagnostics,
     SealPruneOutcome, SealPruneRequestBody,
 };
+use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, admin_signer_for, fresh_hlc};
-use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
