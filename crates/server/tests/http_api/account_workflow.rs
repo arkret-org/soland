@@ -307,6 +307,84 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
 }
 
 #[tokio::test]
+async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000003";
+    let did = "did:web:bob-repeat.example";
+    let first = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
+        .json(&serde_json::json!({
+            "principal_id": did,
+            "display_name": "bob",
+            "device_id": device_id,
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(first.status_code.unwrap(), StatusCode::OK);
+
+    let placeholder = state
+        .persistence
+        .devices()
+        .get(did, device_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let generation_ref = "1-QmCurrentGeneration";
+    state
+        .persistence
+        .devices()
+        .put(&soland::state::DeviceInventoryRecord {
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({
+                "device_id": device_id,
+                "device_public_key": "z6MkAuthorizedDeviceKey",
+                "authorized_generation_ref": generation_ref,
+                "device_authorize_projected": true,
+            }),
+            updated_at: chrono::Utc::now(),
+            ..placeholder
+        })
+        .await
+        .unwrap();
+
+    let repeated = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
+        .json(&serde_json::json!({
+            "principal_id": did,
+            "display_name": "bob",
+            "device_id": device_id,
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(repeated.status_code.unwrap(), StatusCode::OK);
+
+    let preserved = state
+        .persistence
+        .devices()
+        .get(did, device_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved.verification_state, "verified");
+    assert_eq!(
+        preserved.payload["authorized_generation_ref"],
+        generation_ref
+    );
+    assert_eq!(
+        preserved.payload["device_public_key"],
+        "z6MkAuthorizedDeviceKey"
+    );
+}
+
+#[tokio::test]
 async fn account_contacts_and_realm_lifecycle_workflow() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;

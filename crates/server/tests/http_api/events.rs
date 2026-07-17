@@ -1283,8 +1283,8 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(invalid_cursor_body["error"]["code"], "invalid_param");
 }
 
-#[tokio::test]
-async fn incremental_sync_omits_quiet_realm_from_delta() {
+#[tokio::test(start_paused = true)]
+async fn incremental_sync_waits_30_seconds_then_returns_frontier() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
 
@@ -1295,25 +1295,27 @@ async fn incremental_sync_omits_quiet_realm_from_delta() {
         "full sync MUST include the realm baseline: {baseline}"
     );
 
+    let started = tokio::time::Instant::now();
     let quiet = account_subscribe_frame(
         state.clone(),
         Some(&alice),
         &format!("catchup=true&after={cursor}"),
     )
     .await;
-    assert!(
-        quiet["realms"][DEMO_REALM_ID].is_null(),
-        "incremental noop MUST drop the realm baseline: {quiet}"
+    let elapsed = started.elapsed();
+    assert_eq!(
+        elapsed,
+        Duration::from_secs(30),
+        "quiet incremental subscribe must be a server-side 30s long poll"
     );
+    assert_eq!(quiet["kind"], "frontier");
     assert!(
-        quiet["realms"]
-            .as_object()
-            .is_some_and(|map| map.is_empty()),
-        "no other realm should appear in a quiet delta: {quiet}"
+        quiet["realms"].is_null(),
+        "frontier must carry no fake delta: {quiet}"
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn incremental_sync_meta_only_delta_advances_cursor_once() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
@@ -1375,15 +1377,10 @@ async fn incremental_sync_meta_only_delta_advances_cursor_once() {
         &format!("catchup=true&after={next_cursor}"),
     )
     .await;
+    assert_eq!(quiet["kind"], "frontier");
     assert!(
-        quiet["realms"][&realm_id].is_null(),
+        quiet["realms"].is_null(),
         "same meta-only projection MUST NOT repeat after its cursor: {quiet}"
-    );
-    assert!(
-        quiet["realms"]
-            .as_object()
-            .is_some_and(|map| !map.contains_key(&realm_id)),
-        "quiet delta must omit the meta-only realm entirely: {quiet}"
     );
 }
 
@@ -1421,7 +1418,7 @@ async fn incremental_sync_emits_realm_with_new_timeline_event() {
 }
 
 #[tokio::test]
-async fn account_subscribe_stays_open_after_catchup_and_delivers_broadcast() {
+async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batch() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
 
@@ -1458,20 +1455,22 @@ async fn account_subscribe_stays_open_after_catchup_and_delivers_broadcast() {
     .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
     .await;
-    let initial: Value = serde_json::from_str(&take_first_response_chunk(&mut response).await)
-        .expect("initial delta frame");
-    assert_eq!(initial["kind"], "delta");
+    let woken: Value = serde_json::from_str(&take_first_response_chunk(&mut response).await)
+        .expect("woken delta frame");
+    assert_eq!(woken["kind"], "delta");
     let catchup: Value = serde_json::from_str(&take_first_response_chunk(&mut response).await)
         .expect("catchup-complete frame");
     assert_eq!(catchup["kind"], "catchup_complete");
-    let woken: Value = serde_json::from_str(&take_first_response_chunk(&mut response).await)
-        .expect("post-catchup delta frame");
     let elapsed = start.elapsed();
     let message = waker.await.unwrap();
 
     assert!(
+        elapsed >= Duration::from_millis(150),
+        "incremental subscribe returned before its broadcast wake-up: {elapsed:?}"
+    );
+    assert!(
         elapsed < Duration::from_secs(3),
-        "broadcast should wake the open stream well before the heartbeat deadline: {elapsed:?}"
+        "broadcast should wake the long poll well before its 30s deadline: {elapsed:?}"
     );
     let timeline = woken["realms"][DEMO_REALM_ID]["timeline"]["events"]
         .as_array()

@@ -12,6 +12,12 @@ pub trait DeviceInventoryStore: Send + Sync {
         device_id: &str,
     ) -> PersistenceResult<Option<DeviceInventoryRecord>>;
     async fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()>;
+    /// Insert a placeholder only when the actor/device row does not exist.
+    ///
+    /// Account registration is idempotent and may be replayed after an
+    /// `ak.device.authorize` projection has already verified the device.  A
+    /// placeholder write must never overwrite that authoritative projection.
+    async fn put_if_absent(&self, record: &DeviceInventoryRecord) -> PersistenceResult<bool>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>>;
     async fn list_for_actor_including_revoked(
         &self,
@@ -129,6 +135,16 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
             record.clone(),
         );
         Ok(())
+    }
+
+    async fn put_if_absent(&self, record: &DeviceInventoryRecord) -> PersistenceResult<bool> {
+        let mut data = self.data.lock();
+        let key = (record.actor.clone(), record.device_id.clone());
+        if data.contains_key(&key) {
+            return Ok(false);
+        }
+        data.insert(key, record.clone());
+        Ok(true)
     }
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
@@ -922,6 +938,27 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
         .bind::<Nullable<Timestamptz>, _>(record.revoked_at)
         .execute(&mut *conn).await
         .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn put_if_absent(&self, record: &DeviceInventoryRecord) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO devices (id, actor_id, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (actor_id, device_id) DO NOTHING",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
+        .bind::<Text, _>(&record.actor)
+        .bind::<Text, _>(&record.device_id)
+        .bind::<Jsonb, _>(&record.payload)
+        .bind::<Text, _>(&record.verification_state)
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .bind::<Nullable<Timestamptz>, _>(record.revoked_at)
+        .execute(&mut *conn)
+        .await
+        .map(|affected| affected > 0)
         .map_err(PersistenceError::from)
     }
 

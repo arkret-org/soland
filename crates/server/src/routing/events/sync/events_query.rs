@@ -6,6 +6,7 @@
 use super::*;
 
 const EVENTS_CATCHUP_LIMIT: usize = 100;
+const EVENTS_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 
 /// `ak.self.events.stream.subscribe` at `GET /_arkret/self/events/subscribe`. NDJSON
 /// streaming: each line is one frame, frame `kind` is one of
@@ -23,7 +24,7 @@ const EVENTS_CATCHUP_LIMIT: usize = 100;
 ///      frames every 30s of idle e) a terminal `resync_required` frame when subscription-wide
 ///      broadcast lag is detected
 ///   4. Stream terminates when:
-///      - `max_duration_ms` query param elapsed (default 60_000 ms)
+///      - `max_duration_ms` query param elapsed (default 30_000 ms)
 ///      - client disconnects (drops the response stream)
 ///      - the broadcast channel is closed (server shutdown)
 #[endpoint]
@@ -125,7 +126,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
         return;
     }
-    // Cap how long the stream stays open. Default 5s so clients whose HTTP
+    // Cap how long the stream stays open. Default 30s so clients whose HTTP
     // runtime exposes the NDJSON body only when the response closes (notably
     // browser/WASM fetch adapters) still observe bounded live latency. Tests
     // typically pass `max_duration_ms=500` to bound assertion latency.
@@ -133,7 +134,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     // pattern) or use SSE EventSource auto-reconnect.
     let max_duration_ms = query_param(req, "max_duration_ms")
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(5_000)
+        .unwrap_or(EVENTS_SUBSCRIBE_DEFAULT_WAIT_MS)
         .min(600_000);
     // Heartbeat interval. Default 15s; min 100ms (for tests).
     let heartbeat_ms = query_param(req, "heartbeat_ms")
@@ -1188,6 +1189,11 @@ mod tests {
         let mut config = crate::config::AppConfig::test_default();
         config.seed_demo_data = false;
         AppState::new(config, soland_data::Db { pool: None })
+    }
+
+    #[test]
+    fn events_subscribe_default_wait_is_30_seconds() {
+        assert_eq!(EVENTS_SUBSCRIBE_DEFAULT_WAIT_MS, 30_000);
     }
 
     fn operation_at(

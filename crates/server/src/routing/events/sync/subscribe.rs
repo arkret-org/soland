@@ -16,8 +16,10 @@ pub(super) async fn account_describe(
     ))
 }
 
-const ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 25_000;
-const ACCOUNT_SUBSCRIBE_FRONTIER_INTERVAL_MS: u64 = 60_000;
+/// Bounded account long-poll window. An incremental request with no visible
+/// changes waits for a durable/broadcast wake-up and completes after 30s with
+/// a projection-neutral frontier. The client then reconnects from that cursor.
+const ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 /// SOL-02-005 — debounce window for `account_subscribe` long-poll wakeups.
 /// When a broadcast notification passes the visibility filter, further
 /// notifications arriving within this window are drained and coalesced so a
@@ -192,81 +194,49 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     let mut rx = state.event_broadcast.subscribe();
     let response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor, false).await;
     let initial_cursor = response.cursor.clone();
+    let initial_has_delta = body.after.is_none() || !delta_is_empty(&response);
     let body_stream = async_stream::stream! {
-        yield Ok::<Bytes, std::io::Error>(ndjson_line(&response));
-        if body.catchup.unwrap_or(false) {
-            yield Ok::<Bytes, std::io::Error>(ndjson_line(&arkret_sdk::AccountSubscribeFrame {
-                kind: arkret_sdk::AccountSubscribeFrameKind::CatchupComplete,
-                cursor: initial_cursor.clone(),
-                realms: None,
-                to_device: None,
-                device_lists: None,
-                account_data: None,
-                presence: None,
-                notifications: None,
-                partial: None,
-                priority: None,
-                reconnect_after_ms: None,
-            }));
+        if initial_has_delta {
+            yield Ok::<Bytes, std::io::Error>(ndjson_line(&response));
+            if body.catchup.unwrap_or(false) {
+                yield Ok::<Bytes, std::io::Error>(ndjson_line(&account_catchup_complete_frame(
+                    initial_cursor.clone(),
+                )));
+            }
+            return;
         }
 
-        let mut current_cursor = after_cursor;
-        let mut current_cursor_token = initial_cursor.clone();
-        if let Some(cursor) = initial_cursor.as_deref()
-            && let Ok(parsed) = parse_and_validate_sync_cursor(
-                cursor,
-                &state,
-                Some(&session),
-                filter_value.as_ref(),
-                chrono::Utc::now().timestamp_millis(),
-            ).await
-        {
-            current_cursor = parsed;
-        }
-        let mut heartbeat = tokio::time::interval(Duration::from_millis(
-            ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS,
-        ));
-        heartbeat.tick().await;
-        let mut frontier = tokio::time::interval(Duration::from_millis(
-            ACCOUNT_SUBSCRIBE_FRONTIER_INTERVAL_MS,
-        ));
-        frontier.tick().await;
+        let current_cursor = after_cursor;
+        let current_cursor_token = body.after.clone();
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_millis(ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS);
 
         loop {
             tokio::select! {
-                _ = heartbeat.tick() => {
-                    yield Ok::<Bytes, std::io::Error>(ndjson_line(
-                        &arkret_sdk::AccountSubscribeFrame {
-                            kind: arkret_sdk::AccountSubscribeFrameKind::Heartbeat,
-                            cursor: None,
-                            realms: None,
-                            to_device: None,
-                            device_lists: None,
-                            account_data: None,
-                            presence: None,
-                            notifications: None,
-                            partial: None,
-                            priority: None,
-                            reconnect_after_ms: None,
-                        },
-                    ));
-                }
-                _ = frontier.tick(), if current_cursor_token.is_some() => {
-                    yield Ok::<Bytes, std::io::Error>(ndjson_line(
-                        &arkret_sdk::AccountSubscribeFrame {
-                            kind: arkret_sdk::AccountSubscribeFrameKind::Frontier,
-                            cursor: current_cursor_token.clone(),
-                            realms: None,
-                            to_device: None,
-                            device_lists: None,
-                            account_data: None,
-                            presence: None,
-                            notifications: None,
-                            partial: None,
-                            priority: None,
-                            reconnect_after_ms: None,
-                        },
-                    ));
+                _ = tokio::time::sleep_until(deadline) => {
+                    // Re-read durable projections at timeout. Broadcast is only
+                    // a latency hint, so a lost wake-up must not hide data.
+                    let final_snapshot = build_sync_snapshot(
+                        &state,
+                        Some(&session),
+                        &body,
+                        &current_cursor,
+                        false,
+                    ).await;
+                    let final_cursor = final_snapshot.cursor.clone();
+                    if delta_is_empty(&final_snapshot) {
+                        yield Ok::<Bytes, std::io::Error>(ndjson_line(
+                            &account_frontier_frame(final_cursor.clone()),
+                        ));
+                    } else {
+                        yield Ok::<Bytes, std::io::Error>(ndjson_line(&final_snapshot));
+                    }
+                    if body.catchup.unwrap_or(false) {
+                        yield Ok::<Bytes, std::io::Error>(ndjson_line(
+                            &account_catchup_complete_frame(final_cursor),
+                        ));
+                    }
+                    break;
                 }
                 recv = rx.recv() => match recv {
                     Ok(notification) => {
@@ -322,19 +292,14 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                         if delta_is_empty(&delta) {
                             continue;
                         }
-                        if let Some(cursor) = delta.cursor.as_deref()
-                            && let Ok(parsed) = parse_and_validate_sync_cursor(
-                                cursor,
-                                &state,
-                                Some(&session),
-                                filter_value.as_ref(),
-                                chrono::Utc::now().timestamp_millis(),
-                            ).await
-                        {
-                            current_cursor = parsed;
-                        }
-                        current_cursor_token = delta.cursor.clone();
+                        let delta_cursor = delta.cursor.clone();
                         yield Ok::<Bytes, std::io::Error>(ndjson_line(&delta));
+                        if body.catchup.unwrap_or(false) {
+                            yield Ok::<Bytes, std::io::Error>(ndjson_line(
+                                &account_catchup_complete_frame(delta_cursor),
+                            ));
+                        }
+                        break;
                     }
                     Err(RecvError::Lagged(_)) => {
                         arm_subscribe_reconnect(
@@ -358,6 +323,38 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     };
     let _ = res.add_header("content-type", "application/x-ndjson", true);
     res.stream(body_stream.boxed());
+}
+
+fn account_frontier_frame(cursor: Option<String>) -> arkret_sdk::AccountSubscribeFrame {
+    arkret_sdk::AccountSubscribeFrame {
+        kind: arkret_sdk::AccountSubscribeFrameKind::Frontier,
+        cursor,
+        realms: None,
+        to_device: None,
+        device_lists: None,
+        account_data: None,
+        presence: None,
+        notifications: None,
+        partial: None,
+        priority: None,
+        reconnect_after_ms: None,
+    }
+}
+
+fn account_catchup_complete_frame(cursor: Option<String>) -> arkret_sdk::AccountSubscribeFrame {
+    arkret_sdk::AccountSubscribeFrame {
+        kind: arkret_sdk::AccountSubscribeFrameKind::CatchupComplete,
+        cursor,
+        realms: None,
+        to_device: None,
+        device_lists: None,
+        account_data: None,
+        presence: None,
+        notifications: None,
+        partial: None,
+        priority: None,
+        reconnect_after_ms: None,
+    }
 }
 
 /// A snapshot is "delta-empty" when an incremental sync would carry no

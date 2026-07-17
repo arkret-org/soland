@@ -1489,8 +1489,9 @@ async fn put_account_device_placeholder(
     state
         .persistence
         .devices()
-        .put(&device)
+        .put_if_absent(&device)
         .await
+        .map(|_| ())
         .map_err(|error| AppError::internal(error.to_string()))
 }
 
