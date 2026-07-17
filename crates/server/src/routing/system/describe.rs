@@ -299,7 +299,7 @@ fn service_identity_health(state: &ServiceIdentityState) -> Value {
 }
 
 async fn database_ready(state: &AppState) -> bool {
-    crate::persistence::database_ready(state.db.pool.as_ref()).await
+    soland_storage_postgres::database_ready(state.db.pool.as_ref()).await
 }
 
 #[endpoint(

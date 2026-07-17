@@ -40,6 +40,10 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_storage::{
+    AccountLifecycleRecord, AccountLocalpartRecord, AccountRecord, ContactRecord,
+    DeviceInventoryRecord, DirectConversationBindingRecord, ProjectionEventRecord,
+};
 
 use super::auth::{
     active_delegated_sessions_for_actor, purge_device_delivery_state, revoke_devices_for_actor,
@@ -57,16 +61,13 @@ use super::{
 };
 use crate::error::AppError;
 use crate::routing::validate_device_id;
-use crate::state::{
-    AccountLifecycleRecord, AccountLocalpartRecord, AccountRecord, AppState, ContactRecord,
-    DeviceInventoryRecord, DirectConversationBindingRecord, ProjectionEventRecord,
-};
+use crate::state::AppState;
 use crate::wire::SolandAccountRegisterOutcome;
 
 pub(crate) async fn record_handle_release(
     state: &AppState,
     localpart: &str,
-) -> Result<(), crate::persistence::PersistenceError> {
+) -> Result<(), soland_storage::PersistenceError> {
     let released_at = chrono::Utc::now();
     state
         .persistence
@@ -332,10 +333,10 @@ fn normalize_account_localpart_for_request(
     Ok(localpart)
 }
 
-fn localpart_persistence_error(error: crate::persistence::PersistenceError) -> AppError {
+fn localpart_persistence_error(error: soland_storage::PersistenceError) -> AppError {
     match error {
-        crate::persistence::PersistenceError::NotFound(message) => AppError::not_found(message),
-        crate::persistence::PersistenceError::Conflict(message) => {
+        soland_storage::PersistenceError::NotFound(message) => AppError::not_found(message),
+        soland_storage::PersistenceError::Conflict(message) => {
             AppError::new(crate::error::ErrorCode::DuplicateConflict, message)
         }
         other => AppError::internal(other.to_string()),

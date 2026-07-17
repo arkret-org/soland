@@ -12,8 +12,8 @@
 
 use arkret_sdk::Operation;
 use serde_json::{Value, json};
-use soland::hlc::ServerHlc;
-use soland::reducer::{ProjectionEffect, ProjectionState};
+use soland_domain::hlc::ServerHlc;
+use soland_domain::reducer::{ProjectionEffect, ProjectionState};
 
 const REALM_HA: &str = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const REALM_STANDARD: &str = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";

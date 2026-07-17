@@ -232,7 +232,7 @@ pub(super) async fn submit_identity_anchor_batch(
             )
         })?;
         validate_pre_fence_basis(state, &first, payload.pre_fence_basis.as_ref()).await?;
-        Some(crate::persistence::IdentityAnchorFrontierCas {
+        Some(soland_storage::IdentityAnchorFrontierCas {
             realm_id: first.realm_id.clone(),
             raw_leaves: raw_leaves
                 .into_iter()
@@ -244,7 +244,7 @@ pub(super) async fn submit_identity_anchor_batch(
     };
     let reanchor_slot = if is_reanchor {
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
-        Some(crate::persistence::IdentityAnchorReanchorSlot {
+        Some(soland_storage::IdentityAnchorReanchorSlot {
             actor_id: first.actor_id.clone(),
             version_number: payload.did_version_number(),
             did_version_id: payload.did_version_id.to_string(),
@@ -270,13 +270,13 @@ pub(super) async fn submit_identity_anchor_batch(
                 realm_already_exists_error()
             } else if matches!(
                 &error,
-                crate::persistence::PersistenceError::Conflict(reason)
+                soland_storage::PersistenceError::Conflict(reason)
                     if reason == "device_reanchor_frontier_mismatch"
             ) {
                 frontier_error()
             } else if matches!(
                 &error,
-                crate::persistence::PersistenceError::Conflict(reason)
+                soland_storage::PersistenceError::Conflict(reason)
                     if reason == "duplicate_conflict"
             ) {
                 SubmitOneError::new(
@@ -1087,7 +1087,7 @@ async fn identity_anchor_device_projection(
     envelope: &Value,
     authorized_generation_ref: Option<String>,
     accepted_at: DateTime<Utc>,
-) -> Result<crate::state::DeviceInventoryRecord, SubmitOneError> {
+) -> Result<soland_storage::DeviceInventoryRecord, SubmitOneError> {
     let typed = typed_device_authorize_payload(envelope)?;
     let principal_id = typed.principal_id.as_str();
     let device_id = typed.device_id.as_str();
@@ -1151,7 +1151,7 @@ async fn identity_anchor_device_projection(
     } else {
         payload_object.remove("cross_signing_binding");
     }
-    Ok(crate::state::DeviceInventoryRecord {
+    Ok(soland_storage::DeviceInventoryRecord {
         actor: principal_id.to_owned(),
         device_id: device_id.to_owned(),
         display_name: existing
@@ -1672,7 +1672,7 @@ mod tests {
     async fn identical_retry_survives_response_loss_and_later_head_advancement() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
-            soland_data::Db { pool: None },
+            soland_storage_postgres::Db { pool: None },
         );
         let reanchor = json!({
             "event_id": event_id("000000000001"),

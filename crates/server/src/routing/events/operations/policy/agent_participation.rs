@@ -380,7 +380,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
         .agent_action_requests
         .get(request_id)
         .ok_or("agent_act_on_behalf_approval_request_missing")?;
-    if request.status != crate::reducer::AgentActionRequestStatus::Approved {
+    if request.status != soland_domain::reducer::AgentActionRequestStatus::Approved {
         return Err("agent_act_on_behalf_approval_request_not_approved");
     }
     if request.agent_id != agent_id {

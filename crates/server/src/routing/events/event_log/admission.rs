@@ -268,7 +268,7 @@ pub fn realm_policy_components_check(
     binding_discussion_metadata_digest: Option<&str>,
 ) -> Result<(), (ErrorCode, String)> {
     if let Some(join_policy) = payload.get("join_policy") {
-        crate::reducer::validate_join_policy_payload(join_policy).map_err(|reason| {
+        soland_domain::reducer::validate_join_policy_payload(join_policy).map_err(|reason| {
             (
                 ErrorCode::SchemaViolation,
                 format!("ak.realm.policy_components.join_policy invalid: {reason}"),
@@ -304,7 +304,7 @@ pub fn realm_policy_components_check(
             == Some("ak.profile.e2ee_relaxed.v1");
     let compliance_active = active_profiles
         .iter()
-        .any(|p| crate::kinds::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str()));
+        .any(|p| soland_domain::kinds::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str()));
     if relaxed_active && compliance_active {
         return Err((
             ErrorCode::FailedPrecondition,

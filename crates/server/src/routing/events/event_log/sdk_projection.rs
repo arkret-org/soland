@@ -493,7 +493,7 @@ pub(crate) fn sdk_event_for_state(
 
 fn sdk_event_from_record(
     record: &CanonicalEventRecord,
-    tombstone: Option<crate::state::RetentionTombstoneRecord>,
+    tombstone: Option<soland_storage::RetentionTombstoneRecord>,
 ) -> Result<Event, AppError> {
     let object = record
         .envelope

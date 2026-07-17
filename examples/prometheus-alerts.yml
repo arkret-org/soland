@@ -19,7 +19,7 @@
 # for full alert-rule syntax.
 
 groups:
-  - name: soland-core
+  - name: soland-runtime
     interval: 30s
     rules:
       # Spec C.3.7 — every durable audit-log append failure bumps this

@@ -10,10 +10,9 @@ use arkret_sdk::{
     KeyBackupDeleteDevelopmentProof, KeyBackupDeleteProof, KeysBackupsDeleteRequestBody,
 };
 use serde_json::{Map, Value};
-use soland::persistence::PersistenceStore;
-use soland::state::{
-    CanonicalEventRecord, DeviceInventoryRecord, RecoveryPolicyRecord, SessionRecord,
-    WebvhDocumentRecord,
+use soland_storage::{
+    CanonicalEventRecord, DeviceInventoryRecord, PersistenceStore, RecoveryPolicyRecord,
+    SessionRecord, WebvhDocumentRecord,
 };
 
 use crate::common::*;

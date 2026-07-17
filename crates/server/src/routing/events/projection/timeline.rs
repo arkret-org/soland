@@ -1,8 +1,8 @@
 use arkret_sdk::Operation;
+use soland_domain::kinds;
+use soland_storage::ProjectionEventRecord;
 
 use super::*;
-use crate::kinds;
-use crate::state::ProjectionEventRecord;
 
 pub fn projection_event_from_operation(
     operation: &Operation,

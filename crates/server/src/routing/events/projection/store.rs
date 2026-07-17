@@ -1,24 +1,25 @@
 use std::collections::BTreeSet;
 
 use arkret_sdk::{Operation, OperationId};
+use soland_domain::kinds;
+use soland_storage::ProjectionEventRecord;
 
 use super::*;
-use crate::kinds;
-use crate::state::{AppState, ProjectionEventRecord};
+use crate::state::AppState;
 
 pub async fn append_projection_event(
     state: &AppState,
     event: ProjectionEventRecord,
-) -> crate::persistence::PersistenceResult<crate::persistence::ProjectionEventAppendOutcome> {
+) -> soland_storage::PersistenceResult<soland_storage::ProjectionEventAppendOutcome> {
     state.persistence.projection_events().append(event).await
 }
 
 pub async fn persist_and_publish_projection_event(
     state: &AppState,
     event: ProjectionEventRecord,
-) -> crate::persistence::PersistenceResult<crate::persistence::ProjectionEventAppendOutcome> {
+) -> soland_storage::PersistenceResult<soland_storage::ProjectionEventAppendOutcome> {
     let outcome = append_projection_event(state, event.clone()).await?;
-    if outcome == crate::persistence::ProjectionEventAppendOutcome::Inserted {
+    if outcome == soland_storage::ProjectionEventAppendOutcome::Inserted {
         let _ = state
             .event_broadcast
             .send(crate::state::EventNotification::event(
@@ -178,7 +179,7 @@ pub async fn load_projected_events_from_pg(
     let Some(pool) = state.db.pool.as_ref() else {
         return Ok(Vec::new());
     };
-    crate::persistence::load_projected_events_from_pg(pool, realm_id)
+    soland_storage_postgres::load_projected_events_from_pg(pool, realm_id)
         .await
         .map_err(Into::into)
 }
@@ -375,7 +376,7 @@ pub async fn persist_projected_operation(
     let Some(pool) = state.db.pool.as_ref() else {
         return Ok(());
     };
-    crate::persistence::persist_projected_operation_to_pg(pool, origin, operation)
+    soland_storage_postgres::persist_projected_operation_to_pg(pool, origin, operation)
         .await
         .map_err(Into::into)
 }

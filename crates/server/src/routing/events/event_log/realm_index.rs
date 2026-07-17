@@ -344,7 +344,7 @@ pub(super) async fn bootstrap_realm_member_index(
     // (legacy) string array entries.
     plaintext_visible_services.extend(plaintext_visible_service_classes.keys().cloned());
     let minimal_metadata_realm =
-        payload_object.is_some_and(crate::kinds::payload_declares_minimal_metadata_realm);
+        payload_object.is_some_and(soland_domain::kinds::payload_declares_minimal_metadata_realm);
     let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed.clone(), title);
     entry.description = summary.clone();
     entry.public = discoverability == "public";
@@ -353,7 +353,7 @@ pub(super) async fn bootstrap_realm_member_index(
         let mut realms = state.realms.lock();
         realms.upsert(entry);
     }
-    let meta = crate::state::RealmMetaRecord {
+    let meta = soland_storage::RealmMetaRecord {
         owner: actor.to_owned(),
         deleted: false,
         discoverability,

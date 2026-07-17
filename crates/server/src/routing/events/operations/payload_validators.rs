@@ -317,7 +317,7 @@ fn payload_string(payload: &serde_json::Map<String, Value>, field: &str) -> Opti
 }
 
 pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &'static str> {
-    if crate::kinds::operation_is_message_create(operation) {
+    if soland_domain::kinds::operation_is_message_create(operation) {
         if operation
             .payload
             .get("strand_id")

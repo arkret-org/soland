@@ -2,10 +2,12 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::json;
-use soland_data::Db;
+use soland_storage::{
+    CanonicalEventRecord, DeviceInventoryRecord, DirectConversationBindingRecord,
+};
+use soland_storage_postgres::Db;
 
 use super::*;
-use crate::state::{CanonicalEventRecord, DeviceInventoryRecord, DirectConversationBindingRecord};
 
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
@@ -250,7 +252,7 @@ fn seed_read_receipt_inheritance(
         .realm_links
         .entry(child_realm_id.to_owned())
         .or_default()
-        .push(crate::reducer::RealmLinkState {
+        .push(soland_domain::reducer::RealmLinkState {
             realm_id: child_realm_id.to_owned(),
             target_realm_id: parent_realm_id.to_owned(),
             link_kind: "governed_by".to_owned(),
@@ -262,7 +264,7 @@ fn seed_read_receipt_inheritance(
         });
     projection.realm_inheritance_policies.insert(
         child_realm_id.to_owned(),
-        crate::reducer::RealmInheritancePolicyState {
+        soland_domain::reducer::RealmInheritancePolicyState {
             realm_id: child_realm_id.to_owned(),
             operation_id: "ak:operation:01904100-0000-7000-8000-000000009901".to_owned(),
             source_realm_id: parent_realm_id.to_owned(),
@@ -499,14 +501,14 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
         let mut projection = state.projection.lock();
         projection.strands.insert(
             strand_id.as_str().to_owned(),
-            crate::reducer::StrandProjection {
+            soland_domain::reducer::StrandProjection {
                 strand_id: strand_id.as_str().to_owned(),
                 realm_id: realm_id.to_string(),
                 tracks: Default::default(),
                 title: "Scoped".to_owned(),
                 summary: None,
                 fields: Default::default(),
-                state: crate::reducer::ObjectLifecycleState::Active,
+                state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
                 created_by: "did:web:alice.example".to_owned(),
                 created_at: chrono::Utc::now(),
@@ -553,7 +555,7 @@ async fn register_agent_selection(
     reply: bool,
     act_on_behalf: bool,
 ) {
-    let mut record = crate::persistence::AgentPrincipalRecord::new(
+    let mut record = soland_storage::AgentPrincipalRecord::new(
         agent_id.to_owned(),
         "did:web:alice.example".to_owned(),
         "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
@@ -660,15 +662,15 @@ fn insert_approved_agent_action(
     let payload_digest = arkret_sdk::canonical::canonical_sha256(&message.payload).unwrap();
     state.projection.lock().agent_action_requests.insert(
         request_id.to_owned(),
-        crate::reducer::AgentActionRequestProjection {
+        soland_domain::reducer::AgentActionRequestProjection {
             request_id: request_id.to_owned(),
             agent_id: agent_id.to_owned(),
-            status: crate::reducer::AgentActionRequestStatus::Approved,
+            status: soland_domain::reducer::AgentActionRequestStatus::Approved,
             requested_at: message.created_at - chrono::Duration::minutes(1),
             resolved_at: Some(message.created_at),
             resolution_event_id: Some("ak:event:01904100-0000-7000-8000-0000000007aa".to_owned()),
             cancel_reason: None,
-            approval: Some(crate::reducer::AgentActionApprovalProjection {
+            approval: Some(soland_domain::reducer::AgentActionApprovalProjection {
                 approval_id: "ak:agent_approval:01904100-0000-7000-8000-0000000007aa".to_owned(),
                 proposed_action: kinds::canonical_kind_string(message),
                 target: json!({
@@ -1496,7 +1498,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
         members.insert("did:web:alice.example".to_owned());
         projection.circles.insert(
             circle_id.to_owned(),
-            crate::reducer::CircleProjection {
+            soland_domain::reducer::CircleProjection {
                 circle_id: circle_id.to_owned(),
                 realm_id: realm_id.to_string(),
                 profile_ref: None,
@@ -1510,7 +1512,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
                 metadata_encryption_floor: None,
                 encryption_profile: "none".to_owned(),
                 mls_group_ref: None,
-                state: crate::reducer::CircleLifecycleState::Active,
+                state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
                 created_by: "did:web:alice.example".to_owned(),
                 created_at: now,
@@ -1521,7 +1523,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
         );
         projection.relations.insert(
             relation_id.to_owned(),
-            crate::reducer::SolandRelationState {
+            soland_domain::reducer::SolandRelationState {
                 relation_id: relation_id.to_owned(),
                 realm_id: realm_id.to_string(),
                 relation_kind: "confidential_discussion_of".to_owned(),
@@ -1971,7 +1973,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
         .realm_meta()
         .put(
             realm_id.as_str(),
-            &crate::state::RealmMetaRecord {
+            &soland_storage::RealmMetaRecord {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -2108,7 +2110,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
         .realm_meta()
         .put(
             realm_id.as_str(),
-            &crate::state::RealmMetaRecord {
+            &soland_storage::RealmMetaRecord {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -2161,7 +2163,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
         let mut projection = state.projection.lock();
         projection.members.insert(
             (realm_id.to_string(), bob.to_owned()),
-            crate::reducer::SolandMembershipState {
+            soland_domain::reducer::SolandMembershipState {
                 member: bob.to_owned(),
                 realm_id: realm_id.to_string(),
                 state: "join".to_owned(),

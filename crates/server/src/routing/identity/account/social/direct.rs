@@ -587,11 +587,12 @@ pub(super) async fn submit_direct_mls_genesis(
         arkret_sdk::events::EventKind::MLS_GENESIS,
         payload,
     )?;
-    let effect = crate::reducer::mls::apply_group_genesis(&mut state.projection.lock(), &op);
+    let effect =
+        soland_domain::reducer::mls::apply_group_genesis(&mut state.projection.lock(), &op);
     match &effect {
-        crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::GroupGenesis {
-            ..
-        }) => {
+        soland_domain::reducer::ProjectionEffect::Mls(
+            soland_domain::reducer::MlsEffect::GroupGenesis { .. },
+        ) => {
             crate::routing::events::projection::mirror_mls_effect_to_persistence(
                 state,
                 actor,
@@ -602,9 +603,9 @@ pub(super) async fn submit_direct_mls_genesis(
             .await;
             Ok(())
         }
-        crate::reducer::ProjectionEffect::Rejected { reason } => Err(AppError::internal(format!(
-            "direct conversation MLS genesis rejected: {reason}"
-        ))),
+        soland_domain::reducer::ProjectionEffect::Rejected { reason } => Err(AppError::internal(
+            format!("direct conversation MLS genesis rejected: {reason}"),
+        )),
         other => Err(AppError::internal(format!(
             "unexpected direct conversation MLS genesis effect: {other:?}"
         ))),
@@ -698,11 +699,12 @@ pub(super) async fn submit_direct_mls_welcome(
         arkret_sdk::events::EventKind::MLS_WELCOME,
         payload,
     )?;
-    let effect = crate::reducer::mls::apply_welcome_enqueue(&mut state.projection.lock(), &op);
+    let effect =
+        soland_domain::reducer::mls::apply_welcome_enqueue(&mut state.projection.lock(), &op);
     match &effect {
-        crate::reducer::ProjectionEffect::Mls(crate::reducer::MlsEffect::WelcomeEnqueued {
-            ..
-        }) => {
+        soland_domain::reducer::ProjectionEffect::Mls(
+            soland_domain::reducer::MlsEffect::WelcomeEnqueued { .. },
+        ) => {
             crate::routing::events::projection::mirror_mls_effect_to_persistence(
                 state,
                 actor,
@@ -713,9 +715,9 @@ pub(super) async fn submit_direct_mls_welcome(
             .await;
             Ok(())
         }
-        crate::reducer::ProjectionEffect::Rejected { reason } => Err(AppError::internal(format!(
-            "direct conversation MLS welcome rejected: {reason}"
-        ))),
+        soland_domain::reducer::ProjectionEffect::Rejected { reason } => Err(AppError::internal(
+            format!("direct conversation MLS welcome rejected: {reason}"),
+        )),
         other => Err(AppError::internal(format!(
             "unexpected direct conversation MLS welcome effect: {other:?}"
         ))),
@@ -738,8 +740,8 @@ pub(super) fn direct_mls_governance_binding(
         "next_epoch": 0,
         "membership_frontier": member_event_refs,
         "policy_root": arkret_sdk::canonical::sha256_digest(format!("direct-policy:{realm_id}:{mls_group_id}")),
-        "binding_profile": crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-        "reducer_profile": crate::kinds::MLS_REDUCER_PROFILE_V1,
+        "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+        "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1,
     })
 }
 

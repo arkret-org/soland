@@ -125,13 +125,13 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
     state
         .persistence
         .sessions()
-        .put(&soland::state::SessionRecord {
+        .put(&soland_storage::SessionRecord {
             token_hash: test_session_credential_hash(token, &state.service_id),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
             audience: state.service_id.clone(),
             session_public_key: Some("{}".to_owned()),
-            agent_session: Some(soland::state::AgentSessionRecord {
+            agent_session: Some(soland_storage::AgentSessionRecord {
                 granted_scope: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
                 scope_details: serde_json::json!({
                     "controller_id": "did:web:alice.example",
@@ -158,7 +158,7 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
     state
         .persistence
         .devices()
-        .put(&soland::state::DeviceInventoryRecord {
+        .put(&soland_storage::DeviceInventoryRecord {
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
             display_name: Some("Agent Session".to_owned()),
@@ -790,7 +790,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     state
         .persistence
         .events()
-        .put(soland::state::CanonicalEventRecord {
+        .put(soland_storage::CanonicalEventRecord {
             event_id: event.event_id.to_string(),
             actor_id: event.actor_id.to_string(),
             actor_seq: event.actor_seq,

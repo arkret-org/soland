@@ -546,7 +546,7 @@ async fn append_account_deactivation_propagation_state(
     });
     let _ = crate::routing::events::projection::append_projection_event(
         state,
-        crate::state::ProjectionEventRecord {
+        soland_storage::ProjectionEventRecord {
             event_id: crate::ids::generate_event_id(),
             realm_id: crate::routing::identity::recovery::principal_control_realm_for_did(did),
             event_kind: "ak.account.status".to_owned(),
@@ -983,7 +983,7 @@ async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec
 }
 
 fn projection_event_belongs_to_actor(
-    event: &crate::state::ProjectionEventRecord,
+    event: &soland_storage::ProjectionEventRecord,
     actor: &str,
 ) -> bool {
     event.sender.as_deref() == Some(actor)

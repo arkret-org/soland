@@ -23,6 +23,7 @@ use salvo::http::{Method, ParseError, StatusCode};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_storage::{BlobRecord, SessionRecord};
 use subtle::ConstantTimeEq as _;
 
 use super::{
@@ -32,7 +33,7 @@ use super::{
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, BlobRecord, SessionRecord};
+use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -1549,7 +1550,7 @@ impl PresignBlobBlock {
 /// Returns the matching block reason or `None`.
 ///
 /// The blob record is taken as a JSON value so this fn stays decoupled
-/// from `crate::state::BlobRecord`; presign callers pass
+/// from `soland_storage::BlobRecord`; presign callers pass
 /// `serde_json::to_value(&record)` (cheap — BlobRecord is small).
 pub fn classify_presign_blob_block(
     blob: &Value,

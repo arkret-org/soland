@@ -1,5 +1,5 @@
 use chrono::{TimeZone, Timelike};
-use soland_data::Db;
+use soland_storage_postgres::Db;
 
 use super::*;
 use crate::config::AppConfig;
@@ -192,7 +192,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         .iter()
         .find(|event| event.event_id == event_id)
         .expect("message projection event");
-    let bob_session = crate::state::SessionRecord {
+    let bob_session = soland_storage::SessionRecord {
         token_hash: "test".to_owned(),
         actor: bob.to_owned(),
         device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),

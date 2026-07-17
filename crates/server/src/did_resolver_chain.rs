@@ -33,9 +33,9 @@ use arkret_sdk::identity::{
 use arkret_sdk::{Did, Error};
 use parking_lot::RwLock;
 use serde_json::Value;
+use soland_storage::PersistenceStore;
 
 use crate::config::AppConfig;
-use crate::persistence::PersistenceStore;
 
 /// Build the no-IO fallback resolver chain used by tests and sync SDK bridges.
 /// Honors the `did_resolver_allow_methods` filter.
@@ -89,8 +89,9 @@ struct CachedDidDocument {
 
 impl SolandDidResolver {
     fn new(config: &AppConfig, persistence: Option<Arc<dyn PersistenceStore>>) -> Self {
-        let persistence = persistence
-            .unwrap_or_else(|| Arc::new(crate::persistence::SolandMemoryPersistenceStore::new()));
+        let persistence = persistence.unwrap_or_else(|| {
+            Arc::new(soland_storage_memory::SolandMemoryPersistenceStore::new())
+        });
         Self {
             persistence,
             fallback: build_fallback_did_resolver_chain(config),
@@ -118,7 +119,7 @@ impl SolandDidResolver {
     fn document_from_record(
         &self,
         did: &Did,
-        record: crate::state::WebvhDocumentRecord,
+        record: soland_storage::WebvhDocumentRecord,
     ) -> Result<DidDocument, Error> {
         let seq = record.seq;
         let document: DidDocument = serde_json::from_value(record.did_document)
@@ -153,7 +154,7 @@ impl SolandDidResolver {
 
     pub fn cache_webvh_record(
         &self,
-        record: crate::state::WebvhDocumentRecord,
+        record: soland_storage::WebvhDocumentRecord,
     ) -> Result<DidDocument, Error> {
         let did = Did::new(record.did.clone()).map_err(Error::from)?;
         self.document_from_record(&did, record)
@@ -336,11 +337,11 @@ mod tests {
     use arkret_sdk::Did;
     use arkret_sdk::identity::DidResolver;
     use serde_json::json;
+    use soland_storage::{PersistenceStore, WebvhDocumentRecord};
+    use soland_storage_memory::SolandMemoryPersistenceStore;
 
     use super::*;
     use crate::config::ObjectStorageConfig;
-    use crate::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
-    use crate::state::WebvhDocumentRecord;
 
     fn base_config() -> AppConfig {
         AppConfig {

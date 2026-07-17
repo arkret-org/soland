@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::service;
 use soland::state::AppState;
-use soland_data::Db;
+use soland_storage_postgres::Db;
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -362,8 +362,8 @@ async fn mls_lifecycle_end_to_end() {
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
         "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-        "binding_profile": soland::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-        "reducer_profile": soland::kinds::MLS_REDUCER_PROFILE_V1
+        "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+        "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1
     });
 
     // ── 3a. Realm + MLS group genesis enter through canonical events ─
@@ -540,8 +540,8 @@ async fn mls_lifecycle_end_to_end() {
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
         "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-        "binding_profile": soland::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-        "reducer_profile": soland::kinds::MLS_REDUCER_PROFILE_V1
+        "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+        "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1
     });
     let commit = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e3",

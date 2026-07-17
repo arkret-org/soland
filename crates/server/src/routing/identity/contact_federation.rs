@@ -27,6 +27,7 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use soland_storage::{ContactRecord, ProjectionEventRecord};
 
 use super::consent::{
     auto_revoke_requester_side_contact_consent, consent_cell_snapshot,
@@ -36,7 +37,7 @@ use super::consent::{
 use super::now;
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, ContactRecord, ProjectionEventRecord};
+use crate::state::AppState;
 
 const HEADER_CONTENT_DIGEST: &str = "content-digest";
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
@@ -851,7 +852,7 @@ fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> 
 #[cfg(test)]
 mod tests {
 
-    use soland_data::Db;
+    use soland_storage_postgres::Db;
 
     use super::*;
     use crate::config::{AppConfig, ObjectStorageConfig};

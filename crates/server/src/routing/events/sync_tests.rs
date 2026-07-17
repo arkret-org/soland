@@ -376,7 +376,7 @@ fn test_config() -> crate::config::AppConfig {
 }
 
 fn test_state() -> AppState {
-    AppState::new(test_config(), soland_data::Db { pool: None })
+    AppState::new(test_config(), soland_storage_postgres::Db { pool: None })
 }
 
 const ROSTER_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000a001";
@@ -455,7 +455,7 @@ fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) 
     let updated_at = now();
     state.projection.lock().members.insert(
         (ROSTER_REALM.to_owned(), actor.to_owned()),
-        crate::reducer::SolandMembershipState {
+        soland_domain::reducer::SolandMembershipState {
             member: actor.to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             state: membership.to_owned(),
@@ -476,7 +476,7 @@ fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) 
 async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     let mut config = test_config();
     config.seed_demo_data = false;
-    let state = AppState::new(config, soland_data::Db { pool: None });
+    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     state.realms.lock().upsert(roster_realm(false, true));
     let session = roster_session(&state, ROSTER_CALLER);
     let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
@@ -491,7 +491,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         .realm_meta()
         .put(
             ROSTER_REALM,
-            &crate::state::RealmMetaRecord {
+            &soland_storage::RealmMetaRecord {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -608,7 +608,7 @@ async fn put_canonical_event_received_at_for_actor(
     state
         .persistence
         .events()
-        .put(crate::state::CanonicalEventRecord {
+        .put(soland_storage::CanonicalEventRecord {
             event_id: event_id.to_owned(),
             actor_id: actor_id.to_owned(),
             actor_seq,
@@ -628,7 +628,7 @@ async fn put_canonical_event_received_at_for_actor(
 async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     let mut config = test_config();
     config.seed_demo_data = false;
-    let state = AppState::new(config, soland_data::Db { pool: None });
+    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     state.realms.lock().upsert(roster_realm(false, true));
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
@@ -644,7 +644,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         .realm_meta()
         .put(
             ROSTER_REALM,
-            &crate::state::RealmMetaRecord {
+            &soland_storage::RealmMetaRecord {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -1161,7 +1161,7 @@ fn roster_limits_large_inline_handle_claim_payloads() {
 async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() {
     let mut config = test_config();
     config.seed_demo_data = false;
-    let state = AppState::new(config, soland_data::Db { pool: None });
+    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     state.realms.lock().upsert(roster_realm(false, true));
 
@@ -1278,7 +1278,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
 async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     let mut config = test_config();
     config.seed_demo_data = false;
-    let state = AppState::new(config, soland_data::Db { pool: None });
+    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     state.realms.lock().upsert(roster_realm(false, true));
 
@@ -1292,7 +1292,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .realm_meta()
         .put(
             ROSTER_REALM,
-            &crate::state::RealmMetaRecord {
+            &soland_storage::RealmMetaRecord {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -1316,7 +1316,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     state
         .persistence
         .projection_events()
-        .append(crate::state::ProjectionEventRecord {
+        .append(soland_storage::ProjectionEventRecord {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000a1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_sdk::events::EventKind::STRAND_UPDATE.to_owned(),
@@ -1370,7 +1370,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     state
         .persistence
         .projection_events()
-        .append(crate::state::ProjectionEventRecord {
+        .append(soland_storage::ProjectionEventRecord {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000b1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_sdk::events::EventKind::STRAND_UPDATE.to_owned(),
@@ -1434,7 +1434,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
 async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     let mut config = test_config();
     config.seed_demo_data = false;
-    let state = AppState::new(config, soland_data::Db { pool: None });
+    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
     let message_event_id = "ak:event:01904100-0000-7000-8000-0000000000d1";
@@ -1577,7 +1577,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
 async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     let mut config = test_config();
     config.seed_demo_data = false;
-    let state = AppState::new(config, soland_data::Db { pool: None });
+    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
     let message_event_id = "ak:event:01904100-0000-7000-8000-0000000001d1";
@@ -2125,7 +2125,7 @@ async fn revoked_cursor_returns_revoked_error() {
     state
         .sync_cursor_revocations
         .lock()
-        .push(crate::state::CursorRevocation {
+        .push(soland_storage::CursorRevocation {
             cursor_digest: sha256_hex(token.as_bytes()),
             principal_id: "did:web:alice.example".to_owned(),
             device_id: None,
@@ -2161,7 +2161,7 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
     state
         .sync_cursor_revocations
         .lock()
-        .push(crate::state::CursorRevocation {
+        .push(soland_storage::CursorRevocation {
             cursor_digest: sha256_hex(token.as_bytes()),
             principal_id: "did:web:alice.example".to_owned(),
             device_id: None,

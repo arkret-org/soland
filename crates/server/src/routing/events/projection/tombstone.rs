@@ -2,10 +2,11 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
+use soland_domain::reducer::{MessageExpiryProjection, message_expiry_projection_from_value};
+use soland_storage::{ProjectionEventRecord, RetentionTombstoneRecord};
 
 use super::*;
-use crate::reducer::{MessageExpiryProjection, message_expiry_projection_from_value};
-use crate::state::{AppState, ProjectionEventRecord, RetentionTombstoneRecord};
+use crate::state::AppState;
 
 const EXPIRY_DERIVED_FIELD_KEYS: &[&str] = &[
     "attachment_preview",
@@ -48,12 +49,12 @@ const EXPIRY_DERIVED_FIELD_KEYS: &[&str] = &[
 
 pub fn redaction_target_event_ids_from_events(
     events: &[ProjectionEventRecord],
-    projection: &crate::reducer::ProjectionState,
+    projection: &soland_domain::reducer::ProjectionState,
 ) -> HashSet<String> {
     events
         .iter()
         .filter(|event| arkret_sdk::events::kinds::is_redaction_kind(&event.event_kind))
-        .filter_map(|event| crate::reducer::message_redaction_target_ref(&event.payload))
+        .filter_map(|event| soland_domain::reducer::message_redaction_target_ref(&event.payload))
         .map(|target_ref| projection.redaction_key_for_message_target(&target_ref))
         .filter(|target_ref| !target_ref.trim().is_empty())
         .collect()
@@ -64,7 +65,7 @@ pub fn event_is_visible(event: &ProjectionEventRecord, _redacted: &HashSet<Strin
 }
 
 pub fn actor_erased_in_realm(
-    projection: &crate::reducer::ProjectionState,
+    projection: &soland_domain::reducer::ProjectionState,
     actor: &str,
     realm_id: &str,
 ) -> bool {
@@ -99,7 +100,7 @@ pub fn projection_event_actor(event: &ProjectionEventRecord) -> Option<&str> {
 }
 
 pub fn tombstone_projection_event_for_erased_actor(
-    projection: &crate::reducer::ProjectionState,
+    projection: &soland_domain::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
 ) {
     if event.event_kind == arkret_sdk::events::EventKind::AUDIT_ERASURE_RECEIPT {
@@ -116,7 +117,7 @@ pub fn tombstone_projection_event_for_erased_actor(
 }
 
 pub fn tombstone_projection_event_for_message_redaction(
-    projection: &crate::reducer::ProjectionState,
+    projection: &soland_domain::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
 ) {
     if !matches!(
@@ -147,7 +148,7 @@ pub fn retention_tombstone_for_event(
 }
 
 pub fn stub_projection_event_for_message_expiry(
-    projection: &crate::reducer::ProjectionState,
+    projection: &soland_domain::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
     now: DateTime<Utc>,
 ) {
@@ -178,7 +179,7 @@ pub fn tombstone_projection_event_for_retention(
 }
 
 pub fn stub_pin_projection_event_for_invisible_target(
-    projection: &crate::reducer::ProjectionState,
+    projection: &soland_domain::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
 ) {
     if !arkret_sdk::events::kinds::is_pin_kind(&event.event_kind) {
@@ -411,10 +412,11 @@ fn pin_target_locked_stub_payload(payload: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::reducer::{
+    use soland_domain::reducer::{
         MessageState, ProjectionState, RedactionCellValue, SolandMembershipState,
     };
+
+    use super::*;
 
     fn fixed_time(value: &str) -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339(value)
@@ -425,7 +427,7 @@ mod tests {
     fn expired_message(event_id: &str, realm_id: &str) -> MessageState {
         MessageState {
             event_id: event_id.to_owned(),
-            message_id: crate::reducer::message_id_from_event_id(event_id),
+            message_id: soland_domain::reducer::message_id_from_event_id(event_id),
             realm_id: realm_id.to_owned(),
             sender: "did:web:alice.example".to_owned(),
             thread_id: realm_id.to_owned(),
@@ -668,7 +670,7 @@ mod tests {
             event_id.to_owned(),
             MessageState {
                 event_id: event_id.to_owned(),
-                message_id: crate::reducer::message_id_from_event_id(event_id),
+                message_id: soland_domain::reducer::message_id_from_event_id(event_id),
                 realm_id: realm_id.to_owned(),
                 sender: "did:web:alice.example".to_owned(),
                 thread_id: realm_id.to_owned(),

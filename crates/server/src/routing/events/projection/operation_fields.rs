@@ -1,8 +1,9 @@
 use arkret_sdk::Operation;
 use serde_json::Value;
+use soland_domain::kinds;
+use soland_storage::RetentionPolicyRecord;
 
-use crate::kinds;
-use crate::state::{AppState, RetentionPolicyRecord};
+use crate::state::AppState;
 
 pub(super) fn first_string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter()

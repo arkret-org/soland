@@ -690,7 +690,7 @@ async fn invites(
     })
 }
 
-fn invite_record_to_sdk(invite: crate::state::RealmInviteRecord) -> Result<Invite, AppError> {
+fn invite_record_to_sdk(invite: soland_storage::RealmInviteRecord) -> Result<Invite, AppError> {
     let invite_delivery_target = invite
         .invite_delivery_target
         .clone()

@@ -4,7 +4,7 @@ use arkret_sdk::{RealmId, SealId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
-use soland_core::admin::seal::{
+use soland_contracts::admin::seal::{
     CompactionOutcome, CompactionRequestBody, SealDagSnapshot, SealLeaf, SealPruneDiagnostics,
     SealPruneOutcome, SealPruneRequestBody,
 };

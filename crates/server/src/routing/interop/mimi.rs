@@ -37,6 +37,7 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
+use soland_storage::{CanonicalEventRecord, MessageRecord, ProjectionEventRecord};
 
 use super::moderation::{
     moderation_request_source_ip_hash, moderation_request_source_service,
@@ -51,7 +52,7 @@ use crate::routing::identity::consent::{
     materialize_mimi_consent_request, materialize_mimi_consent_update_by_id,
 };
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, CanonicalEventRecord, MessageRecord, ProjectionEventRecord};
+use crate::state::AppState;
 
 const EVENT_SCHEMA_ID: &str = "ak.schema.event.v1";
 

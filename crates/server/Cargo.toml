@@ -58,8 +58,6 @@ bytes = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}
 arkret-sdk = {workspace = true,features = ["full-surface", "client", "device-runtime", "applet-runtime", "mls", "salvo", "signer", "keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"]}
 arkret-wire-base = {workspace = true}
-diesel = {workspace = true,features = ["postgres", "serde_json", "chrono", "uuid", "pq-src"]}
-diesel-async = {workspace = true,features = ["postgres", "deadpool", "async-connection-wrapper"]}
 dotenvy = {workspace = true}
 ed25519-dalek = {workspace = true}
 futures-util = {workspace = true}
@@ -87,8 +85,11 @@ salvo-oapi = {workspace = true,features = ["yaml"]}
 serde = {workspace = true,features = ["derive"]}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
-soland-core = {workspace = true,features = ["salvo"]}
-soland-data = {workspace = true}
+soland-contracts = {workspace = true,features = ["salvo"]}
+soland-domain = {workspace = true}
+soland-storage = {workspace = true}
+soland-storage-memory = {workspace = true}
+soland-storage-postgres = {workspace = true}
 subtle = {workspace = true}
 thiserror = {workspace = true}
 tokio = {workspace = true,features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"]}

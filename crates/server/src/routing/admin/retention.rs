@@ -10,16 +10,14 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_storage::{RetentionPolicyRecord, RetentionTombstoneRecord};
 
 use super::audit::append_audit_log;
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::events::projection::retention_ttl_seconds_from_value;
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{
-    AppState, EventNotification, EventNotificationKind, RetentionPolicyRecord,
-    RetentionTombstoneRecord,
-};
+use crate::state::{AppState, EventNotification, EventNotificationKind};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct ConfigureRetentionPolicyRequestBody {

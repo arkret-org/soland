@@ -2,10 +2,10 @@ use std::collections::HashSet;
 
 use arkret_sdk::Operation;
 use serde_json::json;
+use soland_domain::kinds;
+use soland_storage::ProjectionEventRecord;
 
 use super::*;
-use crate::kinds;
-use crate::state::ProjectionEventRecord;
 
 #[derive(Clone, Debug)]
 pub struct ProjectedEventPage {
@@ -59,7 +59,9 @@ pub fn redaction_targets_from_operations(operations: &[Operation]) -> HashSet<St
     operations
         .iter()
         .filter(|operation| kinds::operation_is_redaction(operation))
-        .filter_map(|operation| crate::reducer::message_redaction_target_ref(&operation.payload))
+        .filter_map(|operation| {
+            soland_domain::reducer::message_redaction_target_ref(&operation.payload)
+        })
         .collect()
 }
 

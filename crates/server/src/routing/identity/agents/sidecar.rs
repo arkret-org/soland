@@ -308,7 +308,7 @@ pub(super) fn find_sidecar_circle(
                 && circle.created_by == controller
                 && circle.title == short_name
                 && circle.directory_visibility == "members"
-                && circle.state == crate::reducer::CircleLifecycleState::Active
+                && circle.state == soland_domain::reducer::CircleLifecycleState::Active
         })
         .and_then(|circle| CircleId::new(circle.circle_id.clone()).ok())
 }

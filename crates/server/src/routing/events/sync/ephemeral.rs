@@ -9,12 +9,13 @@ use arkret_sdk::EphemeralSubmitOutcome;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::Value;
+use soland_storage::{PresenceRecord, SessionRecord, TypingRecord};
 
 use crate::routing::spaces::space::{
     PresenceVisibilityPolicy, presence_visibility_for_actor, realm_has_member,
     realm_history_visibility_for_id, typing_scope_allows_actor,
 };
-use crate::state::{AppState, EventNotification, PresenceRecord, SessionRecord, TypingRecord};
+use crate::state::{AppState, EventNotification};
 
 #[endpoint(
     operation_id = "ak.self.ephemeral.command.send",
@@ -122,12 +123,12 @@ pub(super) async fn submit_ephemeral(
 /// envelope is stored unmodified (proof intact) and pruned at its TTL.
 async fn relay_ephemeral_call_signal(
     state: &AppState,
-    session: &crate::state::SessionRecord,
+    session: &soland_storage::SessionRecord,
     realm_id: &str,
     payload: &arkret_sdk::CallSignalPayload,
     envelope: &arkret_sdk::EphemeralEnvelope,
 ) -> Result<u64, crate::error::AppError> {
-    let record = crate::state::CallSignalRelayRecord {
+    let record = soland_storage::CallSignalRelayRecord {
         realm_id: realm_id.to_owned(),
         sender_actor: session.actor.clone(),
         sender_device: session.device_id.clone(),

@@ -21,9 +21,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
+use soland_storage::RecoveryPolicyRecord;
 
 use crate::error::{AppError, ErrorCode};
-use crate::state::{AppState, RecoveryPolicyRecord};
+use crate::state::AppState;
 
 const CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS: i64 = 90_000;
 
@@ -1028,7 +1029,7 @@ pub(crate) async fn try_resolve_device_signing_directory_facet(
     state: &AppState,
     principal_id: &str,
     device_id: &str,
-) -> Result<DeviceSigningDirectoryFacet, crate::persistence::PersistenceError> {
+) -> Result<DeviceSigningDirectoryFacet, soland_storage::PersistenceError> {
     let record = match state
         .persistence
         .devices()

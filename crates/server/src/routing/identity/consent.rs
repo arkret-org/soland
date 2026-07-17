@@ -16,16 +16,16 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_storage::{
+    AccountDataRecord, ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ProjectionEventRecord,
+};
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
 use crate::error::AppError;
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
 };
-use crate::state::{
-    AccountDataRecord, AppState, ConsentCellKey, ConsentCellRecord, ConsentGrantDot,
-    ProjectionEventRecord,
-};
+use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
 const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
@@ -41,7 +41,7 @@ pub(super) fn router() -> Router {
 }
 
 pub(crate) async fn project_consent_operation(state: &AppState, operation: &Operation) {
-    let kind = crate::kinds::canonical_kind_string(operation);
+    let kind = soland_domain::kinds::canonical_kind_string(operation);
     let projected = match kind.as_str() {
         "ak.consent.grant" => project_consent_grant_operation(state, operation).await,
         "ak.consent.revoke" => project_consent_revoke_operation(state, operation).await,
@@ -1645,7 +1645,7 @@ impl ConsentRevokeInvalidationChannel {
 #[cfg(test)]
 mod tests {
 
-    use soland_data::Db;
+    use soland_storage_postgres::Db;
 
     use super::*;
     use crate::config::{AppConfig, ObjectStorageConfig};

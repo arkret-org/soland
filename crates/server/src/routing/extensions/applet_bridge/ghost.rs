@@ -8,6 +8,7 @@ use arkret_sdk::{
     RealmId, canonical, namespace_pattern_matches,
 };
 use serde_json::{Value, json};
+use soland_storage::{CanonicalEventRecord, ProjectionEventRecord};
 
 use super::record::{
     applet_record, applet_records, ensure_not_revoked, extension_actor_id_document,
@@ -19,7 +20,7 @@ use super::types::{
 };
 use crate::error::AppError;
 use crate::ids;
-use crate::state::{AppState, CanonicalEventRecord, ProjectionEventRecord};
+use crate::state::AppState;
 
 pub(super) async fn revoke_applet_record(
     state: &AppState,

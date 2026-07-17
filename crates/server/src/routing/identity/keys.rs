@@ -15,12 +15,13 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
+use soland_storage::DeviceInventoryRecord;
 
 use super::{bearer_token, is_device_revoked, now, sha256_hex};
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, DeviceInventoryRecord};
+use crate::state::AppState;
 use crate::wire::{
     AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
     DeviceSigningKeyDirectoryQueryRequestBody, DeviceStatus, KeysClaimOutcome,

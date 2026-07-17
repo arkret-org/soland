@@ -1296,9 +1296,9 @@ impl AppConfig {
     pub fn hardening_status(&self) -> crate::wire::HardeningStatus {
         let development_mode = self.development_mode;
         let tls_enabled = self.tls_enabled();
-        let pq_hybrid_tls_required_group = crate::artifacts::pq_hybrid_tls_required_group();
+        let pq_hybrid_tls_required_group = soland_domain::artifacts::pq_hybrid_tls_required_group();
         let pq_hybrid_tls_probe_artifact =
-            crate::artifacts::PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ARTIFACT_REF;
+            soland_domain::artifacts::PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ARTIFACT_REF;
         let pq_hybrid_tls_probe_verified = self.pq_hybrid_tls_probe_verified();
         // CSP is enforced upstream by the reverse proxy (Caddyfile /
         // nginx); we can't probe the live header from inside the app,

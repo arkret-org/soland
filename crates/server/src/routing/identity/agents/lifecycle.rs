@@ -659,7 +659,7 @@ fn controller_sidecar_circles_since(
         .filter(|circle| {
             circle.created_by == controller
                 && circle.directory_visibility == "members"
-                && circle.state == crate::reducer::CircleLifecycleState::Active
+                && circle.state == soland_domain::reducer::CircleLifecycleState::Active
                 && circle.title
                     == super::sidecar::sidecar_short_name(
                         &super::sidecar::controller_agent_circle_key(&circle.realm_id, controller),

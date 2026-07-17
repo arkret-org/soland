@@ -14,9 +14,10 @@
 //! container; it is not a synonym for `strand_id`.
 
 use serde_json::json;
+use soland_storage::ProjectionEventRecord;
 
 use super::{now, realm_discoverability, sha256_hex};
-use crate::state::{AppState, ProjectionEventRecord};
+use crate::state::AppState;
 
 pub fn retag_typed_id(value: &str, from_prefix: &str, to_prefix: &str) -> Option<String> {
     value

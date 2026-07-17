@@ -6,7 +6,7 @@ use soland::config::AppConfig;
 use soland::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
 use soland::state::AppState;
 use soland::{artifacts, service};
-use soland_data::Db;
+use soland_storage_postgres::Db;
 use tokio::signal;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -539,7 +539,7 @@ async fn service_identity_waiting(res: &mut Response) {
 
 fn spawn_service_identity_supervisor(
     state: AppState,
-    persistence: std::sync::Arc<dyn soland::persistence::PersistenceStore>,
+    persistence: std::sync::Arc<dyn soland_storage::PersistenceStore>,
     key_store: Option<std::sync::Arc<dyn arkret_sdk::KeyStore>>,
 ) {
     if !matches!(

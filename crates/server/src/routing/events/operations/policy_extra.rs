@@ -1,8 +1,8 @@
 use arkret_sdk::{Operation, ReadReceiptPolicy, ReadReceiptPolicyChildViolation};
 use serde_json::Value;
+use soland_domain::reducer::poll_id_from_content;
 
 use super::*;
-use crate::reducer::poll_id_from_content;
 
 pub(crate) async fn validate_history_visibility_policy(
     state: &AppState,
@@ -324,7 +324,7 @@ fn pending_read_receipt_policy_source_realm(
         {
             continue;
         }
-        let policies = crate::reducer::inheritance_allowed_policies(&operation.payload);
+        let policies = soland_domain::reducer::inheritance_allowed_policies(&operation.payload);
         if !policies
             .iter()
             .any(|policy| policy == READ_RECEIPT_POLICY_RULE)

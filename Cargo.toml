@@ -1,9 +1,13 @@
 ﻿[workspace]
 resolver = "3"
 members = [
-    "crates/core",
+    "xtask",
+    "crates/contracts",
+    "crates/domain",
+    "crates/storage",
+    "crates/storage-memory",
+    "crates/storage-postgres",
     "crates/server",
-    "crates/data",
 ]
 default-members = ["crates/server"]
 
@@ -52,8 +56,12 @@ salvo-oapi = { version = "0.94", default-features = false }
 serde = "1.0.228"
 serde_json = "1.0.150"
 sha2 = "0.11.0"
-soland-core = { version = "0.3.0", path = "crates/core" }
-soland-data = { version = "0.3.0", path = "crates/data" }
+soland-contracts = { version = "0.3.0", path = "crates/contracts" }
+soland-domain = { version = "0.3.0", path = "crates/domain" }
+soland-storage = { version = "0.3.0", path = "crates/storage" }
+soland-storage-memory = { version = "0.3.0", path = "crates/storage-memory" }
+soland-storage-postgres = { version = "0.3.0", path = "crates/storage-postgres" }
+url = "2.5"
 subtle = "2.6.1"
 thiserror = "2"
 tokio = "1.52.3"

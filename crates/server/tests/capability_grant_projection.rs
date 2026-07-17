@@ -16,8 +16,8 @@
 use arkret_sdk::{Operation, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland::authz::SolandAuthzEngine;
-use soland::hlc::ServerHlc;
-use soland::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
+use soland_domain::hlc::ServerHlc;
+use soland_domain::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
 
 const REALM: &str = "ak:realm:01904100-0000-7000-8000-cccccccccccc";
 const GRANT_ID: &str = "ak:grant:01904100-0000-7000-8000-dddddddddddd";

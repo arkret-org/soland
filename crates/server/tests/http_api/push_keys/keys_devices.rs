@@ -757,7 +757,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
     state
         .persistence
         .devices()
-        .put(&soland::state::DeviceInventoryRecord {
+        .put(&soland_storage::DeviceInventoryRecord {
             actor: alice.to_owned(),
             device_id: alice_device.to_owned(),
             display_name: None,

@@ -1,4 +1,4 @@
-use soland_data::Db;
+use soland_storage_postgres::Db;
 
 use super::*;
 use crate::config::{AppConfig, ObjectStorageConfig};
@@ -55,7 +55,7 @@ async fn ingest_fresh_webvh_document(state: &AppState, did: &str) {
     state
         .persistence
         .webvh()
-        .put_document(crate::state::WebvhDocumentRecord {
+        .put_document(soland_storage::WebvhDocumentRecord {
             did: did.to_owned(),
             did_document: json!({
                 "id": did,
@@ -268,7 +268,7 @@ async fn policy_components_media_plaintext_reads_realm_meta() {
         .realm_meta()
         .put(
             realm_id,
-            &crate::state::RealmMetaRecord {
+            &soland_storage::RealmMetaRecord {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
@@ -314,7 +314,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
         .realm_meta()
         .put(
             realm_id,
-            &crate::state::RealmMetaRecord {
+            &soland_storage::RealmMetaRecord {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
@@ -418,7 +418,7 @@ async fn circle_scoped_write_requires_circle_membership() {
         let mut projection = state.projection.lock();
         projection.circles.insert(
             circle_id.to_owned(),
-            crate::reducer::CircleProjection {
+            soland_domain::reducer::CircleProjection {
                 circle_id: circle_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 profile_ref: None,
@@ -432,7 +432,7 @@ async fn circle_scoped_write_requires_circle_membership() {
                 metadata_encryption_floor: None,
                 encryption_profile: "mls_rfc9420".to_owned(),
                 mls_group_ref: None,
-                state: crate::reducer::CircleLifecycleState::Active,
+                state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
                 created_by: member.to_owned(),
                 created_at: now,
@@ -503,7 +503,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
         let mut projection = state.projection.lock();
         projection.circles.insert(
             circle_id.to_owned(),
-            crate::reducer::CircleProjection {
+            soland_domain::reducer::CircleProjection {
                 circle_id: circle_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 profile_ref: None,
@@ -517,7 +517,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
                 metadata_encryption_floor: None,
                 encryption_profile: "mls_rfc9420".to_owned(),
                 mls_group_ref: None,
-                state: crate::reducer::CircleLifecycleState::Active,
+                state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
                 created_by: member.to_owned(),
                 created_at: now,
@@ -529,7 +529,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
         // A Strand scoped to the Circle, and a Message inside it.
         projection.strands.insert(
             strand_id.to_owned(),
-            crate::reducer::StrandProjection {
+            soland_domain::reducer::StrandProjection {
                 strand_id: strand_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 tracks: std::collections::BTreeMap::from([(
@@ -539,7 +539,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
                 title: String::new(),
                 summary: None,
                 fields: std::collections::BTreeMap::new(),
-                state: crate::reducer::ObjectLifecycleState::Active,
+                state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
                 created_by: member.to_owned(),
                 created_at: now,
@@ -551,9 +551,9 @@ async fn circle_scoped_reaction_requires_circle_membership() {
         );
         projection.messages.insert(
             event_id.to_owned(),
-            crate::reducer::MessageState {
+            soland_domain::reducer::MessageState {
                 event_id: event_id.to_owned(),
-                message_id: crate::reducer::message_id_from_event_id(event_id),
+                message_id: soland_domain::reducer::message_id_from_event_id(event_id),
                 realm_id: realm_id.to_owned(),
                 sender: member.to_owned(),
                 thread_id: strand_id.to_owned(),
@@ -609,7 +609,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
         let mut projection = state.projection.lock();
         projection.circles.insert(
             circle_id.to_owned(),
-            crate::reducer::CircleProjection {
+            soland_domain::reducer::CircleProjection {
                 circle_id: circle_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 profile_ref: None,
@@ -623,7 +623,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
                 metadata_encryption_floor: None,
                 encryption_profile: "mls_rfc9420".to_owned(),
                 mls_group_ref: None,
-                state: crate::reducer::CircleLifecycleState::Active,
+                state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
                 created_by: member.to_owned(),
                 created_at: now,
@@ -638,7 +638,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
         ] {
             projection.morphs.insert(
                 morph_id.to_owned(),
-                crate::reducer::MorphProjection {
+                soland_domain::reducer::MorphProjection {
                     morph_id: morph_id.to_owned(),
                     realm_id: realm_id.to_owned(),
                     scope_circle_id,
@@ -648,7 +648,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
                     schema_refs: Vec::new(),
                     facets: Vec::new(),
                     versions: Vec::new(),
-                    state: crate::reducer::ObjectLifecycleState::Active,
+                    state: soland_domain::reducer::ObjectLifecycleState::Active,
                     state_changed_at: None,
                     created_by: member.to_owned(),
                     created_at: now,
@@ -715,7 +715,7 @@ async fn applet_registration_requires_realm_admin() {
         .realm_meta()
         .put(
             realm_id,
-            &crate::state::RealmMetaRecord {
+            &soland_storage::RealmMetaRecord {
                 owner: owner.to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
@@ -777,7 +777,7 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
         .realm_meta()
         .put(
             realm_id,
-            &crate::state::RealmMetaRecord {
+            &soland_storage::RealmMetaRecord {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
@@ -2036,7 +2036,7 @@ async fn ingest_principal_with_enrollment_authority(
     state
         .persistence
         .webvh()
-        .put_document(crate::state::WebvhDocumentRecord {
+        .put_document(soland_storage::WebvhDocumentRecord {
             did: principal_did.to_owned(),
             did_document: json!({
                 "id": principal_did,

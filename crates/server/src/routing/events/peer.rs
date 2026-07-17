@@ -10,15 +10,15 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
+use soland_storage::{CanonicalEventRecord, PeerEventsPageQuery, RealmMetaRecord};
 
 use super::{
     is_realm_deleted, is_valid_hash_digest, now, query_param, query_param_all, render_error,
     validate_did,
 };
 use crate::error::AppError;
-use crate::persistence::PeerEventsPageQuery;
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, CanonicalEventRecord, RealmMetaRecord};
+use crate::state::AppState;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
@@ -620,7 +620,8 @@ impl PeerReadAuthz {
                     PeerCircleState {
                         realm_id: circle.realm_id.clone(),
                         history_visibility: circle.history_visibility.clone(),
-                        active: circle.state == crate::reducer::CircleLifecycleState::Active,
+                        active: circle.state
+                            == soland_domain::reducer::CircleLifecycleState::Active,
                     },
                 )
             })

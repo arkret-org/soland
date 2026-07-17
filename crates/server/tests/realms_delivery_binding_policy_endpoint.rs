@@ -15,7 +15,7 @@ use serde_json::Value;
 use soland::config::AppConfig;
 use soland::service;
 use soland::state::AppState;
-use soland_data::Db;
+use soland_storage_postgres::Db;
 
 /// Build a minimal dev-mode `AppConfig`. Identical posture to the
 /// helper in `tests/http_api/common.rs` (kept in-line so this test file

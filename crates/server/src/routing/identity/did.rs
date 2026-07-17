@@ -25,6 +25,7 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_storage::{WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord};
 
 use super::webvh_validation::{
     WebvhLogEntry, derive_webvh_scid_from_skeleton, validate_log_chain,
@@ -33,9 +34,8 @@ use super::webvh_validation::{
 };
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
 use crate::error::{AppError, ErrorCode};
-use crate::persistence::WebvhLogCommitOutcome;
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, WebvhDocumentRecord, WebvhLogRecord};
+use crate::state::AppState;
 use crate::wire::{IdentityLogListOutcome, IdentityReceiptListOutcome, IdentityResolveRequestBody};
 
 const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";

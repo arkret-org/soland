@@ -6,28 +6,24 @@
 // does not accumulate noisy local allow attributes.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-pub mod artifacts;
 pub mod authz;
 pub mod bootstrap;
 pub mod compactor;
 pub mod config;
 pub mod error;
 pub mod gc;
-pub mod hlc;
 pub mod ids;
 mod invite_claim_proofs;
 pub mod jws_verify;
-pub mod kinds;
 pub mod metrics;
 pub mod multisig_watchdog;
 pub mod notary;
 pub mod object_storage;
 pub mod otel;
-pub mod persistence;
+mod persistence_registry;
 pub mod push_rule_core;
 pub mod ratelimit;
 pub mod realm_alias;
-pub mod reducer;
 pub mod result;
 pub mod routing;
 pub mod runtime_settings;

@@ -124,7 +124,7 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
     state
         .persistence
         .contacts()
-        .put(&soland::state::ContactRecord {
+        .put(&soland_storage::ContactRecord {
             requester: "did:web:alice.example".to_owned(),
             target: BOB_DID.to_owned(),
             scope: "direct_message".to_owned(),
@@ -159,7 +159,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
     state
         .persistence
         .contacts()
-        .put(&soland::state::ContactRecord {
+        .put(&soland_storage::ContactRecord {
             requester: "did:web:alice.example".to_owned(),
             target: BOB_PAIRWISE_DID.to_owned(),
             scope: "direct_message".to_owned(),
@@ -176,12 +176,12 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         .unwrap();
     let grant_dot = "ak:event:0196419b-0000-7000-8000-000000000233".to_owned();
     state.consent_cells.lock().insert(
-        soland::state::ConsentCellKey {
+        soland_storage::ConsentCellKey {
             holder: BOB_PAIRWISE_DID.to_owned(),
             peer: "did:web:alice.example".to_owned(),
             scope: "direct_message".to_owned(),
         },
-        soland::state::ConsentCellRecord {
+        soland_storage::ConsentCellRecord {
             holder: BOB_PAIRWISE_DID.to_owned(),
             peer: "did:web:alice.example".to_owned(),
             scope: "direct_message".to_owned(),
@@ -189,7 +189,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
             requested_at: None,
             grant_dots: BTreeMap::from([(
                 grant_dot.clone(),
-                soland::state::ConsentGrantDot {
+                soland_storage::ConsentGrantDot {
                     dot: grant_dot,
                     expires_at: None,
                     granted_at: now,
@@ -222,7 +222,7 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
     state
         .persistence
         .contacts()
-        .put(&soland::state::ContactRecord {
+        .put(&soland_storage::ContactRecord {
             requester: "did:web:alice.example".to_owned(),
             target: BOB_DID.to_owned(),
             scope: "direct_message".to_owned(),

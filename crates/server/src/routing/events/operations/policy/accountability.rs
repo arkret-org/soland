@@ -131,7 +131,7 @@ pub(super) fn accountability_grant_operation_signed_by(
 }
 
 pub(super) fn accountability_grant_envelope_signed_by(
-    record: &crate::state::CanonicalEventRecord,
+    record: &soland_storage::CanonicalEventRecord,
     issuer: &str,
 ) -> bool {
     record

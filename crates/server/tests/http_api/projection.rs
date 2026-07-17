@@ -401,7 +401,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
         let mut projection = state.projection.lock();
         projection.circles.insert(
             circle_id.to_owned(),
-            soland::reducer::CircleProjection {
+            soland_domain::reducer::CircleProjection {
                 circle_id: circle_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 profile_ref: None,
@@ -415,7 +415,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
                 metadata_encryption_floor: None,
                 encryption_profile: "none".to_owned(),
                 mls_group_ref: None,
-                state: soland::reducer::CircleLifecycleState::Active,
+                state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
                 created_by: "did:web:alice.example".to_owned(),
                 created_at: now,
@@ -430,7 +430,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
         ] {
             projection.morphs.insert(
                 morph_id.to_owned(),
-                soland::reducer::MorphProjection {
+                soland_domain::reducer::MorphProjection {
                     morph_id: morph_id.to_owned(),
                     realm_id: realm_id.to_owned(),
                     scope_circle_id,
@@ -440,7 +440,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
                     schema_refs: Vec::new(),
                     facets: Vec::new(),
                     versions: Vec::new(),
-                    state: soland::reducer::ObjectLifecycleState::Active,
+                    state: soland_domain::reducer::ObjectLifecycleState::Active,
                     state_changed_at: None,
                     created_by: "did:web:alice.example".to_owned(),
                     created_at: now,
@@ -737,15 +737,15 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
     let locked_realm_id = locked_realm["realm_id"].as_str().unwrap().to_owned();
 
     let now = chrono::Utc::now();
-    let strand =
-        |strand_id: &str, strand_realm_id: &str, title: &str| soland::reducer::StrandProjection {
+    let strand = |strand_id: &str, strand_realm_id: &str, title: &str| {
+        soland_domain::reducer::StrandProjection {
             strand_id: strand_id.to_owned(),
             realm_id: strand_realm_id.to_owned(),
             tracks: Default::default(),
             title: title.to_owned(),
             summary: None,
             fields: Default::default(),
-            state: soland::reducer::ObjectLifecycleState::Active,
+            state: soland_domain::reducer::ObjectLifecycleState::Active,
             state_changed_at: None,
             created_by: "did:web:alice.example".to_owned(),
             created_at: now,
@@ -753,28 +753,31 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
             updated_by: None,
             updated_at: None,
             scope_circle_id: None,
-        };
-    let relation =
-        |relation_id: &str, target_ref: &str, role: &str| -> soland::reducer::SolandRelationState {
-            let mut fields = std::collections::BTreeMap::new();
-            fields.insert("role".to_owned(), serde_json::json!(role));
-            fields.insert("preview_title".to_owned(), serde_json::json!(role));
-            soland::reducer::SolandRelationState {
-                relation_id: relation_id.to_owned(),
-                realm_id: realm_id.to_owned(),
-                relation_kind: "references".to_owned(),
-                scope_circle_id: None,
-                from_ref: Some(morph_id.to_owned()),
-                to_ref: Some(target_ref.to_owned()),
-                fields,
-                state: "active".to_owned(),
-                source_event_id: None,
-                source_event_digest: Some(format!("sha256:{}", "1".repeat(64))),
-                created_at: now,
-                history_basis_seals: Vec::new(),
-                updated_at: now,
-            }
-        };
+        }
+    };
+    let relation = |relation_id: &str,
+                    target_ref: &str,
+                    role: &str|
+     -> soland_domain::reducer::SolandRelationState {
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert("role".to_owned(), serde_json::json!(role));
+        fields.insert("preview_title".to_owned(), serde_json::json!(role));
+        soland_domain::reducer::SolandRelationState {
+            relation_id: relation_id.to_owned(),
+            realm_id: realm_id.to_owned(),
+            relation_kind: "references".to_owned(),
+            scope_circle_id: None,
+            from_ref: Some(morph_id.to_owned()),
+            to_ref: Some(target_ref.to_owned()),
+            fields,
+            state: "active".to_owned(),
+            source_event_id: None,
+            source_event_digest: Some(format!("sha256:{}", "1".repeat(64))),
+            created_at: now,
+            history_basis_seals: Vec::new(),
+            updated_at: now,
+        }
+    };
 
     {
         let mut projection = state.projection.lock();
@@ -788,7 +791,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
         );
         projection.morphs.insert(
             morph_id.to_owned(),
-            soland::reducer::MorphProjection {
+            soland_domain::reducer::MorphProjection {
                 morph_id: morph_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 scope_circle_id: None,
@@ -798,7 +801,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
                 schema_refs: Vec::new(),
                 facets: Vec::new(),
                 versions: Vec::new(),
-                state: soland::reducer::ObjectLifecycleState::Active,
+                state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
                 created_by: "did:web:alice.example".to_owned(),
                 created_at: now,

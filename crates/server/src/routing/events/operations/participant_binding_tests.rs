@@ -1,7 +1,7 @@
 use arkret_sdk::lattice::CellState;
 use arkret_sdk::{CellRef, Operation};
 use serde_json::{Value, json};
-use soland_data::Db;
+use soland_storage_postgres::Db;
 
 use super::*;
 use crate::routing::interop::participant_binding;

@@ -18,10 +18,10 @@
 //! takes effect on the very next request with no lock contention.
 
 use serde::{Deserialize, Serialize};
-use soland_data::PgPool;
+use serde_json::Value;
+use soland_storage_postgres::PgPool;
 
 use crate::config::{AppConfig, FederationFanoutTopology};
-use crate::persistence::{QueryableByName, RunQueryDsl, Value, pg_conn, sql_query};
 use crate::ratelimit::RateLimiterConfig;
 
 /// Rate-limit ceilings, per endpoint class, as a serializable snapshot.
@@ -222,25 +222,10 @@ fn decode<T: serde::de::DeserializeOwned>(key: &str, value: Value) -> anyhow::Re
         .map_err(|error| anyhow::anyhow!("setting `{key}` has invalid shape: {error}"))
 }
 
-#[derive(QueryableByName)]
-struct SettingRow {
-    #[diesel(sql_type = crate::persistence::Text)]
-    key: String,
-    #[diesel(sql_type = crate::persistence::Jsonb)]
-    value: Value,
-}
-
 /// Load all persisted override rows (`key`, `value`). Empty when no key has
 /// been overridden (fresh deployment → boot config is fully authoritative).
 pub async fn load_overrides(pool: &PgPool) -> anyhow::Result<Vec<(String, Value)>> {
-    let mut conn = pg_conn(pool)
-        .await
-        .map_err(|error| anyhow::anyhow!("server_settings load: {error}"))?;
-    let rows = sql_query("SELECT key, value FROM server_settings")
-        .get_results::<SettingRow>(&mut *conn)
-        .await
-        .map_err(|error| anyhow::anyhow!("server_settings query: {error}"))?;
-    Ok(rows.into_iter().map(|row| (row.key, row.value)).collect())
+    soland_storage_postgres::load_settings_overrides(pool).await
 }
 
 /// Upsert a single override key. `value` MUST already be the canonical,
@@ -251,25 +236,7 @@ pub async fn store_override(
     value: &Value,
     updated_by: &str,
 ) -> anyhow::Result<()> {
-    use crate::persistence::{Jsonb, Text};
-    let mut conn = pg_conn(pool)
-        .await
-        .map_err(|error| anyhow::anyhow!("server_settings store: {error}"))?;
-    sql_query(
-        "INSERT INTO server_settings (key, value, updated_by, updated_at) \
-         VALUES ($1, $2, $3, NOW()) \
-         ON CONFLICT (key) DO UPDATE SET \
-            value = EXCLUDED.value, \
-            updated_by = EXCLUDED.updated_by, \
-            updated_at = NOW()",
-    )
-    .bind::<Text, _>(key)
-    .bind::<Jsonb, _>(value)
-    .bind::<Text, _>(updated_by)
-    .execute(&mut *conn)
-    .await
-    .map(|_| ())
-    .map_err(|error| anyhow::anyhow!("server_settings upsert `{key}`: {error}"))
+    soland_storage_postgres::store_settings_override(pool, key, value, updated_by).await
 }
 
 #[cfg(test)]

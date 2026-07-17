@@ -31,15 +31,16 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_storage::{
+    SovereignAuditRecord, SovereignEnclaveRecord, SovereignExternalAccountRecord,
+    SovereignExternalInviteRecord, SovereignRealmRecord, SovereignStoreForwardRecord,
+};
 
 use crate::config::AppConfig;
 use crate::error::AppError;
 use crate::routing::admin::{RequireAdmin, require_admin_principal};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{
-    AppState, SovereignAuditRecord, SovereignEnclaveRecord, SovereignExternalAccountRecord,
-    SovereignExternalInviteRecord, SovereignRealmRecord, SovereignStoreForwardRecord,
-};
+use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
 /// Result of [`assert_enclave_invariants`]. The enclave profile is
@@ -1186,7 +1187,10 @@ fn validate_did_against_roots(
         .with_wire_code(code))
 }
 
-fn deployment_profile(state: &AppState, guard: &crate::state::SovereignDeploymentState) -> String {
+fn deployment_profile(
+    state: &AppState,
+    guard: &soland_storage::SovereignDeploymentState,
+) -> String {
     guard.profile_override.clone().unwrap_or_else(|| {
         if state.config.sovereign_enclave_enabled {
             "enclave".to_owned()
@@ -1221,7 +1225,7 @@ fn did_matches_trust_root(did: &str, root: &str) -> bool {
 }
 
 fn audit(
-    guard: &mut crate::state::SovereignDeploymentState,
+    guard: &mut soland_storage::SovereignDeploymentState,
     subject: &str,
     action: &str,
     realm_id: Option<&str>,

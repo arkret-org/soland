@@ -38,10 +38,10 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::Signer as _;
+use soland_storage::{FederationOutboxDeadLetterRecord, FederationOutboxRecord, PersistenceResult};
 use uuid::Uuid;
 
-use crate::persistence::PersistenceResult;
-use crate::state::{AppState, FederationOutboxDeadLetterRecord, FederationOutboxRecord};
+use crate::state::AppState;
 
 /// How often the dispatcher polls the outbox when idle.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(5);

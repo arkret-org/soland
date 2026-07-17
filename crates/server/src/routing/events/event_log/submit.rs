@@ -176,10 +176,10 @@ fn cba_bottom_reject(reason: &'static str) -> (&'static str, &'static str) {
     }
 }
 
-fn persistence_error_is_realm_already_exists(error: &crate::persistence::PersistenceError) -> bool {
+fn persistence_error_is_realm_already_exists(error: &soland_storage::PersistenceError) -> bool {
     matches!(
         error,
-        crate::persistence::PersistenceError::Conflict(message)
+        soland_storage::PersistenceError::Conflict(message)
             if message.contains("realm_already_exists")
     )
 }

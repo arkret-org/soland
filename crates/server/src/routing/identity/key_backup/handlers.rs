@@ -15,7 +15,7 @@ pub(super) async fn enforce_recovery_policy_ref_typed(
         .get_active_for_principal(actor_id)
         .await
         .map_err(|error| match error {
-            crate::persistence::PersistenceError::NotFound(message) => AppError::not_found(message),
+            soland_storage::PersistenceError::NotFound(message) => AppError::not_found(message),
             other => AppError::internal(format!("recovery policy lookup failed: {other}")),
         })?
         .ok_or_else(|| {
@@ -328,7 +328,7 @@ pub(super) async fn put_key_backup(
             // constraint rejected a concurrent successor double-write. The
             // storage layer is now the authoritative race guard for §7.6
             // monotonicity; the loser is told the seq is already taken.
-            crate::persistence::PersistenceError::Conflict(message) => AppError::new(
+            soland_storage::PersistenceError::Conflict(message) => AppError::new(
                 ErrorCode::SchemaViolation,
                 format!("series_seq_not_monotonic: {message}"),
             )

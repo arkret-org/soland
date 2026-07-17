@@ -39,15 +39,15 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+use soland_storage::{
+    DeviceInventoryRecord, PersistenceError, RecoveryPolicyRecord, RecoveryReceiptRecord,
+    RecoverySessionRecord, SessionRecord,
+};
 
 use super::{AuthArgs, append_audit_log};
 use crate::error::{AppError, ErrorCode};
-use crate::persistence::PersistenceError;
 use crate::result::{JsonResult, json_ok};
-use crate::state::{
-    AppState, DeviceInventoryRecord, RecoveryPolicyRecord, RecoveryReceiptRecord,
-    RecoverySessionRecord, SessionRecord,
-};
+use crate::state::AppState;
 
 mod errors;
 use errors::*;

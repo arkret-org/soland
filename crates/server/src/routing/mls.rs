@@ -22,8 +22,8 @@
 //!
 //! Each handler:
 //!   1. authenticates the caller via [`AuthArgs`] (bearer session);
-//!   2. drives the reducer's `apply_*` helper in [`crate::reducer::mls`] to keep the in-process
-//!      projection in lockstep;
+//!   2. drives the reducer's `apply_*` helper in [`soland_domain::reducer::mls`] to keep the
+//!      in-process projection in lockstep;
 //!   3. mirrors the write into the corresponding persistence store ([`MlsKeyPackageStore`] /
 //!      [`MlsWelcomeStore`]).
 //!
@@ -51,12 +51,12 @@ use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-
-use crate::error::{AppError, ErrorCode};
-use crate::persistence::MlsKeyPackageRow;
-use crate::reducer::{
+use soland_domain::reducer::{
     self, MlsEffect, MlsKeyPackage, MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect,
 };
+use soland_storage::MlsKeyPackageRow;
+
+use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -276,7 +276,7 @@ fn mls_scope_parts(effective_scope: &Value) -> Option<(String, Option<String>)> 
 }
 
 fn actor_participates_in_mls_scope(
-    projection: &crate::reducer::ProjectionState,
+    projection: &soland_domain::reducer::ProjectionState,
     realm_id: &str,
     circle_id: Option<&str>,
     actor_id: &str,
@@ -1192,7 +1192,7 @@ async fn current_keypackage_claim_trust_selector(
 }
 
 fn device_authorize_trust_binding(
-    device: &crate::state::DeviceInventoryRecord,
+    device: &soland_storage::DeviceInventoryRecord,
 ) -> Option<KeyPackageTrustBinding> {
     if device.revoked_at.is_some() || device.verification_state != "verified" {
         return None;

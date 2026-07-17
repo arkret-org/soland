@@ -1381,7 +1381,7 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
     state
         .persistence
         .call_signal_relay()
-        .append(soland::state::CallSignalRelayRecord {
+        .append(soland_storage::CallSignalRelayRecord {
             realm_id: DEMO_REALM_ID.to_owned(),
             sender_actor: alice.to_owned(),
             sender_device: alice_device.to_owned(),

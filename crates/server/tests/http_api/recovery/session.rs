@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use soland::persistence::SolandMemoryPersistenceStore;
-use soland::state::{
+use soland_storage::{
     DeviceInventoryRecord, DeviceMessageRecord, RecoveryPolicyRecord, RecoverySessionRecord,
 };
+use soland_storage_memory::SolandMemoryPersistenceStore;
 
 use super::helpers::*;
 use crate::common::*;

@@ -163,7 +163,7 @@ fn cba_cell_family_plane(family: &str) -> Result<CbaEffectPlane, EventValidation
     if DATA_PLANE_CELL_FAMILIES.contains(&family) {
         return Ok(CbaEffectPlane::Data);
     }
-    if crate::artifacts::cell_family_bindings()
+    if soland_domain::artifacts::cell_family_bindings()
         .iter()
         .any(|binding| binding.cell_family == family)
     {

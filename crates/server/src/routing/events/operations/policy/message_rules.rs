@@ -54,7 +54,7 @@ pub(super) fn validate_reaction_scope_policy(
 /// writes derive scope from the projected target. `ak.message.create` derives
 /// scope from the projected Strand — a Message never self-declares its scope.
 pub(super) fn operation_target_scope_circle_id(
-    projection: &crate::reducer::ProjectionState,
+    projection: &soland_domain::reducer::ProjectionState,
     operation: &Operation,
 ) -> Option<String> {
     let top_level_scope = || -> Option<String> {

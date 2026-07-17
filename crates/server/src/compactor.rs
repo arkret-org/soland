@@ -289,7 +289,7 @@ fn eligibility_wire(eligibility: &PruneEligibility) -> &'static str {
 mod tests {
     use std::collections::BTreeMap;
 
-    use soland_data::Db;
+    use soland_storage_postgres::Db;
 
     use super::*;
     use crate::config::{AppConfig, ObjectStorageConfig};

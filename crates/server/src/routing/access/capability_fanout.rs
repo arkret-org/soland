@@ -4,9 +4,9 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 // SOL-DRY-03 — the coauth↔soland fanout wire contract is shared via
-// soland-core (same pattern as the sodmin admin seal DTOs); do not
+// soland-contracts (same pattern as the sodmin admin seal DTOs); do not
 // re-declare these shapes locally.
-use soland_core::capability_fanout::{
+use soland_contracts::integration::capability_fanout::{
     CapabilityFanoutAuthzState, CapabilityFanoutBody, CapabilityFanoutResponse,
 };
 

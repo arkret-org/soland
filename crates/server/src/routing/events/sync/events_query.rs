@@ -1057,8 +1057,8 @@ async fn events_query_impl(
 /// else from the realm timeline.
 async fn events_query_event_visible(
     state: &AppState,
-    event: &crate::state::ProjectionEventRecord,
-    session: Option<&crate::state::SessionRecord>,
+    event: &soland_storage::ProjectionEventRecord,
+    session: Option<&soland_storage::SessionRecord>,
     recovery_only: bool,
     managed_agent_control: bool,
 ) -> bool {
@@ -1175,8 +1175,9 @@ fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkre
 
 #[cfg(test)]
 mod tests {
+    use soland_storage::CanonicalEventRecord;
+
     use super::*;
-    use crate::state::CanonicalEventRecord;
 
     const TEST_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000aa01";
     const TEST_ACTOR: &str = "did:web:alice.example";
@@ -1188,7 +1189,7 @@ mod tests {
     fn test_state() -> AppState {
         let mut config = crate::config::AppConfig::test_default();
         config.seed_demo_data = false;
-        AppState::new(config, soland_data::Db { pool: None })
+        AppState::new(config, soland_storage_postgres::Db { pool: None })
     }
 
     #[test]

@@ -6,9 +6,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::Signer as _;
 use reqwest::header::{HeaderMap, HeaderValue};
+use soland_storage::{CanonicalEventRecord, FEDERATION_FRONTIER_STATUS_STALE_PEER};
 
-use crate::persistence::FEDERATION_FRONTIER_STATUS_STALE_PEER;
-use crate::state::{AppState, CanonicalEventRecord};
+use crate::state::AppState;
 
 const EXCHANGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

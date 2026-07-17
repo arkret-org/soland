@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use soland::persistence::SolandMemoryPersistenceStore;
+use soland_storage_memory::SolandMemoryPersistenceStore;
 
 use super::helpers::*;
 use crate::common::*;

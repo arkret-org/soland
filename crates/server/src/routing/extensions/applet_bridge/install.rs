@@ -13,6 +13,8 @@ use arkret_sdk::{
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_domain::reducer::AppletProjection;
+use soland_storage::{MessageRecord, ProjectionEventRecord};
 
 use super::super::applet_manifest::{AppletManifest, VerifiedAppletManifest};
 use super::record::{
@@ -25,9 +27,8 @@ use super::types::{
 };
 use crate::error::AppError;
 use crate::ids;
-use crate::reducer::AppletProjection;
 use crate::routing::events::strand::strand_id_from_realm_id;
-use crate::state::{AppState, MessageRecord, ProjectionEventRecord};
+use crate::state::AppState;
 
 pub(super) const GHOST_PROVISION_ACTION: &str = "ak.applet.ghost.provision";
 
@@ -1436,7 +1437,7 @@ mod tests {
             notary_signing_key_seed: Some([9u8; 32]),
             ..crate::config::AppConfig::test_default()
         };
-        AppState::new(config, soland_data::Db { pool: None })
+        AppState::new(config, soland_storage_postgres::Db { pool: None })
     }
 
     /// Derive a `did:key` DID + its `#`-fragment verification method for an

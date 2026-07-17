@@ -38,9 +38,10 @@ use salvo::http::StatusCode;
 use salvo::prelude::Request;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use soland_storage::{AgentSessionRecord, SessionRecord};
 
 use super::auth::PRINCIPAL_SESSION_BIND_SCOPE;
-use crate::state::{AgentSessionRecord, AppState, SessionRecord};
+use crate::state::AppState;
 use crate::wire::{
     SessionGrantIntrospectGrant, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
     SessionGrantIntrospectStatus,

@@ -4,9 +4,10 @@ use arkret_sdk::{
     Operation, ProfileSemanticRequirements, ServiceDescribe, collect_profile_semantic_requirements,
 };
 use serde_json::Value;
+use soland_domain::kinds;
 
 use crate::state::AppState;
-use crate::{kinds, wire};
+use crate::wire;
 
 const PROFILE_FEDERATION_MINIMAL: &str = "ak.profile.federation_minimal.v1";
 const PROFILE_MLS_GOVERNANCE_FULL: &str = "ak.profile.mls_governance_binding.full.v1";

@@ -1,11 +1,12 @@
 use arkret_sdk::Operation;
 use serde_json::{Value, json};
+use soland_domain::kinds;
+use soland_domain::reducer::MlsWelcomeQueueKey;
+use soland_storage::{DeviceMessageRecord, MlsKeyPackageRow, MlsWelcomeRecord};
 
 use super::*;
-use crate::persistence::{MlsKeyPackageRow, MlsWelcomeRecord};
-use crate::reducer::MlsWelcomeQueueKey;
-use crate::state::{AppState, DeviceMessageRecord};
-use crate::{ids, kinds};
+use crate::ids;
+use crate::state::AppState;
 
 pub async fn project_accepted_operations_from_device(
     state: &AppState,
@@ -18,10 +19,10 @@ pub async fn project_accepted_operations_from_device(
 
 pub(super) fn apply_via_lattice_registry(
     state: &AppState,
-    proj: &mut crate::reducer::ProjectionState,
+    proj: &mut soland_domain::reducer::ProjectionState,
     operation: &Operation,
-) -> crate::reducer::ProjectionEffect {
-    let registry = crate::reducer::lattice_kinds::default_lattice_registry();
+) -> soland_domain::reducer::ProjectionEffect {
+    let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
     proj.apply_via_lattice_registry(operation, &state.hlc, &registry)
 }
 
@@ -30,14 +31,14 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
     origin: &str,
     source_device_id: &str,
     operation: &Operation,
-    effect: &crate::reducer::ProjectionEffect,
+    effect: &soland_domain::reducer::ProjectionEffect,
 ) {
-    let crate::reducer::ProjectionEffect::Mls(effect) = effect else {
+    let soland_domain::reducer::ProjectionEffect::Mls(effect) = effect else {
         return;
     };
 
     match effect {
-        crate::reducer::MlsEffect::KeyPackagePublished { keypackage_id, .. } => {
+        soland_domain::reducer::MlsEffect::KeyPackagePublished { keypackage_id, .. } => {
             let record = {
                 let projection = state.projection.lock();
                 projection.mls_key_packages.get(keypackage_id).cloned()
@@ -68,7 +69,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage publish");
             }
         }
-        crate::reducer::MlsEffect::KeyPackageClaimed {
+        soland_domain::reducer::MlsEffect::KeyPackageClaimed {
             keypackage_id,
             group_id,
             intended_realm_id,
@@ -91,7 +92,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage claim");
             }
         }
-        crate::reducer::MlsEffect::WelcomeEnqueued {
+        soland_domain::reducer::MlsEffect::WelcomeEnqueued {
             welcome_id,
             recipient_actor_id,
             recipient_device_id,
@@ -135,8 +136,8 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 .await;
             }
         }
-        crate::reducer::MlsEffect::RemoveProposalRecorded { .. } => {}
-        crate::reducer::MlsEffect::GroupGenesis {
+        soland_domain::reducer::MlsEffect::RemoveProposalRecorded { .. } => {}
+        soland_domain::reducer::MlsEffect::GroupGenesis {
             group_id,
             effective_scope,
             creator_actor_id,
@@ -166,7 +167,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             }
             bind_circle_mls_group(state, group_id, effective_scope, false);
         }
-        crate::reducer::MlsEffect::CommitEpochAdvanced {
+        soland_domain::reducer::MlsEffect::CommitEpochAdvanced {
             group_id,
             effective_scope,
             previous_epoch,
@@ -198,7 +199,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             }
             bind_circle_mls_group(state, group_id, effective_scope, true);
         }
-        crate::reducer::MlsEffect::CommitFrontierContested {
+        soland_domain::reducer::MlsEffect::CommitFrontierContested {
             group_id,
             effective_scope,
             epoch,
@@ -295,11 +296,11 @@ fn circle_scope_parts(effective_scope: &Value) -> Option<(String, String)> {
 /// materialized, and the later create/snapshot write-through captures the
 /// converged projection.
 async fn write_through_projection(state: &AppState, operation: &Operation) {
-    use crate::kinds;
-    use crate::persistence::{
+    use soland_domain::kinds;
+    use soland_domain::reducer::{ObjectLifecycleState, SpaceContainerLifecycleState};
+    use soland_storage::{
         MorphProjectionRecord, SpaceContainerProjectionRecord, StrandProjectionRecord,
     };
-    use crate::reducer::{ObjectLifecycleState, SpaceContainerLifecycleState};
 
     enum ProjectionWriteThroughSnapshot {
         SpaceContainer(SpaceContainerProjectionRecord),
@@ -445,7 +446,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     };
 
     fn return_snapshot_space_container(
-        p: &crate::reducer::SpaceContainerProjection,
+        p: &soland_domain::reducer::SpaceContainerProjection,
     ) -> Option<ProjectionWriteThroughSnapshot> {
         Some(ProjectionWriteThroughSnapshot::SpaceContainer(
             SpaceContainerProjectionRecord {
@@ -482,7 +483,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     }
 
     fn return_snapshot_strand(
-        f: &crate::reducer::StrandProjection,
+        f: &soland_domain::reducer::StrandProjection,
     ) -> ProjectionWriteThroughSnapshot {
         ProjectionWriteThroughSnapshot::Strand(StrandProjectionRecord {
             strand_id: f.strand_id.clone(),
@@ -502,7 +503,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     }
 
     fn return_snapshot_morph(
-        m: &crate::reducer::MorphProjection,
+        m: &soland_domain::reducer::MorphProjection,
     ) -> ProjectionWriteThroughSnapshot {
         ProjectionWriteThroughSnapshot::Morph(MorphProjectionRecord {
             morph_id: m.morph_id.clone(),
@@ -573,7 +574,7 @@ async fn project_accepted_operations_inner(
 ) {
     for operation in operations {
         tracing::debug!(
-            kind = ?crate::kinds::canonical_kind_for_operation(operation),
+            kind = ?soland_domain::kinds::canonical_kind_for_operation(operation),
             realm_id = %operation.realm_id,
             origin = %origin,
             "project_accepted_operations"
@@ -667,7 +668,7 @@ async fn project_accepted_operations_inner(
         if let Some(effect) = reducer_effect {
             if matches!(
                 &effect,
-                crate::reducer::ProjectionEffect::RealmKeyShareProjected { .. }
+                soland_domain::reducer::ProjectionEffect::RealmKeyShareProjected { .. }
             ) {
                 project_realm_key_share_to_device(state, origin, source_device_id, operation).await;
             }
@@ -732,9 +733,9 @@ async fn project_accepted_operations_inner(
 pub(crate) async fn mirror_moderation_effect_to_persistence(
     state: &AppState,
     operation: &Operation,
-    effect: &crate::reducer::ProjectionEffect,
+    effect: &soland_domain::reducer::ProjectionEffect,
 ) {
-    let crate::reducer::ProjectionEffect::ModerationAppealProjected {
+    let soland_domain::reducer::ProjectionEffect::ModerationAppealProjected {
         appeal_id,
         new_state,
         ..
@@ -781,9 +782,9 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
 /// relationship)`.
 pub(crate) async fn mirror_realm_organization_effect_to_persistence(
     state: &AppState,
-    effect: &crate::reducer::ProjectionEffect,
+    effect: &soland_domain::reducer::ProjectionEffect,
 ) {
-    let crate::reducer::ProjectionEffect::RealmOrganizationProjected {
+    let soland_domain::reducer::ProjectionEffect::RealmOrganizationProjected {
         realm_id,
         organization_id,
         relationship,
@@ -805,7 +806,7 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
     let Some(row) = row else {
         return;
     };
-    let record = crate::state::RealmOrganizationStatementRecord {
+    let record = soland_storage::RealmOrganizationStatementRecord {
         realm_id: row.realm_id,
         organization_id: row.organization_id,
         relationship: row.relationship,
@@ -1002,7 +1003,7 @@ fn realm_key_share_device_message_content(
 /// The `cross_signing_binding` was already verified at ingest
 /// (`validate_device_authorize_binding`).
 async fn project_device_authorize(state: &crate::state::AppState, operation: &Operation) {
-    use crate::state::DeviceInventoryRecord;
+    use soland_storage::DeviceInventoryRecord;
     let payload = &operation.payload;
     // Accepted device.authorize payloads already passed schema validation;
     // parse the wire shape (projection-injected envelope fields stripped)
@@ -1146,9 +1147,9 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
 /// with the projection without HTTP handlers writing it directly.
 fn refresh_authz_index_from_capability_effect(
     state: &AppState,
-    effect: &crate::reducer::ProjectionEffect,
+    effect: &soland_domain::reducer::ProjectionEffect,
 ) {
-    use crate::reducer::ProjectionEffect;
+    use soland_domain::reducer::ProjectionEffect;
     let grant_ids: Vec<String> = match effect {
         ProjectionEffect::CapabilityGrantProjected { grant_id, .. }
         | ProjectionEffect::CapabilityRevokeProjected { grant_id, .. }
@@ -1179,7 +1180,7 @@ mod tests {
     async fn realm_key_share_device_projection_accepts_projected_payload_context() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
-            soland_data::Db { pool: None },
+            soland_storage_postgres::Db { pool: None },
         );
         let realm_id =
             arkret_sdk::RealmId::new("ak:realm:0196419b-1000-7000-8000-000000000101".to_owned())

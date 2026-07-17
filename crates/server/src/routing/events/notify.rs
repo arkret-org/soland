@@ -569,7 +569,7 @@ pub(crate) async fn dispatch_schedule_notifications(
 mod tests {
     use arkret_sdk::RealmId;
     use serde_json::{Value, json};
-    use soland_data::Db;
+    use soland_storage_postgres::Db;
 
     use super::*;
 
@@ -604,7 +604,7 @@ mod tests {
     }
 
     async fn put_agent(state: &AppState, agent: &str, controller: &str) {
-        let mut record = crate::persistence::AgentPrincipalRecord::new(
+        let mut record = soland_storage::AgentPrincipalRecord::new(
             agent.to_owned(),
             controller.to_owned(),
             "ak:realm:01964137-0000-7000-8000-000000000010".to_owned(),
@@ -731,7 +731,7 @@ mod tests {
     fn seed_strand_watch(state: &AppState, strand_id: &str, actor_id: &str, level: &str) {
         state.projection.lock().strand_watches.insert(
             (strand_id.to_owned(), actor_id.to_owned()),
-            crate::reducer::StrandWatchProjection {
+            soland_domain::reducer::StrandWatchProjection {
                 strand_id: strand_id.to_owned(),
                 actor_id: actor_id.to_owned(),
                 level: Some(level.to_owned()),
@@ -744,14 +744,14 @@ mod tests {
     fn seed_strand_scope(state: &AppState, realm_id: &str, strand_id: &str, circle_id: &str) {
         state.projection.lock().strands.insert(
             strand_id.to_owned(),
-            crate::reducer::StrandProjection {
+            soland_domain::reducer::StrandProjection {
                 strand_id: strand_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 tracks: Default::default(),
                 title: "Scoped".to_owned(),
                 summary: None,
                 fields: Default::default(),
-                state: crate::reducer::ObjectLifecycleState::Active,
+                state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
                 created_by: "did:web:alice.example".to_owned(),
                 created_at: chrono::Utc::now(),
@@ -766,14 +766,14 @@ mod tests {
     fn seed_strand(state: &AppState, realm_id: &str, strand_id: &str) {
         state.projection.lock().strands.insert(
             strand_id.to_owned(),
-            crate::reducer::StrandProjection {
+            soland_domain::reducer::StrandProjection {
                 strand_id: strand_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 tracks: Default::default(),
                 title: "Task".to_owned(),
                 summary: None,
                 fields: Default::default(),
-                state: crate::reducer::ObjectLifecycleState::Active,
+                state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
                 created_by: "did:web:alice.example".to_owned(),
                 created_at: chrono::Utc::now(),

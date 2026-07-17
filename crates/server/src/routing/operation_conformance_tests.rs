@@ -1,6 +1,6 @@
 use arkret_sdk::{Operation, OperationId};
 use serde_json::{Value, json};
-use soland_data::Db;
+use soland_storage_postgres::Db;
 
 use super::*;
 use crate::config::AppConfig;
@@ -467,7 +467,9 @@ fn builtin_operation_conformance_vectors_cover_registry() {
 
 #[test]
 fn psi_bucket_timestamp_floors_to_bucket_boundary() {
-    use crate::state::{AppState, PSI_HIT_BUCKET_SECS};
+    use soland_storage::PSI_HIT_BUCKET_SECS;
+
+    use crate::state::AppState;
     // A timestamp mid-bucket floors down to the bucket start; two times in
     // the same bucket map to the same value (hides intra-bucket flip time).
     // Align `base` to a bucket boundary so mid/late share one bucket.
@@ -490,7 +492,7 @@ fn psi_bucket_timestamp_floors_to_bucket_boundary() {
 
 #[test]
 fn psi_probe_rate_limits_high_frequency_pair() {
-    use crate::state::PSI_PROBE_MAX_PER_WINDOW;
+    use soland_storage::PSI_PROBE_MAX_PER_WINDOW;
     let state = test_state();
     let requester = "did:web:probe.example";
     let holder = "did:web:holder.example";

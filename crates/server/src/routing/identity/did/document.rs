@@ -79,7 +79,7 @@ pub(in crate::routing) async fn identity_document_record(
             // entered into the high-risk persistence gate.
             fetched_at: now(),
             expires_at: now()
-                + chrono::Duration::seconds(crate::persistence::WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS),
+                + chrono::Duration::seconds(soland_storage::WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS),
             updated_at: now(),
         };
     }
@@ -99,7 +99,7 @@ pub(in crate::routing) async fn identity_document_record(
             // Local default document (dev fallback), treated as fresh.
             fetched_at: now(),
             expires_at: now()
-                + chrono::Duration::seconds(crate::persistence::WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS),
+                + chrono::Duration::seconds(soland_storage::WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS),
             updated_at: now(),
         });
     with_default_also_known_as(record, state, did)

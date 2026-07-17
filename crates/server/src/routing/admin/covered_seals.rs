@@ -10,7 +10,7 @@
 //!   MLS members are offline and can't ack on their own; this is a coarse maintenance hammer (it
 //!   does NOT replace per-epoch MLS commits).
 //!
-//! Read source: [`crate::reducer::ProjectionState::mls_commit_epochs`]
+//! Read source: [`soland_domain::reducer::ProjectionState::mls_commit_epochs`]
 //! (the per-group epoch + covered_seals accumulator) and the live
 //! `SealStore` leaves (the governance Seal frontier for the Realm). Wire
 //! shapes mirror sodmin's `CoveredSealsSnapshot` / `CoveredSealsAdvanceOutcome`
@@ -21,10 +21,10 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-// Shared wire DTOs live in `soland-core` so producer (this server) and
+// Shared wire DTOs live in `soland-contracts` so producer (this server) and
 // consumer (sodmin) cannot drift. `CoveredSealsSnapshot` is the describe
 // response; `CoveredSealsAdvanceOutcome` is the override response.
-use soland_core::admin::covered_seals::{
+use soland_contracts::admin::covered_seals::{
     CoveredSealsAdvanceOutcome, CoveredSealsSnapshot as CoveredSealsSnapshotOutcome,
 };
 

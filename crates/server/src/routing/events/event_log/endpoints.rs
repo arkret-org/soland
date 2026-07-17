@@ -356,7 +356,7 @@ async fn persist_idempotency_first_response(
     body: &Value,
 ) {
     let created_at = now();
-    let record = crate::persistence::IdempotencyRecord {
+    let record = soland_storage::IdempotencyRecord {
         principal_id: principal_id.to_owned(),
         idempotency_key: idempotency_key.to_owned(),
         service_id: state.service_id.clone(),

@@ -6,7 +6,7 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::Value;
-use soland_core::admin::seal::{
+use soland_contracts::admin::seal::{
     AdminNotaryValue, NotaryReconfigRequestBody, SubmitControlMoveOutcome,
 };
 

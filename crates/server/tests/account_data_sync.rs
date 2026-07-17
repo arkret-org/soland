@@ -6,8 +6,9 @@ use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::service;
-use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
-use soland_data::Db;
+use soland::state::{AppState, RealmDirectoryEntry};
+use soland_storage::RealmMetaRecord;
+use soland_storage_postgres::Db;
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(2_000);
 

@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use soland::reducer::{CircleLifecycleState, CircleProjection};
-use soland::state::{CanonicalEventRecord, RealmMetaRecord};
+use soland_domain::reducer::{CircleLifecycleState, CircleProjection};
+use soland_storage::{CanonicalEventRecord, RealmMetaRecord};
 
 use super::common::*;
 
@@ -15,7 +15,7 @@ fn seed_peer_delivery_binding(state: &AppState) {
     let now = Utc::now();
     state.projection.lock().members.insert(
         (TEST_REALM_ID.to_owned(), "did:web:alice.example".to_owned()),
-        soland::reducer::SolandMembershipState {
+        soland_domain::reducer::SolandMembershipState {
             member: "did:web:alice.example".to_owned(),
             realm_id: TEST_REALM_ID.to_owned(),
             state: "join".to_owned(),
@@ -776,8 +776,8 @@ fn mls_governance_binding(group_id: &str) -> Value {
             "ak:event:01904100-0000-7000-8000-fede00000a01"
         ],
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "binding_profile": soland::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-        "reducer_profile": soland::kinds::MLS_REDUCER_PROFILE_V1
+        "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+        "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1
     })
 }
 

@@ -41,7 +41,7 @@ use crate::{JsonResult, json_ok};
 struct DeviceGenerationEventSealContext {
     principal_id: String,
     current_generation_ref: String,
-    records: Vec<crate::state::CanonicalEventRecord>,
+    records: Vec<soland_storage::CanonicalEventRecord>,
     accepted_frontier_refs: Vec<SealId>,
     cas_frontier_refs: Vec<SealId>,
     generation_fence: Option<crate::notary::FirstGenerationEventSealRequirement>,
@@ -359,7 +359,7 @@ fn verify_device_seal_signature(seal: &Seal, device_public_key: &str) -> Result<
         })
 }
 
-fn ordinary_event_device_id(record: &crate::state::CanonicalEventRecord) -> Option<String> {
+fn ordinary_event_device_id(record: &soland_storage::CanonicalEventRecord) -> Option<String> {
     let verification_method = record
         .envelope
         .get("proofs")
@@ -805,7 +805,7 @@ async fn try_apply_device_generation_event_seal(
 pub(crate) async fn apply_managed_agent_event_seal(
     state: &AppState,
     seal: &Seal,
-    agent_record: &crate::persistence::AgentPrincipalRecord,
+    agent_record: &soland_storage::AgentPrincipalRecord,
     session_device_id: &str,
 ) -> Result<SealEffect, AppError> {
     seal.validate_id()

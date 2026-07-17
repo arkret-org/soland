@@ -4,9 +4,10 @@ use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::Signer as _;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use soland_storage::FederationTransactionRecord;
 
 use super::{now, sha256_hex};
-use crate::state::{AppState, FederationTransactionRecord};
+use crate::state::AppState;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FederationPeerTarget {
@@ -383,7 +384,7 @@ pub(super) async fn run_outbound_fanout_retry_pass_at(
     node_id: &str,
     limit: usize,
     now: DateTime<Utc>,
-) -> crate::persistence::PersistenceResult<OutboundFanoutRetryReport> {
+) -> soland_storage::PersistenceResult<OutboundFanoutRetryReport> {
     let mut report = OutboundFanoutRetryReport::default();
     if limit == 0 {
         return Ok(report);
@@ -553,7 +554,7 @@ pub(crate) fn test_app_state_with_peers(
     peers: Vec<String>,
     erasure_propagation_window_ms: u64,
 ) -> crate::state::AppState {
-    use soland_data::Db;
+    use soland_storage_postgres::Db;
 
     use crate::config::AppConfig;
     use crate::state::AppState;

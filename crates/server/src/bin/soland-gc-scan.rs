@@ -7,7 +7,7 @@
 use soland::config::AppConfig;
 use soland::gc;
 use soland::state::AppState;
-use soland_data::Db;
+use soland_storage_postgres::Db;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -3,15 +3,14 @@ use std::collections::BTreeMap;
 use arkret_sdk::{ReadReceipt, ReadScopeKind};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::Value;
+use soland_storage::{CanonicalEventRecord, ReadReceiptRelayRecord, SessionRecord};
 
 use crate::error::AppError;
 use crate::routing::events::event_log::{
     canonical_realm_id_for_record, effective_scope_for_envelope, event_visible_to_session,
 };
 use crate::routing::spaces::space::{realm_event_visible_to_session, realm_has_member};
-use crate::state::{
-    AppState, CanonicalEventRecord, EventNotification, ReadReceiptRelayRecord, SessionRecord,
-};
+use crate::state::{AppState, EventNotification};
 
 struct NormalizedReadReceipt {
     event_id: String,

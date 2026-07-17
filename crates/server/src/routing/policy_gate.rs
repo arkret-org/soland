@@ -5,12 +5,13 @@ use arkret_sdk::identity::{DidDocument, DidResolver};
 use arkret_sdk::{Did, Hash, Operation, RealmId};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
+use soland_domain::kinds;
 
 use crate::authz::obligation_executor::{ObligationError, RequestContext};
 use crate::authz::policy_client::{PolicyCheckRequestInput, PolicyClient, PolicyFrontierSnapshot};
 use crate::authz::{MergedAuthzDecision, check_with_policy_server};
+use crate::ids;
 use crate::state::AppState;
-use crate::{ids, kinds};
 
 #[derive(Clone, Debug)]
 pub(crate) enum PolicyGateSurface {
