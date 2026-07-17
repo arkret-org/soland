@@ -4,6 +4,45 @@
 
 use super::common::*;
 
+struct ControllerSealSigner {
+    did: arkret_sdk::Did,
+    verification_method: String,
+    signing_key: SigningKey,
+}
+
+impl arkret_sdk::MoveSigner for ControllerSealSigner {
+    fn sign_move(
+        &self,
+        _unsigned: &arkret_sdk::UnsignedMove,
+    ) -> Result<arkret_sdk::Move, arkret_sdk::WireError> {
+        unreachable!("managed Agent PCR test only signs a Seal")
+    }
+
+    fn signer_did(&self) -> &arkret_sdk::Did {
+        &self.did
+    }
+
+    fn verification_method_id(&self) -> &str {
+        &self.verification_method
+    }
+
+    fn sign_payload(
+        &self,
+        canonical_bytes: &[u8],
+    ) -> Result<arkret_sdk::MoveSignature, arkret_sdk::WireError> {
+        Ok(arkret_sdk::MoveSignature {
+            alg: "EdDSA".to_owned(),
+            verification_method: self.verification_method.clone(),
+            payload_digest: arkret_sdk::Hash::new(arkret_sdk::canonical::sha256_digest(
+                canonical_bytes,
+            ))?,
+            created_at: chrono::Utc::now(),
+            jws: arkret_sdk::jws::sign_jws_ed25519(canonical_bytes, &self.signing_key)
+                .expect("sign managed Agent PCR Seal"),
+        })
+    }
+}
+
 async fn fetch_chunked_mls_governance_proof(
     state: &AppState,
     token: &str,
@@ -855,86 +894,218 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
 }
 
 #[tokio::test]
-async fn agent_controller_can_fetch_managed_pcr_mls_governance_proof() {
+async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
-    let realm_id = "ak:realm:0196419b-0000-7000-8000-00000000a901".to_owned();
-    let typed_realm = RealmId::new(realm_id.clone()).unwrap();
-    let agent_id = "did:web:agent-governance.example";
     let controller_id = "did:web:alice.example";
-    state
+    let token = "managed-agent-governance-session";
+    super::agents::seed_controller_session(&state, token, controller_id).await;
+    super::agents::seed_agent_provision_prerequisites(&state, controller_id).await;
+    super::agents::seed_active_controller_device_generation(&state, controller_id).await;
+
+    let mut created = TestClient::post("http://server/_arkret/self/agents")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "display_name": "Governance recovery Agent",
+            "slug": "governance-recovery",
+            "requested_scope": {
+                "actions": [
+                    "ak.self.events.stream.subscribe",
+                    "ak.self.events.query.scan",
+                    "ak.self.events.command.submit"
+                ],
+                "resources": [
+                    {
+                        "kind": "operation",
+                        "operation": "ak.self.events.stream.subscribe"
+                    },
+                    {
+                        "kind": "operation",
+                        "operation": "ak.self.events.query.scan"
+                    },
+                    {
+                        "kind": "operation",
+                        "operation": "ak.self.events.command.submit"
+                    }
+                ],
+                "constraints": []
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    let create_status = created.status_code.expect("Agent create status");
+    let create_body: Value = created.take_json().await.expect("Agent create body");
+    assert_eq!(
+        create_status,
+        StatusCode::CREATED,
+        "managed Agent create failed: {create_body}"
+    );
+    let agent_id = create_body["agent_id"]
+        .as_str()
+        .expect("managed Agent id")
+        .to_owned();
+    let agent_record = state
         .persistence
         .agents()
-        .put(soland_data::AgentPrincipalRecord::new(
-            agent_id.to_owned(),
-            controller_id.to_owned(),
-            realm_id.clone(),
-            format!("{agent_id}#managed-controller"),
-            "pairing_expired".to_owned(),
-            chrono::Utc::now(),
-        ))
+        .list_for_controller(controller_id)
         .await
-        .unwrap();
-
-    let mut event = arkret_sdk::Event::new(
-        arkret_sdk::events::EventKind::MEMBER_STATE,
-        typed_realm.clone(),
-        Did::new(agent_id).unwrap(),
+        .unwrap()
+        .into_iter()
+        .find(|record| record.id == agent_id)
+        .expect("created managed Agent record");
+    let realm_id = agent_record.principal_control_realm_id.clone();
+    let created_at = chrono::DateTime::parse_from_rfc3339(
+        &arkret_sdk::canonical::format_timestamp_canonical(chrono::Utc::now()),
+    )
+    .unwrap()
+    .with_timezone(&chrono::Utc);
+    let mut create = arkret_sdk::Event::new(
+        arkret_sdk::events::EventKind::REALM_CREATE,
+        RealmId::new(realm_id.clone()).unwrap(),
+        Did::new(agent_id.clone()).unwrap(),
         1,
-        arkret_sdk::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
+        arkret_sdk::Hlc::new("01980b44cc00-0000-aabbcce0").unwrap(),
         serde_json::json!({
-            "actor_id": agent_id,
-            "membership": "join"
+            "object": {
+                "id": realm_id,
+                "schema": "ak.schema.realm.v1",
+                "title": "Managed Agent Principal Control Realm",
+                "summary": "Controller-managed E2EE continuity for a Native Personal Agent",
+                "trust_domain": "ak:trust_domain:soland.local",
+                "created_by": agent_id,
+                "schema_refs": [
+                    "ak.schema.realm.v1",
+                    "ak.profile.principal_control_realm.v1"
+                ],
+                "default_discoverability": "invite_only",
+                "default_join_rule": "invite",
+                "history_visibility": "restricted",
+                "encryption_profile": "mls_rfc9420",
+                "content_scheme": "mls-rfc9420",
+                "security_class": "high_assurance",
+                "federation_policy": "restricted",
+                "notary_profile": "single_did",
+                "digest_algorithm": "sha256",
+                "created_at": arkret_sdk::canonical::format_timestamp_canonical(created_at),
+                "fields": {"purpose": "principal_control"},
+                "content_encryption_floor": "e2ee_required",
+                "metadata_encryption_floor": "e2ee_required",
+                "plaintext_visible_services": [],
+                "history_sharing_policy": {
+                    "version": 1,
+                    "default_key_share": "deny",
+                    "pre_join_history": "deny",
+                    "allowed_key_sources": ["key_backup"],
+                    "allowed_receiver_states": ["active_member"],
+                    "audit": {
+                        "share_audit_event_required": true,
+                        "access_audit_required": true
+                    }
+                },
+                "notary": {
+                    "type": "single_did",
+                    "did": agent_id,
+                    "recovery_members": [controller_id],
+                    "controller_organization": controller_id,
+                    "recovery_controller_organizations": [controller_id]
+                }
+            }
         }),
     )
     .unwrap();
-    event.effective_scope = Some(arkret_sdk::models::EffectiveScope::Realm {
-        realm_id: typed_realm.clone(),
-    });
-    event.effects = vec![arkret_sdk::Effect {
-        cell: arkret_sdk::CellRef::new(
-            "ak:cell:ak.component.member.state.v1:did.web.agent-governance.example",
+    create.created_at = created_at;
+    create.executed_by = Some(Did::new(controller_id).unwrap());
+    create.authorization_ref = Some(agent_record.controller_authorization_ref.clone());
+    create.effects = vec![
+        arkret_sdk::identity::managed_agent_principal_control_create_effect(
+            &create.realm_id,
+            create.actor_seq,
         )
         .unwrap(),
-        op: arkret_sdk::LatticeOp {
-            op_type: arkret_sdk::LatticeOpType::Transition,
-            tag: None,
-            value: None,
-            from: Some(serde_json::json!("leave")),
-            to: Some(serde_json::json!("join")),
-            reason: None,
-            issuer_seq: None,
+    ];
+    let signer = ControllerSealSigner {
+        did: Did::new(controller_id).unwrap(),
+        verification_method: format!("{controller_id}#{}", super::agents::CONTROLLER_DEVICE_ID),
+        signing_key: SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED),
+    };
+    let event_verification_method = signer.verification_method.clone();
+    arkret_sdk::signatures::sign_event(
+        &mut create,
+        &signer,
+        &event_verification_method,
+        arkret_sdk::signatures::SignEventOptions {
+            domain: None,
+            audience: None,
+            created_at: Some(created_at),
         },
-    }];
-    let digest = arkret_sdk::Hash::new(event.event_digest().unwrap()).unwrap();
-    event.proofs.push(arkret_sdk::Proof {
-        kind: "detached_jws".to_owned(),
-        alg: "EdDSA".to_owned(),
-        verification_method: format!("{controller_id}#device-key"),
-        event_digest: digest.clone(),
-        created_at: event.created_at,
-        domain: None,
-        audience: None,
-        jws: "AAAA.BBBB.CCCC".to_owned(),
-    });
-    let envelope = serde_json::to_value(&event).unwrap();
-    state
+    )
+    .unwrap();
+    let mut create_response = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&create)
+        .send(&app_from_state(state.clone()))
+        .await;
+    let event_status = create_response.status_code.expect("create Event status");
+    let event_body: Value = create_response
+        .take_json()
+        .await
+        .expect("create Event body");
+    assert_eq!(
+        event_status,
+        StatusCode::OK,
+        "managed Agent PCR create Event failed: {event_body}"
+    );
+
+    let records = state
         .persistence
         .events()
-        .put(soland::state::CanonicalEventRecord {
-            event_id: event.event_id.to_string(),
-            actor_id: event.actor_id.to_string(),
-            actor_seq: event.actor_seq,
-            realm_id: Some(realm_id.clone()),
-            kind: event.kind.as_str().to_owned(),
-            schema_id: "ak.schema.event_envelope.v1".to_owned(),
-            canonical_digest: digest.to_string(),
-            canonical_bytes: arkret_sdk::canonical::canonical_json_bytes(&event).unwrap(),
-            envelope,
-            received_at: chrono::Utc::now(),
-        })
+        .realm_events_newest_first(&realm_id)
         .await
         .unwrap();
+    let events = records
+        .into_iter()
+        .map(|record| serde_json::from_value::<arkret_sdk::Event>(record.envelope).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 1, "managed Agent PCR must start at create");
+    let seal = arkret_sdk::identity::build_managed_agent_pcr_event_seal(
+        &events,
+        None,
+        arkret_sdk::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
+        &signer,
+    )
+    .unwrap();
+    let mut seal_response = TestClient::post("http://server/_arkret/self/events/seals")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&seal)
+        .send(&app_from_state(state.clone()))
+        .await;
+    let seal_status = seal_response.status_code.expect("Seal submit status");
+    let seal_body: Value = seal_response.take_json().await.expect("Seal submit body");
+    assert_eq!(
+        seal_status,
+        StatusCode::OK,
+        "managed Agent PCR Seal submit failed: {seal_body}"
+    );
+
+    let mut frontier_response = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    let frontier_status = frontier_response.status_code.expect("frontier status");
+    let frontier_body: Value = frontier_response
+        .take_json()
+        .await
+        .expect("managed PCR frontier body");
+    assert_eq!(
+        frontier_status,
+        StatusCode::OK,
+        "managed Agent PCR frontier failed: {frontier_body}"
+    );
+    let trusted_anchor_seal_id = frontier_body["frontier"]["seal_id"]
+        .as_str()
+        .expect("managed PCR frontier Seal id")
+        .to_owned();
 
     let proof_request = serde_json::json!({
         "realm_id": realm_id,
@@ -943,11 +1114,17 @@ async fn agent_controller_can_fetch_managed_pcr_mls_governance_proof() {
         "previous_epoch": 0,
         "next_epoch": 1,
         "binding_profile": "ak.profile.mls_governance_binding.full.v1",
-        "reducer_profile": "ak.reducer.v1"
+        "reducer_profile": "ak.reducer.v1",
+        "trusted_anchor_seal_id": trusted_anchor_seal_id,
+        "chunk_index": 0
     });
     let (_, bundle) =
         fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request.clone()).await;
     assert_eq!(bundle.realm_id.as_str(), realm_id);
+    assert_eq!(
+        bundle.trusted_anchor_seal_id.as_str(),
+        trusted_anchor_seal_id
+    );
     let mut denied_request = proof_request;
     denied_request["trusted_anchor_seal_id"] =
         Value::String(bundle.trusted_anchor_seal_id.to_string());

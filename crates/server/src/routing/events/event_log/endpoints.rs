@@ -38,10 +38,20 @@ async fn submit_event_seal(
     let seal = body.into_inner();
     let expected_realm =
         crate::routing::identity::recovery::principal_control_realm_for_did(&session.actor);
-    if seal.realm_id.as_str() != expected_realm {
+    let managed_agent = if seal.realm_id.as_str() == expected_realm {
+        None
+    } else {
+        crate::routing::identity::managed_agent_pcr::managed_agent_record_for_controller_pcr(
+            state,
+            &session.actor,
+            seal.realm_id.as_str(),
+        )
+        .await?
+    };
+    if seal.realm_id.as_str() != expected_realm && managed_agent.is_none() {
         return Err(AppError::new(
             ErrorCode::PolicyViolation,
-            "self Seal submission is limited to the caller's principal-control Realm",
+            "Seal submission is limited to the caller's own or delegated Agent principal-control Realm",
         )
         .with_status(StatusCode::FORBIDDEN));
     }
@@ -49,7 +59,7 @@ async fn submit_event_seal(
     let NotarySig::Single(signature) = &seal.notary_signature else {
         return Err(AppError::new(
             ErrorCode::PolicyViolation,
-            "self Seal submission requires one bound device signature",
+            "principal-control Seal submission requires one bound device signature",
         )
         .with_status(StatusCode::FORBIDDEN));
     };
@@ -61,7 +71,17 @@ async fn submit_event_seal(
         .with_status(StatusCode::FORBIDDEN));
     }
 
-    let effect = crate::routing::federation::move_seal::apply_inbound_seal(state, &seal).await?;
+    let effect = if let Some(agent_record) = managed_agent.as_ref() {
+        crate::routing::federation::move_seal::apply_managed_agent_event_seal(
+            state,
+            &seal,
+            agent_record,
+            &session.device_id,
+        )
+        .await?
+    } else {
+        crate::routing::federation::move_seal::apply_inbound_seal(state, &seal).await?
+    };
     json_ok(EventSealSubmitOutcome {
         seal_id: effect.seal,
         accepted_event_digests: effect.accepted_move_ids,
