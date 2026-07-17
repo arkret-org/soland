@@ -543,9 +543,12 @@ pub(crate) async fn validate_delegated_agent_envelope(
             agent_id,
             record.principal_control_realm_id.as_str(),
         )?;
-        let realm_id = RealmId::new(record.principal_control_realm_id.clone()).map_err(|error| {
-            schema_error(format!("managed Agent PCR binding contains an invalid Realm id: {error}"))
-        })?;
+        let realm_id =
+            RealmId::new(record.principal_control_realm_id.clone()).map_err(|error| {
+                schema_error(format!(
+                    "managed Agent PCR binding contains an invalid Realm id: {error}"
+                ))
+            })?;
         validate_agent_pcr_genesis_effect(envelope, &realm_id)?;
     }
     validate_agent_controller_binding(state, &record, Utc::now()).await
