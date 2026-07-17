@@ -1315,6 +1315,13 @@ async fn build_reanchor_batch_receipt(
         created_at,
         proofs: Vec::new(),
     };
+    receipt.canonicalize_events().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("generated Event Batch Receipt events are invalid: {error}"),
+        )
+    })?;
     receipt
         .proofs
         .push(sign_event_batch_receipt(state, &receipt)?);

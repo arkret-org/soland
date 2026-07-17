@@ -316,6 +316,27 @@ async fn health_and_describe_work() {
 }
 
 #[tokio::test]
+async fn server_describe_accepts_only_its_selected_role() {
+    let service = app_from_state(AppState::new(test_config(), Db { pool: None }));
+
+    let selected: Value =
+        TestClient::get("http://server/_arkret/describe?service_type=principal_server")
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(selected["service_type"], "principal_server");
+
+    let mut rejected = TestClient::get("http://server/_arkret/describe?service_type=auth_server")
+        .send(&service)
+        .await;
+    assert_eq!(rejected.status_code.unwrap().as_u16(), 400);
+    let rejected: Value = rejected.take_json().await.unwrap();
+    assert_eq!(rejected["error"]["code"], "invalid_param");
+}
+
+#[tokio::test]
 async fn private_federation_write_rail_is_local_only() {
     let mut config = test_config();
     config.development_mode = false;

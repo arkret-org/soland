@@ -200,6 +200,17 @@ fn device_message_expires_at(message: &DeviceMessageRecord) -> chrono::DateTime<
         .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1))
 }
 
+fn ensure_device_message_id(message: &mut DeviceMessageRecord) {
+    if let Some(content) = message.content.as_object_mut()
+        && !content.contains_key("message_id")
+    {
+        content.insert(
+            "message_id".to_owned(),
+            Value::String(crate::ids::generate("device_message")),
+        );
+    }
+}
+
 fn queued_reset_message_generation(content: &Value) -> Option<u64> {
     content
         .get("new_generation")
@@ -240,7 +251,8 @@ fn cross_signing_reset_blocks_queued_message(content: &Value, new_generation: u6
 
 #[async_trait]
 impl DeviceMessageStore for MemoryDeviceMessageStore {
-    async fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()> {
+    async fn append(&self, mut message: DeviceMessageRecord) -> PersistenceResult<()> {
+        ensure_device_message_id(&mut message);
         self.queue.lock().push_back(message);
         Ok(())
     }
@@ -495,7 +507,8 @@ struct DeviceMessageAckTokenRow {
 
 #[async_trait]
 impl DeviceMessageStore for PgDeviceMessageStore {
-    async fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()> {
+    async fn append(&self, mut message: DeviceMessageRecord) -> PersistenceResult<()> {
+        ensure_device_message_id(&mut message);
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO device_messages \

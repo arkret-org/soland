@@ -9,6 +9,11 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let ciphertext = "base64url-opaque-ciphertext";
+    let target = device_message_target(
+        "ak.mls.application",
+        encrypted_envelope("ak.mls.application", ciphertext),
+    );
+    let message_id = target["message_id"].as_str().unwrap().to_owned();
 
     TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -17,7 +22,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
             "messages": {
                 "did:web:alice.example": {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ak.mls.application", encrypted_envelope("ak.mls.application", ciphertext))
+                        target
                 }
             }
         }))
@@ -32,6 +37,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
         .await
         .unwrap();
     let content = &delivered["messages"][0]["content"];
+    assert_eq!(delivered["messages"][0]["message_id"], message_id);
     assert_eq!(content["ciphertext"], ciphertext);
     assert!(content.get("plaintext").is_none());
     assert!(
@@ -168,7 +174,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
     assert!(!decode_cursor(next_cursor)["h"].as_str().unwrap().is_empty());
 
     let replay: Value = TestClient::get(format!(
-        "http://server/_arkret/self/device_messages?from={}",
+        "http://server/_arkret/self/device_messages?after={}",
         next_cursor
     ))
     .add_header("authorization", format!("Bearer {token}"), true)

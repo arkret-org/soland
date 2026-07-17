@@ -11,6 +11,7 @@ pub(crate) use arkret_sdk::{Did, Operation, OperationId, RealmId, new_prefixed_u
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
+pub(crate) use futures_util::StreamExt;
 pub(crate) use salvo::http::StatusCode;
 pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::Value;
@@ -81,13 +82,22 @@ pub(crate) async fn account_subscribe_frame(
     if let Some(token) = token {
         request = request.add_header("authorization", format!("Bearer {token}"), true);
     }
-    let body = request
-        .send(&app_from_state(state))
-        .await
-        .take_string()
-        .await
-        .unwrap();
+    let mut response = request.send(&app_from_state(state)).await;
+    let body = take_first_response_chunk(&mut response).await;
     serde_json::from_str(body.lines().next().unwrap()).unwrap()
+}
+
+pub(crate) async fn take_first_response_chunk(response: &mut salvo::Response) -> String {
+    let frame = response
+        .body
+        .next()
+        .await
+        .expect("response body must contain a frame")
+        .expect("response body frame must be readable");
+    let bytes = frame
+        .into_data()
+        .expect("first response frame must be data");
+    String::from_utf8(bytes.to_vec()).expect("response body must be utf-8")
 }
 
 pub(crate) fn decode_cursor(token: &str) -> Value {

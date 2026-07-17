@@ -1,4 +1,4 @@
-//! Account-aggregate describe + subscribe long-poll stream
+//! Account-aggregate describe + long-lived subscribe stream
 //! (`ak.self.account.stream.subscribe`): the timeline / presence / typing /
 //! to_device NDJSON delta machinery and its auth-material gate.
 
@@ -16,9 +16,8 @@ pub(super) async fn account_describe(
     ))
 }
 
-/// Long-poll window for incremental `account/subscribe` requests that find
-/// the delta empty after building the initial snapshot.
 const ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 25_000;
+const ACCOUNT_SUBSCRIBE_FRONTIER_INTERVAL_MS: u64 = 60_000;
 /// SOL-02-005 — debounce window for `account_subscribe` long-poll wakeups.
 /// When a broadcast notification passes the visibility filter, further
 /// notifications arriving within this window are drained and coalesced so a
@@ -191,131 +190,14 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     // event landing between snapshot-build and long-poll subscribe is not
     // missed.
     let mut rx = state.event_broadcast.subscribe();
-    let mut response =
-        build_sync_snapshot(&state, Some(&session), &body, &after_cursor, false).await;
-    let mut control_frame: Option<arkret_sdk::AccountSubscribeFrame> = None;
-
-    // Long-poll only when the client supplied an `after` cursor (true
-    // incremental sync) AND the snapshot is delta-empty. Full sync always
-    // returns immediately because the client needs the baseline.
-    if body.after.is_some() && delta_is_empty(&response) {
-        let deadline =
-            tokio::time::Instant::now() + Duration::from_millis(ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS);
-        loop {
-            tokio::select! {
-                biased;
-                _ = tokio::time::sleep_until(deadline) => break,
-                recv = rx.recv() => {
-                    match recv {
-                        Ok(notification) => {
-                            // Filter on realms visible to the current session.
-                            // For non-event notifications (epoch/frontier/etc.)
-                            // we still rebuild so the client picks up control
-                            // state on its next delta if it surfaces there.
-                            if !account_subscribe_notification_should_wake(
-                                &state,
-                                &notification,
-                                Some(&session),
-                                &after_cursor,
-                            )
-                            .await
-                            {
-                                continue;
-                            }
-                            // SOL-02-005 debounce: drain notifications that
-                            // arrive within the coalescing window (bounded by
-                            // the long-poll deadline) so a broadcast burst
-                            // rebuilds the snapshot once. Coalesced
-                            // notifications need no individual handling — the
-                            // rebuilt snapshot covers everything visible.
-                            let mut lagged_during_drain = false;
-                            let mut include_presence_delta =
-                                account_subscribe_notification_is_presence(&notification);
-                            let drain_until = (tokio::time::Instant::now()
-                                + Duration::from_millis(SUBSCRIBE_REBUILD_DEBOUNCE_MS))
-                            .min(deadline);
-                            loop {
-                                tokio::select! {
-                                    biased;
-                                    _ = tokio::time::sleep_until(drain_until) => break,
-                                    more = rx.recv() => match more {
-                                        Ok(more) => {
-                                            include_presence_delta |=
-                                                account_subscribe_notification_is_presence(&more);
-                                        }
-                                        Err(RecvError::Lagged(_)) => {
-                                            lagged_during_drain = true;
-                                            include_presence_delta = true;
-                                            break;
-                                        }
-                                        Err(RecvError::Closed) => break,
-                                    }
-                                }
-                            }
-                            response = build_sync_snapshot(
-                                &state,
-                                Some(&session),
-                                &body,
-                                &after_cursor,
-                                include_presence_delta,
-                            )
-                            .await;
-                            if !delta_is_empty(&response) {
-                                break;
-                            }
-                            if lagged_during_drain {
-                                // Same terminal handling as the direct
-                                // `Lagged` arm below: gate reconnect and
-                                // close with a control frame.
-                                arm_subscribe_reconnect(&state, &subscribe_scope_key, SUBSCRIBE_RECONNECT_AFTER_MS);
-                                control_frame = Some(account_reconnect_control_frame(
-                                    body.after.as_deref(),
-                                    "broadcast_lagged",
-                                    SUBSCRIBE_RECONNECT_AFTER_MS,
-                                ));
-                                break;
-                            }
-                        }
-                        Err(RecvError::Lagged(_)) => {
-                            // We lost some notifications; rebuild and let the
-                            // delta speak for itself. If the rebuilt delta is
-                            // still empty, close with a terminal control frame
-                            // and gate immediate reconnect for the same scope.
-                            response = build_sync_snapshot(
-                                &state,
-                                Some(&session),
-                                &body,
-                                &after_cursor,
-                                true,
-                            )
-                            .await;
-                            if !delta_is_empty(&response) {
-                                break;
-                            }
-                            arm_subscribe_reconnect(&state, &subscribe_scope_key, SUBSCRIBE_RECONNECT_AFTER_MS);
-                            control_frame = Some(account_reconnect_control_frame(
-                                body.after.as_deref(),
-                                "broadcast_lagged",
-                                SUBSCRIBE_RECONNECT_AFTER_MS,
-                            ));
-                            break;
-                        }
-                        Err(RecvError::Closed) => break,
-                    }
-                }
-            }
-        }
-    }
-
-    let frames = if let Some(control_frame) = control_frame {
-        vec![ndjson_line(&control_frame)]
-    } else {
-        let cursor = response.cursor.clone();
-        let mut frames = vec![ndjson_line(&response)];
+    let response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor, false).await;
+    let initial_cursor = response.cursor.clone();
+    let body_stream = async_stream::stream! {
+        yield Ok::<Bytes, std::io::Error>(ndjson_line(&response));
         if body.catchup.unwrap_or(false) {
-            frames.push(ndjson_line(&arkret_sdk::AccountSubscribeFrame {
+            yield Ok::<Bytes, std::io::Error>(ndjson_line(&arkret_sdk::AccountSubscribeFrame {
                 kind: arkret_sdk::AccountSubscribeFrameKind::CatchupComplete,
-                cursor,
+                cursor: initial_cursor.clone(),
                 realms: None,
                 to_device: None,
                 device_lists: None,
@@ -327,12 +209,151 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                 reconnect_after_ms: None,
             }));
         }
-        frames
-    };
 
-    let body_stream = async_stream::stream! {
-        for frame in frames {
-            yield Ok::<Bytes, std::io::Error>(frame);
+        let mut current_cursor = after_cursor;
+        let mut current_cursor_token = initial_cursor.clone();
+        if let Some(cursor) = initial_cursor.as_deref()
+            && let Ok(parsed) = parse_and_validate_sync_cursor(
+                cursor,
+                &state,
+                Some(&session),
+                filter_value.as_ref(),
+                chrono::Utc::now().timestamp_millis(),
+            ).await
+        {
+            current_cursor = parsed;
+        }
+        let mut heartbeat = tokio::time::interval(Duration::from_millis(
+            ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS,
+        ));
+        heartbeat.tick().await;
+        let mut frontier = tokio::time::interval(Duration::from_millis(
+            ACCOUNT_SUBSCRIBE_FRONTIER_INTERVAL_MS,
+        ));
+        frontier.tick().await;
+
+        loop {
+            tokio::select! {
+                _ = heartbeat.tick() => {
+                    yield Ok::<Bytes, std::io::Error>(ndjson_line(
+                        &arkret_sdk::AccountSubscribeFrame {
+                            kind: arkret_sdk::AccountSubscribeFrameKind::Heartbeat,
+                            cursor: None,
+                            realms: None,
+                            to_device: None,
+                            device_lists: None,
+                            account_data: None,
+                            presence: None,
+                            notifications: None,
+                            partial: None,
+                            priority: None,
+                            reconnect_after_ms: None,
+                        },
+                    ));
+                }
+                _ = frontier.tick(), if current_cursor_token.is_some() => {
+                    yield Ok::<Bytes, std::io::Error>(ndjson_line(
+                        &arkret_sdk::AccountSubscribeFrame {
+                            kind: arkret_sdk::AccountSubscribeFrameKind::Frontier,
+                            cursor: current_cursor_token.clone(),
+                            realms: None,
+                            to_device: None,
+                            device_lists: None,
+                            account_data: None,
+                            presence: None,
+                            notifications: None,
+                            partial: None,
+                            priority: None,
+                            reconnect_after_ms: None,
+                        },
+                    ));
+                }
+                recv = rx.recv() => match recv {
+                    Ok(notification) => {
+                        if !account_subscribe_notification_should_wake(
+                            &state,
+                            &notification,
+                            Some(&session),
+                            &current_cursor,
+                        ).await {
+                            continue;
+                        }
+                        let mut include_presence_delta =
+                            account_subscribe_notification_is_presence(&notification);
+                        let drain_until = tokio::time::Instant::now()
+                            + Duration::from_millis(SUBSCRIBE_REBUILD_DEBOUNCE_MS);
+                        let mut lagged = false;
+                        loop {
+                            tokio::select! {
+                                _ = tokio::time::sleep_until(drain_until) => break,
+                                more = rx.recv() => match more {
+                                    Ok(more) => include_presence_delta |=
+                                        account_subscribe_notification_is_presence(&more),
+                                    Err(RecvError::Lagged(_)) => {
+                                        lagged = true;
+                                        break;
+                                    }
+                                    Err(RecvError::Closed) => break,
+                                }
+                            }
+                        }
+                        if lagged {
+                            arm_subscribe_reconnect(
+                                &state,
+                                &subscribe_scope_key,
+                                SUBSCRIBE_RECONNECT_AFTER_MS,
+                            );
+                            yield Ok::<Bytes, std::io::Error>(ndjson_line(
+                                &account_reconnect_control_frame(
+                                    current_cursor_token.as_deref(),
+                                    "broadcast_lagged",
+                                    SUBSCRIBE_RECONNECT_AFTER_MS,
+                                ),
+                            ));
+                            break;
+                        }
+                        let delta = build_sync_snapshot(
+                            &state,
+                            Some(&session),
+                            &body,
+                            &current_cursor,
+                            include_presence_delta,
+                        ).await;
+                        if delta_is_empty(&delta) {
+                            continue;
+                        }
+                        if let Some(cursor) = delta.cursor.as_deref()
+                            && let Ok(parsed) = parse_and_validate_sync_cursor(
+                                cursor,
+                                &state,
+                                Some(&session),
+                                filter_value.as_ref(),
+                                chrono::Utc::now().timestamp_millis(),
+                            ).await
+                        {
+                            current_cursor = parsed;
+                        }
+                        current_cursor_token = delta.cursor.clone();
+                        yield Ok::<Bytes, std::io::Error>(ndjson_line(&delta));
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        arm_subscribe_reconnect(
+                            &state,
+                            &subscribe_scope_key,
+                            SUBSCRIBE_RECONNECT_AFTER_MS,
+                        );
+                        yield Ok::<Bytes, std::io::Error>(ndjson_line(
+                            &account_reconnect_control_frame(
+                                current_cursor_token.as_deref(),
+                                "broadcast_lagged",
+                                SUBSCRIBE_RECONNECT_AFTER_MS,
+                            ),
+                        ));
+                        break;
+                    }
+                    Err(RecvError::Closed) => break,
+                }
+            }
         }
     };
     let _ = res.add_header("content-type", "application/x-ndjson", true);
