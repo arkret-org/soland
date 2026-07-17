@@ -5,10 +5,12 @@ use arkret_sdk::models::EffectiveScope as GovernanceScope;
 use arkret_sdk::move_event::{LatticeOp, LatticeOpType};
 use arkret_sdk::state::compute_state_root;
 use arkret_sdk::{
-    CellId, CellRef, Event, Hash, MlsGovernanceBindingPayload, MlsGovernanceControlStateLeaf,
-    MlsGovernanceControlStateValue, MlsGovernanceProofBundle, MlsGovernanceProofRequest, MoveId,
-    SealId, derive_mls_capability_root, derive_mls_discussion_metadata_digest,
-    derive_mls_policy_root, is_mls_membership_frontier_component,
+    CellId, CellRef, Event, Hash, MaterializedMlsGovernanceProofBundle,
+    MlsGovernanceBindingPayload, MlsGovernanceControlStateLeaf, MlsGovernanceControlStateValue,
+    MlsGovernanceProofBundle, MlsGovernanceProofRequest, MoveId, SealId,
+    build_mls_governance_proof_chunks, derive_mls_capability_root,
+    derive_mls_discussion_metadata_digest, derive_mls_policy_root,
+    is_mls_membership_frontier_component,
 };
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -60,8 +62,25 @@ pub(super) async fn mls_governance_proof(
         return Err(AppError::not_found("realm not found"));
     }
 
-    let bundle = materialize_governance_proof(state, request).await?;
-    json_ok(bundle)
+    let materialized = materialize_governance_proof(state, &request).await?;
+    let chunks = build_mls_governance_proof_chunks(&request, &materialized).map_err(|error| {
+        let message = error.to_string();
+        if message.contains("expected_bundle_digest") {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                "requested MLS governance proof manifest is no longer available",
+            )
+        } else if message.contains(ErrorCode::MLS_GOVERNANCE_PROOF_BOUNDS_EXCEEDED) {
+            AppError::new(ErrorCode::MlsGovernanceProofBoundsExceeded, message)
+        } else {
+            proof_state_error(message)
+        }
+    })?;
+    let chunk = chunks
+        .get(request.chunk_index as usize)
+        .cloned()
+        .ok_or_else(|| AppError::invalid_param("chunk_index is outside chunk_manifest"))?;
+    json_ok(chunk)
 }
 
 fn scope_visible_to_session(
@@ -393,8 +412,8 @@ pub(crate) async fn materialize_realm_event_seal(
 
 async fn materialize_governance_proof(
     state: &AppState,
-    request: MlsGovernanceProofRequest,
-) -> Result<MlsGovernanceProofBundle, AppError> {
+    request: &MlsGovernanceProofRequest,
+) -> Result<MaterializedMlsGovernanceProofBundle, AppError> {
     let MaterializedRealmControl {
         events,
         joined,
@@ -475,17 +494,47 @@ async fn materialize_governance_proof(
     }
     .map_err(proof_state_error)?;
 
-    Ok(MlsGovernanceProofBundle {
+    let anchor_position = seal_view
+        .seal_path
+        .iter()
+        .position(|seal| seal.id == request.trusted_anchor_seal_id)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::MlsGovernanceAnchorUnreachable,
+                "requested trusted anchor is not in the accepted Seal ancestry",
+            )
+        })?;
+    let seal_path = seal_view.seal_path[anchor_position..].to_vec();
+    let mut prior = BTreeSet::new();
+    for seal in &seal_path {
+        if seal.id != request.trusted_anchor_seal_id
+            && seal.predecessor_refs.iter().any(|predecessor| {
+                predecessor != &request.trusted_anchor_seal_id && !prior.contains(predecessor)
+            })
+        {
+            return Err(AppError::new(
+                ErrorCode::MlsGovernanceAnchorUnreachable,
+                "requested trusted anchor cannot bridge every accepted Seal predecessor",
+            ));
+        }
+        prior.insert(seal.id.clone());
+    }
+
+    Ok(MaterializedMlsGovernanceProofBundle {
         bundle_version: arkret_sdk::MLS_GOVERNANCE_PROOF_BUNDLE_VERSION,
+        proof_request_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
+            .expect("zero sha256 digest is valid"),
+        bundle_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
+            .expect("zero sha256 digest is valid"),
         materialization_profile: arkret_sdk::MLS_GOVERNANCE_COMPLETE_MATERIALIZATION_PROFILE
             .to_owned(),
-        realm_id: request.realm_id,
-        effective_scope: request.effective_scope,
-        reducer_profile: request.reducer_profile,
+        realm_id: request.realm_id.clone(),
+        effective_scope: request.effective_scope.clone(),
+        reducer_profile: request.reducer_profile.clone(),
         governance_binding,
-        trust_anchor_seal_id: seal_view.trust_anchor_seal_id,
+        trusted_anchor_seal_id: request.trusted_anchor_seal_id.clone(),
         accepted_seal_id: seal_view.accepted_seal.id,
-        seal_path: seal_view.seal_path,
+        seal_path,
         covered_event_digests: covered_event_digests
             .into_iter()
             .map(|digest| Hash::new(digest.as_str().to_owned()))
