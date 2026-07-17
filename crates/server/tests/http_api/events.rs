@@ -758,6 +758,131 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
 }
 
 #[tokio::test]
+async fn agent_controller_can_fetch_managed_pcr_mls_governance_proof() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let realm_id = "ak:realm:0196419b-0000-7000-8000-00000000a901".to_owned();
+    let typed_realm = RealmId::new(realm_id.clone()).unwrap();
+    let agent_id = "did:web:agent-governance.example";
+    let controller_id = "did:web:alice.example";
+    state
+        .persistence
+        .agents()
+        .put(soland_data::AgentPrincipalRecord::new(
+            agent_id.to_owned(),
+            controller_id.to_owned(),
+            realm_id.clone(),
+            format!("{agent_id}#managed-controller"),
+            "pairing_expired".to_owned(),
+            chrono::Utc::now(),
+        ))
+        .await
+        .unwrap();
+
+    let mut event = arkret_sdk::Event::new(
+        arkret_sdk::events::EventKind::MEMBER_STATE,
+        typed_realm.clone(),
+        Did::new(agent_id).unwrap(),
+        1,
+        arkret_sdk::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
+        serde_json::json!({
+            "actor_id": agent_id,
+            "membership": "join"
+        }),
+    )
+    .unwrap();
+    event.effective_scope = Some(arkret_sdk::models::EffectiveScope::Realm {
+        realm_id: typed_realm.clone(),
+    });
+    event.effects = vec![arkret_sdk::Effect {
+        cell: arkret_sdk::CellRef::new(
+            "ak:cell:ak.component.member.state.v1:did.web.agent-governance.example",
+        )
+        .unwrap(),
+        op: arkret_sdk::LatticeOp {
+            op_type: arkret_sdk::LatticeOpType::Transition,
+            tag: None,
+            value: None,
+            from: Some(serde_json::json!("leave")),
+            to: Some(serde_json::json!("join")),
+            reason: None,
+            issuer_seq: None,
+        },
+    }];
+    let digest = arkret_sdk::Hash::new(event.event_digest().unwrap()).unwrap();
+    event.proofs.push(arkret_sdk::Proof {
+        kind: "detached_jws".to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method: format!("{controller_id}#device-key"),
+        event_digest: digest.clone(),
+        created_at: event.created_at,
+        domain: None,
+        audience: None,
+        jws: "AAAA.BBBB.CCCC".to_owned(),
+    });
+    let envelope = serde_json::to_value(&event).unwrap();
+    state
+        .persistence
+        .events()
+        .put(soland::state::CanonicalEventRecord {
+            event_id: event.event_id.to_string(),
+            actor_id: event.actor_id.to_string(),
+            actor_seq: event.actor_seq,
+            realm_id: Some(realm_id.clone()),
+            kind: event.kind.as_str().to_owned(),
+            schema_id: "ak.schema.event_envelope.v1".to_owned(),
+            canonical_digest: digest.to_string(),
+            canonical_bytes: arkret_sdk::canonical::canonical_json_bytes(&event).unwrap(),
+            envelope,
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let proof_request = serde_json::json!({
+        "realm_id": realm_id,
+        "effective_scope": {"kind": "realm", "realm_id": realm_id},
+        "mls_group_id": "YXJrcmV0LW1scy1tYW5hZ2VkLXNjcg",
+        "previous_epoch": 0,
+        "next_epoch": 1,
+        "binding_profile": "ak.profile.mls_governance_binding.full.v1",
+        "reducer_profile": "ak.reducer.v1"
+    });
+    let mut proof_response =
+        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&proof_request)
+            .send(&app_from_state(state.clone()))
+            .await;
+    let proof_status = proof_response.status_code.expect("proof status");
+    let proof_body: Value = proof_response.take_json().await.expect("proof body");
+    assert_eq!(
+        proof_status,
+        StatusCode::OK,
+        "managed Agent PCR governance proof failed: {proof_body}"
+    );
+    let bundle: arkret_sdk::MlsGovernanceProofBundle =
+        serde_json::from_value(proof_body).expect("typed managed PCR governance proof");
+    assert_eq!(bundle.realm_id.as_str(), realm_id);
+
+    let bob_token = dev_token_for_device(
+        state.clone(),
+        "did:web:bob.example",
+        "ak:device:01904100-0000-7000-8000-b0b000000001",
+        "Bob Desktop",
+    )
+    .await;
+    let mut denied = TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+        .add_header("authorization", format!("Bearer {bob_token}"), true)
+        .json(&proof_request)
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(denied.status_code, Some(StatusCode::NOT_FOUND));
+    let denied_body: Value = denied.take_json().await.expect("denied proof body");
+    assert_eq!(denied_body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
 async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

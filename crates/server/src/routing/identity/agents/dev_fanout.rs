@@ -9,8 +9,10 @@
 //!
 //! The dev-proof envelope shape is the one accepted by
 //! `validate_event_proofs` (event_log/validation.rs): `type="dev-proof"`,
-//! `verification_method == actor_id`, and `payload_digest` = the sha256 of
-//! the canonical payload bytes.
+//! `verification_method == actor_id#session.device_id`, and `payload_digest`
+//! = the sha256 of the canonical payload bytes. Rooting the proof in the
+//! authenticated device keeps development fan-out inside the B-model device
+//! generation fence.
 
 use arkret_sdk::{
     AccountabilityGrantPayload, AccountabilityScope, AgentSelectorClaim, Did, HandleBindingState,
@@ -59,6 +61,7 @@ pub(super) async fn submit_agent_fanout_event(
     let operation_alias = format!("ak:operation:{}", uuid::Uuid::now_v7());
     let payload_bytes = canonical::canonical_json_bytes(&payload).unwrap_or_default();
     let payload_digest = canonical::sha256_digest(&payload_bytes);
+    let verification_method = format!("{}#{}", actor, session.device_id);
     // Envelope created_at MUST be canonical RFC3339 UTC with no fractional
     // seconds (exactly YYYY-MM-DDTHH:MM:SSZ) per canonical::validate_timestamp_canonical.
     let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -76,7 +79,7 @@ pub(super) async fn submit_agent_fanout_event(
         "unsigned": { "local_operation_idempotency_alias": operation_alias },
         "proofs": [{
             "type": "dev-proof",
-            "verification_method": actor,
+            "verification_method": verification_method,
             "payload_digest": payload_digest,
         }],
     });
