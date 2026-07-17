@@ -481,8 +481,8 @@ pub struct SpaceContainerProjection {
     pub realm_id: String,
     pub kind: String,
     pub title: String,
+    pub fields: BTreeMap<String, Value>,
     pub scope_circle_id: Option<String>,
-    pub default_scope_circle_id: Option<String>,
     pub child_scope_policy: Option<ChildScopePolicy>,
     pub parent_ref: Option<String>,
     pub rank: Option<String>,
@@ -517,20 +517,14 @@ pub struct SpaceContainerProjection {
 pub struct ChildScopePolicy {
     pub kind: String,
     pub scope_circle_id: Option<String>,
-    pub metadata_encryption_floor: Option<String>,
 }
 
 impl ChildScopePolicy {
-    pub fn from_parts(
-        kind: Option<String>,
-        scope_circle_id: Option<String>,
-        metadata_encryption_floor: Option<String>,
-    ) -> Option<Self> {
+    pub fn from_parts(kind: Option<String>, scope_circle_id: Option<String>) -> Option<Self> {
         let kind = kind?;
         Some(Self {
             kind,
             scope_circle_id,
-            metadata_encryption_floor,
         })
     }
 }

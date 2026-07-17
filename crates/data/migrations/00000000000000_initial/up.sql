@@ -1005,12 +1005,11 @@ CREATE TABLE public.projection_spaces (
     id uuid NOT NULL,
     realm_id uuid NOT NULL,
     scope_circle_id uuid,
-    default_scope_circle_id uuid,
     child_scope_policy text,
     child_scope_policy_scope_circle_id uuid,
-    child_scope_policy_metadata_encryption_floor text,
     kind text NOT NULL,
     title text NOT NULL,
+    fields jsonb DEFAULT '{}'::jsonb NOT NULL,
     parent_ref uuid,
     rank text,
     state text DEFAULT 'active'::text NOT NULL,
@@ -1022,7 +1021,6 @@ CREATE TABLE public.projection_spaces (
     updated_at timestamp with time zone,
     CONSTRAINT projection_spaces_child_scope_policy_check CHECK ((child_scope_policy = ANY (ARRAY['allow_any'::text, 'require_e2ee'::text, 'require_same_scope'::text, 'require_scope_circle_id'::text]))),
     CONSTRAINT projection_spaces_child_scope_policy_scope_check CHECK (((child_scope_policy <> 'require_scope_circle_id'::text) OR (child_scope_policy_scope_circle_id IS NOT NULL))),
-    CONSTRAINT projection_spaces_child_scope_policy_metadata_floor_check CHECK ((child_scope_policy_metadata_encryption_floor = ANY (ARRAY['allow_plaintext'::text, 'e2ee_required'::text]))),
     CONSTRAINT projection_spaces_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'tombstoned'::text])))
 );
 

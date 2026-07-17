@@ -86,18 +86,20 @@ impl ProjectionState {
                 reason: "space_create_missing_id".to_owned(),
             };
         };
-        // AKP-0007 — validate optional `scope_circle_id` /
-        // `default_scope_circle_id` against the Realm + Circle state.
-        // Either field MUST reference an active Circle in this Realm.
-        for field in ["scope_circle_id", "default_scope_circle_id"] {
-            if let Some(scope_circle_id) = object.get(field).and_then(Value::as_str)
-                && let Err(reason) =
-                    self.validate_scope_circle_id(scope_circle_id, operation.realm_id.as_ref())
-            {
-                return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
-                };
-            }
+        if object.contains_key("default_scope_circle_id") {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        }
+        // The Space's own optional scope MUST reference an active Circle in
+        // this Realm. Child defaults are expressed only by child_scope_policy.
+        if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
+            && let Err(reason) =
+                self.validate_scope_circle_id(scope_circle_id, operation.realm_id.as_ref())
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
         }
         let child_scope_policy = match child_scope_policy_from_object(object) {
             Ok(policy) => policy,
@@ -122,6 +124,18 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
+        let fields = object
+            .get("fields")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        if let Err(reason) = validate_space_wip_policy(&kind, &fields) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         let title = object
             .get("title")
             .and_then(|v| v.as_str())
@@ -154,13 +168,9 @@ impl ProjectionState {
             realm_id,
             kind,
             title,
+            fields,
             scope_circle_id: object
                 .get("scope_circle_id")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(ToOwned::to_owned),
-            default_scope_circle_id: object
-                .get("default_scope_circle_id")
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .map(ToOwned::to_owned),
@@ -215,12 +225,33 @@ impl ProjectionState {
         }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
+            if patch.contains_key("default_scope_circle_id") {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+            let candidate_kind = patch
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or(&space_container.kind);
+            let candidate_fields = patch
+                .get("fields")
+                .and_then(Value::as_object)
+                .map(|fields| fields.clone().into_iter().collect())
+                .unwrap_or_else(|| space_container.fields.clone());
+            if let Err(reason) = validate_space_wip_policy(candidate_kind, &candidate_fields) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
             if let Some(title) = patch.get("title").and_then(|v| v.as_str()) {
                 space_container.title = title.to_owned();
             }
             if let Some(rank) = patch.get("rank").and_then(|v| v.as_str()) {
                 space_container.rank = Some(rank.to_owned());
             }
+            space_container.kind = candidate_kind.to_owned();
+            space_container.fields = candidate_fields;
         }
         space_container.updated_by = operation
             .payload
@@ -623,7 +654,7 @@ impl ProjectionState {
         parent_space_id: &str,
         child_scope_circle_id: Option<&str>,
         child_realm_id: &str,
-        child_has_plaintext_metadata: bool,
+        _child_has_plaintext_metadata: bool,
     ) -> Result<(), &'static str> {
         let Some(parent) = self.space_containers.get(parent_space_id) else {
             return Ok(());
@@ -634,11 +665,6 @@ impl ProjectionState {
         let Some(policy) = parent.child_scope_policy.as_ref() else {
             return Ok(());
         };
-        if policy.metadata_encryption_floor.as_deref() == Some("e2ee_required")
-            && child_has_plaintext_metadata
-        {
-            return Err(arkret_sdk::ReasonCode::METADATA_ENCRYPTION_FLOOR_VIOLATION);
-        }
         match policy.kind.as_str() {
             "allow_any" => Ok(()),
             "require_same_scope" => {
@@ -731,17 +757,43 @@ fn child_scope_policy_from_object(
     if kind == "require_scope_circle_id" && scope_circle_id.is_none() {
         return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
     }
-    let metadata_encryption_floor = match policy.get("metadata_encryption_floor").map(Value::as_str)
-    {
-        Some(Some(value)) if matches!(value, "allow_plaintext" | "e2ee_required") => {
-            Some(value.to_owned())
-        }
-        Some(_) => return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION),
-        None => None,
-    };
+    if policy.keys().any(|key| {
+        key != "kind" && !(kind == "require_scope_circle_id" && key == "scope_circle_id")
+    }) {
+        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+    }
     Ok(Some(ChildScopePolicy {
         kind: kind.to_owned(),
         scope_circle_id,
-        metadata_encryption_floor,
     }))
+}
+
+fn validate_space_wip_policy(
+    kind: &str,
+    fields: &std::collections::BTreeMap<String, Value>,
+) -> Result<(), &'static str> {
+    let limit = fields.get("wip_limit");
+    let enforcement = fields.get("wip_limit_enforcement");
+    if kind != "list" && (limit.is_some() || enforcement.is_some()) {
+        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+    }
+    if let Some(limit) = limit {
+        if !limit
+            .as_u64()
+            .is_some_and(|limit| (1..=100_000).contains(&limit))
+            || enforcement.is_none()
+        {
+            return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+        }
+    }
+    if let Some(enforcement) = enforcement
+        && (limit.is_none()
+            || !matches!(
+                enforcement.as_str(),
+                Some("warn" | "reject" | "require_review")
+            ))
+    {
+        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+    }
+    Ok(())
 }

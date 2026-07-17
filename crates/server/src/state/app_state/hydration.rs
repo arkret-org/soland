@@ -87,12 +87,11 @@ pub(super) async fn hydrate_projections_from_persistence(
                     realm_id: record.realm_id,
                     kind: record.kind,
                     title: record.title,
+                    fields: record.fields,
                     scope_circle_id: record.scope_circle_id,
-                    default_scope_circle_id: record.default_scope_circle_id,
                     child_scope_policy: ChildScopePolicy::from_parts(
                         record.child_scope_policy,
                         record.child_scope_policy_scope_circle_id,
-                        record.child_scope_policy_metadata_encryption_floor,
                     ),
                     parent_ref: record.parent_ref,
                     rank: record.rank,

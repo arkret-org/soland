@@ -453,8 +453,8 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
                 realm_id: p.realm_id.clone(),
                 kind: p.kind.clone(),
                 title: p.title.clone(),
+                fields: p.fields.clone(),
                 scope_circle_id: p.scope_circle_id.clone(),
-                default_scope_circle_id: p.default_scope_circle_id.clone(),
                 child_scope_policy: p
                     .child_scope_policy
                     .as_ref()
@@ -463,10 +463,6 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
                     .child_scope_policy
                     .as_ref()
                     .and_then(|policy| policy.scope_circle_id.clone()),
-                child_scope_policy_metadata_encryption_floor: p
-                    .child_scope_policy
-                    .as_ref()
-                    .and_then(|policy| policy.metadata_encryption_floor.clone()),
                 parent_ref: p.parent_ref.clone(),
                 rank: p.rank.clone(),
                 state: match p.state {
