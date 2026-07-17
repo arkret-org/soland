@@ -2,6 +2,8 @@
 
 use super::common::*;
 
+const CONTROLLER_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+
 fn test_session_credential_hash(token: &str, audience: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(audience.as_bytes());
@@ -12,14 +14,13 @@ fn test_session_credential_hash(token: &str, audience: &str) -> String {
 
 async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
     let now = chrono::Utc::now();
-    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     state
         .persistence
         .sessions()
         .put(&soland::state::SessionRecord {
             token_hash: test_session_credential_hash(token, &state.service_id),
             actor: actor.to_owned(),
-            device_id: device_id.to_owned(),
+            device_id: CONTROLLER_DEVICE_ID.to_owned(),
             audience: state.service_id.clone(),
             session_public_key: None,
             agent_session: None,
@@ -34,14 +35,114 @@ async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
         .devices()
         .put(&soland::state::DeviceInventoryRecord {
             actor: actor.to_owned(),
-            device_id: device_id.to_owned(),
+            device_id: CONTROLLER_DEVICE_ID.to_owned(),
             display_name: Some("Alice Desktop".to_owned()),
             verification_state: "verified".to_owned(),
             payload: serde_json::json!({
-                "device_id": device_id,
+                "device_id": CONTROLLER_DEVICE_ID,
                 "display_name": "Alice Desktop",
                 "verification": "verified",
                 "last_seen_at": now,
+            }),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+}
+
+async fn seed_active_controller_device_generation(state: &AppState, controller: &str) {
+    let now = chrono::Utc::now();
+    let generation_ref = "1-test-device-generation";
+    state
+        .persistence
+        .webvh()
+        .append_log_event(soland::state::WebvhLogRecord {
+            event_digest: format!("sha256:{}", "1".repeat(64)),
+            did: controller.to_owned(),
+            seq: 1,
+            operation: serde_json::json!({
+                "versionId": generation_ref,
+                "state": {
+                    "service": [{
+                        "id": format!("{controller}#device-enrollment-authority"),
+                        "type": arkret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
+                        "serviceEndpoint": "did:web:device-authority.example"
+                    }]
+                }
+            }),
+            created_at: now,
+        })
+        .await
+        .unwrap();
+
+    let realm_id = soland::test_support::principal_control_realm_for_did(controller);
+    let bootstrap_id = new_prefixed_uuid7("ak:event:");
+    let bootstrap = serde_json::json!({
+        "event_id": bootstrap_id,
+        "kind": "ak.realm.create",
+        "realm_id": realm_id,
+        "actor_id": controller,
+        "actor_seq": 1,
+        "prev_refs": [],
+        "refs": [{"role": "did_inception"}],
+        "payload": {"object": {"fields": {"purpose": "principal_control"}}}
+    });
+    let authorize_id = new_prefixed_uuid7("ak:event:");
+    let authorize = serde_json::json!({
+        "event_id": authorize_id,
+        "kind": "ak.device.authorize",
+        "realm_id": realm_id,
+        "actor_id": controller,
+        "actor_seq": 2,
+        "prev_refs": [bootstrap_id],
+        "refs": [],
+        "payload": {
+            "principal_id": controller,
+            "device_id": CONTROLLER_DEVICE_ID,
+            "authorized_generation_ref": generation_ref
+        }
+    });
+    for (envelope, kind, actor_seq) in [
+        (bootstrap, "ak.realm.create", 1),
+        (authorize, "ak.device.authorize", 2),
+    ] {
+        let event_id = envelope["event_id"].as_str().unwrap().to_owned();
+        let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
+        state
+            .persistence
+            .events()
+            .put(soland::state::CanonicalEventRecord {
+                event_id,
+                actor_id: controller.to_owned(),
+                actor_seq,
+                realm_id: Some(realm_id.clone()),
+                kind: kind.to_owned(),
+                schema_id: "ak.schema.event_envelope.v1".to_owned(),
+                canonical_digest: arkret_sdk::canonical::sha256_digest(&canonical_bytes),
+                canonical_bytes,
+                envelope,
+                received_at: now,
+            })
+            .await
+            .unwrap();
+    }
+
+    state
+        .persistence
+        .devices()
+        .put(&soland::state::DeviceInventoryRecord {
+            actor: controller.to_owned(),
+            device_id: CONTROLLER_DEVICE_ID.to_owned(),
+            display_name: Some("Alice Desktop".to_owned()),
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({
+                "device_id": CONTROLLER_DEVICE_ID,
+                "display_name": "Alice Desktop",
+                "verification": "verified",
+                "last_seen_at": now,
+                "authorized_generation_ref": generation_ref
             }),
             created_at: now,
             updated_at: now,
@@ -286,5 +387,62 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
             .unwrap_or_default()
             .contains("slug is already bound"),
         "{duplicate_body}"
+    );
+}
+
+#[tokio::test]
+async fn provisioned_agent_fanout_uses_the_active_controller_device_generation() {
+    let mut config = test_config();
+    config.development_mode = true;
+    let state = AppState::new(config, Db { pool: None });
+    let controller = "did:web:alice.example";
+    let token = "agent-device-generation-session";
+    seed_controller_session(&state, token, controller).await;
+    seed_agent_provision_prerequisites(&state, controller).await;
+    seed_active_controller_device_generation(&state, controller).await;
+
+    let app = app_from_state(state.clone());
+    let mut created = TestClient::post("http://server/_arkret/self/agents")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "display_name": "Generation-bound Agent",
+            "slug": "generation-bound",
+            "requested_scope": {
+                "actions": ["ak.self.events.stream.subscribe"],
+                "resources": [{
+                    "kind": "operation",
+                    "operation": "ak.self.events.stream.subscribe"
+                }],
+                "constraints": []
+            }
+        }))
+        .send(&app)
+        .await;
+
+    let status = created.status_code.unwrap();
+    let body: Value = created.take_json().await.unwrap();
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let accountability_ref = state
+        .persistence
+        .agents()
+        .list_for_controller(controller)
+        .await
+        .unwrap()[0]
+        .provision_event_refs
+        .as_ref()
+        .and_then(|refs| refs["accountability_grant_event_id"].as_str())
+        .unwrap()
+        .to_owned();
+    let accountability = state
+        .persistence
+        .events()
+        .get(&accountability_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        accountability.envelope["proofs"][0]["verification_method"],
+        format!("{controller}#{CONTROLLER_DEVICE_ID}")
     );
 }

@@ -45,7 +45,15 @@ pub(super) async fn mls_governance_proof(
     let realm_value = request.realm_id.as_str();
     let own_pcr =
         crate::routing::identity::recovery::principal_control_realm_for_did(&session.actor);
+    let managed_agent_pcr =
+        crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
+            state,
+            &session.actor,
+            realm_value,
+        )
+        .await?;
     let realm_accessible = realm_value == own_pcr
+        || managed_agent_pcr
         || crate::routing::spaces::space::realm_id_accessible(state, realm_value, Some(&session))
             .await;
     if !realm_accessible || !scope_visible_to_session(state, &request.effective_scope, &session) {
