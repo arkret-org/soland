@@ -377,6 +377,7 @@ pub(super) fn hydrate_applet_install_grants(
             subject: package.service_id.to_string(),
             resource: portal_realm_id.to_owned(),
             actions: vec![action.to_owned()],
+            capability_action_registry_digest: None,
             constraints: vec![crate::authz::Constraint::AppletDelegationBinding {
                 applet_id: package.applet_id.clone(),
                 executed_by: package.service_id.to_string(),

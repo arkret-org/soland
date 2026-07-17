@@ -139,6 +139,7 @@ impl SolandAuthzEngine {
             subject,
             resource,
             actions,
+            None,
             constraints,
             None,
             None,
@@ -157,6 +158,7 @@ impl SolandAuthzEngine {
         subject: String,
         resource: String,
         actions: Vec<String>,
+        capability_action_registry_digest: Option<arkret_sdk::Hash>,
         constraints: Vec<Constraint>,
         delegated_from: Option<String>,
         expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -168,6 +170,7 @@ impl SolandAuthzEngine {
             subject,
             resource,
             actions,
+            capability_action_registry_digest,
             constraints,
             revoked: false,
             created_at: chrono::Utc::now(),
@@ -201,6 +204,7 @@ impl SolandAuthzEngine {
         subject: String,
         resource: String,
         actions: Vec<String>,
+        capability_action_registry_digest: Option<arkret_sdk::Hash>,
         constraints: Vec<Constraint>,
         expires_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Grant, DelegationError> {
@@ -224,6 +228,7 @@ impl SolandAuthzEngine {
             subject,
             resource,
             actions,
+            capability_action_registry_digest,
             constraints,
             expires_at,
         };
@@ -1613,6 +1618,7 @@ mod tests {
                 "did:web:carol".to_owned(),
                 "ak:space:1".to_owned(),
                 vec!["ak.message.create".to_owned()],
+                None,
                 vec![],
                 None,
             )

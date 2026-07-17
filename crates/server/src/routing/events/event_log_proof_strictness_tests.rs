@@ -1530,6 +1530,7 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
         subject: DATA_EVENT_ACTOR.to_owned(),
         resource: DATA_EVENT_STRAND.to_owned(),
         actions: vec![action.to_owned()],
+        capability_action_registry_digest: None,
         constraints: Vec::new(),
         revoked,
         created_at: chrono::Utc::now(),

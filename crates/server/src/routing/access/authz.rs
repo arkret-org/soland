@@ -409,6 +409,7 @@ fn capability_grant_from_authz_grant(
         subject,
         actions: grant.actions,
         resources: vec![resource_selector],
+        capability_action_registry_digest: grant.capability_action_registry_digest,
         constraints,
         parent_grant_id: grant
             .delegated_from

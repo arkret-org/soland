@@ -315,6 +315,7 @@ fn applet_install_grant(
         subject: package.service_id.to_string(),
         resource: record.portal_realm_id.clone(),
         actions: vec![action.to_owned()],
+        capability_action_registry_digest: None,
         constraints: applet_delegation_constraints(record, package),
         revoked: false,
         created_at: record.registered_at,

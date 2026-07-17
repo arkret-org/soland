@@ -311,6 +311,31 @@ fn validate_grant_payload(
             "payload.grant.actions must be a non-empty string array",
         ));
     }
+    let actions = grant["actions"]
+        .as_array()
+        .expect("validated actions array")
+        .iter()
+        .map(|value| value.as_str().expect("validated action string").to_owned())
+        .collect::<Vec<_>>();
+    let registry_digest = match grant.get("capability_action_registry_digest") {
+        None => None,
+        Some(Value::String(value)) if value.starts_with("sha256:") => {
+            Some(arkret_sdk::Hash::new(value.clone()).map_err(|_| {
+                AppError::invalid_param(
+                    "payload.grant.capability_action_registry_digest must be sha256",
+                )
+            })?)
+        }
+        Some(_) => {
+            return Err(AppError::invalid_param(
+                "payload.grant.capability_action_registry_digest must be sha256",
+            ));
+        }
+    };
+    arkret_sdk::validate_capability_action_registry_binding(&actions, registry_digest.as_ref())
+        .map_err(|_| {
+            AppError::invalid_param("payload.grant capability registry basis is unavailable")
+        })?;
     if grant
         .get("resources")
         .and_then(Value::as_array)

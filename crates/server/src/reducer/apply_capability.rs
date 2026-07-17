@@ -196,6 +196,10 @@ fn engine_grant_from_cell_body(
         return None;
     }
     let resource = engine_resource_from_body(body, &realm_id);
+    let capability_action_registry_digest = body
+        .get("capability_action_registry_digest")
+        .and_then(Value::as_str)
+        .and_then(|value| arkret_sdk::Hash::new(value.to_owned()).ok());
     let constraints = engine_constraints_from_body(body);
     let created_at = body
         .get("issued_at")
@@ -221,6 +225,7 @@ fn engine_grant_from_cell_body(
         subject,
         resource,
         actions,
+        capability_action_registry_digest,
         constraints,
         revoked,
         created_at,
@@ -251,7 +256,24 @@ pub(crate) fn engine_grant_from_capability_cell_state(
 fn validate_grant_body_scope(body: &Value) -> Result<(), &'static str> {
     let actions = validate_grant_actions(body)?;
     crate::authz::validate_capability_actions(&actions)?;
+    validate_capability_registry_binding(body, &actions)?;
     validate_grant_resources(body)
+}
+
+fn validate_capability_registry_binding(
+    body: &Value,
+    actions: &[String],
+) -> Result<(), &'static str> {
+    let digest = match body.get("capability_action_registry_digest") {
+        None => None,
+        Some(Value::String(value)) if value.starts_with("sha256:") => Some(
+            arkret_sdk::Hash::new(value.clone())
+                .map_err(|_| "capability_grant_registry_digest_invalid")?,
+        ),
+        Some(_) => return Err("capability_grant_registry_digest_invalid"),
+    };
+    arkret_sdk::validate_capability_action_registry_binding(actions, digest.as_ref())
+        .map_err(|_| "capability_registry_basis_unavailable")
 }
 
 /// capabilities.md §8 — grants whose subject is an agent principal must carry
@@ -1293,6 +1315,29 @@ mod agent_key_tests {
                 active_profiles: Vec::new(),
             },
         );
+    }
+
+    #[test]
+    fn aggregate_admin_grant_requires_registry_basis() {
+        let body = json!({
+            "actions": ["ak.realm.admin"],
+            "resources": [{ "kind": "realm", "realm_id": REALM }]
+        });
+        assert_eq!(
+            super::validate_grant_body_scope(&body),
+            Err("capability_registry_basis_unavailable")
+        );
+    }
+
+    #[test]
+    fn aggregate_admin_grant_accepts_current_registry_basis() {
+        let digest = arkret_sdk::current_capability_action_registry_digest().unwrap();
+        let body = json!({
+            "actions": ["ak.realm.admin"],
+            "resources": [{ "kind": "realm", "realm_id": REALM }],
+            "capability_action_registry_digest": digest,
+        });
+        assert_eq!(super::validate_grant_body_scope(&body), Ok(()));
     }
 
     #[test]
