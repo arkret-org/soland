@@ -848,10 +848,7 @@ pub(crate) fn validate_view_payload(operation: &Operation) -> Result<(), &'stati
             Value::Object(fields) => fields.iter().any(|(key, value)| {
                 matches!(
                     key.as_str(),
-                    "selection_policy"
-                        | "page_size"
-                        | "wip_limit_enforcement"
-                        | "state_changed_at"
+                    "selection_policy" | "page_size" | "wip_limit_enforcement" | "state_changed_at"
                 ) || contains_retired_field(value)
             }),
             Value::Array(values) => values.iter().any(contains_retired_field),
