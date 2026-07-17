@@ -431,9 +431,11 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
                 "scope_circle_id": circle_id,
                 "metadata": {"title": "Scoped"},
                 "agent_participation": {
-                    "reply": true,
-                    "accept_third_party_mention": true,
-                    "act_on_behalf": false
+                    "native_agent": {
+                        "reply": true,
+                        "accept_third_party_mention": true,
+                        "act_on_behalf": false
+                    }
                 }
             }
         }),

@@ -25,7 +25,7 @@ pub(super) fn agent_participation_ceiling_change(
     use arkret_sdk::models::AgentParticipation;
     let payload = &operation.payload;
     let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
-    let find = |native: bool| -> Option<Value> {
+    let find = || -> Option<Value> {
         let base = payload
             .get("agent_participation")
             .or_else(|| {
@@ -43,11 +43,7 @@ pub(super) fn agent_participation_ceiling_change(
                     .get("object")
                     .and_then(|p| p.get("agent_participation"))
             })?;
-        if native {
-            base.get("native_agent").cloned()
-        } else {
-            Some(base.clone())
-        }
+        base.get("native_agent").cloned()
     };
     let to_part = |value: &Value| AgentParticipation {
         reply: ap_bool(value, "reply"),
@@ -74,7 +70,7 @@ pub(super) fn agent_participation_ceiling_change(
     };
     match kinds::canonical_kind_for_operation(operation) {
         Some(arkret_sdk::events::EventKind::REALM_POLICY_COMPONENTS) => {
-            let value = find(true)?;
+            let value = find()?;
             Some((
                 "realm",
                 format!("realm:{realm_uuid}"),
@@ -84,7 +80,7 @@ pub(super) fn agent_participation_ceiling_change(
         }
         Some(arkret_sdk::events::EventKind::CIRCLE_CREATE)
         | Some(arkret_sdk::events::EventKind::CIRCLE_UPDATE) => {
-            let value = find(false)?;
+            let value = find()?;
             let circle_uuid = ap_uuid_part(&id_of("circle_id")?).to_owned();
             Some((
                 "circle",
@@ -95,7 +91,7 @@ pub(super) fn agent_participation_ceiling_change(
         }
         Some(arkret_sdk::events::EventKind::STRAND_CREATE)
         | Some(arkret_sdk::events::EventKind::STRAND_UPDATE) => {
-            let value = find(false)?;
+            let value = find()?;
             let strand_uuid = ap_uuid_part(&id_of("strand_id")?).to_owned();
             Some((
                 "strand",
