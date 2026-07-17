@@ -1689,7 +1689,9 @@ async fn call_recording_start_defaults_to_record_capability() {
         json!({
             "sender": "did:web:recorder.example",
             "call_id": "ak:call:01904100-0000-7000-8000-000000000904",
-            "recording_id": "recording-904"
+            "recording_id": "recording-904",
+            "recording_agent": "did:web:recorder.example",
+            "mode": "audio_video"
         }),
     );
 
@@ -1718,7 +1720,9 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
             "sender": "did:web:recorder.example",
             "call_id": "ak:call:01904100-0000-7000-8000-000000000905",
             "recording_id": "transcript-905",
-            "capture_kind": "transcript"
+            "recording_agent": "did:web:recorder.example",
+            "capture_kind": "transcript",
+            "mode": "audio"
         }),
     );
 
@@ -1757,13 +1761,63 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
             "sender": "did:web:recorder.example",
             "call_id": "ak:call:01904100-0000-7000-8000-000000000906",
             "recording_id": "transcript-906",
-            "capture_kind": "transcript"
+            "recording_agent": "did:web:recorder.example",
+            "capture_kind": "transcript",
+            "mode": "audio"
         }),
     );
 
     validate_operation_policy(&state, &[start])
         .await
         .expect("ak.call.transcribe should authorize transcript capture");
+}
+
+#[tokio::test]
+async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id() {
+    let state = test_state();
+    let realm_id =
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000907".to_owned())
+            .unwrap();
+    grant_call_action(
+        &state,
+        &realm_id,
+        "did:web:recorder.example",
+        arkret_sdk::CapabilityActionId::CALL_RECORD,
+    );
+    let payload = json!({
+        "sender": "did:web:recorder.example",
+        "call_id": "ak:call:01904100-0000-7000-8000-000000000907",
+        "recording_id": "recording-907",
+        "recording_agent": "did:web:recorder.example"
+    });
+    let missing_mode = op(
+        realm_id.clone(),
+        "000000000907",
+        arkret_sdk::events::EventKind::CALL_RECORDING_START,
+        payload.clone(),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[missing_mode])
+            .await
+            .unwrap_err(),
+        arkret_sdk::ErrorCode::SCHEMA_VIOLATION
+    );
+
+    let mut invalid_recording_id_payload = payload;
+    invalid_recording_id_payload["recording_id"] = json!("recording id");
+    invalid_recording_id_payload["mode"] = json!("audio_video");
+    let invalid_recording_id = op(
+        realm_id,
+        "000000000908",
+        arkret_sdk::events::EventKind::CALL_RECORDING_START,
+        invalid_recording_id_payload,
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[invalid_recording_id])
+            .await
+            .unwrap_err(),
+        arkret_sdk::ErrorCode::SCHEMA_VIOLATION
+    );
 }
 
 #[tokio::test]

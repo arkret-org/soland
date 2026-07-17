@@ -459,7 +459,8 @@ pub(super) async fn validate_call_recording_start_policy(
     {
         return Ok(());
     }
-    let action = call_recording_start_required_action(operation);
+    let payload = call_recording_start_payload(operation)?;
+    let action = call_recording_start_required_action(&payload);
     let Some(actor) = operation.actor() else {
         return Ok(());
     };
@@ -488,15 +489,42 @@ pub(super) async fn validate_call_recording_start_policy(
     }
 }
 
-pub(super) fn call_recording_start_required_action(operation: &Operation) -> &'static str {
-    match operation
-        .payload
-        .get("capture_kind")
-        .and_then(Value::as_str)
-        .unwrap_or("recording")
-    {
-        "transcript" => arkret_sdk::CapabilityActionId::CALL_TRANSCRIBE,
-        _ => arkret_sdk::CapabilityActionId::CALL_RECORD,
+fn call_recording_start_payload(
+    operation: &Operation,
+) -> Result<arkret_sdk::RecordingStartPayload, &'static str> {
+    let Some(payload) = operation.payload.as_object() else {
+        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+    };
+    let wire_payload = [
+        "call_id",
+        "recording_id",
+        "recording_agent",
+        "capture_kind",
+        "mode",
+        "visible_notice",
+    ]
+    .into_iter()
+    .filter_map(|field| {
+        payload
+            .get(field)
+            .cloned()
+            .map(|value| (field.to_owned(), value))
+    })
+    .collect();
+    serde_json::from_value(Value::Object(wire_payload))
+        .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+}
+
+pub(super) fn call_recording_start_required_action(
+    payload: &arkret_sdk::RecordingStartPayload,
+) -> &'static str {
+    match payload.capture_kind {
+        Some(arkret_sdk::RecordingCaptureKind::Transcript) => {
+            arkret_sdk::CapabilityActionId::CALL_TRANSCRIBE
+        }
+        Some(arkret_sdk::RecordingCaptureKind::Recording) | None => {
+            arkret_sdk::CapabilityActionId::CALL_RECORD
+        }
     }
 }
 

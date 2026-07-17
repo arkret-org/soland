@@ -274,6 +274,19 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
+        for result in [
+            value.get("recording_result"),
+            value.get("transcript_result"),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(reason) = validate_call_capture_failure_reason(result) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
 
         // §5 — backend recording artifacts MUST land in the Arkret blob
         // pipeline. A `recording_result` referencing a raw external URL (or a
@@ -1141,4 +1154,11 @@ fn validate_transcript_result_storage(
     } else {
         Some(arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
     }
+}
+
+fn validate_call_capture_failure_reason(result: &Value) -> Option<&'static str> {
+    let reason = result.get("failure_reason_code")?;
+    serde_json::from_value::<arkret_sdk::CallCaptureFailureReasonCode>(reason.clone())
+        .err()
+        .map(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
 }

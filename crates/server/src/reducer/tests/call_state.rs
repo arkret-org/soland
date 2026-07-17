@@ -660,6 +660,79 @@ fn call_state_transcript_capture_requires_consent_and_rejects_unknown_state() {
 }
 
 #[test]
+fn call_state_capture_failure_reason_uses_closed_sdk_type() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000f";
+
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                arkret_sdk::events::EventKind::CALL_STATE,
+                realm,
+                serde_json::json!({ "call_id": call_id, "state": "connecting" }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                arkret_sdk::events::EventKind::CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "state": "active",
+                    "recording_state": "recording",
+                    "recording_result": { "retention": { "consent_confirmed": true } }
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                arkret_sdk::events::EventKind::CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "recording_state": "failed",
+                    "recording_result": {
+                        "recording_start_event_id": "ak:event:01904100-0000-7000-8000-e0000000000f",
+                        "failure_reason_code": "storage_failed"
+                    }
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
+    let invalid_call_id = "ak:call:01904100-0000-7000-8000-c00000000010";
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                arkret_sdk::events::EventKind::CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": invalid_call_id,
+                    "recording_state": "failed",
+                    "recording_result": {
+                        "failure_reason_code": "vendor_timeout"
+                    }
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == arkret_sdk::ErrorCode::SCHEMA_VIOLATION
+    ));
+}
+
+#[test]
 fn call_summary_requires_terminal_state_and_is_write_once() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
