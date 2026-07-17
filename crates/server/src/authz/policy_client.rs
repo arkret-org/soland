@@ -322,7 +322,8 @@ impl PolicyClient {
         resolver: Arc<dyn DidResolver + Send + Sync>,
     ) -> Self {
         self.verification_key_resolver = Some(Arc::new(move |kid| {
-            resolve_policy_ed25519_pubkey(&*resolver, kid)
+            arkret_sdk::jws::resolve_ed25519_pubkey(&*resolver, kid)
+                .map_err(|error| error.to_string())
         }));
         self
     }
@@ -696,86 +697,6 @@ fn decode_policy_signature(sig: &str) -> Result<Signature, PolicyClientError> {
     let mut raw = [0u8; 64];
     raw.copy_from_slice(&bytes);
     Ok(Signature::from_bytes(&raw))
-}
-
-fn resolve_policy_ed25519_pubkey(
-    resolver: &dyn DidResolver,
-    verification_method: &str,
-) -> Result<VerifyingKey, String> {
-    let (did_str, fragment) = verification_method
-        .split_once('#')
-        .map(|(d, f)| (d.to_owned(), Some(f.to_owned())))
-        .unwrap_or_else(|| (verification_method.to_owned(), None));
-    let did = Did::new(did_str.clone()).map_err(|e| format!("invalid DID `{did_str}`: {e}"))?;
-    let document = resolver
-        .resolve_did(&did)
-        .map_err(|e| format!("DID resolve failed for `{did_str}`: {e}"))?;
-
-    let material = document
-        .verification_methods
-        .get(verification_method)
-        .or_else(|| {
-            fragment
-                .as_ref()
-                .and_then(|fragment| document.verification_methods.get(fragment))
-        })
-        .or_else(|| {
-            if did.method() == "key" && document.verification_methods.len() == 1 {
-                document.verification_methods.values().next()
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| {
-            format!(
-                "verification_method `{verification_method}` not found in DID document for `{did_str}` (have {:?})",
-                document.verification_methods.keys().collect::<Vec<_>>()
-            )
-        })?;
-
-    decode_policy_ed25519_public_key(material)
-}
-
-fn decode_policy_ed25519_public_key(material: &str) -> Result<VerifyingKey, String> {
-    let material = material.trim();
-    if material.starts_with('z') {
-        return decode_ed25519_multibase(material);
-    }
-
-    let value: Value = serde_json::from_str(material)
-        .map_err(|e| format!("public key material is neither multibase nor JWK JSON: {e}"))?;
-    match value {
-        Value::String(inner) => decode_policy_ed25519_public_key(&inner),
-        Value::Object(object) => {
-            let kty = object.get("kty").and_then(Value::as_str).unwrap_or("");
-            let crv = object.get("crv").and_then(Value::as_str).unwrap_or("");
-            if kty != "OKP" || crv != "Ed25519" {
-                return Err(format!("unsupported publicKeyJwk kty/crv: {kty}/{crv}"));
-            }
-            let x = object
-                .get("x")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "Ed25519 publicKeyJwk missing x".to_owned())?;
-            let bytes = URL_SAFE_NO_PAD
-                .decode(x.as_bytes())
-                .map_err(|e| format!("Ed25519 publicKeyJwk x is not base64url: {e}"))?;
-            if bytes.len() != 32 {
-                return Err(format!(
-                    "Ed25519 publicKeyJwk x must be 32 bytes, got {}",
-                    bytes.len()
-                ));
-            }
-            let mut raw = [0u8; 32];
-            raw.copy_from_slice(&bytes);
-            VerifyingKey::from_bytes(&raw).map_err(|e| format!("invalid Ed25519 public key: {e}"))
-        }
-        other => Err(format!("unsupported public key material shape: {other}")),
-    }
-}
-
-fn decode_ed25519_multibase(multibase: &str) -> Result<VerifyingKey, String> {
-    let key_bytes = arkret_sdk::decode_ed25519_multibase(multibase).map_err(|e| e.to_string())?;
-    VerifyingKey::from_bytes(&key_bytes).map_err(|e| format!("invalid Ed25519 public key: {e}"))
 }
 
 #[cfg(test)]
