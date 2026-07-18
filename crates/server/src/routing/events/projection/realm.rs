@@ -73,7 +73,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
     project_retention_policy_from_operation(state, origin, operation).await;
 
     let now = now();
-    let store = state.persistence.realm_meta();
+    let store = state.realm_meta_store();
     match store.get(realm_id.as_str()).await {
         Ok(None) => {
             let history_sharing_policy = operation_realm_history_sharing_policy(operation);
@@ -228,7 +228,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     if kinds::canonical_kind_for_operation(operation)
         == Some(arkret_sdk::events::EventKind::REALM_DESTROY)
     {
-        let store = state.persistence.realm_meta();
+        let store = state.realm_meta_store();
         if let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()).await {
             record.deleted = true;
             record.updated_at = operation.created_at;
@@ -274,7 +274,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
             );
             return;
         }
-        let invites = state.persistence.realm_invites();
+        let invites = state.realm_invite_application();
         let already_invited = invites
             .snapshot_all()
             .await
@@ -331,8 +331,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
 
     let cascaded_agent_ids = if matches!(membership, Some("leave" | "ban")) {
         let agent_ids = state
-            .persistence
-            .agents()
+            .agents_store()
             .list_for_controller(member)
             .await
             .unwrap_or_default()
@@ -391,7 +390,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
 }
 
 async fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {
-    let invites = state.persistence.realm_invites();
+    let invites = state.realm_invite_application();
     let Ok(records) = invites.snapshot_all().await else {
         return;
     };

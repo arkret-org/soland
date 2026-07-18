@@ -457,8 +457,7 @@ pub(crate) async fn event_view_for_state(
     session: &SessionRecord,
 ) -> JsonResult<EventView> {
     let mut receipts = state
-        .persistence
-        .events()
+        .events_store()
         .batch_receipts_for_event(&record.event_id)
         .await
         .map_err(|error| AppError::internal(format!("Event Batch Receipt lookup failed: {error}")))?
@@ -928,7 +927,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     // Cold-path fallback: linear scan of the durable Event store. Used at
     // boot before the projection has been rehydrated, or when a server is
     // running with persistence disabled.
-    let records = state.persistence.events().snapshot_all().await.ok()?;
+    let records = state.events_store().snapshot_all().await.ok()?;
     let mut latest: Option<&CanonicalEventRecord> = None;
     for record in &records {
         // CanonicalEventRecord uses `kind` (not event_kind) for the

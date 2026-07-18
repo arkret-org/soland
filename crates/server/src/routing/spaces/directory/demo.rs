@@ -52,8 +52,7 @@ pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_id: &str) -> V
 /// project as `offline`.
 pub(super) async fn directory_presence_for_actor(state: &AppState, did: &str) -> Value {
     let records = state
-        .persistence
-        .presence()
+        .presence_store()
         .list_for_actor(did)
         .await
         .unwrap_or_default();
@@ -75,12 +74,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         "presence": {"status": "online", "updated_at": now()},
     })];
 
-    let accounts = state
-        .persistence
-        .accounts()
-        .list()
-        .await
-        .unwrap_or_default();
+    let accounts = state.accounts_store().list().await.unwrap_or_default();
     for account in accounts {
         if actors
             .iter()
@@ -109,8 +103,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     }
 
     let devices = state
-        .persistence
-        .devices()
+        .devices_store()
         .list()
         .await
         .map(|devices| {

@@ -58,9 +58,9 @@ pub(super) async fn submit_agent_fanout_event(
     let payload_bytes = canonical::canonical_json_bytes(&payload).unwrap_or_default();
     let payload_digest = canonical::sha256_digest(&payload_bytes);
     let verification_method = format!("{}#{}", actor, session.device_id);
-    // Envelope created_at MUST be canonical RFC3339 UTC with no fractional
-    // seconds (exactly YYYY-MM-DDTHH:MM:SSZ) per canonical::validate_timestamp_canonical.
-    let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    // Event Envelope timestamps use the dedicated millisecond wire profile.
+    // Payload timestamps below may use different schema-specific profiles.
+    let created_at = canonical::format_timestamp_millis_canonical(Utc::now());
     let envelope = json!({
         "event_id": event_id,
         "kind": kind,
@@ -111,7 +111,7 @@ async fn submit_managed_agent_control_event(
         "realm_id": realm_id,
         "actor_id": agent_id,
         "actor_seq": next_seq,
-        "created_at": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "created_at": canonical::format_timestamp_millis_canonical(Utc::now()),
         "hlc": state.hlc.now(),
         "prev_refs": [],
         "refs": [],
@@ -582,30 +582,18 @@ pub(super) async fn submit_revoke_agent_grants(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    use soland_storage::RealmMetaRecord;
     use soland_storage_postgres::Db;
 
     use super::*;
 
-    fn realm_meta(owner: &str) -> RealmMetaRecord {
+    fn realm_meta(owner: &str) -> soland_application::events::RealmMetadata {
         let now = chrono::Utc::now();
-        RealmMetaRecord {
-            owner: owner.to_owned(),
-            deleted: false,
+        soland_application::events::RealmMetadata {
+            realm_id: String::new(),
+            owner_id: owner.to_owned(),
             discoverability: "invite_only".to_owned(),
             history_visibility: "shared".to_owned(),
-            history_sharing_policy: None,
-            history_sharing_policy_digest: None,
-            preview_policy: None,
-            preview_policy_digest: None,
-            asset_privacy_policy: None,
-            asset_privacy_policy_digest: None,
-            encryption_profile: None,
-            plaintext_visible_services: BTreeSet::new(),
-            plaintext_visible_service_classes: BTreeMap::new(),
-            minimal_metadata_realm: false,
+            deleted: false,
             created_at: now,
             updated_at: now,
         }
@@ -701,5 +689,15 @@ mod tests {
                 "deprecated self-events shortcut `{action}` must not be used as an agent runtime scope"
             );
         }
+    }
+
+    #[test]
+    fn fanout_event_timestamp_uses_canonical_millisecond_profile() {
+        let created_at = canonical::format_timestamp_millis_canonical(Utc::now());
+
+        canonical::validate_timestamp_millis_canonical(&created_at)
+            .expect("fan-out Event Envelope timestamp must pass the shared validator");
+        assert_eq!(created_at.len(), "2026-07-18T00:00:00.000Z".len());
+        assert!(created_at.ends_with('Z'));
     }
 }

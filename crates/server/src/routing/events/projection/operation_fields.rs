@@ -210,7 +210,7 @@ pub async fn project_retention_policy_from_operation(
         updated_by: origin.to_owned(),
         updated_at: operation.created_at,
     };
-    if let Err(error) = state.persistence.retention_policies().put(&record).await {
+    if let Err(error) = state.retention_policies_store().put(&record).await {
         tracing::warn!(
             %error,
             realm_id = %record.realm_id,

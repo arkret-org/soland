@@ -144,8 +144,7 @@ pub(crate) async fn federation_transaction(
     // a worker that crashed between `try_begin` and the finalising `put`.
     let mut stale_claim_takeover = false;
     match state
-        .persistence
-        .federation_transactions()
+        .federation_transactions_store()
         .get(body.origin.as_str(), &txn_id)
         .await
     {
@@ -275,8 +274,7 @@ pub(crate) async fn federation_transaction(
             processed_at: None,
         };
         let claimed = state
-            .persistence
-            .federation_transactions()
+            .federation_transactions_store()
             .try_begin(&placeholder)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
@@ -316,8 +314,7 @@ pub(crate) async fn federation_transaction(
         processed_at: Some(now),
     };
     state
-        .persistence
-        .federation_transactions()
+        .federation_transactions_store()
         .put(&record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -458,8 +455,7 @@ pub(crate) async fn federation_actor_events(
     // cannot full-scan an arbitrarily large projection table into memory.
     const FEDERATION_ACTOR_EVENTS_SCAN_CAP: usize = 10_000;
     let mut events = state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .snapshot_capped(FEDERATION_ACTOR_EVENTS_SCAN_CAP)
         .await
         .unwrap_or_default()
@@ -535,8 +531,7 @@ pub(crate) async fn federation_pull_operations(
     let limit = limit.into_inner().unwrap_or(100).min(100);
     let _want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
     let realm_operations = state
-        .persistence
-        .federation_operations()
+        .federation_operations_store()
         .list_for_realm(&realm_id)
         .await
         .unwrap_or_default();
@@ -674,8 +669,7 @@ async fn operation_history_visible_for_federation_pull(
     operation: &arkret_sdk::Operation,
 ) -> bool {
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(operation.realm_id.as_str())
         .await
         .ok()
@@ -924,8 +918,7 @@ pub(crate) async fn federation_seals_push(
             }
         }
         let realm_events = match state
-            .persistence
-            .events()
+            .events_store()
             .realm_events_newest_first(seal.realm_id.as_str())
             .await
         {

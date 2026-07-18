@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) async fn realm_requires_content_encryption(state: &AppState, realm_id: &str) -> bool {
-    let store = state.persistence.realm_meta();
+    let store = state.realm_meta_store();
     let realm_meta = store.get(realm_id).await.ok().flatten();
     realm_meta.is_some_and(|record| {
         encryption_profile_requires_content_encryption(record.encryption_profile.as_deref())
@@ -232,8 +232,7 @@ pub fn message_operation_is_encrypted(operation: &Operation) -> bool {
 
 pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &str) -> bool {
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()

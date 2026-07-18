@@ -243,8 +243,7 @@ async fn ensure_applet_e2ee_authorization_projections(
         return Ok(());
     }
     let existing = state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .snapshot_all()
         .await
         .map_err(|error| {
@@ -268,8 +267,7 @@ async fn ensure_applet_registration_projection(
     event_id: &str,
 ) -> Result<(), AppError> {
     let exists = state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .snapshot_all()
         .await
         .map_err(|error| {
@@ -673,7 +671,7 @@ pub(super) async fn append_portal_message(
         encrypted: false,
         created_at,
     };
-    if let Err(error) = state.persistence.messages().put(&message_record).await {
+    if let Err(error) = state.messages_store().put(&message_record).await {
         tracing::error!(%error, "applet bridge: failed to persist portal MessageRecord");
         return Err(AppError::internal("failed to persist portal message"));
     }
@@ -1335,8 +1333,7 @@ async fn realm_owner_and_members(
     realm_id: &str,
 ) -> (Option<String>, Vec<String>) {
     let owner = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()

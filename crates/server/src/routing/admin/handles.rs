@@ -143,18 +143,12 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
     let claims = state.member_identity_registry().snapshot_handle_claims();
     let claims_by_subject: BTreeMap<String, Vec<HandleClaimEvidenceRecord>> = claims;
 
-    let accounts = state
-        .persistence
-        .accounts()
-        .list()
-        .await
-        .unwrap_or_default();
+    let accounts = state.accounts_store().list().await.unwrap_or_default();
 
     let mut rows = Vec::new();
     for account in accounts {
         let localparts = state
-            .persistence
-            .account_localparts()
+            .account_localparts_store()
             .list_for_account(&account.did)
             .await
             .unwrap_or_default();
@@ -297,12 +291,7 @@ async fn get_handle_audit(
     let record = handle_record_by_id(state, &handle_id).await?;
     let handle_at = record.aliases.first().cloned().unwrap_or_default();
 
-    let entries = state
-        .persistence
-        .audit()
-        .snapshot_all()
-        .await
-        .unwrap_or_default();
+    let entries = state.audit_store().snapshot_all().await.unwrap_or_default();
     let mut data: Vec<AdminHandleAuditEvent> = entries
         .into_iter()
         .filter(|entry| audit_entry_mentions_handle(entry, &handle_id, &handle_at))
@@ -398,8 +387,7 @@ async fn revoke_handle(
     // records the release in the post-release grace ledger.
     let released = handle_id.clone();
     state
-        .persistence
-        .account_localparts()
+        .account_localparts_store()
         .remove(&subject_did, &released)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -463,8 +451,7 @@ async fn reassign_handle(
 
     // Target account must exist before we re-bind onto it.
     let target = state
-        .persistence
-        .accounts()
+        .accounts_store()
         .get(&new_subject_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -476,16 +463,14 @@ async fn reassign_handle(
         && previous != new_subject_id
     {
         state
-            .persistence
-            .account_localparts()
+            .account_localparts_store()
             .remove(previous, &localpart)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
 
     state
-        .persistence
-        .account_localparts()
+        .account_localparts_store()
         .add(&target.did, &localpart, true)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;

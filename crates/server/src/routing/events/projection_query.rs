@@ -102,8 +102,7 @@ async fn realm_history_sharing_policy(
     realm_id: &str,
 ) -> Option<HistorySharingPolicyPayloadValue> {
     let policy_value = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()

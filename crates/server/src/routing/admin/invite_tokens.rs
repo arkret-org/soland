@@ -92,8 +92,7 @@ async fn create_invite_token(
         updated_at: None,
     };
     state
-        .persistence
-        .realm_invites()
+        .realm_invite_application()
         .put(invite.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -131,16 +130,14 @@ async fn revoke_invite_token(
     let session = require_admin_principal(state, session)?;
     let invite_id = invite_id.into_inner();
     let mut invite = state
-        .persistence
-        .realm_invites()
+        .realm_invite_application()
         .get(&invite_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("invite token not found"))?;
     invite.status = "revoked".to_owned();
     state
-        .persistence
-        .realm_invites()
+        .realm_invite_application()
         .put(invite.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;

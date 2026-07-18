@@ -14,8 +14,30 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use soland_application::delivery::DeliveryApplicationService;
 use soland_application::events::{
-    EventApplicationService, EventQueryApplicationService, MlsCommitQueryApplicationService,
-    MlsKeyPackageApplicationService, RealmQueryApplicationService,
+    AccountDataStoreApplicationService, AccountLocalpartStoreApplicationService,
+    AccountStoreApplicationService, AgentParticipationStoreApplicationService,
+    AgentStoreApplicationService, AppletStoreApplicationService, AuditStoreApplicationService,
+    BlobStoreApplicationService, CallSignalRelayStoreApplicationService,
+    DeviceInventoryStoreApplicationService, EventApplicationService, EventQueryApplicationService,
+    EventStoreApplicationService, FederationFrontierExchangeStoreApplicationService,
+    FederationOperationsStoreApplicationService, FederationOutboxStoreApplicationService,
+    FederationTransactionStoreApplicationService, IdempotencyStoreApplicationService,
+    MessageStoreApplicationService, MlsCommitQueryApplicationService,
+    MlsCommitStoreApplicationService, MlsKeyPackageApplicationService,
+    MlsKeyPackageStoreApplicationService, MlsWelcomeStoreApplicationService,
+    ModerationStoreApplicationService, MorphProjectionStoreApplicationService,
+    MultisigPendingStoreApplicationService, NotificationStoreApplicationService,
+    OrganizationPolicyStoreApplicationService, OrganizationStoreApplicationService,
+    PolicyDocumentStoreApplicationService, PresenceStoreApplicationService,
+    ProjectionEventStoreApplicationService, PushBridgeCacheStoreApplicationService,
+    PushDeviceStoreApplicationService, ReadReceiptRelayStoreApplicationService,
+    RealmInviteApplicationService, RealmMetaStoreApplicationService,
+    RealmModerationPolicyStoreApplicationService,
+    RealmOrganizationStatementStoreApplicationService, RealmOrganizationStoreApplicationService,
+    RealmQueryApplicationService, RecoverySessionStoreApplicationService,
+    RetentionPolicyStoreApplicationService, RetentionTombstoneStoreApplicationService,
+    SpaceContainerProjectionStoreApplicationService, StrandProjectionStoreApplicationService,
+    SyncCursorStoreApplicationService, TypingStoreApplicationService, WebvhStoreApplicationService,
 };
 use soland_application::federation::FederationApplicationService;
 use soland_application::governance::GovernanceApplicationService;
@@ -92,6 +114,57 @@ pub struct AppState {
     mls_commit_query_application: MlsCommitQueryApplicationService,
     mls_key_package_application: MlsKeyPackageApplicationService,
     realm_query_application: RealmQueryApplicationService,
+    realm_invite_application: RealmInviteApplicationService,
+    account_data_store: AccountDataStoreApplicationService,
+    accounts_store: AccountStoreApplicationService,
+    account_localparts_store: AccountLocalpartStoreApplicationService,
+    audit_store: AuditStoreApplicationService,
+    retention_tombstones_store: RetentionTombstoneStoreApplicationService,
+    multisig_pending_store: MultisigPendingStoreApplicationService,
+    agent_participation_store: AgentParticipationStoreApplicationService,
+    agents_store: AgentStoreApplicationService,
+    applets_store: AppletStoreApplicationService,
+    blobs_store: BlobStoreApplicationService,
+    call_signal_relay_store: CallSignalRelayStoreApplicationService,
+    devices_store: DeviceInventoryStoreApplicationService,
+    events_store: EventStoreApplicationService,
+    federation_frontier_exchange_store: FederationFrontierExchangeStoreApplicationService,
+    federation_operations_store: FederationOperationsStoreApplicationService,
+    federation_outbox_store: FederationOutboxStoreApplicationService,
+    federation_transactions_store: FederationTransactionStoreApplicationService,
+    idempotency_keys_store: IdempotencyStoreApplicationService,
+    messages_store: MessageStoreApplicationService,
+    mls_commits_store: MlsCommitStoreApplicationService,
+    mls_key_packages_store: MlsKeyPackageStoreApplicationService,
+    mls_welcomes_store: MlsWelcomeStoreApplicationService,
+    moderation_store: ModerationStoreApplicationService,
+    morph_projections_store: MorphProjectionStoreApplicationService,
+    policy_documents_store: PolicyDocumentStoreApplicationService,
+    organizations_store: OrganizationStoreApplicationService,
+    organization_policies_store: OrganizationPolicyStoreApplicationService,
+    realm_organizations_store: RealmOrganizationStoreApplicationService,
+    realm_moderation_policies_store: RealmModerationPolicyStoreApplicationService,
+    presence_store: PresenceStoreApplicationService,
+    push_devices_store: PushDeviceStoreApplicationService,
+    push_bridge_cache_store: PushBridgeCacheStoreApplicationService,
+    projection_events_store: ProjectionEventStoreApplicationService,
+    read_receipt_relay_store: ReadReceiptRelayStoreApplicationService,
+    realm_meta_store: RealmMetaStoreApplicationService,
+    realm_organization_statements_store: RealmOrganizationStatementStoreApplicationService,
+    recovery_sessions_store: RecoverySessionStoreApplicationService,
+    retention_policies_store: RetentionPolicyStoreApplicationService,
+    space_container_projections_store: SpaceContainerProjectionStoreApplicationService,
+    strand_projections_store: StrandProjectionStoreApplicationService,
+    typing_store: TypingStoreApplicationService,
+    // Only read from routing `#[cfg(test)]` modules; unused under `--lib`.
+    #[allow(dead_code)]
+    webvh_store: WebvhStoreApplicationService,
+    // Only read from routing `#[cfg(test)]` modules; unused under `--lib`.
+    #[allow(dead_code)]
+    sync_cursors_store: SyncCursorStoreApplicationService,
+    // Only read from the notify.rs `#[cfg(test)]` module; unused under `--lib`.
+    #[allow(dead_code)]
+    notifications_store: NotificationStoreApplicationService,
     delivery_application: DeliveryApplicationService,
     identity_application: IdentityApplicationService,
     account_data_application: AccountDataApplicationService,
@@ -673,6 +746,139 @@ impl AppState {
         let realm_query_application = RealmQueryApplicationService::new(Arc::new(
             PersistenceRealmMetadata(persistence.clone()),
         ));
+        let realm_invite_application = RealmInviteApplicationService::new(Arc::new(
+            PersistenceRealmInvites(persistence.clone()),
+        ));
+        let account_data_store = AccountDataStoreApplicationService::new(Arc::new(
+            PersistenceAccountDataStore(persistence.clone()),
+        ));
+        let accounts_store = AccountStoreApplicationService::new(Arc::new(
+            PersistenceAccountStore(persistence.clone()),
+        ));
+        let account_localparts_store = AccountLocalpartStoreApplicationService::new(Arc::new(
+            PersistenceAccountLocalpartStore(persistence.clone()),
+        ));
+        let audit_store =
+            AuditStoreApplicationService::new(Arc::new(PersistenceAuditStore(persistence.clone())));
+        let retention_tombstones_store = RetentionTombstoneStoreApplicationService::new(Arc::new(
+            PersistenceRetentionTombstoneStore(persistence.clone()),
+        ));
+        let multisig_pending_store = MultisigPendingStoreApplicationService::new(Arc::new(
+            PersistenceMultisigPendingStore(persistence.clone()),
+        ));
+        let agent_participation_store = AgentParticipationStoreApplicationService::new(Arc::new(
+            PersistenceAgentParticipationStore(persistence.clone()),
+        ));
+        let agents_store =
+            AgentStoreApplicationService::new(Arc::new(PersistenceAgentStore(persistence.clone())));
+        let applets_store = AppletStoreApplicationService::new(Arc::new(PersistenceAppletStore(
+            persistence.clone(),
+        )));
+        let blobs_store =
+            BlobStoreApplicationService::new(Arc::new(PersistenceBlobStore(persistence.clone())));
+        let call_signal_relay_store = CallSignalRelayStoreApplicationService::new(Arc::new(
+            PersistenceCallSignalRelayStore(persistence.clone()),
+        ));
+        let devices_store = DeviceInventoryStoreApplicationService::new(Arc::new(
+            PersistenceDeviceInventoryStore(persistence.clone()),
+        ));
+        let events_store =
+            EventStoreApplicationService::new(Arc::new(PersistenceEventStore(persistence.clone())));
+        let federation_frontier_exchange_store =
+            FederationFrontierExchangeStoreApplicationService::new(Arc::new(
+                PersistenceFederationFrontierExchangeStore(persistence.clone()),
+            ));
+        let federation_operations_store = FederationOperationsStoreApplicationService::new(
+            Arc::new(PersistenceFederationOperationsStore(persistence.clone())),
+        );
+        let federation_transactions_store = FederationTransactionStoreApplicationService::new(
+            Arc::new(PersistenceFederationTransactionStore(persistence.clone())),
+        );
+        let federation_outbox_store = FederationOutboxStoreApplicationService::new(Arc::new(
+            PersistenceFederationOutboxStore(persistence.clone()),
+        ));
+        let idempotency_keys_store = IdempotencyStoreApplicationService::new(Arc::new(
+            PersistenceIdempotencyStore(persistence.clone()),
+        ));
+        let messages_store = MessageStoreApplicationService::new(Arc::new(
+            PersistenceMessageStore(persistence.clone()),
+        ));
+        let mls_commits_store = MlsCommitStoreApplicationService::new(Arc::new(
+            PersistenceMlsCommitStore(persistence.clone()),
+        ));
+        let mls_key_packages_store = MlsKeyPackageStoreApplicationService::new(Arc::new(
+            PersistenceMlsKeyPackageStore(persistence.clone()),
+        ));
+        let mls_welcomes_store = MlsWelcomeStoreApplicationService::new(Arc::new(
+            PersistenceMlsWelcomeStore(persistence.clone()),
+        ));
+        let moderation_store = ModerationStoreApplicationService::new(Arc::new(
+            PersistenceModerationStore(persistence.clone()),
+        ));
+        let morph_projections_store = MorphProjectionStoreApplicationService::new(Arc::new(
+            PersistenceMorphProjectionStore(persistence.clone()),
+        ));
+        let policy_documents_store = PolicyDocumentStoreApplicationService::new(Arc::new(
+            PersistencePolicyDocumentStore(persistence.clone()),
+        ));
+        let organizations_store = OrganizationStoreApplicationService::new(Arc::new(
+            PersistenceOrganizationStore(persistence.clone()),
+        ));
+        let organization_policies_store = OrganizationPolicyStoreApplicationService::new(Arc::new(
+            PersistenceOrganizationPolicyStore(persistence.clone()),
+        ));
+        let realm_organizations_store = RealmOrganizationStoreApplicationService::new(Arc::new(
+            PersistenceRealmOrganizationStore(persistence.clone()),
+        ));
+        let realm_moderation_policies_store = RealmModerationPolicyStoreApplicationService::new(
+            Arc::new(PersistenceRealmModerationPolicyStore(persistence.clone())),
+        );
+        let presence_store = PresenceStoreApplicationService::new(Arc::new(
+            PersistencePresenceStore(persistence.clone()),
+        ));
+        let push_devices_store = PushDeviceStoreApplicationService::new(Arc::new(
+            PersistencePushDeviceStore(persistence.clone()),
+        ));
+        let push_bridge_cache_store = PushBridgeCacheStoreApplicationService::new(Arc::new(
+            PersistencePushBridgeCacheStore(persistence.clone()),
+        ));
+        let projection_events_store = ProjectionEventStoreApplicationService::new(Arc::new(
+            PersistenceProjectionEventStore(persistence.clone()),
+        ));
+        let read_receipt_relay_store = ReadReceiptRelayStoreApplicationService::new(Arc::new(
+            PersistenceReadReceiptRelayStore(persistence.clone()),
+        ));
+        let realm_meta_store = RealmMetaStoreApplicationService::new(Arc::new(
+            PersistenceRealmMetaStore(persistence.clone()),
+        ));
+        let realm_organization_statements_store =
+            RealmOrganizationStatementStoreApplicationService::new(Arc::new(
+                PersistenceRealmOrganizationStatementStore(persistence.clone()),
+            ));
+        let recovery_sessions_store = RecoverySessionStoreApplicationService::new(Arc::new(
+            PersistenceRecoverySessionStore(persistence.clone()),
+        ));
+        let retention_policies_store = RetentionPolicyStoreApplicationService::new(Arc::new(
+            PersistenceRetentionPolicyStore(persistence.clone()),
+        ));
+        let space_container_projections_store =
+            SpaceContainerProjectionStoreApplicationService::new(Arc::new(
+                PersistenceSpaceContainerProjectionStore(persistence.clone()),
+            ));
+        let strand_projections_store = StrandProjectionStoreApplicationService::new(Arc::new(
+            PersistenceStrandProjectionStore(persistence.clone()),
+        ));
+        let typing_store = TypingStoreApplicationService::new(Arc::new(PersistenceTypingStore(
+            persistence.clone(),
+        )));
+        let webvh_store =
+            WebvhStoreApplicationService::new(Arc::new(PersistenceWebvhStore(persistence.clone())));
+        let sync_cursors_store = SyncCursorStoreApplicationService::new(Arc::new(
+            PersistenceSyncCursorStore(persistence.clone()),
+        ));
+        let notifications_store = NotificationStoreApplicationService::new(Arc::new(
+            PersistenceNotificationStore(persistence.clone()),
+        ));
         let delivery_application = DeliveryApplicationService::new(
             Arc::new(PersistenceNotificationWriter(persistence.clone())),
             Arc::new(PersistenceDeviceDelivery(persistence.clone())),
@@ -743,6 +949,51 @@ impl AppState {
             mls_commit_query_application,
             mls_key_package_application,
             realm_query_application,
+            realm_invite_application,
+            account_data_store,
+            accounts_store,
+            account_localparts_store,
+            audit_store,
+            retention_tombstones_store,
+            multisig_pending_store,
+            agent_participation_store,
+            agents_store,
+            applets_store,
+            blobs_store,
+            call_signal_relay_store,
+            devices_store,
+            events_store,
+            federation_frontier_exchange_store,
+            federation_operations_store,
+            federation_transactions_store,
+            federation_outbox_store,
+            idempotency_keys_store,
+            messages_store,
+            mls_commits_store,
+            mls_key_packages_store,
+            mls_welcomes_store,
+            moderation_store,
+            morph_projections_store,
+            organizations_store,
+            organization_policies_store,
+            realm_organizations_store,
+            realm_moderation_policies_store,
+            policy_documents_store,
+            presence_store,
+            push_devices_store,
+            push_bridge_cache_store,
+            projection_events_store,
+            read_receipt_relay_store,
+            realm_meta_store,
+            realm_organization_statements_store,
+            recovery_sessions_store,
+            retention_policies_store,
+            space_container_projections_store,
+            strand_projections_store,
+            typing_store,
+            webvh_store,
+            sync_cursors_store,
+            notifications_store,
             delivery_application,
             identity_application,
             account_data_application,
@@ -846,6 +1097,201 @@ impl AppState {
 
     pub(crate) fn realm_query_application(&self) -> &RealmQueryApplicationService {
         &self.realm_query_application
+    }
+
+    pub(crate) fn realm_invite_application(&self) -> &RealmInviteApplicationService {
+        &self.realm_invite_application
+    }
+
+    pub(crate) fn account_data_store(&self) -> &AccountDataStoreApplicationService {
+        &self.account_data_store
+    }
+
+    pub(crate) fn accounts_store(&self) -> &AccountStoreApplicationService {
+        &self.accounts_store
+    }
+
+    pub(crate) fn account_localparts_store(&self) -> &AccountLocalpartStoreApplicationService {
+        &self.account_localparts_store
+    }
+
+    pub(crate) fn audit_store(&self) -> &AuditStoreApplicationService {
+        &self.audit_store
+    }
+
+    pub(crate) fn retention_tombstones_store(&self) -> &RetentionTombstoneStoreApplicationService {
+        &self.retention_tombstones_store
+    }
+
+    pub(crate) fn multisig_pending_store(&self) -> &MultisigPendingStoreApplicationService {
+        &self.multisig_pending_store
+    }
+
+    pub(crate) fn agent_participation_store(&self) -> &AgentParticipationStoreApplicationService {
+        &self.agent_participation_store
+    }
+
+    pub(crate) fn agents_store(&self) -> &AgentStoreApplicationService {
+        &self.agents_store
+    }
+
+    pub(crate) fn applets_store(&self) -> &AppletStoreApplicationService {
+        &self.applets_store
+    }
+
+    pub(crate) fn blobs_store(&self) -> &BlobStoreApplicationService {
+        &self.blobs_store
+    }
+
+    pub(crate) fn call_signal_relay_store(&self) -> &CallSignalRelayStoreApplicationService {
+        &self.call_signal_relay_store
+    }
+
+    pub(crate) fn devices_store(&self) -> &DeviceInventoryStoreApplicationService {
+        &self.devices_store
+    }
+
+    pub(crate) fn events_store(&self) -> &EventStoreApplicationService {
+        &self.events_store
+    }
+
+    pub(crate) fn federation_frontier_exchange_store(
+        &self,
+    ) -> &FederationFrontierExchangeStoreApplicationService {
+        &self.federation_frontier_exchange_store
+    }
+
+    pub(crate) fn federation_operations_store(
+        &self,
+    ) -> &FederationOperationsStoreApplicationService {
+        &self.federation_operations_store
+    }
+
+    pub(crate) fn federation_outbox_store(&self) -> &FederationOutboxStoreApplicationService {
+        &self.federation_outbox_store
+    }
+
+    pub(crate) fn federation_transactions_store(
+        &self,
+    ) -> &FederationTransactionStoreApplicationService {
+        &self.federation_transactions_store
+    }
+
+    pub(crate) fn idempotency_keys_store(&self) -> &IdempotencyStoreApplicationService {
+        &self.idempotency_keys_store
+    }
+
+    pub(crate) fn messages_store(&self) -> &MessageStoreApplicationService {
+        &self.messages_store
+    }
+
+    pub(crate) fn mls_commits_store(&self) -> &MlsCommitStoreApplicationService {
+        &self.mls_commits_store
+    }
+
+    pub(crate) fn mls_key_packages_store(&self) -> &MlsKeyPackageStoreApplicationService {
+        &self.mls_key_packages_store
+    }
+
+    pub(crate) fn mls_welcomes_store(&self) -> &MlsWelcomeStoreApplicationService {
+        &self.mls_welcomes_store
+    }
+
+    pub(crate) fn moderation_store(&self) -> &ModerationStoreApplicationService {
+        &self.moderation_store
+    }
+
+    pub(crate) fn morph_projections_store(&self) -> &MorphProjectionStoreApplicationService {
+        &self.morph_projections_store
+    }
+
+    pub(crate) fn policy_documents_store(&self) -> &PolicyDocumentStoreApplicationService {
+        &self.policy_documents_store
+    }
+
+    pub(crate) fn organizations_store(&self) -> &OrganizationStoreApplicationService {
+        &self.organizations_store
+    }
+
+    pub(crate) fn organization_policies_store(&self) -> &OrganizationPolicyStoreApplicationService {
+        &self.organization_policies_store
+    }
+
+    pub(crate) fn realm_organizations_store(&self) -> &RealmOrganizationStoreApplicationService {
+        &self.realm_organizations_store
+    }
+
+    pub(crate) fn realm_moderation_policies_store(
+        &self,
+    ) -> &RealmModerationPolicyStoreApplicationService {
+        &self.realm_moderation_policies_store
+    }
+
+    pub(crate) fn presence_store(&self) -> &PresenceStoreApplicationService {
+        &self.presence_store
+    }
+
+    pub(crate) fn push_devices_store(&self) -> &PushDeviceStoreApplicationService {
+        &self.push_devices_store
+    }
+
+    pub(crate) fn push_bridge_cache_store(&self) -> &PushBridgeCacheStoreApplicationService {
+        &self.push_bridge_cache_store
+    }
+
+    pub(crate) fn projection_events_store(&self) -> &ProjectionEventStoreApplicationService {
+        &self.projection_events_store
+    }
+
+    pub(crate) fn read_receipt_relay_store(&self) -> &ReadReceiptRelayStoreApplicationService {
+        &self.read_receipt_relay_store
+    }
+
+    pub(crate) fn realm_meta_store(&self) -> &RealmMetaStoreApplicationService {
+        &self.realm_meta_store
+    }
+
+    pub(crate) fn realm_organization_statements_store(
+        &self,
+    ) -> &RealmOrganizationStatementStoreApplicationService {
+        &self.realm_organization_statements_store
+    }
+
+    pub(crate) fn recovery_sessions_store(&self) -> &RecoverySessionStoreApplicationService {
+        &self.recovery_sessions_store
+    }
+
+    pub(crate) fn retention_policies_store(&self) -> &RetentionPolicyStoreApplicationService {
+        &self.retention_policies_store
+    }
+
+    pub(crate) fn space_container_projections_store(
+        &self,
+    ) -> &SpaceContainerProjectionStoreApplicationService {
+        &self.space_container_projections_store
+    }
+
+    pub(crate) fn strand_projections_store(&self) -> &StrandProjectionStoreApplicationService {
+        &self.strand_projections_store
+    }
+
+    pub(crate) fn typing_store(&self) -> &TypingStoreApplicationService {
+        &self.typing_store
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn webvh_store(&self) -> &WebvhStoreApplicationService {
+        &self.webvh_store
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn sync_cursors_store(&self) -> &SyncCursorStoreApplicationService {
+        &self.sync_cursors_store
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn notifications_store(&self) -> &NotificationStoreApplicationService {
+        &self.notifications_store
     }
 
     pub(crate) fn delivery_application(&self) -> &DeliveryApplicationService {
@@ -1723,6 +2169,51 @@ struct PersistenceMlsCommitReader(Arc<dyn PersistenceStore>);
 struct PersistenceMlsKeyPackageMaintenance(Arc<dyn PersistenceStore>);
 
 struct PersistenceRealmMetadata(Arc<dyn PersistenceStore>);
+struct PersistenceRealmInvites(Arc<dyn PersistenceStore>);
+struct PersistenceAccountDataStore(Arc<dyn PersistenceStore>);
+struct PersistenceAccountStore(Arc<dyn PersistenceStore>);
+struct PersistenceAccountLocalpartStore(Arc<dyn PersistenceStore>);
+struct PersistenceAuditStore(Arc<dyn PersistenceStore>);
+struct PersistenceRetentionTombstoneStore(Arc<dyn PersistenceStore>);
+struct PersistenceMultisigPendingStore(Arc<dyn PersistenceStore>);
+struct PersistenceAgentParticipationStore(Arc<dyn PersistenceStore>);
+struct PersistenceAgentStore(Arc<dyn PersistenceStore>);
+struct PersistenceAppletStore(Arc<dyn PersistenceStore>);
+struct PersistenceBlobStore(Arc<dyn PersistenceStore>);
+struct PersistenceCallSignalRelayStore(Arc<dyn PersistenceStore>);
+struct PersistenceDeviceInventoryStore(Arc<dyn PersistenceStore>);
+struct PersistenceEventStore(Arc<dyn PersistenceStore>);
+struct PersistenceFederationFrontierExchangeStore(Arc<dyn PersistenceStore>);
+struct PersistenceFederationOperationsStore(Arc<dyn PersistenceStore>);
+struct PersistenceFederationTransactionStore(Arc<dyn PersistenceStore>);
+struct PersistenceFederationOutboxStore(Arc<dyn PersistenceStore>);
+struct PersistenceIdempotencyStore(Arc<dyn PersistenceStore>);
+struct PersistenceMessageStore(Arc<dyn PersistenceStore>);
+struct PersistenceMlsCommitStore(Arc<dyn PersistenceStore>);
+struct PersistenceMlsKeyPackageStore(Arc<dyn PersistenceStore>);
+struct PersistenceMlsWelcomeStore(Arc<dyn PersistenceStore>);
+struct PersistenceModerationStore(Arc<dyn PersistenceStore>);
+struct PersistenceMorphProjectionStore(Arc<dyn PersistenceStore>);
+struct PersistencePolicyDocumentStore(Arc<dyn PersistenceStore>);
+struct PersistenceOrganizationStore(Arc<dyn PersistenceStore>);
+struct PersistenceOrganizationPolicyStore(Arc<dyn PersistenceStore>);
+struct PersistenceRealmOrganizationStore(Arc<dyn PersistenceStore>);
+struct PersistenceRealmModerationPolicyStore(Arc<dyn PersistenceStore>);
+struct PersistencePresenceStore(Arc<dyn PersistenceStore>);
+struct PersistencePushDeviceStore(Arc<dyn PersistenceStore>);
+struct PersistencePushBridgeCacheStore(Arc<dyn PersistenceStore>);
+struct PersistenceProjectionEventStore(Arc<dyn PersistenceStore>);
+struct PersistenceWebvhStore(Arc<dyn PersistenceStore>);
+struct PersistenceSyncCursorStore(Arc<dyn PersistenceStore>);
+struct PersistenceReadReceiptRelayStore(Arc<dyn PersistenceStore>);
+struct PersistenceRealmMetaStore(Arc<dyn PersistenceStore>);
+struct PersistenceRealmOrganizationStatementStore(Arc<dyn PersistenceStore>);
+struct PersistenceRecoverySessionStore(Arc<dyn PersistenceStore>);
+struct PersistenceRetentionPolicyStore(Arc<dyn PersistenceStore>);
+struct PersistenceSpaceContainerProjectionStore(Arc<dyn PersistenceStore>);
+struct PersistenceStrandProjectionStore(Arc<dyn PersistenceStore>);
+struct PersistenceTypingStore(Arc<dyn PersistenceStore>);
+struct PersistenceNotificationStore(Arc<dyn PersistenceStore>);
 
 struct PersistenceNotificationWriter(Arc<dyn PersistenceStore>);
 
@@ -3891,6 +4382,1386 @@ impl soland_application::events::RealmMetadataPort for PersistenceRealmMetadata 
                 },
             )
             .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::RealmInvitePort for PersistenceRealmInvites {
+    async fn get(
+        &self,
+        invite_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::RealmInviteRecord>> {
+        Ok(self.0.realm_invites().get(invite_id).await?)
+    }
+
+    async fn put(
+        &self,
+        record: soland_storage::RealmInviteRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.realm_invites().put(record).await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::RealmInviteRecord>> {
+        Ok(self.0.realm_invites().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::AccountDataStorePort for PersistenceAccountDataStore {
+    async fn put(
+        &self,
+        record: &soland_storage::AccountDataRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.account_data().put(record).await?)
+    }
+
+    async fn delete(
+        &self,
+        actor: &str,
+        data_type: &str,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.account_data().delete(actor, data_type).await?)
+    }
+
+    async fn get(
+        &self,
+        actor: &str,
+        data_type: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::AccountDataRecord>> {
+        Ok(self.0.account_data().get(actor, data_type).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::AccountStorePort for PersistenceAccountStore {
+    async fn get(
+        &self,
+        did: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::AccountRecord>> {
+        Ok(self.0.accounts().get(did).await?)
+    }
+
+    async fn list(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::AccountRecord>> {
+        Ok(self.0.accounts().list().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::AccountLocalpartStorePort for PersistenceAccountLocalpartStore {
+    async fn list_for_account(
+        &self,
+        account_did: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::AccountLocalpartRecord>> {
+        Ok(self
+            .0
+            .account_localparts()
+            .list_for_account(account_did)
+            .await?)
+    }
+
+    async fn owner_of(
+        &self,
+        localpart: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::AccountLocalpartRecord>> {
+        Ok(self.0.account_localparts().owner_of(localpart).await?)
+    }
+
+    async fn add(
+        &self,
+        account_did: &str,
+        localpart: &str,
+        primary: bool,
+    ) -> soland_application::ApplicationResult<soland_storage::AccountLocalpartRecord> {
+        Ok(self
+            .0
+            .account_localparts()
+            .add(account_did, localpart, primary)
+            .await?)
+    }
+
+    async fn remove(
+        &self,
+        account_did: &str,
+        localpart: &str,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self
+            .0
+            .account_localparts()
+            .remove(account_did, localpart)
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::AuditStorePort for PersistenceAuditStore {
+    async fn snapshot_all(&self) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self.0.audit().snapshot_all().await?)
+    }
+
+    async fn list_for_actor(
+        &self,
+        actor: &str,
+    ) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self.0.audit().list_for_actor(actor).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::RetentionTombstoneStorePort
+    for PersistenceRetentionTombstoneStore
+{
+    async fn get(
+        &self,
+        event_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::RetentionTombstoneRecord>>
+    {
+        Ok(self.0.retention_tombstones().get(event_id).await?)
+    }
+
+    async fn put(
+        &self,
+        record: &soland_storage::RetentionTombstoneRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.retention_tombstones().put(record).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::MultisigPendingStorePort for PersistenceMultisigPendingStore {
+    async fn get(
+        &self,
+        seal_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::MultisigPendingRecord>> {
+        Ok(self.0.multisig_pending().get(seal_id).await?)
+    }
+
+    async fn upsert(
+        &self,
+        record: soland_storage::MultisigPendingRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.multisig_pending().upsert(record).await?)
+    }
+
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::MultisigPendingRecord>> {
+        Ok(self.0.multisig_pending().list_for_realm(realm_id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::AgentParticipationStorePort
+    for PersistenceAgentParticipationStore
+{
+    async fn put_selection(
+        &self,
+        record: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.agent_participation().put_selection(record).await?)
+    }
+
+    async fn put_ceiling(
+        &self,
+        record: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.agent_participation().put_ceiling(record).await?)
+    }
+
+    async fn ceilings_for_scope_keys(
+        &self,
+        scope_keys: &[String],
+    ) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self
+            .0
+            .agent_participation()
+            .ceilings_for_scope_keys(scope_keys)
+            .await?)
+    }
+
+    async fn list_selections(
+        &self,
+        agent_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self
+            .0
+            .agent_participation()
+            .list_selections(agent_id)
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::AgentStorePort for PersistenceAgentStore {
+    async fn get(
+        &self,
+        agent_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::AgentPrincipalRecord>> {
+        Ok(self.0.agents().get(agent_id).await?)
+    }
+
+    async fn put(
+        &self,
+        record: soland_storage::AgentPrincipalRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.agents().put(record).await?)
+    }
+
+    async fn list_for_controller(
+        &self,
+        controller_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::AgentPrincipalRecord>> {
+        Ok(self.0.agents().list_for_controller(controller_id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::AppletStorePort for PersistenceAppletStore {
+    async fn get(
+        &self,
+        applet_id: &str,
+    ) -> soland_application::ApplicationResult<Option<serde_json::Value>> {
+        Ok(self.0.applets().get(applet_id).await?)
+    }
+
+    async fn put(
+        &self,
+        applet_id: &str,
+        record: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.applets().put(applet_id, record).await?)
+    }
+
+    async fn list(&self) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self.0.applets().list().await?)
+    }
+
+    async fn begin_transaction_replay(
+        &self,
+        record: soland_storage::AppletTransactionReplayRecord,
+    ) -> soland_application::ApplicationResult<soland_storage::AppletTransactionReplayBegin> {
+        Ok(self.0.applets().begin_transaction_replay(record).await?)
+    }
+
+    async fn complete_transaction_replay(
+        &self,
+        source_service_id: &str,
+        idempotency_key: &str,
+        outcome: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self
+            .0
+            .applets()
+            .complete_transaction_replay(source_service_id, idempotency_key, outcome)
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::BlobStorePort for PersistenceBlobStore {
+    async fn get(
+        &self,
+        blob_ref: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::BlobRecord>> {
+        Ok(self.0.blobs().get(blob_ref).await?)
+    }
+
+    async fn put(
+        &self,
+        blob_ref: &str,
+        record: &soland_storage::BlobRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.blobs().put(blob_ref, record).await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::BlobRecord>> {
+        Ok(self.0.blobs().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::CallSignalRelayStorePort for PersistenceCallSignalRelayStore {
+    async fn append(
+        &self,
+        record: soland_storage::CallSignalRelayRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.call_signal_relay().append(record).await?)
+    }
+
+    async fn delivered_through(
+        &self,
+        actor: &str,
+        device: &str,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<u64> {
+        Ok(self
+            .0
+            .call_signal_relay()
+            .delivered_through(actor, device, realm_id)
+            .await?)
+    }
+
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::CallSignalRelayRecord>> {
+        Ok(self.0.call_signal_relay().list_for_realm(realm_id).await?)
+    }
+
+    async fn advance(
+        &self,
+        actor: &str,
+        device: &str,
+        realm_id: &str,
+        position: u64,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self
+            .0
+            .call_signal_relay()
+            .advance(actor, device, realm_id, position)
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::DeviceInventoryStorePort for PersistenceDeviceInventoryStore {
+    async fn get(
+        &self,
+        actor: &str,
+        device_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::DeviceInventoryRecord>> {
+        Ok(self.0.devices().get(actor, device_id).await?)
+    }
+
+    async fn put(
+        &self,
+        record: &soland_storage::DeviceInventoryRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.devices().put(record).await?)
+    }
+
+    async fn list_for_actor_including_revoked(
+        &self,
+        actor: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::DeviceInventoryRecord>> {
+        Ok(self
+            .0
+            .devices()
+            .list_for_actor_including_revoked(actor)
+            .await?)
+    }
+
+    async fn list_for_actor(
+        &self,
+        actor: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::DeviceInventoryRecord>> {
+        Ok(self.0.devices().list_for_actor(actor).await?)
+    }
+
+    async fn list(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::DeviceInventoryRecord>> {
+        Ok(self.0.devices().list().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::EventStorePort for PersistenceEventStore {
+    async fn get(
+        &self,
+        event_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::CanonicalEventRecord>> {
+        Ok(self.0.events().get(event_id).await?)
+    }
+
+    async fn put(
+        &self,
+        record: soland_storage::CanonicalEventRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.events().put(record).await?)
+    }
+
+    async fn contains(&self, event_id: &str) -> soland_application::ApplicationResult<bool> {
+        Ok(self.0.events().contains(event_id).await?)
+    }
+
+    async fn max_actor_seq(
+        &self,
+        actor_id: &str,
+    ) -> soland_application::ApplicationResult<Option<u64>> {
+        Ok(self.0.events().max_actor_seq(actor_id).await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::CanonicalEventRecord>> {
+        Ok(self.0.events().snapshot_all().await?)
+    }
+
+    async fn batch_receipts_for_event(
+        &self,
+        event_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<arkret_sdk::EventBatchReceipt>> {
+        Ok(self.0.events().batch_receipts_for_event(event_id).await?)
+    }
+
+    async fn peer_authz_state_records(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::CanonicalEventRecord>> {
+        Ok(self.0.events().peer_authz_state_records().await?)
+    }
+
+    async fn peer_events_query_page(
+        &self,
+        query: &soland_storage::PeerEventsPageQuery,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::CanonicalEventRecord>> {
+        Ok(self.0.events().peer_events_query_page(query).await?)
+    }
+
+    async fn realm_event_stats(
+        &self,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<soland_storage::RealmEventStats> {
+        Ok(self.0.events().realm_event_stats(realm_id).await?)
+    }
+
+    async fn realm_events_newest_first(
+        &self,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::CanonicalEventRecord>> {
+        Ok(self.0.events().realm_events_newest_first(realm_id).await?)
+    }
+
+    async fn put_identity_anchor_batch_atomic(
+        &self,
+        records: Vec<soland_storage::CanonicalEventRecord>,
+        receipt: Option<arkret_sdk::EventBatchReceipt>,
+        device: Option<soland_storage::DeviceInventoryRecord>,
+        frontier_cas: Option<soland_storage::IdentityAnchorFrontierCas>,
+        reanchor_slot: Option<soland_storage::IdentityAnchorReanchorSlot>,
+    ) -> soland_application::ApplicationResult<soland_storage::IdentityAnchorCommitOutcome> {
+        Ok(self
+            .0
+            .events()
+            .put_identity_anchor_batch_atomic(records, receipt, device, frontier_cas, reanchor_slot)
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::FederationOperationsStorePort
+    for PersistenceFederationOperationsStore
+{
+    async fn append(
+        &self,
+        operation: arkret_sdk::Operation,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.federation_operations().append(operation).await?)
+    }
+
+    async fn contains(&self, operation_id: &str) -> soland_application::ApplicationResult<bool> {
+        Ok(self
+            .0
+            .federation_operations()
+            .contains(operation_id)
+            .await?)
+    }
+
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<arkret_sdk::Operation>> {
+        Ok(self
+            .0
+            .federation_operations()
+            .list_for_realm(realm_id)
+            .await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<arkret_sdk::Operation>> {
+        Ok(self.0.federation_operations().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::FederationOutboxStorePort for PersistenceFederationOutboxStore {
+    async fn enqueue(
+        &self,
+        record: &soland_storage::FederationOutboxRecord,
+    ) -> soland_application::ApplicationResult<bool> {
+        Ok(self.0.federation_outbox().enqueue(record).await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::FederationOutboxRecord>> {
+        Ok(self.0.federation_outbox().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::FederationTransactionStorePort
+    for PersistenceFederationTransactionStore
+{
+    async fn get(
+        &self,
+        origin: &str,
+        txn_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::FederationTransactionRecord>>
+    {
+        Ok(self.0.federation_transactions().get(origin, txn_id).await?)
+    }
+
+    async fn try_begin(
+        &self,
+        record: &soland_storage::FederationTransactionRecord,
+    ) -> soland_application::ApplicationResult<bool> {
+        Ok(self.0.federation_transactions().try_begin(record).await?)
+    }
+
+    async fn put(
+        &self,
+        record: &soland_storage::FederationTransactionRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.federation_transactions().put(record).await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::FederationTransactionRecord>>
+    {
+        Ok(self.0.federation_transactions().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::FederationFrontierExchangeStorePort
+    for PersistenceFederationFrontierExchangeStore
+{
+    async fn get(
+        &self,
+        realm_id: &str,
+        peer_service_id: &str,
+    ) -> soland_application::ApplicationResult<
+        Option<soland_storage::FederationFrontierExchangeRecord>,
+    > {
+        Ok(self
+            .0
+            .federation_frontier_exchange()
+            .get(realm_id, peer_service_id)
+            .await?)
+    }
+
+    async fn record_success(
+        &self,
+        realm_id: &str,
+        peer_service_id: &str,
+        frontier_root: &str,
+        observed_at: i64,
+    ) -> soland_application::ApplicationResult<soland_storage::FederationFrontierExchangeRecord>
+    {
+        Ok(self
+            .0
+            .federation_frontier_exchange()
+            .record_success(realm_id, peer_service_id, frontier_root, observed_at)
+            .await?)
+    }
+
+    async fn record_failure(
+        &self,
+        realm_id: &str,
+        peer_service_id: &str,
+        reason: &str,
+        observed_at: i64,
+    ) -> soland_application::ApplicationResult<soland_storage::FederationFrontierExchangeRecord>
+    {
+        Ok(self
+            .0
+            .federation_frontier_exchange()
+            .record_failure(realm_id, peer_service_id, reason, observed_at)
+            .await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::FederationFrontierExchangeRecord>>
+    {
+        Ok(self.0.federation_frontier_exchange().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::IdempotencyStorePort for PersistenceIdempotencyStore {
+    async fn get(
+        &self,
+        principal_id: &str,
+        idempotency_key: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::IdempotencyRecord>> {
+        Ok(self
+            .0
+            .idempotency_keys()
+            .get(principal_id, idempotency_key)
+            .await?)
+    }
+
+    async fn record(
+        &self,
+        record: &soland_storage::IdempotencyRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.idempotency_keys().record(record).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::MessageStorePort for PersistenceMessageStore {
+    async fn get(
+        &self,
+        event_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::MessageRecord>> {
+        Ok(self.0.messages().get(event_id).await?)
+    }
+
+    async fn put(
+        &self,
+        record: &soland_storage::MessageRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.messages().put(record).await?)
+    }
+
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+        limit: usize,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::MessageRecord>> {
+        Ok(self.0.messages().list_for_realm(realm_id, limit).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::MlsCommitStorePort for PersistenceMlsCommitStore {
+    async fn get(
+        &self,
+        effective_scope: &serde_json::Value,
+        group_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::MlsCommitEpochRecord>> {
+        Ok(self.0.mls_commits().get(effective_scope, group_id).await?)
+    }
+
+    async fn initialize_genesis(
+        &self,
+        effective_scope: &serde_json::Value,
+        group_id: &str,
+        leader_actor_id: &str,
+        covered_seals: &[String],
+        governance_binding: &serde_json::Value,
+        committed_at: i64,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::MlsCommitEpochRecord>> {
+        Ok(self
+            .0
+            .mls_commits()
+            .initialize_genesis(
+                effective_scope,
+                group_id,
+                leader_actor_id,
+                covered_seals,
+                governance_binding,
+                committed_at,
+            )
+            .await?)
+    }
+
+    async fn try_bump(
+        &self,
+        effective_scope: &serde_json::Value,
+        group_id: &str,
+        expected_prev_epoch: u64,
+        leader_actor_id: &str,
+        covered_seals: &[String],
+        governance_binding: &serde_json::Value,
+        committed_at: i64,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::MlsCommitEpochRecord>> {
+        Ok(self
+            .0
+            .mls_commits()
+            .try_bump(
+                effective_scope,
+                group_id,
+                expected_prev_epoch,
+                leader_actor_id,
+                covered_seals,
+                governance_binding,
+                committed_at,
+            )
+            .await?)
+    }
+
+    async fn mark_frontier_contested(
+        &self,
+        effective_scope: &serde_json::Value,
+        group_id: &str,
+        epoch: u64,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::MlsCommitEpochRecord>> {
+        Ok(self
+            .0
+            .mls_commits()
+            .mark_frontier_contested(effective_scope, group_id, epoch)
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::MlsKeyPackageStorePort for PersistenceMlsKeyPackageStore {
+    async fn put(
+        &self,
+        record: &soland_storage::MlsKeyPackageRow,
+    ) -> soland_application::ApplicationResult<bool> {
+        Ok(self.0.mls_key_packages().put(record).await?)
+    }
+
+    async fn try_claim(
+        &self,
+        id: &str,
+        mls_group_id: &str,
+        intended_realm_id: Option<&str>,
+        ssk_generation: Option<u64>,
+        device_authorize_event_id: Option<&str>,
+        consumed_at: i64,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::MlsKeyPackageRow>> {
+        Ok(self
+            .0
+            .mls_key_packages()
+            .try_claim(
+                id,
+                mls_group_id,
+                intended_realm_id,
+                ssk_generation,
+                device_authorize_event_id,
+                consumed_at,
+            )
+            .await?)
+    }
+
+    async fn list_claimed_by_group(
+        &self,
+        mls_group_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::MlsKeyPackageRow>> {
+        Ok(self
+            .0
+            .mls_key_packages()
+            .list_claimed_by_group(mls_group_id)
+            .await?)
+    }
+
+    async fn get(
+        &self,
+        id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::MlsKeyPackageRow>> {
+        Ok(self.0.mls_key_packages().get(id).await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::MlsKeyPackageRow>> {
+        Ok(self.0.mls_key_packages().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::MlsWelcomeStorePort for PersistenceMlsWelcomeStore {
+    async fn enqueue(
+        &self,
+        record: &soland_storage::MlsWelcomeRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.mls_welcomes().enqueue(record).await?)
+    }
+
+    async fn drain_pending(
+        &self,
+        recipient_actor_id: &str,
+        recipient_device_id: &str,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::MlsWelcomeRecord>> {
+        Ok(self
+            .0
+            .mls_welcomes()
+            .drain_pending(
+                recipient_actor_id,
+                recipient_device_id,
+                now_unix_secs,
+                limit,
+            )
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::ModerationStorePort for PersistenceModerationStore {
+    async fn append_appeal(
+        &self,
+        appeal: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.moderation().append_appeal(appeal).await?)
+    }
+
+    async fn append_report(
+        &self,
+        report: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.moderation().append_report(report).await?)
+    }
+
+    async fn append_action(
+        &self,
+        action: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.moderation().append_action(action).await?)
+    }
+
+    async fn list_reports(&self) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self.0.moderation().list_reports().await?)
+    }
+
+    async fn list_appeals(&self) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self.0.moderation().list_appeals().await?)
+    }
+
+    async fn appeal_history(
+        &self,
+        appeal_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self.0.moderation().appeal_history(appeal_id).await?)
+    }
+
+    async fn upsert_queue_item(
+        &self,
+        item: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.moderation().upsert_queue_item(item).await?)
+    }
+
+    async fn list_queue_items(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self.0.moderation().list_queue_items().await?)
+    }
+
+    async fn get_queue_item(
+        &self,
+        id: &str,
+    ) -> soland_application::ApplicationResult<Option<serde_json::Value>> {
+        Ok(self.0.moderation().get_queue_item(id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::PushDeviceStorePort for PersistencePushDeviceStore {
+    async fn register(
+        &self,
+        device: serde_json::Value,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.push_devices().register(device).await?)
+    }
+
+    async fn unregister(
+        &self,
+        actor: &str,
+        device_id: &str,
+        push_key: Option<&str>,
+        app_id: Option<&str>,
+    ) -> soland_application::ApplicationResult<usize> {
+        Ok(self
+            .0
+            .push_devices()
+            .unregister(actor, device_id, push_key, app_id)
+            .await?)
+    }
+
+    async fn snapshot_all(&self) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self.0.push_devices().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::PushBridgeCacheStorePort for PersistencePushBridgeCacheStore {
+    async fn get(
+        &self,
+        bridge_describe_url: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::OutboundPushBridgeCacheRecord>>
+    {
+        Ok(self.0.push_bridge_cache().get(bridge_describe_url).await?)
+    }
+
+    async fn put(
+        &self,
+        bridge_describe_url: &str,
+        record: soland_storage::OutboundPushBridgeCacheRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self
+            .0
+            .push_bridge_cache()
+            .put(bridge_describe_url, record)
+            .await?)
+    }
+
+    async fn delete(
+        &self,
+        bridge_describe_url: &str,
+    ) -> soland_application::ApplicationResult<bool> {
+        Ok(self
+            .0
+            .push_bridge_cache()
+            .delete(bridge_describe_url)
+            .await?)
+    }
+
+    async fn clear(&self) -> soland_application::ApplicationResult<usize> {
+        Ok(self.0.push_bridge_cache().clear().await?)
+    }
+
+    async fn len(&self) -> soland_application::ApplicationResult<usize> {
+        Ok(self.0.push_bridge_cache().len().await?)
+    }
+
+    async fn current_contract(
+        &self,
+        gateway_describe_url: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::OutboundPushBridgeCacheRecord>>
+    {
+        Ok(self
+            .0
+            .push_bridge_cache()
+            .current_contract(gateway_describe_url)
+            .await?)
+    }
+
+    async fn verify_contract_freshness(
+        &self,
+        gateway_describe_url: &str,
+        observed_digest: &str,
+        max_age: chrono::Duration,
+    ) -> soland_application::ApplicationResult<soland_storage::DriftResult> {
+        Ok(self
+            .0
+            .push_bridge_cache()
+            .verify_contract_freshness(gateway_describe_url, observed_digest, max_age)
+            .await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::OutboundPushBridgeCacheRecord>>
+    {
+        Ok(self.0.push_bridge_cache().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::OrganizationStorePort for PersistenceOrganizationStore {
+    async fn get(
+        &self,
+        organization_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::OrganizationRecord>> {
+        Ok(self.0.organizations().get(organization_id).await?)
+    }
+
+    async fn put(
+        &self,
+        record: &soland_storage::OrganizationRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.organizations().put(record).await?)
+    }
+
+    async fn list(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::OrganizationRecord>> {
+        Ok(self.0.organizations().list().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::OrganizationPolicyStorePort
+    for PersistenceOrganizationPolicyStore
+{
+    async fn get(
+        &self,
+        organization_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::OrganizationPolicyRecord>>
+    {
+        Ok(self.0.organization_policies().get(organization_id).await?)
+    }
+
+    async fn put(
+        &self,
+        record: &soland_storage::OrganizationPolicyRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.organization_policies().put(record).await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::OrganizationPolicyRecord>> {
+        Ok(self.0.organization_policies().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::RealmOrganizationStorePort for PersistenceRealmOrganizationStore {
+    async fn link(
+        &self,
+        realm_id: &str,
+        organization_id: &str,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self
+            .0
+            .realm_organizations()
+            .link(realm_id, organization_id)
+            .await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<(String, BTreeSet<String>)>> {
+        Ok(self.0.realm_organizations().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::RealmModerationPolicyStorePort
+    for PersistenceRealmModerationPolicyStore
+{
+    async fn put(
+        &self,
+        record: &soland_storage::RealmModerationPolicyRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.realm_moderation_policies().put(record).await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::RealmModerationPolicyRecord>>
+    {
+        Ok(self.0.realm_moderation_policies().snapshot_all().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::MorphProjectionStorePort for PersistenceMorphProjectionStore {
+    async fn put(
+        &self,
+        record: &soland_storage::MorphProjectionRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.morph_projections().put(record).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::PolicyDocumentStorePort for PersistencePolicyDocumentStore {
+    async fn get(
+        &self,
+        policy_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::PolicyDocumentRecord>> {
+        Ok(self.0.policy_documents().get(policy_id).await?)
+    }
+
+    async fn put(
+        &self,
+        record: soland_storage::PolicyDocumentRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.policy_documents().put(record).await?)
+    }
+
+    async fn delete(&self, policy_id: &str) -> soland_application::ApplicationResult<bool> {
+        Ok(self.0.policy_documents().delete(policy_id).await?)
+    }
+
+    async fn list_for_owner(
+        &self,
+        owner: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::PolicyDocumentRecord>> {
+        Ok(self.0.policy_documents().list_for_owner(owner).await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::PolicyDocumentRecord>> {
+        Ok(self.0.policy_documents().snapshot_all().await?)
+    }
+
+    async fn list_active(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::PolicyDocumentRecord>> {
+        Ok(self.0.policy_documents().list_active().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::PresenceStorePort for PersistencePresenceStore {
+    async fn put(
+        &self,
+        presence: soland_storage::PresenceRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.presence().put(presence).await?)
+    }
+
+    async fn list_for_actor(
+        &self,
+        actor: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::PresenceRecord>> {
+        Ok(self.0.presence().list_for_actor(actor).await?)
+    }
+
+    async fn delete(&self, actor: &str) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.presence().delete(actor).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::WebvhStorePort for PersistenceWebvhStore {
+    async fn put_document(
+        &self,
+        record: soland_storage::WebvhDocumentRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.webvh().put_document(record).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::SyncCursorStorePort for PersistenceSyncCursorStore {
+    async fn get(
+        &self,
+        handle: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::SyncCursorRecord>> {
+        Ok(self.0.sync_cursors().get(handle).await?)
+    }
+
+    async fn prune_stream_superseded(
+        &self,
+        principal_id: &str,
+        device_id: &str,
+        filter_digest: &str,
+        presented_issued_at_ms: i64,
+    ) -> soland_application::ApplicationResult<usize> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .prune_stream_superseded(
+                principal_id,
+                device_id,
+                filter_digest,
+                presented_issued_at_ms,
+            )
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::ProjectionEventStorePort for PersistenceProjectionEventStore {
+    async fn append(
+        &self,
+        record: soland_storage::ProjectionEventRecord,
+    ) -> soland_application::ApplicationResult<soland_storage::ProjectionEventAppendOutcome> {
+        Ok(self.0.projection_events().append(record).await?)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::ProjectionEventRecord>> {
+        Ok(self.0.projection_events().snapshot_all().await?)
+    }
+
+    async fn snapshot_capped(
+        &self,
+        limit: usize,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::ProjectionEventRecord>> {
+        Ok(self.0.projection_events().snapshot_capped(limit).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::ReadReceiptRelayStorePort for PersistenceReadReceiptRelayStore {
+    async fn append(
+        &self,
+        record: soland_storage::ReadReceiptRelayRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.read_receipt_relay().append(record).await?)
+    }
+
+    async fn advance(
+        &self,
+        actor: &str,
+        device: &str,
+        realm_id: &str,
+        position: u64,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self
+            .0
+            .read_receipt_relay()
+            .advance(actor, device, realm_id, position)
+            .await?)
+    }
+
+    async fn delivered_through(
+        &self,
+        actor: &str,
+        device: &str,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<u64> {
+        Ok(self
+            .0
+            .read_receipt_relay()
+            .delivered_through(actor, device, realm_id)
+            .await?)
+    }
+
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::ReadReceiptRelayRecord>> {
+        Ok(self.0.read_receipt_relay().list_for_realm(realm_id).await?)
+    }
+
+    async fn list_for_event(
+        &self,
+        event_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::ReadReceiptRelayRecord>> {
+        Ok(self.0.read_receipt_relay().list_for_event(event_id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::RealmMetaStorePort for PersistenceRealmMetaStore {
+    async fn get(
+        &self,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::RealmMetaRecord>> {
+        Ok(self.0.realm_meta().get(realm_id).await?)
+    }
+
+    async fn put(
+        &self,
+        realm_id: &str,
+        record: &soland_storage::RealmMetaRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.realm_meta().put(realm_id, record).await?)
+    }
+
+    async fn list(
+        &self,
+    ) -> soland_application::ApplicationResult<Vec<(String, soland_storage::RealmMetaRecord)>> {
+        Ok(self.0.realm_meta().list().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::RealmOrganizationStatementStorePort
+    for PersistenceRealmOrganizationStatementStore
+{
+    async fn put(
+        &self,
+        record: &soland_storage::RealmOrganizationStatementRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.realm_organization_statements().put(record).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::RecoverySessionStorePort for PersistenceRecoverySessionStore {
+    async fn get(
+        &self,
+        recovery_session_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::RecoverySessionRecord>> {
+        Ok(self.0.recovery_sessions().get(recovery_session_id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::RetentionPolicyStorePort for PersistenceRetentionPolicyStore {
+    async fn put(
+        &self,
+        record: &soland_storage::RetentionPolicyRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.retention_policies().put(record).await?)
+    }
+
+    async fn get(
+        &self,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<Option<soland_storage::RetentionPolicyRecord>> {
+        Ok(self.0.retention_policies().get(realm_id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::SpaceContainerProjectionStorePort
+    for PersistenceSpaceContainerProjectionStore
+{
+    async fn put(
+        &self,
+        record: &soland_storage::SpaceContainerProjectionRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.space_container_projections().put(record).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::StrandProjectionStorePort for PersistenceStrandProjectionStore {
+    async fn put(
+        &self,
+        record: &soland_storage::StrandProjectionRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.strand_projections().put(record).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::TypingStorePort for PersistenceTypingStore {
+    async fn put(
+        &self,
+        typing: soland_storage::TypingRecord,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.typing().put(typing).await?)
+    }
+
+    async fn remove(
+        &self,
+        actor: &str,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<()> {
+        Ok(self.0.typing().remove(actor, realm_id).await?)
+    }
+
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<soland_storage::TypingRecord>> {
+        Ok(self.0.typing().list_for_realm(realm_id).await?)
+    }
+
+    async fn prune_expired(&self) -> soland_application::ApplicationResult<usize> {
+        Ok(self.0.typing().prune_expired().await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_application::events::NotificationStorePort for PersistenceNotificationStore {
+    async fn list_for_recipient(
+        &self,
+        recipient_id: &str,
+    ) -> soland_application::ApplicationResult<Vec<serde_json::Value>> {
+        Ok(self
+            .0
+            .notifications()
+            .list_for_recipient(recipient_id)
+            .await?)
     }
 }
 

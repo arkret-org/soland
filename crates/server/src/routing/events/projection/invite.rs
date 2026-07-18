@@ -47,7 +47,7 @@ pub(super) async fn project_invite_accept_operation(
         );
         return;
     };
-    let invites = state.persistence.realm_invites();
+    let invites = state.realm_invite_application();
     let Ok(Some(mut record)) = invites.get(&invite_id).await else {
         tracing::warn!(invite_id = %invite_id, "ak.invite.accept references unknown invite");
         return;
@@ -228,7 +228,7 @@ async fn project_invite_terminal_operation(
         );
         return;
     };
-    let invites = state.persistence.realm_invites();
+    let invites = state.realm_invite_application();
     let Ok(Some(mut record)) = invites.get(&invite_id).await else {
         tracing::warn!(invite_id = %invite_id, "invite terminal event references unknown invite");
         return;
@@ -343,7 +343,7 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
     let join_rule_snapshot = invite_value_field(payload, invite, "join_rule_snapshot")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({"join_rule": "invite"}));
-    let invites = state.persistence.realm_invites();
+    let invites = state.realm_invite_application();
     if matches!(invites.get(&invite_id).await, Ok(Some(_))) {
         return;
     }
@@ -396,7 +396,7 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
     let Some(claim_nonce) = string_field(payload, "claim_nonce") else {
         return;
     };
-    let invites = state.persistence.realm_invites();
+    let invites = state.realm_invite_application();
     let Ok(Some(mut record)) = invites.get(&invite_id).await else {
         return;
     };
@@ -509,7 +509,7 @@ pub(super) async fn project_invite_create_operation(
         return;
     }
 
-    let invites = state.persistence.realm_invites();
+    let invites = state.realm_invite_application();
     match invites.get(&invite_id).await {
         Ok(Some(existing)) => {
             tracing::debug!(
@@ -976,7 +976,7 @@ pub(super) async fn project_plaintext_visible_services_operation(
     if services.is_empty() && service_classes.is_empty() {
         return;
     }
-    let store = state.persistence.realm_meta();
+    let store = state.realm_meta_store();
     let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()).await else {
         return;
     };

@@ -34,8 +34,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     }
 
     let record_value = state
-        .persistence
-        .applets()
+        .applets_store()
         .get(&applet_id)
         .await
         .map_err(|error| {

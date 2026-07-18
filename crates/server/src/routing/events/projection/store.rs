@@ -11,7 +11,11 @@ pub async fn append_projection_event(
     state: &AppState,
     event: ProjectionEventRecord,
 ) -> soland_storage::PersistenceResult<soland_storage::ProjectionEventAppendOutcome> {
-    state.persistence.projection_events().append(event).await
+    state
+        .projection_events_store()
+        .append(event)
+        .await
+        .map_err(|soland_application::ApplicationError::Storage(error)| error)
 }
 
 pub async fn persist_and_publish_projection_event(
@@ -146,8 +150,7 @@ async fn ordered_projected_events_for_realms(
     realm_ids: &BTreeSet<String>,
 ) -> anyhow::Result<Vec<ProjectionEventRecord>> {
     let mut events = state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -229,8 +232,7 @@ pub async fn ingest_federation_operations(
     for operation in operations {
         let operation_id = operation.operation_id.clone();
         if state
-            .persistence
-            .federation_operations()
+            .federation_operations_store()
             .contains(operation_id.as_str())
             .await
             .unwrap_or(false)
@@ -282,8 +284,7 @@ pub async fn ingest_federation_operations(
             continue;
         }
         if let Err(error) = state
-            .persistence
-            .federation_operations()
+            .federation_operations_store()
             .append(operation.clone())
             .await
         {

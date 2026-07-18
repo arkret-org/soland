@@ -94,7 +94,7 @@ pub(super) async fn submit_event_value_with_context(
     let actor_lock = actor_submit_lock(&parsed.actor_id);
     let _actor_submit_guard = actor_lock.lock().await;
     let received_at = now();
-    let store = state.persistence.events();
+    let store = state.events_store();
     if let Ok(Some(existing)) = store.get(&parsed.event_id).await {
         if existing.canonical_bytes == parsed.canonical_bytes {
             return Ok(event_submit_response(

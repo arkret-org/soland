@@ -592,8 +592,7 @@ async fn require_local_handle_binding(
     localpart: &str,
 ) -> Result<(), AppError> {
     let owner = state
-        .persistence
-        .account_localparts()
+        .account_localparts_store()
         .owner_of(localpart)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;

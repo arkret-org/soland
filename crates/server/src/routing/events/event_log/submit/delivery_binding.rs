@@ -167,12 +167,7 @@ pub(super) async fn delivery_binding_handover_witness(
     });
 
     if let Some(frontier_event_id) = evidence.handover_frontier.first() {
-        match state
-            .persistence
-            .events()
-            .get(frontier_event_id.as_str())
-            .await
-        {
+        match state.events_store().get(frontier_event_id.as_str()).await {
             Ok(Some(record)) => {
                 if let Some(object) = witness.as_object_mut() {
                     object.insert(

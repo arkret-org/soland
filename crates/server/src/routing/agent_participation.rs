@@ -98,8 +98,7 @@ pub(crate) async fn resolve_effective_ceiling_for_scope_keys(
     scope_keys: &[String],
 ) -> AgentParticipation {
     let Ok(rows) = state
-        .persistence
-        .agent_participation()
+        .agent_participation_store()
         .ceilings_for_scope_keys(scope_keys)
         .await
     else {
@@ -137,8 +136,7 @@ pub(crate) async fn resolve_agent_participation_for_scope_keys(
     scope_keys: &[String],
 ) -> Option<ResolvedAgentParticipation> {
     let selections = state
-        .persistence
-        .agent_participation()
+        .agent_participation_store()
         .list_selections(agent_id)
         .await
         .unwrap_or_default();

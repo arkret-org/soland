@@ -19,8 +19,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
     }
 
     let mut events = state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?
@@ -161,8 +160,7 @@ async fn persist_snapshot_chunk_blobs(
             created_at: now(),
         };
         state
-            .persistence
-            .blobs()
+            .blobs_store()
             .put(blob_ref, &record)
             .await
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;

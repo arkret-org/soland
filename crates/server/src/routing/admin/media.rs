@@ -268,18 +268,12 @@ async fn get_media_by_actor(
 }
 
 async fn media_snapshot(state: &AppState) -> Vec<BlobRecord> {
-    state
-        .persistence
-        .blobs()
-        .snapshot_all()
-        .await
-        .unwrap_or_default()
+    state.blobs_store().snapshot_all().await.unwrap_or_default()
 }
 
 async fn media_by_actor_rows(state: &AppState, blobs: &[BlobRecord]) -> Vec<MediaByActorRow> {
     let accounts: BTreeMap<String, _> = state
-        .persistence
-        .accounts()
+        .accounts_store()
         .list()
         .await
         .unwrap_or_default()

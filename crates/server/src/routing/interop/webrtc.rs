@@ -1017,8 +1017,7 @@ async fn call_state_from_event_log(
     cell_id: &CellRef,
 ) -> Result<Option<Value>, AppError> {
     let mut records = state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .map_err(|error| AppError::internal(format!("events store unavailable: {error}")))?
@@ -1544,8 +1543,7 @@ const CAP_CALL_SCREEN_SHARE: &str = "ak.call.screen_share";
 /// `events::operations::realm_owner_and_members` / `circles::circle_authz_principals`.
 async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<String>, Vec<String>) {
     let owner = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()

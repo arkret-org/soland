@@ -255,12 +255,7 @@ pub(super) async fn record_outbound_fanout_attempt(
         received_at: now,
         processed_at: Some(attempted_at),
     };
-    if let Err(error) = state
-        .persistence
-        .federation_transactions()
-        .put(&record)
-        .await
-    {
+    if let Err(error) = state.federation_transactions_store().put(&record).await {
         tracing::warn!(
             %error,
             %peer,
@@ -391,10 +386,10 @@ pub(super) async fn run_outbound_fanout_retry_pass_at(
     }
 
     let records = state
-        .persistence
-        .federation_transactions()
+        .federation_transactions_store()
         .snapshot_all()
-        .await?;
+        .await
+        .map_err(|soland_application::ApplicationError::Storage(error)| error)?;
     for record in records {
         report.scanned += 1;
         if record.origin != state.service_id || !record.txn_id.starts_with("outbound_") {
@@ -428,10 +423,10 @@ pub(super) async fn run_outbound_fanout_retry_pass_at(
             report.retried += 1;
         }
         state
-            .persistence
-            .federation_transactions()
+            .federation_transactions_store()
             .put(&updated)
-            .await?;
+            .await
+            .map_err(|soland_application::ApplicationError::Storage(error)| error)?;
     }
 
     Ok(report)

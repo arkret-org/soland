@@ -225,8 +225,7 @@ pub(super) async fn admin_list_actors(
 
     let (device_counts, realm_counts) = actor_count_maps(state).await;
     let mut rows: Vec<AdminActor> = state
-        .persistence
-        .accounts()
+        .accounts_store()
         .list()
         .await
         .map_err(|error| {
@@ -371,8 +370,7 @@ pub(super) async fn admin_query_audit(
     };
 
     let mut entries: Vec<AdminAuditEntry> = state
-        .persistence
-        .audit()
+        .audit_store()
         .snapshot_all()
         .await
         .map_err(|error| {
@@ -603,8 +601,7 @@ pub(super) async fn admin_list_devices(
     }
 
     let mut rows: Vec<AdminDevice> = state
-        .persistence
-        .devices()
+        .devices_store()
         .list()
         .await
         .map_err(|error| {

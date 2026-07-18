@@ -402,11 +402,13 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
+    use chrono::{DateTime, Utc};
     use serde_json::{Value, json};
     use soland_application::ApplicationResult;
     use soland_application::identity::{
-        AccountIdentity, AccountLookupPort, AgentController, AgentDirectoryPort,
-        DeviceDirectoryPort, DeviceIdentity, SaveDeviceCommand,
+        AccountIdentity, AccountLifecycleState, AccountLocalpartState, AccountLookupPort,
+        AccountProfileState, AgentController, AgentDirectoryPort, DeviceDirectoryPort,
+        DeviceIdentity, SaveDeviceCommand,
     };
 
     use super::*;
@@ -430,6 +432,81 @@ mod tests {
         ) -> ApplicationResult<()> {
             Ok(())
         }
+
+        async fn account(&self, _actor_id: &str) -> ApplicationResult<Option<AccountProfileState>> {
+            Ok(None)
+        }
+
+        async fn save_account(&self, _account: AccountProfileState) -> ApplicationResult<()> {
+            Ok(())
+        }
+
+        async fn delete_account(&self, _actor_id: &str) -> ApplicationResult<()> {
+            Ok(())
+        }
+
+        async fn account_localparts(
+            &self,
+            _actor_id: &str,
+        ) -> ApplicationResult<Vec<AccountLocalpartState>> {
+            Ok(Vec::new())
+        }
+
+        async fn localpart_owner(
+            &self,
+            _localpart: &str,
+        ) -> ApplicationResult<Option<AccountLocalpartState>> {
+            Ok(None)
+        }
+
+        async fn add_localpart(
+            &self,
+            _actor_id: &str,
+            _localpart: &str,
+            _primary: bool,
+        ) -> ApplicationResult<AccountLocalpartState> {
+            unreachable!("NoAccounts mock: add_localpart is not exercised by these tests")
+        }
+
+        async fn set_primary_localpart(
+            &self,
+            _actor_id: &str,
+            _localpart: &str,
+        ) -> ApplicationResult<AccountLocalpartState> {
+            unreachable!("NoAccounts mock: set_primary_localpart is not exercised by these tests")
+        }
+
+        async fn remove_localpart(
+            &self,
+            _actor_id: &str,
+            _localpart: &str,
+        ) -> ApplicationResult<()> {
+            Ok(())
+        }
+
+        async fn clear_localparts(&self, _actor_id: &str) -> ApplicationResult<()> {
+            Ok(())
+        }
+
+        async fn record_handle_release(
+            &self,
+            _localpart: &str,
+            _released_at: DateTime<Utc>,
+        ) -> ApplicationResult<()> {
+            Ok(())
+        }
+
+        async fn save_account_lifecycle(
+            &self,
+            _actor_id: &str,
+            _lifecycle: AccountLifecycleState,
+        ) -> ApplicationResult<()> {
+            Ok(())
+        }
+
+        async fn delete_account_lifecycle(&self, _actor_id: &str) -> ApplicationResult<()> {
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -448,6 +525,10 @@ mod tests {
 
         async fn save_device(&self, _command: SaveDeviceCommand) -> ApplicationResult<()> {
             Ok(())
+        }
+
+        async fn save_device_if_absent(&self, _device: DeviceIdentity) -> ApplicationResult<bool> {
+            Ok(true)
         }
 
         async fn devices_for_actor(

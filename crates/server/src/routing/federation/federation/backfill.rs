@@ -89,8 +89,7 @@ pub(super) async fn operation_frontier_outcome(
     realm_id: &str,
 ) -> FederationOperationFrontierOutcome {
     let operations = state
-        .persistence
-        .federation_operations()
+        .federation_operations_store()
         .list_for_realm(realm_id)
         .await
         .unwrap_or_default();

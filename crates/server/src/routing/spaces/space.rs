@@ -328,8 +328,7 @@ async fn upsert_realm_moderation_policy(
     let realm_id = realm_id.into_inner();
     RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let record = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(&realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -428,8 +427,7 @@ async fn export_realm(
         return Err(AppError::not_found("not found"));
     }
     let events = state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -516,8 +514,7 @@ pub async fn realm_lifecycle_response(
             .unwrap_or((false, false, None, None, None))
     };
     let record = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -540,7 +537,7 @@ pub async fn realm_lifecycle_response(
 }
 
 pub async fn touch_realm_meta(state: &AppState, realm_id: &str) {
-    let store = state.persistence.realm_meta();
+    let store = state.realm_meta_store();
     if let Ok(Some(mut record)) = store.get(realm_id).await {
         record.updated_at = now();
         if let Err(error) = store.put(realm_id, &record).await {
@@ -689,8 +686,7 @@ pub async fn realm_allows_plaintext_service_for_data_class(
 
 pub async fn realm_meta_deleted(state: &AppState, realm_id: &str) -> bool {
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()
@@ -700,8 +696,7 @@ pub async fn realm_meta_deleted(state: &AppState, realm_id: &str) -> bool {
 
 pub async fn realm_discoverability_for_id(state: &AppState, realm_id: &str) -> String {
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()
@@ -842,8 +837,7 @@ pub async fn invite_token_realm_id(state: &AppState, token: &str) -> Option<Stri
     }
     let now = now();
     state
-        .persistence
-        .realm_invites()
+        .realm_invite_application()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -963,8 +957,7 @@ pub fn realm_recovery_event_visible(
 /// `joined` when no meta record exists (matches the spec default).
 pub async fn realm_history_visibility_for_id(state: &AppState, realm_id: &str) -> String {
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()
@@ -1003,13 +996,7 @@ pub async fn realm_member_joined_at_for_id(
             return Some(member.joined_at);
         }
     }
-    let meta = state
-        .persistence
-        .realm_meta()
-        .get(realm_id)
-        .await
-        .ok()
-        .flatten();
+    let meta = state.realm_meta_store().get(realm_id).await.ok().flatten();
     if meta.as_ref().is_some_and(|record| record.owner == actor) {
         return meta.map(|record| record.created_at);
     }
@@ -1074,14 +1061,7 @@ async fn realm_restricted_history_policy_allows(
     let Some(realm_id) = realm_scope_to_realm_id(realm_or_internal_id) else {
         return false;
     };
-    let Some(meta) = state
-        .persistence
-        .realm_meta()
-        .get(&realm_id)
-        .await
-        .ok()
-        .flatten()
-    else {
+    let Some(meta) = state.realm_meta_store().get(&realm_id).await.ok().flatten() else {
         return false;
     };
     let Some(policy_value) = meta.history_sharing_policy else {
@@ -1153,8 +1133,7 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
         return true;
     }
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()
@@ -1164,8 +1143,7 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
 
 async fn realm_public_content_for_id(state: &AppState, realm_id: &str) -> bool {
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()
@@ -1196,7 +1174,7 @@ pub fn realm_member_count_excluding(state: &AppState, realm_id: &str, exclude_ac
 }
 
 pub async fn prune_expired_typing(state: &AppState) {
-    if let Err(error) = state.persistence.typing().prune_expired().await {
+    if let Err(error) = state.typing_store().prune_expired().await {
         tracing::warn!(%error, "failed to prune expired typing entries");
     }
 }
@@ -1215,8 +1193,7 @@ pub(crate) async fn presence_visibility_for_actor(
     actor: &str,
 ) -> PresenceVisibilityPolicy {
     match state
-        .persistence
-        .account_data()
+        .account_data_store()
         .get(actor, ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY)
         .await
     {
@@ -1272,7 +1249,11 @@ async fn accepted_contact_between(state: &AppState, left: &str, right: &str) -> 
         return true;
     }
     for (requester, target) in [(left, right), (right, left)] {
-        match state.persistence.contacts().get(requester, target).await {
+        match state
+            .contact_application()
+            .contact_any(requester, target)
+            .await
+        {
             Ok(Some(contact)) if contact.status == "accepted" => return true,
             Ok(_) => {}
             Err(error) => {
@@ -1358,8 +1339,7 @@ async fn personal_blocklist_allows_actor(
         return true;
     }
     match state
-        .persistence
-        .account_data()
+        .account_data_store()
         .get(&session.actor, ACCOUNT_DATA_TYPE_BLOCKLIST)
         .await
     {

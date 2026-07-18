@@ -138,7 +138,7 @@ async fn relay_ephemeral_call_signal(
         // `append` assigns the monotonic per-Realm position.
         position: 0,
     };
-    if let Err(error) = state.persistence.call_signal_relay().append(record).await {
+    if let Err(error) = state.call_signal_relay_store().append(record).await {
         tracing::error!(%error, "failed to relay ephemeral ak.call.signal");
         return Err(soland_http::error::AppError::internal(
             "failed to relay ak.call.signal for realm broadcast",
@@ -218,8 +218,7 @@ async fn persist_ephemeral_typing(
     if typing {
         if presence_visibility_for_actor(state, actor).await == PresenceVisibilityPolicy::Nobody {
             state
-                .persistence
-                .typing()
+                .typing_store()
                 .remove(actor, realm_id)
                 .await
                 .map_err(|error| {
@@ -239,8 +238,7 @@ async fn persist_ephemeral_typing(
             })?;
         typing_scope_allows_actor(state, realm_id, actor, Some(strand_id.as_str())).await?;
         state
-            .persistence
-            .typing()
+            .typing_store()
             .put(TypingRecord {
                 actor: actor.to_owned(),
                 realm_id: realm_id.to_owned(),
@@ -256,8 +254,7 @@ async fn persist_ephemeral_typing(
             })?;
     } else {
         state
-            .persistence
-            .typing()
+            .typing_store()
             .remove(actor, realm_id)
             .await
             .map_err(|error| {
@@ -327,8 +324,7 @@ async fn persist_ephemeral_presence(
     };
     if presence_visibility_for_actor(state, actor).await == PresenceVisibilityPolicy::Nobody {
         state
-            .persistence
-            .presence()
+            .presence_store()
             .delete(actor)
             .await
             .map_err(|error| {
@@ -341,8 +337,7 @@ async fn persist_ephemeral_presence(
     // proof-bound device_id is present.
     let device_id = envelope.device_id.as_str().to_owned();
     state
-        .persistence
-        .presence()
+        .presence_store()
         .put(PresenceRecord {
             actor: actor.to_owned(),
             device_id,

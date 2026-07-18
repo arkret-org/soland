@@ -217,8 +217,7 @@ pub(super) async fn reject_revoked_actor_device_signature(
 
     for device_id in candidate_devices {
         let revoked = state
-            .persistence
-            .devices()
+            .devices_store()
             .get(actor_id, &device_id)
             .await
             .map_err(|error| {

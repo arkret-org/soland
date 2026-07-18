@@ -11,7 +11,7 @@
 //!
 //! Implemented: live remote `bridge/describe` fetch with `Etag`/freshness
 //! metadata stamped per entry; durable cache via
-//! `state.persistence.push_bridge_cache()` (PostgreSQL when configured,
+//! `state.push_bridge_cache_store()` (PostgreSQL when configured,
 //! in-memory when not); contract-digest drift fails closed unless the caller
 //! sets `force_refresh=true`; snapshot export/import round-trips trust
 //! level + freshness alongside the contract digest.
@@ -195,8 +195,7 @@ async fn outbound_push_bridge_resolve(
     let bridge_describe_url =
         join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
     let cached = state
-        .persistence
-        .push_bridge_cache()
+        .push_bridge_cache_store()
         .get(&bridge_describe_url)
         .await
         .ok()
@@ -269,8 +268,7 @@ async fn outbound_push_bridge_fetch(
         )
         .map_err(AppError::capability_denied)?;
     let existing_cache = state
-        .persistence
-        .push_bridge_cache()
+        .push_bridge_cache_store()
         .get(&bridge_describe_url)
         .await
         .ok()
@@ -335,8 +333,7 @@ async fn outbound_push_bridge_fetch(
                         etag: etag.clone(),
                     };
                     if let Err(error) = state
-                        .persistence
-                        .push_bridge_cache()
+                        .push_bridge_cache_store()
                         .put(&bridge_describe_url, record.clone())
                         .await
                     {
@@ -391,8 +388,7 @@ async fn outbound_push_bridge_fetch(
 async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let entries = state
-        .persistence
-        .push_bridge_cache()
+        .push_bridge_cache_store()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -407,8 +403,7 @@ async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response
 async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let entries = state
-        .persistence
-        .push_bridge_cache()
+        .push_bridge_cache_store()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -438,7 +433,7 @@ async fn outbound_push_bridge_cache_import(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let replace_existing = body.replace_existing;
-    let cache = state.persistence.push_bridge_cache();
+    let cache = state.push_bridge_cache_store();
     let mut imported_count = 0usize;
     let mut skipped_count = 0usize;
     for snapshot in body.entries {
@@ -504,7 +499,7 @@ async fn outbound_push_bridge_cache_invalidate(
 ) -> JsonResult<OutboundPushBridgeCacheInvalidateOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let cache = state.persistence.push_bridge_cache();
+    let cache = state.push_bridge_cache_store();
     let removed_count = if let Some(push_gateway_url) = body
         .push_gateway_url
         .as_deref()

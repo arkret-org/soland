@@ -65,7 +65,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 created_at: kp.created_at,
             });
             if let Some(record) = record
-                && let Err(error) = state.persistence.mls_key_packages().put(&record).await
+                && let Err(error) = state.mls_key_packages_store().put(&record).await
             {
                 tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage publish");
             }
@@ -78,8 +78,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             ..
         } => {
             if let Err(error) = state
-                .persistence
-                .mls_key_packages()
+                .mls_key_packages_store()
                 .try_claim(
                     keypackage_id,
                     group_id,
@@ -123,7 +122,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 delivered_at: welcome.delivered_at,
             });
             if let Some(record) = record {
-                if let Err(error) = state.persistence.mls_welcomes().enqueue(&record).await {
+                if let Err(error) = state.mls_welcomes_store().enqueue(&record).await {
                     tracing::warn!(%error, welcome_id = %welcome_id, "failed to mirror MLS Welcome enqueue");
                 }
                 project_mls_welcome_to_device(
@@ -152,8 +151,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 .cloned()
                 .unwrap_or(Value::Null);
             if let Err(error) = state
-                .persistence
-                .mls_commits()
+                .mls_commits_store()
                 .initialize_genesis(
                     effective_scope,
                     group_id,
@@ -183,8 +181,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 .cloned()
                 .unwrap_or(Value::Null);
             if let Err(error) = state
-                .persistence
-                .mls_commits()
+                .mls_commits_store()
                 .try_bump(
                     effective_scope,
                     group_id,
@@ -210,8 +207,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             // group stays fail-closed (`decryption_pending`) across restarts
             // until a resolving commit advances the epoch.
             if let Err(error) = state
-                .persistence
-                .mls_commits()
+                .mls_commits_store()
                 .mark_frontier_contested(effective_scope, group_id, *epoch)
                 .await
             {
@@ -541,18 +537,10 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
 
     let result = match snapshot {
         ProjectionWriteThroughSnapshot::SpaceContainer(r) => {
-            state
-                .persistence
-                .space_container_projections()
-                .put(&r)
-                .await
+            state.space_container_projections_store().put(&r).await
         }
-        ProjectionWriteThroughSnapshot::Strand(r) => {
-            state.persistence.strand_projections().put(&r).await
-        }
-        ProjectionWriteThroughSnapshot::Morph(r) => {
-            state.persistence.morph_projections().put(&r).await
-        }
+        ProjectionWriteThroughSnapshot::Strand(r) => state.strand_projections_store().put(&r).await,
+        ProjectionWriteThroughSnapshot::Morph(r) => state.morph_projections_store().put(&r).await,
     };
     if let Err(error) = result {
         tracing::warn!(
@@ -706,11 +694,7 @@ async fn project_accepted_operations_inner(
         // participation.set / .get ceiling resolution).
         if let Some(record) =
             crate::routing::events::operations::agent_participation_ceiling_record(operation)
-            && let Err(error) = state
-                .persistence
-                .agent_participation()
-                .put_ceiling(record)
-                .await
+            && let Err(error) = state.agent_participation_store().put_ceiling(record).await
         {
             tracing::warn!(%error, "failed to persist agent participation ceiling");
         }
@@ -761,8 +745,7 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
         .entry("projected_at".to_owned())
         .or_insert_with(|| Value::String(operation.created_at.to_rfc3339()));
     if let Err(error) = state
-        .persistence
-        .moderation()
+        .moderation_store()
         .append_appeal(Value::Object(record))
         .await
     {
@@ -826,8 +809,7 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
         updated_at: row.updated_at,
     };
     if let Err(error) = state
-        .persistence
-        .realm_organization_statements()
+        .realm_organization_statements_store()
         .put(&record)
         .await
     {
@@ -1034,8 +1016,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         return;
     }
     let existing = state
-        .persistence
-        .devices()
+        .devices_store()
         .get(principal_id, device_id)
         .await
         .ok()
@@ -1054,8 +1035,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     let revoked_at = existing.as_ref().and_then(|device| device.revoked_at);
     let operation_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
     let authorize_event_id = ids::format_typed_uuid("event", &operation_uuid);
-    let authorized_generation_ref = match state.persistence.events().get(&authorize_event_id).await
-    {
+    let authorized_generation_ref = match state.events_store().get(&authorize_event_id).await {
         Ok(Some(record)) => {
             crate::routing::identity::device_generation::authorized_generation_for_event(
                 state, &record,
@@ -1143,7 +1123,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         updated_at,
         revoked_at,
     };
-    if let Err(error) = state.persistence.devices().put(&device).await {
+    if let Err(error) = state.devices_store().put(&device).await {
         tracing::warn!(%error, "failed to project ak.device.authorize device_public_key");
     }
 }
@@ -1285,18 +1265,22 @@ mod tests {
             "created_at": "2026-06-30T00:00:00Z"
         });
         let created_at = chrono::Utc::now();
+        // Production assigns the `message_id` in the storage `append`
+        // (`soland_storage::ensure_device_message_id`); this test builds the
+        // record by hand, so inject it the same way the store would.
+        let mut content =
+            realm_key_share_device_message_content(sender_device, realm_id, operation_id, &payload);
+        content.as_object_mut().unwrap().insert(
+            "message_id".to_owned(),
+            json!("ak:device_message:0196419b-1000-7000-8000-000000000099"),
+        );
         let record = DeviceMessageState {
             idempotency_key: format!("realm_key_share:{operation_id}"),
             sender: sender.to_owned(),
             recipient: recipient.to_owned(),
             device_id: recipient_device.to_owned(),
             position: 1,
-            content: realm_key_share_device_message_content(
-                sender_device,
-                realm_id,
-                operation_id,
-                &payload,
-            ),
+            content,
             created_at,
         };
 

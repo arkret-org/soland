@@ -28,8 +28,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
 ) -> Result<(), AppError> {
     let normalized = normalize_read_receipt_payload(realm_id, envelope)?;
     let target = state
-        .persistence
-        .events()
+        .events_store()
         .get(&normalized.event_id)
         .await
         .ok()
@@ -71,7 +70,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
         expires_at: envelope.expires_at,
         position: 0,
     };
-    if let Err(error) = state.persistence.read_receipt_relay().append(record).await {
+    if let Err(error) = state.read_receipt_relay_store().append(record).await {
         tracing::error!(%error, "failed to relay ephemeral ak.receipt.read");
         return Err(AppError::internal(
             "failed to relay ak.receipt.read for realm sync",
@@ -170,8 +169,7 @@ pub(crate) async fn deliver_read_receipt_envelopes_for_subscriber(
         (session, records.iter().map(|record| record.position).max())
     {
         let _ = state
-            .persistence
-            .read_receipt_relay()
+            .read_receipt_relay_store()
             .advance(&session.actor, &session.device_id, realm_id, max_position)
             .await;
     }
@@ -189,8 +187,7 @@ async fn pending_read_receipt_records_for_subscriber(
         0
     } else if let Some(session) = session {
         state
-            .persistence
-            .read_receipt_relay()
+            .read_receipt_relay_store()
             .delivered_through(&session.actor, &session.device_id, realm_id)
             .await
             .unwrap_or(0)
@@ -199,8 +196,7 @@ async fn pending_read_receipt_records_for_subscriber(
     };
     let mut visible = Vec::new();
     for record in state
-        .persistence
-        .read_receipt_relay()
+        .read_receipt_relay_store()
         .list_for_realm(realm_id)
         .await
         .unwrap_or_default()
@@ -223,8 +219,7 @@ pub(crate) async fn visible_read_receipts_for_event(
     let now = Utc::now();
     let mut visible = Vec::new();
     for record in state
-        .persistence
-        .read_receipt_relay()
+        .read_receipt_relay_store()
         .list_for_event(&target.event_id)
         .await
         .unwrap_or_default()
@@ -294,8 +289,7 @@ async fn target_record_visible_to_session(
         target.clone()
     } else {
         let Some(target) = state
-            .persistence
-            .events()
+            .events_store()
             .get(&record.event_id)
             .await
             .ok()

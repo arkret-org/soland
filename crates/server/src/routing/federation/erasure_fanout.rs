@@ -266,7 +266,7 @@ fn erasure_push_payload(
 }
 
 async fn persist_erasure_operation_for_pull(state: &AppState, operation: &Operation) {
-    let store = state.persistence.federation_operations();
+    let store = state.federation_operations_store();
     match store.contains(operation.operation_id.as_str()).await {
         Ok(true) => {}
         Ok(false) => {
@@ -478,8 +478,7 @@ mod tests {
         assert!(peer_sent, "sent_at must be stamped on enqueue");
         assert!(peer_unacked);
         let outbox = state
-            .persistence
-            .federation_outbox()
+            .federation_outbox_store()
             .snapshot_all()
             .await
             .unwrap();

@@ -134,9 +134,8 @@ pub(super) fn directory_resource_kind_str(kind: DirectoryResourceKind) -> &'stat
 
 pub async fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
     state
-        .persistence
-        .contacts()
-        .list_for_actor(left)
+        .contact_application()
+        .contacts_for_actor(left)
         .await
         .unwrap_or_default()
         .iter()

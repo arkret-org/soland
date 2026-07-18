@@ -221,8 +221,7 @@ async fn peer_events_resolve(
         .map(|digest| digest.as_str())
         .collect::<BTreeSet<_>>();
     let records = state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .map_err(|error| AppError::internal(format!("peer events resolve: {error}")))?;
@@ -286,8 +285,7 @@ async fn peer_events_frontier(
         return Err(AppError::not_found("not found"));
     }
     let records = state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .map_err(|error| AppError::internal(format!("peer frontier: {error}")))?;
@@ -602,8 +600,7 @@ impl PeerReadAuthz {
         records: &[CanonicalEventRecord],
     ) -> Result<Self, AppError> {
         let realm_meta = state
-            .persistence
-            .realm_meta()
+            .realm_meta_store()
             .list()
             .await
             .map_err(|error| AppError::internal(format!("peer realm metadata: {error}")))?
@@ -1173,8 +1170,7 @@ async fn peer_events_query_response(
     let cursor_event_id =
         peer_events_query_cursor_event_id(state, parts.active_cursor(), &filter_digest).await?;
     let authz_records = state
-        .persistence
-        .events()
+        .events_store()
         .peer_authz_state_records()
         .await
         .map_err(|error| AppError::internal(format!("peer events query: {error}")))?;
@@ -1200,8 +1196,7 @@ async fn peer_events_query_response(
     let mut visible = Vec::new();
     loop {
         let candidates = state
-            .persistence
-            .events()
+            .events_store()
             .peer_events_query_page(&PeerEventsPageQuery {
                 realms: query_realms.clone(),
                 actors: parts.actors.clone(),

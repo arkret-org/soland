@@ -389,8 +389,7 @@ async fn projection_event_duplicate(
     draft: &CapabilityFanoutDraft,
 ) -> Result<bool, AppError> {
     let existing = state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .snapshot_all()
         .await
         .map_err(|error| AppError::internal(format!("projection event lookup failed: {error}")))?

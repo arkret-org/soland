@@ -56,8 +56,7 @@ fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
 
 async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
     state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .ok()?
@@ -319,8 +318,7 @@ pub(super) async fn validate_strand_watch_audit_pair(
         ));
     }
     let audit_record = state
-        .persistence
-        .events()
+        .events_store()
         .get(audit_ref)
         .await
         .map_err(|_| manage_others_audit_error("audit_pair event lookup failed"))?

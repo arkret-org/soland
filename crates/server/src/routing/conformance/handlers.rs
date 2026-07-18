@@ -860,16 +860,14 @@ pub async fn chaos_operation(
     }
 
     let canonical_event = state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?
         .into_iter()
         .find(|record| canonical_event_operation_id(record).as_deref() == Some(&operation_id));
     let projection_event = state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .snapshot_all()
         .await
         .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?

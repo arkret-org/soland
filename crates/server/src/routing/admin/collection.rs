@@ -382,8 +382,7 @@ pub(super) async fn admin_list_realm_members(
 
 async fn admin_realm_items(state: &AppState) -> Vec<Value> {
     let meta: BTreeMap<String, _> = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .list()
         .await
         .unwrap_or_default()
@@ -423,8 +422,7 @@ pub(super) async fn admin_get_realm_item(
     }
     .ok_or_else(|| AppError::not_found("realm not found"))?;
     let realm_meta = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -449,8 +447,7 @@ pub(super) async fn admin_realm_member_items(
     }
     .ok_or_else(|| AppError::not_found("realm not found"))?;
     let realm_meta = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -548,8 +545,7 @@ fn admin_space_container_items(state: &AppState) -> Vec<Value> {
 
 async fn admin_federation_items(state: &AppState) -> Vec<Value> {
     state
-        .persistence
-        .federation_operations()
+        .federation_operations_store()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -599,8 +595,7 @@ fn admin_applet_items(state: &AppState) -> Vec<Value> {
 
 pub(super) async fn admin_invite_items(state: &AppState) -> Vec<AdminInviteTokenItem> {
     state
-        .persistence
-        .realm_invites()
+        .realm_invite_application()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -633,8 +628,7 @@ pub(super) fn admin_invite_item(invite: &RealmInviteRecord) -> AdminInviteTokenI
 
 async fn admin_policy_items(state: &AppState) -> Vec<Value> {
     state
-        .persistence
-        .policy_documents()
+        .policy_documents_store()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -645,8 +639,7 @@ async fn admin_policy_items(state: &AppState) -> Vec<Value> {
 
 pub(super) async fn admin_media_items(state: &AppState) -> Vec<Value> {
     state
-        .persistence
-        .blobs()
+        .blobs_store()
         .snapshot_all()
         .await
         .unwrap_or_default()

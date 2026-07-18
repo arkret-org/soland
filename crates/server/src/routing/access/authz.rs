@@ -70,8 +70,7 @@ async fn authz_check(
     // Look up Realm owner and members.
     let (owner, members) = {
         let owner = state
-            .persistence
-            .realm_meta()
+            .realm_meta_store()
             .get(&realm_id)
             .await
             .ok()
@@ -355,8 +354,7 @@ async fn effective_grants(
     let grants = if realm_id == "*" {
         // Return grants across all Realms.
         state
-            .persistence
-            .realm_meta()
+            .realm_meta_store()
             .list()
             .await
             .unwrap_or_default()
@@ -585,8 +583,7 @@ fn insert_constraint_extension(
 
 async fn session_owns_realm(state: &AppState, actor: &str, realm_id: &str) -> bool {
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()
@@ -657,8 +654,7 @@ async fn invites(
     let now = now();
     let mut invite_list = Vec::new();
     for invite in state
-        .persistence
-        .realm_invites()
+        .realm_invite_application()
         .snapshot_all()
         .await
         .unwrap_or_default()

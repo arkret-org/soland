@@ -158,8 +158,7 @@ pub(super) async fn push_register(
     )?;
     let registration_id = push_target_id.clone();
     let previous_registrations = state
-        .persistence
-        .push_devices()
+        .push_devices_store()
         .snapshot_all()
         .await
         .unwrap_or_else(|error| {
@@ -179,14 +178,12 @@ pub(super) async fn push_register(
         warnings.push(auth_warning);
     }
     state
-        .persistence
-        .push_devices()
+        .push_devices_store()
         .unregister(&principal_id, &device_id, None, app_id.as_deref())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Err(error) = state
-        .persistence
-        .push_devices()
+        .push_devices_store()
         .register(json!({
             "registration_id": registration_id,
             "actor": session.actor,
@@ -345,8 +342,7 @@ pub(super) async fn push_unregister(
         return Err(AppError::invalid_param("invalid device_id"));
     }
     let removed = state
-        .persistence
-        .push_devices()
+        .push_devices_store()
         .unregister(
             &session.actor,
             body.device_id.as_str(),
@@ -402,8 +398,7 @@ pub(super) async fn push_notify(
         .cloned()
         .unwrap_or_default();
     let registered = state
-        .persistence
-        .push_devices()
+        .push_devices_store()
         .snapshot_all()
         .await
         .unwrap_or_default();
@@ -498,7 +493,7 @@ async fn verify_push_gateway_contract_drift(
     };
     let bridge_describe_url =
         join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
-    let cache = state.persistence.push_bridge_cache();
+    let cache = state.push_bridge_cache_store();
     let snapshot_digest = match cache.current_contract(&bridge_describe_url).await {
         Ok(Some(record)) => record.contract_digest,
         Ok(None) => return DriftResult::Unknown,

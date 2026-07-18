@@ -379,8 +379,7 @@ async fn persist_invite_quarantine_entry(
     decision: &ReceiveDecision,
 ) -> Result<bool, AppError> {
     let subject_exists = state
-        .persistence
-        .accounts()
+        .accounts_store()
         .get(subject)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -443,7 +442,7 @@ async fn persist_invite_quarantine_entry(
         "expires_at": expires_at,
     });
 
-    let account_data = state.persistence.account_data();
+    let account_data = state.account_data_store();
     let existing = account_data
         .get(subject, ACCOUNT_DATA_TYPE_INVITE_QUARANTINE)
         .await

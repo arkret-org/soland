@@ -7,14 +7,7 @@ pub(super) async fn preview_token_matches_policy(
     token: &str,
     session: Option<&SessionRecord>,
 ) -> bool {
-    let Some(meta) = state
-        .persistence
-        .realm_meta()
-        .get(realm_id)
-        .await
-        .ok()
-        .flatten()
-    else {
+    let Some(meta) = state.realm_meta_store().get(realm_id).await.ok().flatten() else {
         return false;
     };
     let Some(policy) = meta.preview_policy.as_ref() else {

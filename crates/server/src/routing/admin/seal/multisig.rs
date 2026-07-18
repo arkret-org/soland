@@ -85,11 +85,11 @@ pub(crate) async fn admin_submit_multisig_partial(
     // row via the notary worker when threshold signing kicks off, but a
     // defaulted row lets the H'9 UI exercise the full path against a fresh
     // seal_id in dev/test without an explicit pre-create dance.
-    let store = state.persistence.multisig_pending();
+    let store = state.multisig_pending_store();
     let mut record = match store
         .get(&seal_id_str)
         .await
-        .map_err(persistence_to_app_err)?
+        .map_err(|soland_application::ApplicationError::Storage(e)| persistence_to_app_err(e))?
     {
         Some(r) => r,
         None => soland_storage::MultisigPendingRecord {
@@ -133,7 +133,7 @@ pub(crate) async fn admin_submit_multisig_partial(
     store
         .upsert(record.clone())
         .await
-        .map_err(persistence_to_app_err)?;
+        .map_err(|soland_application::ApplicationError::Storage(e)| persistence_to_app_err(e))?;
 
     let collected = record.partials.len() as u32;
     let threshold = record.threshold_k;
@@ -184,11 +184,10 @@ pub(crate) async fn admin_list_multisig_pending(
     })?;
 
     let rows = state
-        .persistence
-        .multisig_pending()
+        .multisig_pending_store()
         .list_for_realm(&realm_id_str)
         .await
-        .map_err(persistence_to_app_err)?;
+        .map_err(|soland_application::ApplicationError::Storage(e)| persistence_to_app_err(e))?;
 
     let entries = rows
         .into_iter()

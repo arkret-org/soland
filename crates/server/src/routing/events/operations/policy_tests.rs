@@ -424,8 +424,7 @@ async fn put_agent_participation_ceiling(
     act_on_behalf: bool,
 ) {
     state
-        .persistence
-        .agent_participation()
+        .agent_participation_store()
         .put_ceiling(json!({
             "scope_kind": scope_kind,
             "scope_key": scope_key,
@@ -566,8 +565,7 @@ async fn register_agent_selection(
     record.display_name = Some("Summary".to_owned());
     record.agent_slug = Some("summary".to_owned());
     state
-        .persistence
-        .agents()
+        .agents_store()
         .put(record)
         .await
         .expect("agent record");
@@ -576,8 +574,7 @@ async fn register_agent_selection(
         .strip_prefix("ak:realm:")
         .expect("realm id prefix");
     state
-        .persistence
-        .agent_participation()
+        .agent_participation_store()
         .put_selection(json!({
             "agent_id": agent_id,
             "scope_kind": "realm",
@@ -1109,16 +1106,14 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
         Vec::new(),
     );
     let mut record = state
-        .persistence
-        .agents()
+        .agents_store()
         .get(agent)
         .await
         .expect("agent lookup")
         .expect("agent record");
     record.state = "paused".to_owned();
     state
-        .persistence
-        .agents()
+        .agents_store()
         .put(record)
         .await
         .expect("agent record update");
@@ -1233,8 +1228,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
         arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a6".to_owned())
             .unwrap();
     state
-        .persistence
-        .events()
+        .events_store()
         .put(CanonicalEventRecord {
             event_id: "ak:event:01904100-0000-7000-8000-0000000007a6".to_owned(),
             actor_id: "did:web:mallory.example".to_owned(),
@@ -1969,8 +1963,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
             .unwrap();
     let now = chrono::Utc::now();
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .put(
             realm_id.as_str(),
             &soland_storage::RealmMetaRecord {
@@ -2106,8 +2099,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
     let bob_device = "ak:device:01904100-0000-7000-8000-00000000d3d1";
 
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .put(
             realm_id.as_str(),
             &soland_storage::RealmMetaRecord {
@@ -2145,8 +2137,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
         .await
         .expect("realm meta stored");
     state
-        .persistence
-        .devices()
+        .devices_store()
         .put(&DeviceInventoryRecord {
             actor: bob.to_owned(),
             device_id: bob_device.to_owned(),

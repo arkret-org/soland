@@ -11,14 +11,7 @@ pub(crate) async fn effective_realm_mention_routing_hint(
     realm_id: &str,
     declared_hint: Option<&str>,
 ) -> MentionRoutingHint {
-    let Some(record) = state
-        .persistence
-        .realm_meta()
-        .get(realm_id)
-        .await
-        .ok()
-        .flatten()
-    else {
+    let Some(record) = state.realm_meta_store().get(realm_id).await.ok().flatten() else {
         return MentionRoutingHint::Disabled;
     };
     let mut profiles = Vec::new();

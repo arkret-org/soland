@@ -160,12 +160,7 @@ pub(super) async fn project_account_data_set(
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        if let Err(error) = state
-            .persistence
-            .account_data()
-            .delete(owner, data_type)
-            .await
-        {
+        if let Err(error) = state.account_data_store().delete(owner, data_type).await {
             tracing::warn!(%error, owner, data_type, "failed to tombstone account_data from event");
             return;
         }
@@ -200,7 +195,7 @@ pub(super) async fn project_account_data_set(
         payload: content,
         updated_at: operation.created_at,
     };
-    if let Err(error) = state.persistence.account_data().put(&record).await {
+    if let Err(error) = state.account_data_store().put(&record).await {
         tracing::warn!(%error, owner, data_type, "failed to project account_data from event");
         return;
     }

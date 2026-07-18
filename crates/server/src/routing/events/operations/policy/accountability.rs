@@ -33,8 +33,7 @@ pub(super) async fn validate_accountability_profile_policy(
     };
     let now = chrono::Utc::now();
     let accepted_events = state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .unwrap_or_default();
@@ -243,8 +242,7 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
     // minimal-metadata profile; absent meta (target realm unknown) leaves the
     // obligation to the committer / client.
     let is_minimal = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(operation.realm_id.as_str())
         .await
         .ok()

@@ -380,7 +380,11 @@ impl NotaryWorker {
         // forensic_attribution|recovery_members`). Anything else — including
         // the pre-rename alias spellings (`shape`/`kind_raw`/`k`/`n`/
         // `primary`/`threshold_dids`/...) — is fail-closed: not authorized.
-        let Ok(notary_value) = serde_json::from_value::<arkret_sdk::NotaryValue>(value.clone())
+        // Envelope-only extras (`paused`, `revocation_freshness_window_ms`)
+        // ride alongside the profile in the cell object and are stripped
+        // before the (now `deny_unknown_fields`) `NotaryValue` parse.
+        let Ok(notary_value) =
+            serde_json::from_value::<arkret_sdk::NotaryValue>(notary_profile_wire(&value))
         else {
             return Ok(false);
         };
@@ -667,6 +671,19 @@ impl NotaryWorker {
 /// The value never reaches the wire — `sign_pending_for_realm` overwrites
 /// `seal.notary_signature` with the real signature after deriving the
 /// canonical bytes and the id.
+/// Strip envelope-only extras (`paused`, `revocation_freshness_window_ms`)
+/// that ride alongside the `NotaryValue` profile in a notary cell object, so
+/// the strict (`deny_unknown_fields`) `NotaryValue` parse accepts the profile.
+/// Non-object values pass through unchanged.
+fn notary_profile_wire(value: &serde_json::Value) -> serde_json::Value {
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("paused");
+        object.remove("revocation_freshness_window_ms");
+    }
+    value
+}
+
 fn zero_notary_sig_placeholder() -> Result<MoveSignature, NotaryError> {
     let payload_digest = Hash::new(format!("sha256:{}", "00".repeat(32)))
         .map_err(|e| NotaryError::Construction(format!("zero payload hash: {e}")))?;
@@ -1091,7 +1108,9 @@ mod tests {
     #[test]
     fn notary_cell_value_parses_authoritative_wire_only() {
         // The authoritative `NotaryValue` form parses; envelope extras
-        // (`paused`, `revocation_freshness_window_ms`) are tolerated.
+        // (`paused`, `revocation_freshness_window_ms`) ride alongside the
+        // profile in the cell object and are stripped by `notary_profile_wire`
+        // before the strict (`deny_unknown_fields`) `NotaryValue` parse.
         let v = json!({
             "type": "threshold",
             "threshold": 2,
@@ -1100,7 +1119,8 @@ mod tests {
             "revocation_freshness_window_ms": 60000,
             "paused": false,
         });
-        let parsed: arkret_sdk::NotaryValue = serde_json::from_value(v).unwrap();
+        let parsed: arkret_sdk::NotaryValue =
+            serde_json::from_value(notary_profile_wire(&v)).unwrap();
         match parsed {
             arkret_sdk::NotaryValue::Threshold {
                 threshold, members, ..

@@ -218,8 +218,7 @@ pub(super) async fn resolve_target(
     let realm_preview = realm_preview_for_policy_typed(state, &realm_entry).await?;
     let policy_revision = if parsed.link_type == LinkType::Preview
         && let Some(meta) = state
-            .persistence
-            .realm_meta()
+            .realm_meta_store()
             .get(realm_entry.realm_id.as_str())
             .await
             .ok()
@@ -571,8 +570,7 @@ pub(super) async fn realm_preview_for_policy(
     realm_entry: &RealmDirectoryEntry,
 ) -> Value {
     let meta = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_entry.realm_id.as_str())
         .await
         .ok()

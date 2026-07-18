@@ -951,8 +951,7 @@ async fn circle_authz_principals(
     realm_id: &str,
 ) -> (Option<String>, Vec<String>) {
     let owner = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()

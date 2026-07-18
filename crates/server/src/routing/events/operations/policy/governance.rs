@@ -188,7 +188,7 @@ async fn native_agent_controlled_by(
     controller_id: &str,
     require_active: bool,
 ) -> bool {
-    let Ok(Some(record)) = state.persistence.agents().get(agent_id).await else {
+    let Ok(Some(record)) = state.agents_store().get(agent_id).await else {
         return false;
     };
     record.controller_id == controller_id && (!require_active || record.state == "active")

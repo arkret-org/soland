@@ -407,8 +407,7 @@ async fn account_subscribe_notification_should_wake(
             return false;
         }
         return state
-            .persistence
-            .accounts()
+            .accounts_store()
             .get(&session.actor)
             .await
             .ok()
@@ -500,8 +499,7 @@ pub(crate) async fn presence_events_for_actors(
         }
         events.extend(
             state
-                .persistence
-                .presence()
+                .presence_store()
                 .list_for_actor(&actor)
                 .await
                 .unwrap_or_default()

@@ -311,7 +311,7 @@ pub(super) async fn mimi_room_message(
         encrypted: mapped_content.encrypted,
         created_at,
     };
-    if let Err(error) = state.persistence.messages().put(&message_record).await {
+    if let Err(error) = state.messages_store().put(&message_record).await {
         tracing::error!(%error, "mimi: failed to persist MessageRecord");
     }
     let projection_payload = json!({
@@ -760,8 +760,7 @@ pub(super) async fn mimi_report_abuse(
     }
     report_fields.insert("created_at".to_owned(), json!(now()));
     if let Err(error) = state
-        .persistence
-        .moderation()
+        .moderation_store()
         .append_report(Value::Object(report_fields))
         .await
     {
@@ -855,8 +854,7 @@ pub(super) async fn enforce_mimi_reporter_resolution(
     Did::new(reporter.to_owned())
         .map_err(|error| AppError::invalid_param(format!("invalid reporter DID: {error}")))?;
     if state
-        .persistence
-        .accounts()
+        .accounts_store()
         .get(reporter)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -910,13 +908,7 @@ pub(super) async fn mimi_proxy_download(
         .get("asset_privacy_policy")
         .and_then(|value| value.as_str())
         .unwrap_or("provider_proxy");
-    let blob = state
-        .persistence
-        .blobs()
-        .get(asset_ref)
-        .await
-        .ok()
-        .flatten();
+    let blob = state.blobs_store().get(asset_ref).await.ok().flatten();
     let proxy_required = matches!(asset_policy, "provider_proxy" | "ohttp_relay");
     let download_ref = if proxy_required {
         mimi_proxy_download_ref(state, asset_ref)?

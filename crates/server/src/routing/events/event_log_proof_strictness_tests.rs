@@ -53,8 +53,7 @@ async fn ingest_fresh_webvh_document(state: &AppState, did: &str) {
     let now = chrono::Utc::now();
     let public_key_multibase = arkret_sdk::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]);
     state
-        .persistence
-        .webvh()
+        .webvh_store()
         .put_document(soland_storage::WebvhDocumentRecord {
             did: did.to_owned(),
             did_document: json!({
@@ -264,8 +263,7 @@ async fn policy_components_media_plaintext_reads_realm_meta() {
     let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000001";
     let now = chrono::Utc::now();
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .put(
             realm_id,
             &soland_storage::RealmMetaRecord {
@@ -310,8 +308,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
     let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000002";
     let now = chrono::Utc::now();
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .put(
             realm_id,
             &soland_storage::RealmMetaRecord {
@@ -711,8 +708,7 @@ async fn applet_registration_requires_realm_admin() {
     let outsider = "did:web:mallory.example";
     let now = chrono::Utc::now();
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .put(
             realm_id,
             &soland_storage::RealmMetaRecord {
@@ -773,8 +769,7 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
     let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000003";
     let now = chrono::Utc::now();
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .put(
             realm_id,
             &soland_storage::RealmMetaRecord {
@@ -2034,8 +2029,7 @@ async fn ingest_principal_with_enrollment_authority(
 ) {
     let now = chrono::Utc::now();
     state
-        .persistence
-        .webvh()
+        .webvh_store()
         .put_document(soland_storage::WebvhDocumentRecord {
             did: principal_did.to_owned(),
             did_document: json!({

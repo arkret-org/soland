@@ -128,7 +128,7 @@ pub(super) async fn member_join_accepts_pending_invite(
     if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
         return false;
     }
-    let Ok(Some(invite)) = state.persistence.realm_invites().get(invite_id).await else {
+    let Ok(Some(invite)) = state.realm_invite_application().get(invite_id).await else {
         return false;
     };
     if invite.status != "pending" || invite.invitee.as_deref() != Some(actor) {
@@ -163,7 +163,7 @@ pub(super) async fn invitee_cancels_pending_invite(
     if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
         return false;
     }
-    let Ok(Some(invite)) = state.persistence.realm_invites().get(invite_id).await else {
+    let Ok(Some(invite)) = state.realm_invite_application().get(invite_id).await else {
         return false;
     };
     if invite.realm_id != realm_id
@@ -202,7 +202,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
         return false;
     }
-    let Ok(Some(invite)) = state.persistence.realm_invites().get(invite_id).await else {
+    let Ok(Some(invite)) = state.realm_invite_application().get(invite_id).await else {
         return false;
     };
     if invite.realm_id != realm_id {
@@ -371,7 +371,7 @@ pub(super) async fn bootstrap_realm_member_index(
         created_at: super::now(),
         updated_at: super::now(),
     };
-    if let Err(error) = state.persistence.realm_meta().put(realm_id, &meta).await {
+    if let Err(error) = state.realm_meta_store().put(realm_id, &meta).await {
         tracing::error!(%error, %realm_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
     }
 }

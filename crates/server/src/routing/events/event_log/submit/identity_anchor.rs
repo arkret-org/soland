@@ -95,18 +95,13 @@ pub(super) async fn submit_identity_anchor_batch(
             .await?;
     validate_unit_relationships(state, &first, &second, &envelopes, is_bootstrap).await?;
 
-    let existing = state
-        .persistence
-        .events()
-        .snapshot_all()
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("events store unavailable: {error}"),
-            )
-        })?;
+    let existing = state.events_store().snapshot_all().await.map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("events store unavailable: {error}"),
+        )
+    })?;
     let first_existing = existing
         .iter()
         .find(|record| record.event_id == first.event_id);
@@ -255,8 +250,7 @@ pub(super) async fn submit_identity_anchor_batch(
         None
     };
     let commit_outcome = state
-        .persistence
-        .events()
+        .events_store()
         .put_identity_anchor_batch_atomic(
             records.clone(),
             receipt,
@@ -266,6 +260,7 @@ pub(super) async fn submit_identity_anchor_batch(
         )
         .await
         .map_err(|error| {
+            let soland_application::ApplicationError::Storage(error) = error;
             if persistence_error_is_realm_already_exists(&error) {
                 realm_already_exists_error()
             } else if matches!(
@@ -294,18 +289,13 @@ pub(super) async fn submit_identity_anchor_batch(
         })?;
     if commit_outcome.reanchor_conflict {
         reanchor_conflict = true;
-        let committed = state
-            .persistence
-            .events()
-            .snapshot_all()
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("events store unavailable after conflict commit: {error}"),
-                )
-            })?;
+        let committed = state.events_store().snapshot_all().await.map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("events store unavailable after conflict commit: {error}"),
+            )
+        })?;
         conflict_evidence = conflicting_reanchor_slot(&first, &second, &envelopes[0], &committed);
     }
 
@@ -429,7 +419,7 @@ async fn identical_historical_retry(
     }
     let mut existing = Vec::with_capacity(ids.len());
     for id in &ids {
-        existing.push(state.persistence.events().get(id).await.map_err(|error| {
+        existing.push(state.events_store().get(id).await.map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -658,18 +648,13 @@ async fn validate_reanchor_actor_frontier(
     } else {
         std::collections::BTreeSet::new()
     };
-    let records = state
-        .persistence
-        .events()
-        .snapshot_all()
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("actor frontier lookup failed: {error}"),
-            )
-        })?;
+    let records = state.events_store().snapshot_all().await.map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("actor frontier lookup failed: {error}"),
+        )
+    })?;
     let (max_actor_seq, expected_heads) = preserved_actor_frontier(
         &records,
         &reanchor.actor_id,
@@ -878,8 +863,7 @@ async fn validate_reanchor_recovery_session(
         )
     })?;
     let session = state
-        .persistence
-        .recovery_sessions()
+        .recovery_sessions_store()
         .get(session_id.as_str())
         .await
         .map_err(|error| {
@@ -1089,8 +1073,7 @@ async fn identity_anchor_device_projection(
     let principal_id = typed.principal_id.as_str();
     let device_id = typed.device_id.as_str();
     let existing = state
-        .persistence
-        .devices()
+        .devices_store()
         .get(principal_id, device_id)
         .await
         .map_err(|error| {
@@ -1681,14 +1664,12 @@ mod tests {
             "proofs": [{"jws": "first-authority-proof"}]
         });
         state
-            .persistence
-            .events()
+            .events_store()
             .put(stored_record(&reanchor, 10))
             .await
             .unwrap();
         state
-            .persistence
-            .events()
+            .events_store()
             .put(stored_record(&authorize, 11))
             .await
             .unwrap();
@@ -1697,8 +1678,7 @@ mod tests {
             "kind": "ak.profile.update"
         });
         state
-            .persistence
-            .events()
+            .events_store()
             .put(stored_record(&later, 12))
             .await
             .unwrap();

@@ -54,8 +54,7 @@ impl FrontierExchangeWorker {
         }
         let records = self
             .state
-            .persistence
-            .events()
+            .events_store()
             .snapshot_all()
             .await
             .map_err(|error| error.to_string())?;
@@ -83,8 +82,7 @@ impl FrontierExchangeWorker {
                     Ok(remote_root) if remote_root == local_root => {
                         let record = self
                             .state
-                            .persistence
-                            .federation_frontier_exchange()
+                            .federation_frontier_exchange_store()
                             .record_success(&realm_id, &peer.did, &remote_root, now)
                             .await
                             .map_err(|error| error.to_string())?;
@@ -162,8 +160,7 @@ impl FrontierExchangeWorker {
     ) -> Result<(), String> {
         let record = self
             .state
-            .persistence
-            .federation_frontier_exchange()
+            .federation_frontier_exchange_store()
             .record_failure(realm_id, peer_did, reason, observed_at)
             .await
             .map_err(|error| error.to_string())?;
@@ -339,8 +336,7 @@ pub async fn inbound_peer_is_stale(
     peer_service_id: &str,
 ) -> Result<bool, String> {
     state
-        .persistence
-        .federation_frontier_exchange()
+        .federation_frontier_exchange_store()
         .get(realm_id, peer_service_id)
         .await
         .map(|record| {

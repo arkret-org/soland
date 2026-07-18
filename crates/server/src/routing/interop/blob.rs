@@ -319,7 +319,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         uploaded_by: session.actor,
         created_at: received_at,
     };
-    if let Err(error) = state.persistence.blobs().put(&blob_ref, &record).await {
+    if let Err(error) = state.blobs_store().put(&blob_ref, &record).await {
         tracing::error!(%error, "failed to persist blob");
         if let Err(delete_error) = state.object_storage.delete(&storage_key).await {
             tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
@@ -426,13 +426,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             }
         }
     };
-    let mut blob = state
-        .persistence
-        .blobs()
-        .get(&blob_ref)
-        .await
-        .ok()
-        .flatten();
+    let mut blob = state.blobs_store().get(&blob_ref).await.ok().flatten();
     if blob.is_none()
         && purpose == "profile_avatar"
         && let Some(session) = session.as_ref()
@@ -656,7 +650,7 @@ async fn try_recover_profile_avatar_blob(
         uploaded_by: uploaded_by.to_owned(),
         created_at: now(),
     };
-    if let Err(error) = state.persistence.blobs().put(blob_ref, &record).await {
+    if let Err(error) = state.blobs_store().put(blob_ref, &record).await {
         tracing::warn!(%error, %blob_ref, "failed to persist recovered profile avatar blob metadata");
         return None;
     }
@@ -684,8 +678,7 @@ async fn blob_presign(
         return Err(AppError::invalid_param("invalid blob purpose"));
     }
     let blob = state
-        .persistence
-        .blobs()
+        .blobs_store()
         .get(blob_ref)
         .await
         .ok()
@@ -1415,8 +1408,7 @@ pub(super) async fn enforce_blob_quota(
     size: usize,
 ) -> Result<(), &'static str> {
     let blobs = state
-        .persistence
-        .blobs()
+        .blobs_store()
         .snapshot_all()
         .await
         .map_err(|_| "blob store unavailable")?;
@@ -1476,7 +1468,7 @@ async fn realm_presign_policy_block(
     realm_id: Option<&str>,
 ) -> Option<&'static str> {
     let realm_id = realm_id?;
-    let meta = state.persistence.realm_meta().get(realm_id).await.ok()??;
+    let meta = state.realm_meta_store().get(realm_id).await.ok()??;
     if meta.minimal_metadata_realm {
         return Some("minimal_metadata_presign_forbidden");
     }

@@ -169,8 +169,7 @@ pub async fn validate_agent_participation_ceiling(
         let mut parent = AgentParticipation::ALL;
         if !parent_keys.is_empty() {
             let rows = state
-                .persistence
-                .agent_participation()
+                .agent_participation_store()
                 .ceilings_for_scope_keys(&parent_keys)
                 .await
                 .unwrap_or_default();
@@ -233,8 +232,7 @@ pub(super) async fn native_agent_exists(
     principal_id: &str,
 ) -> Result<bool, &'static str> {
     state
-        .persistence
-        .agents()
+        .agents_store()
         .get(principal_id)
         .await
         .map(|record| record.is_some())
@@ -246,8 +244,7 @@ pub(super) async fn agent_lifecycle_rejection_reason(
     agent_id: &str,
 ) -> Result<Option<&'static str>, &'static str> {
     let record_state = state
-        .persistence
-        .agents()
+        .agents_store()
         .get(agent_id)
         .await
         .map_err(|_| "agent_principal_lookup_unavailable")?
@@ -525,8 +522,7 @@ async fn operation_agent_write_context(
         (actor_id.as_deref(), executed_by, authorization_ref)
     {
         let managed = state
-            .persistence
-            .agents()
+            .agents_store()
             .get(actor_id)
             .await
             .map_err(|_| "agent_principal_lookup_unavailable")?

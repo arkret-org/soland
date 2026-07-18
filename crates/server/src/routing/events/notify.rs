@@ -625,8 +625,7 @@ mod tests {
         record.agent_slug = Some("summary".to_owned());
         record.display_name = Some("Summary".to_owned());
         state
-            .persistence
-            .agents()
+            .agents_store()
             .put(record)
             .await
             .expect("agent record");
@@ -639,8 +638,7 @@ mod tests {
         accept_third_party_mention: bool,
     ) {
         state
-            .persistence
-            .agent_participation()
+            .agent_participation_store()
             .put_selection(json!({
                 "agent_id": agent,
                 "scope_kind": "realm",
@@ -663,8 +661,7 @@ mod tests {
         accept_third_party_mention: bool,
     ) {
         state
-            .persistence
-            .agent_participation()
+            .agent_participation_store()
             .put_selection(json!({
                 "agent_id": agent,
                 "scope_kind": "circle",
@@ -689,8 +686,7 @@ mod tests {
         accept_third_party_mention: bool,
     ) {
         state
-            .persistence
-            .agent_participation()
+            .agent_participation_store()
             .put_ceiling(json!({
                 "scope_kind": "circle",
                 "scope_key": crate::routing::agent_participation::circle_scope_key(
@@ -922,8 +918,7 @@ mod tests {
 
         assert!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(alice)
                 .await
                 .unwrap()
@@ -932,8 +927,7 @@ mod tests {
         for recipient in [bob, carol] {
             assert!(
                 state
-                    .persistence
-                    .notifications()
+                    .notifications_store()
                     .list_for_recipient(recipient)
                     .await
                     .unwrap()
@@ -959,8 +953,7 @@ mod tests {
         dispatch_message_notifications(&state, &delivered).await;
 
         let bob_notifications = state
-            .persistence
-            .notifications()
+            .notifications_store()
             .list_for_recipient(bob)
             .await
             .unwrap();
@@ -979,8 +972,7 @@ mod tests {
         );
         assert!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(carol)
                 .await
                 .unwrap()
@@ -988,8 +980,7 @@ mod tests {
         );
         assert!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(alice)
                 .await
                 .unwrap()
@@ -1014,8 +1005,7 @@ mod tests {
 
         assert_eq!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(bob)
                 .await
                 .unwrap()
@@ -1024,8 +1014,7 @@ mod tests {
         );
         assert!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(mallory)
                 .await
                 .unwrap()
@@ -1045,8 +1034,7 @@ mod tests {
         dispatch_message_notifications(&state, &delivered).await;
 
         let notifications = state
-            .persistence
-            .notifications()
+            .notifications_store()
             .list_for_recipient(bob)
             .await
             .unwrap();
@@ -1074,8 +1062,7 @@ mod tests {
         dispatch_assignment_notifications(&state, &operation).await;
 
         let notifications = state
-            .persistence
-            .notifications()
+            .notifications_store()
             .list_for_recipient(bob)
             .await
             .unwrap();
@@ -1111,8 +1098,7 @@ mod tests {
 
         for recipient in [bob, carol] {
             let notifications = state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(recipient)
                 .await
                 .unwrap();
@@ -1130,8 +1116,7 @@ mod tests {
         }
         assert!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(alice)
                 .await
                 .unwrap()
@@ -1152,16 +1137,14 @@ mod tests {
         dispatch_message_notifications(&state, &delivered).await;
 
         let bob_notifications = state
-            .persistence
-            .notifications()
+            .notifications_store()
             .list_for_recipient(bob)
             .await
             .unwrap();
         assert!(bob_notifications.is_empty());
         assert!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(carol)
                 .await
                 .unwrap()
@@ -1183,8 +1166,7 @@ mod tests {
         dispatch_message_notifications(&state, &suppressed).await;
         assert!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(agent)
                 .await
                 .unwrap()
@@ -1195,8 +1177,7 @@ mod tests {
         dispatch_message_notifications(&state, &controller_mention).await;
         assert_eq!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(agent)
                 .await
                 .unwrap()
@@ -1206,8 +1187,7 @@ mod tests {
 
         set_realm_selection(&state, realm_id, agent, true).await;
         let after_flip = state
-            .persistence
-            .notifications()
+            .notifications_store()
             .list_for_recipient(agent)
             .await
             .unwrap();
@@ -1227,8 +1207,7 @@ mod tests {
         dispatch_message_notifications(&state, &unknown_strand).await;
         assert_eq!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(agent)
                 .await
                 .unwrap()
@@ -1239,8 +1218,7 @@ mod tests {
         let delivered = mention_message(realm_id, "000000009984", third_party, agent);
         dispatch_message_notifications(&state, &delivered).await;
         let notifications = state
-            .persistence
-            .notifications()
+            .notifications_store()
             .list_for_recipient(agent)
             .await
             .unwrap();
@@ -1279,8 +1257,7 @@ mod tests {
         dispatch_message_notifications(&state, &delivered).await;
         assert_eq!(
             state
-                .persistence
-                .notifications()
+                .notifications_store()
                 .list_for_recipient(agent)
                 .await
                 .unwrap()
@@ -1298,8 +1275,7 @@ mod tests {
         );
         dispatch_message_notifications(&state, &capped).await;
         let notifications = state
-            .persistence
-            .notifications()
+            .notifications_store()
             .list_for_recipient(agent)
             .await
             .unwrap();

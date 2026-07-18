@@ -198,8 +198,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             }
         };
         match state
-            .persistence
-            .idempotency_keys()
+            .idempotency_keys_store()
             .get(&session.actor, key)
             .await
         {
@@ -399,7 +398,7 @@ async fn persist_idempotency_first_response(
         created_at,
         expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
     };
-    if let Err(error) = state.persistence.idempotency_keys().record(&record).await {
+    if let Err(error) = state.idempotency_keys_store().record(&record).await {
         tracing::warn!(%error, idempotency_key, "idempotency first-response persist failed");
     }
 }
@@ -472,8 +471,7 @@ async fn get_event(
     let session = aa.authenticated_session(state, req).await?;
     let event_id = event_id.into_inner();
     let record = state
-        .persistence
-        .events()
+        .events_store()
         .get(&event_id)
         .await
         .ok()
@@ -506,7 +504,7 @@ async fn resolve_events(
             "too many events requested",
         ));
     }
-    let store = state.persistence.events();
+    let store = state.events_store();
     let mut found = Vec::new();
     let mut missing = Vec::new();
     for event_id in body.event_ids {
@@ -598,8 +596,7 @@ pub(in crate::routing::events) async fn events_query_durable_scope_impl(
     let actors_set: std::collections::BTreeSet<&str> = actors.iter().map(String::as_str).collect();
     let realms_set: std::collections::BTreeSet<&str> = realms.iter().map(String::as_str).collect();
     let scoped = state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -764,8 +761,7 @@ async fn events_frontier(
             Some(seal) => seal,
             None => {
                 let stats = state
-                    .persistence
-                    .events()
+                    .events_store()
                     .realm_event_stats(realm_id.as_str())
                     .await
                     .map_err(|error| {
@@ -804,14 +800,12 @@ async fn events_frontier(
     let actor_id = Did::new(actor.clone())
         .map_err(|_| AppError::invalid_param("actor_id must be a valid DID"))?;
     let events = state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .unwrap_or_default();
     let managed_actor_pcr = state
-        .persistence
-        .agents()
+        .agents_store()
         .get(&actor)
         .await
         .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?

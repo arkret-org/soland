@@ -129,8 +129,7 @@ async fn device_generation_event_seal_context(
     realm_id: &RealmId,
 ) -> Result<Option<DeviceGenerationEventSealContext>, AppError> {
     let records = state
-        .persistence
-        .events()
+        .events_store()
         .realm_events_newest_first(realm_id.as_str())
         .await
         .map_err(|error| {
@@ -539,8 +538,7 @@ async fn try_apply_device_generation_event_seal(
     };
 
     let devices = state
-        .persistence
-        .devices()
+        .devices_store()
         .list_for_actor_including_revoked(&context.principal_id)
         .await
         .map_err(|error| {
@@ -879,8 +877,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         .map_err(app_error_from_seal_reject)?;
 
     let records = state
-        .persistence
-        .events()
+        .events_store()
         .realm_events_newest_first(seal.realm_id.as_str())
         .await
         .map_err(|error| {
@@ -1006,8 +1003,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         ));
     }
     let device = state
-        .persistence
-        .devices()
+        .devices_store()
         .get(&agent_record.controller_id, session_device_id)
         .await
         .map_err(|error| {

@@ -198,8 +198,7 @@ async fn policy_request_for_operation(
         }
     };
     let mut policy_doc_ids = state
-        .persistence
-        .policy_documents()
+        .policy_documents_store()
         .list_active()
         .await
         .map_err(|error| PolicyGateRejection::internal(format!("policy documents: {error}")))?

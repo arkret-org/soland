@@ -98,8 +98,7 @@ async fn list_policy_documents(
     let subject_ref = subject_ref.into_inner();
     let include_inactive = include_inactive.into_inner().unwrap_or(false);
     let policies = state
-        .persistence
-        .policy_documents()
+        .policy_documents_store()
         .list_for_owner(&session.actor)
         .await
         .unwrap_or_default()
@@ -138,8 +137,7 @@ async fn get_policy_document(
     let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
     state
-        .persistence
-        .policy_documents()
+        .policy_documents_store()
         .get(&policy_id)
         .await
         .ok()
@@ -199,7 +197,7 @@ async fn upsert_policy_document(
     if !is_valid_generated_or_custom_id(&policy_id, "policy") {
         return Err(AppError::invalid_param("invalid policy_id"));
     }
-    let store = state.persistence.policy_documents();
+    let store = state.policy_documents_store();
     if let Ok(Some(existing)) = store.get(&policy_id).await
         && existing.owner != session.actor
     {
@@ -247,7 +245,7 @@ async fn delete_policy_document(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
-    let store = state.persistence.policy_documents();
+    let store = state.policy_documents_store();
     let Ok(Some(policy)) = store.get(&policy_id).await else {
         return Err(AppError::not_found("policy not found"));
     };
@@ -294,8 +292,7 @@ async fn policy_check(
         return Err(AppError::capability_denied("request not authorized"));
     }
     let active_policy_documents = state
-        .persistence
-        .policy_documents()
+        .policy_documents_store()
         .list_active()
         .await
         .unwrap_or_default()
@@ -490,8 +487,7 @@ async fn policy_control_frontier_updated_at(
     active_policy_documents: &[PolicyDocumentRecord],
 ) -> Option<DateTime<Utc>> {
     let meta = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()

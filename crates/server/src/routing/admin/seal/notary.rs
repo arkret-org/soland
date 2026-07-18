@@ -141,7 +141,16 @@ pub(super) fn notary_value_from_cell(
             None,
         ));
     };
-    let parsed: SdkNotaryValue = serde_json::from_value(value.clone()).map_err(|e| {
+    // Envelope-only extras (`paused`, `revocation_freshness_window_ms`) ride
+    // alongside the profile in the cell object; strip them before the strict
+    // (`deny_unknown_fields`) `NotaryValue` parse, then read them back from the
+    // original value in `admin_notary_value_from_sdk`.
+    let mut profile = value.clone();
+    if let Some(object) = profile.as_object_mut() {
+        object.remove("paused");
+        object.remove("revocation_freshness_window_ms");
+    }
+    let parsed: SdkNotaryValue = serde_json::from_value(profile).map_err(|e| {
         app_error!(
             InternalError,
             "notary cell value does not match the authoritative NotaryValue wire shape: {e}"

@@ -106,8 +106,7 @@ async fn configure_retention_policy(
         updated_at: now,
     };
     state
-        .persistence
-        .retention_policies()
+        .retention_policies_store()
         .put(&record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -147,8 +146,7 @@ async fn sweep_retention_policy(
     let realm_id = required_string(body.realm_id.as_deref(), "realm_id")?;
     let now = optional_now(body.now.as_deref())?.unwrap_or_else(Utc::now);
     let policy = state
-        .persistence
-        .retention_policies()
+        .retention_policies_store()
         .get(&realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -156,8 +154,7 @@ async fn sweep_retention_policy(
         .ok_or_else(|| AppError::not_found("retention policy not found"))?;
     let cutoff = now - Duration::seconds(policy.ttl_seconds);
     let events = state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -179,8 +176,7 @@ async fn sweep_retention_policy(
     };
     for event in pending {
         if state
-            .persistence
-            .retention_tombstones()
+            .retention_tombstones_store()
             .get(&event.event_id)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -189,8 +185,7 @@ async fn sweep_retention_policy(
             continue;
         }
         let sealed = state
-            .persistence
-            .events()
+            .events_store()
             .contains(&event.event_id)
             .await
             .unwrap_or(false);
@@ -204,8 +199,7 @@ async fn sweep_retention_policy(
             sealed,
         };
         state
-            .persistence
-            .retention_tombstones()
+            .retention_tombstones_store()
             .put(&tombstone)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;

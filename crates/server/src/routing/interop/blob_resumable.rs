@@ -934,7 +934,7 @@ async fn complete_resumable_upload(
         uploaded_by: actor.to_owned(),
         created_at: received_at,
     };
-    if let Err(error) = state.persistence.blobs().put(&blob_ref, &record).await {
+    if let Err(error) = state.blobs_store().put(&blob_ref, &record).await {
         tracing::error!(%error, "failed to persist blob");
         if let Err(delete_error) = state.object_storage.delete(&storage_key).await {
             tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");

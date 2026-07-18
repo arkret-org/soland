@@ -168,15 +168,13 @@ async fn get_server_status(
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let account_count = state
-        .persistence
-        .accounts()
+        .accounts_store()
         .list()
         .await
         .map(|items| items.len())
         .ok();
     let device_count = state
-        .persistence
-        .devices()
+        .devices_store()
         .list()
         .await
         .map(|items| items.len())
@@ -240,12 +238,7 @@ async fn get_server_stats(
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
 
-    let accounts = state
-        .persistence
-        .accounts()
-        .list()
-        .await
-        .unwrap_or_default();
+    let accounts = state.accounts_store().list().await.unwrap_or_default();
     let actor_count = accounts.len() as u64;
     let active_actor_count = accounts
         .iter()
@@ -253,15 +246,13 @@ async fn get_server_stats(
         .count() as u64;
     let realm_count = state.realms.lock().search(Default::default()).len() as u64;
     let device_count = state
-        .persistence
-        .devices()
+        .devices_store()
         .list()
         .await
         .map(|items| items.len() as u64)
         .unwrap_or(0);
     let report_count = state
-        .persistence
-        .moderation()
+        .moderation_store()
         .list_queue_items()
         .await
         .map(|items| items.len() as u64)
@@ -271,12 +262,7 @@ async fn get_server_stats(
         let proj = state.projection.lock();
         proj.applets.len() as u64
     };
-    let blobs = state
-        .persistence
-        .blobs()
-        .snapshot_all()
-        .await
-        .unwrap_or_default();
+    let blobs = state.blobs_store().snapshot_all().await.unwrap_or_default();
     let blob_count = blobs.len() as u64;
     let blob_total_size = blobs.iter().map(|blob| blob.size_bytes as u64).sum();
 
@@ -555,18 +541,12 @@ async fn revoke_device(
     let body = body.into_inner();
     let mut target_actor = body.actor.or(body.account_id);
     if target_actor.is_none() {
-        target_actor = state
-            .persistence
-            .devices()
-            .list()
-            .await
-            .ok()
-            .and_then(|devices| {
-                devices
-                    .into_iter()
-                    .find(|record| record.device_id == device_id)
-                    .map(|record| record.actor)
-            });
+        target_actor = state.devices_store().list().await.ok().and_then(|devices| {
+            devices
+                .into_iter()
+                .find(|record| record.device_id == device_id)
+                .map(|record| record.actor)
+        });
     }
     let target_actor = target_actor.ok_or_else(|| AppError::not_found("device not found"))?;
     revoke_device_record(state, &target_actor, &device_id)
@@ -608,8 +588,7 @@ async fn get_moderation_queue(
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let items = state
-        .persistence
-        .moderation()
+        .moderation_store()
         .list_queue_items()
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;

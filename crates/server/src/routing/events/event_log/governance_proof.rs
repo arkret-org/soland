@@ -109,8 +109,7 @@ async fn materialize_realm_control(
     realm_id: &RealmId,
 ) -> Result<MaterializedRealmControl, AppError> {
     let stats = state
-        .persistence
-        .events()
+        .events_store()
         .realm_event_stats(realm_id.as_str())
         .await
         .map_err(|error| {
@@ -128,8 +127,7 @@ async fn materialize_realm_control(
         ));
     }
     let realm_records = state
-        .persistence
-        .events()
+        .events_store()
         .realm_events_newest_first(realm_id.as_str())
         .await
         .map_err(|error| {
@@ -181,8 +179,7 @@ async fn materialize_realm_control(
         && active_device_generation.is_some()
     {
         state
-            .persistence
-            .devices()
+            .devices_store()
             .list_for_actor_including_revoked(principal_id)
             .await
             .map_err(|error| {

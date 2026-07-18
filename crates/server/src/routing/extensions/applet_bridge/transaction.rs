@@ -19,8 +19,7 @@ pub(super) async fn process_verified_transaction(
 ) -> Result<AppletTransactionOutcome, AppError> {
     let source_service_id = transaction.source_service_id.to_string();
     let begin = state
-        .persistence
-        .applets()
+        .applets_store()
         .begin_transaction_replay(AppletTransactionReplayRecord {
             source_service_id: source_service_id.clone(),
             idempotency_key: idempotency_key.to_owned(),
@@ -93,8 +92,7 @@ pub(super) async fn process_verified_transaction(
         AppError::internal(format!("applet transaction outcome serialize: {error}"))
     })?;
     state
-        .persistence
-        .applets()
+        .applets_store()
         .complete_transaction_replay(&source_service_id, idempotency_key, outcome_value)
         .await
         .map_err(|error| {

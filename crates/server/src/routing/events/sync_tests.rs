@@ -204,20 +204,26 @@ fn test_presence_envelope(
     } else {
         "ak:device:01904100-0000-7000-8000-000000000001"
     };
+    // Event Envelope timestamps must be canonical millisecond wire form
+    // (`YYYY-MM-DDTHH:MM:SS.sssZ`); serializing a `DateTime<Utc>` directly
+    // emits sub-millisecond precision the SDK deserializer rejects.
+    let sent_at_wire = sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let expires_at_wire = (sent_at + ChronoDuration::seconds(60))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     serde_json::from_value(serde_json::json!({
         "kind": "ak.presence",
         "realm_id": "ak:realm:01964137-0000-7000-8000-000000000001",
         "actor_id": actor,
         "device_id": envelope_device,
-        "sent_at": sent_at,
-        "expires_at": sent_at + ChronoDuration::seconds(60),
+        "sent_at": sent_at_wire,
+        "expires_at": expires_at_wire,
         "payload": {"state": status},
         "proof": {
             "kind": "detached_jws",
             "alg": "EdDSA",
             "verification_method": format!("{actor}#{envelope_device}"),
             "event_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "created_at": sent_at,
+            "created_at": sent_at_wire,
             "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
         }
     }))
@@ -271,8 +277,7 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
     let session = roster_session(&state, ROSTER_ACTOR);
     state.realms.lock().upsert(roster_realm(false, true));
     state
-        .persistence
-        .presence()
+        .presence_store()
         .put(PresenceRecord {
             actor: ROSTER_ACTOR.to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
@@ -487,8 +492,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     let post_join_received_at = created_at + ChronoDuration::milliseconds(300);
 
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .put(
             ROSTER_REALM,
             &soland_storage::RealmMetaRecord {
@@ -606,8 +610,7 @@ async fn put_canonical_event_received_at_for_actor(
     });
     let canonical_bytes = serde_json::to_vec(&envelope).expect("canonical event test envelope");
     state
-        .persistence
-        .events()
+        .events_store()
         .put(soland_storage::CanonicalEventRecord {
             event_id: event_id.to_owned(),
             actor_id: actor_id.to_owned(),
@@ -640,8 +643,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     let post_join_received_at = created_at + ChronoDuration::milliseconds(300);
 
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .put(
             ROSTER_REALM,
             &soland_storage::RealmMetaRecord {
@@ -1180,8 +1182,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         ),
     ] {
         state
-            .persistence
-            .devices()
+            .devices_store()
             .put(&DeviceInventoryRecord {
                 actor: actor.to_owned(),
                 device_id: device_id.to_owned(),
@@ -1215,8 +1216,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     .expect("initial cursor parses");
 
     let mut revoked = state
-        .persistence
-        .devices()
+        .devices_store()
         .list_for_actor_including_revoked(ROSTER_ACTOR)
         .await
         .expect("device list")
@@ -1226,8 +1226,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     revoked.revoked_at = Some(updated_at + ChronoDuration::seconds(1));
     revoked.updated_at = updated_at + ChronoDuration::seconds(1);
     state
-        .persistence
-        .devices()
+        .devices_store()
         .put(&revoked)
         .await
         .expect("device revoked");
@@ -1288,8 +1287,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     let second_created_at = first_created_at + ChronoDuration::seconds(1);
     let meta_created_at = first_created_at - ChronoDuration::seconds(1);
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .put(
             ROSTER_REALM,
             &soland_storage::RealmMetaRecord {
@@ -1314,8 +1312,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .await
         .expect("realm meta stored");
     state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .append(soland_storage::ProjectionEventRecord {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000a1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
@@ -1368,8 +1365,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     .expect("initial cursor parses");
 
     state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .append(soland_storage::ProjectionEventRecord {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000b1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
@@ -1880,8 +1876,7 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
         .and_then(Value::as_str)
         .expect("cursor handle");
     let record = state
-        .persistence
-        .sync_cursors()
+        .sync_cursors_store()
         .get(handle)
         .await
         .unwrap()
@@ -2081,8 +2076,7 @@ async fn presenting_a_cursor_prunes_strictly_older_stream_handles() {
             .await
             .expect("new cursor parses");
     let pruned = state
-        .persistence
-        .sync_cursors()
+        .sync_cursors_store()
         .prune_stream_superseded(
             &session.actor,
             &session.device_id,

@@ -80,13 +80,7 @@ pub(crate) async fn build_sync_snapshot(
     let (account_notifications, notification_position) =
         account_notification_delta(state, session, after_cursor, is_incremental).await;
     for (realm_id, _title, _summary, _tags, _category, members) in visible_realms {
-        let meta = state
-            .persistence
-            .realm_meta()
-            .get(&realm_id)
-            .await
-            .ok()
-            .flatten();
+        let meta = state.realm_meta_store().get(&realm_id).await.ok().flatten();
         let known_timeline_to_cursor = after_cursor.positions.contains_key(&realm_id);
         let known_account_to_cursor = after_cursor.account_positions.contains_key(&realm_id);
         let after_timeline_position = after_cursor
@@ -706,8 +700,7 @@ async fn timeline_events_for_realm(
     }
 
     for message in state
-        .persistence
-        .messages()
+        .messages_store()
         .list_for_realm(realm_id, 100)
         .await
         .unwrap_or_default()
@@ -765,8 +758,7 @@ async fn state_events_for_realm(
     session: Option<&SessionRecord>,
 ) -> (Vec<arkret_sdk::Event>, i64) {
     let mut events = state
-        .persistence
-        .projection_events()
+        .projection_events_store()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -837,7 +829,7 @@ async fn device_lists_for_actors(
     let mut positions = BTreeMap::new();
     let mut changed = BTreeSet::new();
     let mut left = BTreeSet::new();
-    let devices = state.persistence.devices();
+    let devices = state.devices_store();
 
     for actor in visible_actors {
         let records = match devices.list_for_actor_including_revoked(actor).await {
@@ -905,13 +897,7 @@ fn stable_position_tie_breaker(key: &str) -> i64 {
 }
 
 async fn accepted_event(state: &AppState, event_id: &str) -> Option<arkret_sdk::Event> {
-    let record = state
-        .persistence
-        .events()
-        .get(event_id)
-        .await
-        .ok()
-        .flatten()?;
+    let record = state.events_store().get(event_id).await.ok().flatten()?;
     match super::super::event_log::sdk_event_for_state(state, &record) {
         Ok(event) => Some(event),
         Err(error) => {
@@ -930,8 +916,7 @@ async fn account_data_events(
     };
     let mut latest = BTreeMap::<String, (DateTime<Utc>, arkret_sdk::Event)>::new();
     for record in state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -1077,8 +1062,7 @@ async fn typing_envelopes_for_subscriber(
     }
     let mut events = Vec::new();
     for record in state
-        .persistence
-        .typing()
+        .typing_store()
         .list_for_realm(realm_id)
         .await
         .unwrap_or_default()
@@ -1130,15 +1114,13 @@ async fn pending_call_signal_records_for_subscriber(
         0
     } else {
         state
-            .persistence
-            .call_signal_relay()
+            .call_signal_relay_store()
             .delivered_through(&session.actor, &session.device_id, realm_id)
             .await
             .unwrap_or(0)
     };
     state
-        .persistence
-        .call_signal_relay()
+        .call_signal_relay_store()
         .list_for_realm(realm_id)
         .await
         .unwrap_or_default()
@@ -1175,8 +1157,7 @@ async fn deliver_call_signal_envelopes_for_subscriber(
         pending_call_signal_records_for_subscriber(state, realm_id, session, full_sync).await;
     if let Some(max_position) = records.iter().map(|record| record.position).max() {
         let _ = state
-            .persistence
-            .call_signal_relay()
+            .call_signal_relay_store()
             .advance(&session.actor, &session.device_id, realm_id, max_position)
             .await;
     }
@@ -1189,8 +1170,7 @@ async fn timeline_event_received_at(
     created_at: DateTime<Utc>,
 ) -> DateTime<Utc> {
     state
-        .persistence
-        .events()
+        .events_store()
         .get(event_id)
         .await
         .ok()

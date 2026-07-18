@@ -325,14 +325,14 @@ mod tests {
             "verifier_did": service_id,
             "audience": "ak.gate.account.command.pair_agent_key",
             "challenge": "pairing-challenge-0001",
-            "issued_at": "2026-07-06T00:00:00Z",
-            "expires_at": "2026-07-06T00:05:00Z",
+            "issued_at": "2026-07-06T00:00:00.000Z",
+            "expires_at": "2026-07-06T00:05:00.000Z",
             "proofs": [{
                 "kind": "detached_jws",
                 "alg": "EdDSA",
                 "verification_method": "did:web:controller.example#key-1",
                 "event_digest": format!("sha256:{}", "0".repeat(64)),
-                "created_at": "2026-07-06T00:00:00Z",
+                "created_at": "2026-07-06T00:00:00.000Z",
                 "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
             }]
         }))

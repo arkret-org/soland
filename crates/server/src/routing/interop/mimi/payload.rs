@@ -17,8 +17,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
     payload: Value,
 ) -> Result<(), AppError> {
     let actor_seq = state
-        .persistence
-        .events()
+        .events_store()
         .max_actor_seq(actor_id)
         .await
         .map_err(|error| AppError::internal(format!("MIMI actor frontier lookup: {error}")))?
@@ -58,7 +57,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         envelope,
         received_at: created_at,
     };
-    if let Err(error) = state.persistence.events().put(record).await {
+    if let Err(error) = state.events_store().put(record).await {
         tracing::error!(%error, "mimi: failed to persist canonical message event");
         return Err(AppError::internal("MIMI canonical event store unavailable"));
     }

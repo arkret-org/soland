@@ -195,8 +195,8 @@ fn ensure_organization_registry_admin(state: &AppState, actor: &str) -> Result<(
 
 pub(crate) async fn refresh_organization_projection(
     state: &AppState,
-) -> Result<(), soland_storage::PersistenceError> {
-    let organizations = state.persistence.organizations().list().await?;
+) -> Result<(), soland_application::ApplicationError> {
+    let organizations = state.organizations_store().list().await?;
     {
         let mut map = state.organizations.lock();
         for record in organizations {
@@ -204,11 +204,7 @@ pub(crate) async fn refresh_organization_projection(
         }
     }
 
-    let policies = state
-        .persistence
-        .organization_policies()
-        .snapshot_all()
-        .await?;
+    let policies = state.organization_policies_store().snapshot_all().await?;
     {
         let mut map = state.organization_policies.lock();
         for record in policies {
@@ -216,11 +212,7 @@ pub(crate) async fn refresh_organization_projection(
         }
     }
 
-    let links = state
-        .persistence
-        .realm_organizations()
-        .snapshot_all()
-        .await?;
+    let links = state.realm_organizations_store().snapshot_all().await?;
     {
         let mut realm_map = state.realm_organizations.lock();
         let mut organization_map = state.organization_realms.lock();
@@ -236,8 +228,7 @@ pub(crate) async fn refresh_organization_projection(
     }
 
     let realm_policies = state
-        .persistence
-        .realm_moderation_policies()
+        .realm_moderation_policies_store()
         .snapshot_all()
         .await?;
     {
@@ -332,8 +323,7 @@ async fn upsert_organization(
         updated_at: now,
     };
     state
-        .persistence
-        .organizations()
+        .organizations_store()
         .put(&record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -448,8 +438,7 @@ async fn upsert_organization_policy(
     }
     let now = Utc::now();
     let version = state
-        .persistence
-        .organization_policies()
+        .organization_policies_store()
         .get(&organization_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -482,8 +471,7 @@ async fn upsert_organization_policy(
         updated_at: now,
     };
     state
-        .persistence
-        .organization_policies()
+        .organization_policies_store()
         .put(&record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -571,10 +559,9 @@ pub(crate) async fn link_realm_to_organization(
     state: &AppState,
     realm_id: &str,
     organization_id: &str,
-) -> Result<(), soland_storage::PersistenceError> {
+) -> Result<(), soland_application::ApplicationError> {
     state
-        .persistence
-        .realm_organizations()
+        .realm_organizations_store()
         .link(realm_id, organization_id)
         .await?;
     state
@@ -815,18 +802,14 @@ pub(crate) async fn persist_realm_moderation_policy(
     realm_id: &str,
     payload: Value,
     actor: &str,
-) -> Result<RealmModerationPolicyRecord, soland_storage::PersistenceError> {
+) -> Result<RealmModerationPolicyRecord, soland_application::ApplicationError> {
     let record = RealmModerationPolicyRecord {
         realm_id: realm_id.to_owned(),
         payload,
         updated_by: actor.to_owned(),
         updated_at: Utc::now(),
     };
-    state
-        .persistence
-        .realm_moderation_policies()
-        .put(&record)
-        .await?;
+    state.realm_moderation_policies_store().put(&record).await?;
     state
         .realm_moderation_policies
         .lock()
@@ -847,10 +830,9 @@ async fn ensure_organization_placeholder(
     state: &AppState,
     organization_id: &str,
     actor: &str,
-) -> Result<(), soland_storage::PersistenceError> {
+) -> Result<(), soland_application::ApplicationError> {
     if state
-        .persistence
-        .organizations()
+        .organizations_store()
         .get(organization_id)
         .await?
         .is_some()
@@ -872,7 +854,7 @@ async fn ensure_organization_placeholder(
         created_at: now,
         updated_at: now,
     };
-    state.persistence.organizations().put(&record).await?;
+    state.organizations_store().put(&record).await?;
     state
         .organizations
         .lock()

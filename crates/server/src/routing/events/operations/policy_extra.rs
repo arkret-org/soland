@@ -17,8 +17,7 @@ pub(crate) async fn validate_history_visibility_policy(
         return Ok(());
     }
     let Some(meta) = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(operation.realm_id.as_str())
         .await
         .ok()
@@ -138,8 +137,7 @@ async fn intended_history_visibility_for_realm(
         }
     }
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()
@@ -199,8 +197,7 @@ async fn intended_encryption_profile_for_realm(
         }
     }
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()
@@ -427,8 +424,7 @@ pub(crate) async fn validate_realm_key_share_policy(
         .map(arkret_sdk::DeviceId::as_str)
         .ok_or("policy_denied")?;
     let Some(meta) = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(operation.realm_id.as_str())
         .await
         .ok()
@@ -458,8 +454,7 @@ pub(crate) async fn validate_realm_key_share_policy(
         return Err("device_revoked");
     }
     let device = state
-        .persistence
-        .devices()
+        .devices_store()
         .get(share.recipient_principal_id.as_str(), recipient_device_id)
         .await
         .map_err(|_| "policy_denied")?
@@ -704,8 +699,7 @@ pub(crate) async fn validate_realm_moderation_policy(
 
 pub(crate) async fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
     state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()
@@ -801,13 +795,7 @@ pub(crate) async fn realm_owner_and_members(
     state: &AppState,
     realm_id: &str,
 ) -> (Option<String>, Vec<String>) {
-    let meta = state
-        .persistence
-        .realm_meta()
-        .get(realm_id)
-        .await
-        .ok()
-        .flatten();
+    let meta = state.realm_meta_store().get(realm_id).await.ok().flatten();
     let owner = meta.map(|meta| meta.owner);
     let members = {
         let realms = state.realms.lock();
@@ -846,8 +834,7 @@ pub(crate) async fn effective_audience_mention_policy_for_realm(
     realm_id: &str,
 ) -> Option<Value> {
     let events = state
-        .persistence
-        .events()
+        .events_store()
         .realm_events_newest_first(realm_id)
         .await
         .ok()?;

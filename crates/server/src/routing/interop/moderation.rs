@@ -424,8 +424,7 @@ async fn validate_franking_event_time_anchor(
     proof: &FrankingProof,
 ) -> Result<(), AppError> {
     let record = state
-        .persistence
-        .events()
+        .events_store()
         .get(proof.event_id.as_str())
         .await
         .map_err(|error| {
@@ -667,16 +666,14 @@ async fn moderation_report(
     report_fields.insert("created_at".to_owned(), json!(now()));
     let report_payload = Value::Object(report_fields);
     if let Err(error) = state
-        .persistence
-        .moderation()
+        .moderation_store()
         .append_report(report_payload.clone())
         .await
     {
         tracing::error!(%error, "failed to append moderation report");
     }
     if let Err(error) = state
-        .persistence
-        .moderation()
+        .moderation_store()
         .append_action(json!({
             "action_id": ids::generate("moderation_action"),
             "report_id": report_id,
@@ -706,12 +703,7 @@ async fn moderation_report(
         "audit_refs": [],
         "created_at": now(),
     });
-    if let Err(error) = state
-        .persistence
-        .moderation()
-        .upsert_queue_item(queue_item)
-        .await
-    {
+    if let Err(error) = state.moderation_store().upsert_queue_item(queue_item).await {
         tracing::warn!(%error, "queue item upsert failed (likely Pg backend stub)");
     }
     append_audit_log(
@@ -788,8 +780,7 @@ pub(crate) async fn visible_reports_for_actor(
     realm_filter: Option<&str>,
 ) -> Vec<Value> {
     let all = state
-        .persistence
-        .moderation()
+        .moderation_store()
         .list_reports()
         .await
         .unwrap_or_default();
@@ -833,8 +824,7 @@ async fn moderation_routing_visible_to_actor(
         return true;
     }
     let owner = state
-        .persistence
-        .realm_meta()
+        .realm_meta_store()
         .get(realm_id)
         .await
         .ok()
@@ -1174,7 +1164,7 @@ fn sealed_plaintext_release_authorized(emitted: &Value) -> bool {
 /// refuses to invite the audit agent for any later report, while historical
 /// `ak.audit.accessed` records stay in the durable audit log.
 async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
-    let mut records = state.persistence.events().snapshot_all().await.ok()?;
+    let mut records = state.events_store().snapshot_all().await.ok()?;
     // Fold in chronological order so the latest create/update wins regardless
     // of the backing store's natural iteration order.
     records.sort_by(|left, right| {
@@ -1278,8 +1268,7 @@ async fn moderation_appeal_submit(
     }
     let appellant = session.actor.clone();
     let duplicate_active = state
-        .persistence
-        .moderation()
+        .moderation_store()
         .list_appeals()
         .await
         .unwrap_or_default()
@@ -1321,7 +1310,7 @@ async fn moderation_appeal_submit(
         "event_kind": arkret_sdk::events::EventKind::MODERATION_APPEAL_SUBMIT,
         "appeal_state": "submitted",
     });
-    if let Err(error) = state.persistence.moderation().append_appeal(event).await {
+    if let Err(error) = state.moderation_store().append_appeal(event).await {
         tracing::error!(%error, "failed to append moderation appeal");
         return Err(AppError::internal(
             "appeal persistence failed; backend may be a Pg stub",
@@ -1405,8 +1394,7 @@ mod report_safety_tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         state
-            .persistence
-            .events()
+            .events_store()
             .put(soland_storage::CanonicalEventRecord {
                 event_id: FRANKING_EVENT.to_owned(),
                 actor_id: REPORTER.to_owned(),

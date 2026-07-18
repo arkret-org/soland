@@ -38,8 +38,7 @@ async fn get_actor(
     let actor_id = actor_id.into_inner();
 
     let account = state
-        .persistence
-        .accounts()
+        .accounts_store()
         .list()
         .await
         .map_err(|error| {

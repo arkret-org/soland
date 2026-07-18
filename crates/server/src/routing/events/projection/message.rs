@@ -18,7 +18,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
         });
     let message_id =
         soland_domain::reducer::message_id_from_payload_or_event_id(&operation.payload, &event_id);
-    let store = state.persistence.messages();
+    let store = state.messages_store();
     if matches!(store.get(&event_id).await, Ok(Some(_))) {
         return;
     }

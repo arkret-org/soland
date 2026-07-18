@@ -34,7 +34,7 @@ pub(super) async fn record_rejected_invite_claim_effect(
         return Ok(());
     };
 
-    let invites = state.persistence.realm_invites();
+    let invites = state.realm_invite_application();
     let Some(mut record) = invites
         .get(&invite_id)
         .await
@@ -119,7 +119,7 @@ pub(super) async fn enqueue_peer_event_fanout(
     envelope: &Value,
 ) {
     for record in peer_event_fanout_records(state, parsed, envelope) {
-        if let Err(error) = state.persistence.federation_outbox().enqueue(&record).await {
+        if let Err(error) = state.federation_outbox_store().enqueue(&record).await {
             tracing::warn!(
                 %error,
                 event_id = %parsed.event_id,

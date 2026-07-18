@@ -291,7 +291,7 @@ pub(super) async fn persist_formal_applet_event(
     state: &AppState,
     event: FormalAppletEvent,
 ) -> Result<(), AppError> {
-    if let Err(error) = state.persistence.events().put(event.canonical).await {
+    if let Err(error) = state.events_store().put(event.canonical).await {
         tracing::error!(%error, event_id = %event.event_id, "applet ghost provisioning: failed to persist canonical event");
         return Err(AppError::internal(
             "failed to persist ghost actor provisioning event",
@@ -450,8 +450,7 @@ pub(super) fn production_payload_proof(
 
 pub(super) async fn next_actor_seq(state: &AppState, actor_id: &str) -> Result<u64, AppError> {
     state
-        .persistence
-        .events()
+        .events_store()
         .max_actor_seq(actor_id)
         .await
         .map(|seq| seq.unwrap_or(0) + 1)

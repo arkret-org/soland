@@ -487,8 +487,7 @@ async fn upload_keypackage(
         };
         let record = key_package_to_record(&snapshot);
         state
-            .persistence
-            .mls_key_packages()
+            .mls_key_packages_store()
             .put(&record)
             .await
             .map_err(|err| AppError::internal(format!("mls_key_packages.put: {err}")))?;
@@ -717,8 +716,7 @@ pub(crate) async fn claim_keypackages_for_request(
     // Pg-backed deployment; for the in-memory backend the reducer's
     // lock above already serialised them.
     let updated = state
-        .persistence
-        .mls_key_packages()
+        .mls_key_packages_store()
         .try_claim(
             &claimed_keypackage_id,
             &claimed_group_id,
@@ -783,12 +781,7 @@ async fn consume_keypackages(
     let mut consumed = Vec::new();
     let mut failures = Vec::new();
     for keypackage_id in refs {
-        match state
-            .persistence
-            .mls_key_packages()
-            .get(&keypackage_id)
-            .await
-        {
+        match state.mls_key_packages_store().get(&keypackage_id).await {
             Ok(Some(record))
                 if record.last_resort
                     && record.claimed_by_mls_group_id.as_deref() != Some("revoked") =>
@@ -826,8 +819,7 @@ async fn consume_keypackages(
             }
         }
         match state
-            .persistence
-            .mls_key_packages()
+            .mls_key_packages_store()
             .try_claim(
                 &keypackage_id,
                 &group_id,
@@ -879,12 +871,7 @@ async fn revoke_keypackages(
     let mut revoked = Vec::new();
     let mut failures = Vec::new();
     for keypackage_id in refs {
-        match state
-            .persistence
-            .mls_key_packages()
-            .get(&keypackage_id)
-            .await
-        {
+        match state.mls_key_packages_store().get(&keypackage_id).await {
             Ok(Some(record)) if record.actor_id != session.actor => {
                 failures.push(keypackage_ref_failure(keypackage_id, "not_owner"));
             }
@@ -893,8 +880,7 @@ async fn revoke_keypackages(
             }
             Ok(Some(_)) => {
                 match state
-                    .persistence
-                    .mls_key_packages()
+                    .mls_key_packages_store()
                     .try_claim(&keypackage_id, "revoked", None, None, None, revoked_at)
                     .await
                 {
@@ -927,8 +913,7 @@ pub(crate) async fn retire_device_keypackages(
     device_id: &str,
 ) -> Result<usize, AppError> {
     let rows = state
-        .persistence
-        .mls_key_packages()
+        .mls_key_packages_store()
         .snapshot_all()
         .await
         .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
@@ -941,8 +926,7 @@ pub(crate) async fn retire_device_keypackages(
             && row.consumed_at.is_none()
     }) {
         if state
-            .persistence
-            .mls_key_packages()
+            .mls_key_packages_store()
             .try_claim(&row.id, "revoked", None, None, None, retired_at)
             .await
             .map_err(|error| {
@@ -987,8 +971,7 @@ async fn pending_welcomes(
     // then mirror the marked-delivered state into the in-process
     // projection so subsequent same-process polls see it.
     let drained = state
-        .persistence
-        .mls_welcomes()
+        .mls_welcomes_store()
         .drain_pending(&session.actor, &session.device_id, now_secs, cap)
         .await
         .map_err(|err| AppError::internal(format!("mls_welcomes.drain_pending: {err}")))?;
@@ -1129,8 +1112,7 @@ async fn current_keypackage_trust_binding(
         return Ok(KeyPackageTrustBinding::cross_signing(generation));
     }
     let device = state
-        .persistence
-        .devices()
+        .devices_store()
         .get(principal.as_str(), device_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -1164,8 +1146,7 @@ async fn current_keypackage_claim_trust_selector(
     let mut bindings = BTreeMap::new();
     if target_device_ids.is_empty() {
         for device in state
-            .persistence
-            .devices()
+            .devices_store()
             .list_for_actor(principal.as_str())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -1177,8 +1158,7 @@ async fn current_keypackage_claim_trust_selector(
     } else {
         for device_id in target_device_ids {
             if let Some(device) = state
-                .persistence
-                .devices()
+                .devices_store()
                 .get(principal.as_str(), device_id)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?

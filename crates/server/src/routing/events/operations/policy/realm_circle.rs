@@ -206,12 +206,7 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
     if target == controller {
         return true;
     }
-    let Ok(records) = state
-        .persistence
-        .agents()
-        .list_for_controller(controller)
-        .await
-    else {
+    let Ok(records) = state.agents_store().list_for_controller(controller).await else {
         return false;
     };
     let record_matches = records.iter().any(|record| {

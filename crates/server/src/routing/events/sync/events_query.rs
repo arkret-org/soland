@@ -1126,7 +1126,7 @@ async fn full_event_from_projection_json(
     if projection_row_is_redacted_message_tombstone(row) {
         return projection_only_event_from_row(state, row);
     }
-    if let Ok(Some(record)) = state.persistence.events().get(event_id).await
+    if let Ok(Some(record)) = state.events_store().get(event_id).await
         && let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record)
     {
         return Some(event);
@@ -1232,8 +1232,7 @@ mod tests {
     ) {
         let canonical_bytes = serde_json::to_vec(&envelope).unwrap();
         state
-            .persistence
-            .events()
+            .events_store()
             .put(CanonicalEventRecord {
                 event_id: event_id.to_owned(),
                 actor_id: TEST_ACTOR.to_owned(),
@@ -1407,8 +1406,7 @@ async fn durable_events_query_from_parts(
     let actors_set: BTreeSet<&str> = parts.actors.iter().map(String::as_str).collect();
     let realms_set: BTreeSet<&str> = parts.realms.iter().map(String::as_str).collect();
     let all_records = state
-        .persistence
-        .events()
+        .events_store()
         .snapshot_all()
         .await
         .unwrap_or_default();

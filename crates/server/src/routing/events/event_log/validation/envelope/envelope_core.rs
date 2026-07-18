@@ -515,8 +515,7 @@ async fn enforce_device_generation_fence(
             )
         })?;
     let device = state
-        .persistence
-        .devices()
+        .devices_store()
         .get(actor_id, &device_id)
         .await
         .map_err(|error| {
