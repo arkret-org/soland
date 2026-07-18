@@ -111,6 +111,24 @@ pub(in crate::routing) async fn submit_mimi_event_value(
     submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission)).await
 }
 
+pub(in crate::routing) async fn submit_account_data_event_value(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: Value,
+    realm_id: &str,
+    owner: &str,
+    key: &str,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let admission = InternalEventAdmission::account_data(
+        realm_id,
+        state.service_id.as_str(),
+        session.device_id.as_str(),
+        owner,
+        key,
+    );
+    submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission)).await
+}
+
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
     state: &AppState,
     session: &SessionRecord,

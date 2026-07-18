@@ -20,6 +20,7 @@ const ACTOR_SUBMIT_LOCK_SHARDS: usize = 1024;
 pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 
 static ACTOR_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
+static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 
 mod identity_anchor;
 use identity_anchor::{batch_contains_identity_anchor, submit_identity_anchor_batch};
@@ -34,6 +35,12 @@ fn actor_submit_lock(actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     std::hash::Hash::hash(actor_id, &mut hasher);
     let shard = (hasher.finish() as usize) % ACTOR_SUBMIT_LOCK_SHARDS;
     locks[shard].clone()
+}
+
+pub(in crate::routing) fn service_event_authoring_lock() -> Arc<tokio::sync::Mutex<()>> {
+    SERVICE_EVENT_AUTHORING_LOCK
+        .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
 }
 
 fn stamp_projection_operation_received_at(
@@ -118,7 +125,14 @@ pub(in crate::routing) struct InternalEventAdmission {
     realm_id: String,
     actor_id: String,
     kind: String,
-    binding_ref: String,
+    device_id: String,
+    binding: InternalEventBinding,
+}
+
+#[derive(Debug, Clone)]
+enum InternalEventBinding {
+    MimiProvider { binding_ref: String },
+    AccountData { owner: String, key: String },
 }
 
 impl InternalEventAdmission {
@@ -131,7 +145,29 @@ impl InternalEventAdmission {
             realm_id: realm_id.into(),
             actor_id: actor_id.into(),
             kind: arkret_sdk::events::EventKind::MESSAGE_CREATE.to_owned(),
-            binding_ref: binding_ref.into(),
+            device_id: "mimi-provider-facade".to_owned(),
+            binding: InternalEventBinding::MimiProvider {
+                binding_ref: binding_ref.into(),
+            },
+        }
+    }
+
+    pub(in crate::routing) fn account_data(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        device_id: impl Into<String>,
+        owner: impl Into<String>,
+        key: impl Into<String>,
+    ) -> Self {
+        Self {
+            realm_id: realm_id.into(),
+            actor_id: actor_id.into(),
+            kind: arkret_sdk::events::EventKind::ACCOUNT_DATA_SET.to_owned(),
+            device_id: device_id.into(),
+            binding: InternalEventBinding::AccountData {
+                owner: owner.into(),
+                key: key.into(),
+            },
         }
     }
 
@@ -141,16 +177,26 @@ impl InternalEventAdmission {
         object: &serde_json::Map<String, Value>,
     ) -> bool {
         session.actor == self.actor_id
-            && session.device_id == "mimi-provider-facade"
+            && session.device_id == self.device_id
             && object.get("actor_id").and_then(Value::as_str) == Some(self.actor_id.as_str())
             && object.get("realm_id").and_then(Value::as_str) == Some(self.realm_id.as_str())
             && object.get("kind").and_then(Value::as_str) == Some(self.kind.as_str())
-            && object
-                .get("payload")
-                .and_then(|payload| payload.get("mimi_provenance"))
-                .and_then(|provenance| provenance.get("mimi_room_binding_ref"))
-                .and_then(Value::as_str)
-                == Some(self.binding_ref.as_str())
+            && match &self.binding {
+                InternalEventBinding::MimiProvider { binding_ref } => {
+                    object
+                        .get("payload")
+                        .and_then(|payload| payload.get("mimi_provenance"))
+                        .and_then(|provenance| provenance.get("mimi_room_binding_ref"))
+                        .and_then(Value::as_str)
+                        == Some(binding_ref.as_str())
+                }
+                InternalEventBinding::AccountData { owner, key } => {
+                    object.get("payload").is_some_and(|payload| {
+                        payload.get("owner").and_then(Value::as_str) == Some(owner.as_str())
+                            && payload.get("key").and_then(Value::as_str) == Some(key.as_str())
+                    })
+                }
+            }
     }
 }
 
@@ -816,7 +862,9 @@ use post_commit::*;
 use preflight::*;
 pub(in crate::routing::events::event_log) use value::submit_event_value_with_idempotency;
 use value::*;
-pub(in crate::routing) use value::{submit_event_value, submit_mimi_event_value};
+pub(in crate::routing) use value::{
+    submit_account_data_event_value, submit_event_value, submit_mimi_event_value,
+};
 
 #[cfg(test)]
 mod received_at_stamp_tests {

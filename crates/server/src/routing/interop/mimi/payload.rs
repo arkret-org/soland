@@ -15,6 +15,8 @@ pub(super) async fn persist_mimi_canonical_message_event(
     created_at: chrono::DateTime<chrono::Utc>,
     payload: Value,
 ) -> Result<(), AppError> {
+    let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
+    let _service_event_guard = service_event_lock.lock().await;
     let actor_id = state.service_id.as_str();
     let actor_seq = state
         .events_store()
