@@ -445,6 +445,23 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     fn return_snapshot_space_container(
         p: &soland_domain::reducer::SpaceContainerProjection,
     ) -> Option<ProjectionWriteThroughSnapshot> {
+        let (child_scope_policy, child_scope_policy_scope_circle_id) = match p
+            .child_scope_policy
+            .as_ref()
+        {
+            None => (None, None),
+            Some(arkret_sdk::ChildScopePolicy::AllowAny {}) => (Some("allow_any".to_owned()), None),
+            Some(arkret_sdk::ChildScopePolicy::RequireE2ee {}) => {
+                (Some("require_e2ee".to_owned()), None)
+            }
+            Some(arkret_sdk::ChildScopePolicy::RequireSameScope {}) => {
+                (Some("require_same_scope".to_owned()), None)
+            }
+            Some(arkret_sdk::ChildScopePolicy::RequireScopeCircleId { scope_circle_id }) => (
+                Some("require_scope_circle_id".to_owned()),
+                Some(scope_circle_id.as_str().to_owned()),
+            ),
+        };
         Some(ProjectionWriteThroughSnapshot::SpaceContainer(
             SpaceContainerProjectionRecord {
                 container_space_id: p.container_space_id.clone(),
@@ -453,14 +470,8 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
                 title: p.title.clone(),
                 fields: p.fields.clone(),
                 scope_circle_id: p.scope_circle_id.clone(),
-                child_scope_policy: p
-                    .child_scope_policy
-                    .as_ref()
-                    .map(|policy| policy.kind.clone()),
-                child_scope_policy_scope_circle_id: p
-                    .child_scope_policy
-                    .as_ref()
-                    .and_then(|policy| policy.scope_circle_id.clone()),
+                child_scope_policy,
+                child_scope_policy_scope_circle_id,
                 parent_ref: p.parent_ref.clone(),
                 rank: p.rank.clone(),
                 state: match p.state {
