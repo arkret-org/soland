@@ -155,11 +155,20 @@ pub async fn validate_operation_policy(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
+    validate_operation_policy_with_plaintext_service_binding(state, operations, false).await
+}
+
+pub async fn validate_operation_policy_with_plaintext_service_binding(
+    state: &AppState,
+    operations: &[Operation],
+    has_plaintext_service_binding: bool,
+) -> Result<(), &'static str> {
     for operation in operations {
         validate_realm_lifecycle_write_gate(state, operation)?;
         validate_managed_agent_grant_ceiling(state, operation).await?;
         if kinds::operation_is_message_create(operation)
             && !message_operation_is_encrypted(operation)
+            && !has_plaintext_service_binding
             && known_realm_denies_plaintext_service(state, operation.realm_id.as_str()).await
         {
             return Err(

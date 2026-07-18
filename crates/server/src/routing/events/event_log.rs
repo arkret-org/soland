@@ -48,7 +48,8 @@ use super::{
     realm_allows_plaintext_service_for_data_class, realm_event_visible_to_session,
     realm_has_member, render_error, sha256_hex, validate_agent_participation_ceiling,
     validate_agent_reply_participation, validate_content_encryption_floor, validate_did,
-    validate_operation_policy, validate_operation_semantics, validate_space_id,
+    validate_operation_policy, validate_operation_policy_with_plaintext_service_binding,
+    validate_operation_semantics, validate_space_id,
 };
 use crate::routing::organizations;
 use crate::routing::policy_gate::{self, PolicyGateSurface};
@@ -88,7 +89,6 @@ use realm_index::{
 };
 
 mod submit;
-pub(in crate::routing) use submit::submit_event_value;
 pub(super) use submit::submit_federation_events;
 use submit::{
     EventCommitIdempotency, EventValidationError, IDEMPOTENCY_KEY_TTL_SECONDS,
@@ -96,6 +96,7 @@ use submit::{
     event_validation_error, events_submit_outcome, render_submit_one_error, submit_event_batch,
     submit_event_batch_outcome, submit_event_value_with_idempotency,
 };
+pub(in crate::routing) use submit::{submit_event_value, submit_mimi_event_value};
 
 mod validation;
 use validation::*;

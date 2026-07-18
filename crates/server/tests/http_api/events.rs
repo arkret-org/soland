@@ -925,38 +925,39 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     super::agents::seed_agent_provision_prerequisites(&state, controller_id).await;
     super::agents::seed_active_controller_device_generation(&state, controller_id).await;
 
-    let mut created = TestClient::post("http://server/_arkret/self/agents")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "display_name": "Governance recovery Agent",
-            "slug": "governance-recovery",
-            "requested_scope": {
-                "actions": [
-                    "ak.self.events.stream.subscribe",
-                    "ak.self.events.query.scan",
-                    "ak.self.events.command.submit"
-                ],
-                "resources": [
-                    {
-                        "kind": "operation",
-                        "operation": "ak.self.events.stream.subscribe"
-                    },
-                    {
-                        "kind": "operation",
-                        "operation": "ak.self.events.query.scan"
-                    },
-                    {
-                        "kind": "operation",
-                        "operation": "ak.self.events.command.submit"
-                    }
-                ],
-                "constraints": []
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    let create_status = created.status_code.expect("Agent create status");
-    let create_body: Value = created.take_json().await.expect("Agent create body");
+    // Agent provisioning is the spec-defined prepare/commit transcript. Reuse
+    // the SDK-backed fixture instead of maintaining an obsolete one-shot body
+    // in this downstream managed-PCR test.
+    let (create_status, create_body) = super::agents::provision_agent_with_sdk_events(
+        &state,
+        token,
+        controller_id,
+        "Governance recovery Agent",
+        "governance-recovery",
+        serde_json::json!({
+            "actions": [
+                "ak.self.events.stream.subscribe",
+                "ak.self.events.query.scan",
+                "ak.self.events.command.submit"
+            ],
+            "resources": [
+                {
+                    "kind": "operation",
+                    "operation": "ak.self.events.stream.subscribe"
+                },
+                {
+                    "kind": "operation",
+                    "operation": "ak.self.events.query.scan"
+                },
+                {
+                    "kind": "operation",
+                    "operation": "ak.self.events.command.submit"
+                }
+            ],
+            "constraints": []
+        }),
+    )
+    .await;
     assert_eq!(
         create_status,
         StatusCode::CREATED,
@@ -1251,14 +1252,22 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
 #[tokio::test]
 async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
+    let actor = test_event_signer_did();
+    let token = dev_token_for_device(
+        state.clone(),
+        actor,
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        "Cursor Author",
+    )
+    .await;
     let realm_id = DEMO_REALM_ID;
+    add_test_realm_member(&state, realm_id, actor);
 
     for body in ["first backfill page", "second backfill page"] {
         let sent = submit_message_event(
             state.clone(),
             &token,
-            "did:web:alice.example",
+            actor,
             realm_id,
             "ak:strand:backfill-pages",
             serde_json::json!({"body": body}),

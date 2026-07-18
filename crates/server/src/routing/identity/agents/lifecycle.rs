@@ -20,18 +20,60 @@ pub(super) async fn provision_agent(
     // Spec `agent_provision_request_body` carries no controller_id —
     // the controller is ALWAYS the authenticated principal.
     let controller_id = session.actor.clone();
-    let display_name = body
-        .display_name
+    let (
+        prepared_ids,
+        display_name,
+        agent_slug,
+        avatar_blob_ref,
+        requested_scope_typed,
+        provision_events,
+        pairing_ttl_ms,
+    ) = match body {
+        AgentProvisionRequestBody::Prepare {
+            display_name,
+            slug,
+            avatar_blob_ref,
+            requested_scope,
+            pairing_ttl_ms,
+        } => (
+            None,
+            display_name,
+            slug,
+            avatar_blob_ref,
+            requested_scope,
+            None,
+            pairing_ttl_ms,
+        ),
+        AgentProvisionRequestBody::Commit {
+            agent_id,
+            principal_control_realm_id,
+            display_name,
+            slug,
+            avatar_blob_ref,
+            requested_scope,
+            provision_events,
+            pairing_ttl_ms,
+        } => (
+            Some((agent_id, principal_control_realm_id)),
+            display_name,
+            slug,
+            avatar_blob_ref,
+            requested_scope,
+            Some(provision_events),
+            pairing_ttl_ms,
+        ),
+    };
+    let display_name = display_name
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let agent_slug = body.slug.trim().to_owned();
-    let avatar_blob_ref = body.avatar_blob_ref.map(|value| value.to_string());
+    let agent_slug = agent_slug.trim().to_owned();
+    let avatar_blob_ref = avatar_blob_ref.map(|value| value.to_string());
     let now_utc = chrono::Utc::now();
     validate_agent_slug(&agent_slug)
         .map_err(|err| AppError::invalid_param(format!("slug is invalid: {err}")))?;
-    let requested_scope = serde_json::to_value(&body.requested_scope)
+    let requested_scope = serde_json::to_value(&requested_scope_typed)
         .map_err(|error| AppError::invalid_param(format!("requested_scope is invalid: {error}")))?;
     let active_recovery_policy = state
         .recovery_policy_application()
@@ -58,6 +100,58 @@ pub(super) async fn provision_agent(
     for record in existing.iter_mut() {
         *record = lazily_expire_pairing(state, record.clone()).await?;
     }
+    if let Some((prepared_agent_id, prepared_realm_id)) = &prepared_ids
+        && let Some(record) = existing
+            .iter()
+            .find(|record| record.id == prepared_agent_id.as_str())
+    {
+        let events = provision_events
+            .as_ref()
+            .expect("commit phase carries provision_events");
+        let refs_match = record.provision_event_refs.as_ref().is_some_and(|refs| {
+            refs.get("accountability_grant_event_id")
+                .and_then(Value::as_str)
+                == Some(events.accountability_grant.event_id.as_str())
+                && refs.get("selector_claim_event_id").and_then(Value::as_str)
+                    == Some(events.selector_claim.event_id.as_str())
+        });
+        if record.controller_id != controller_id
+            || record.principal_control_realm_id != prepared_realm_id.as_str()
+            || record.agent_slug.as_deref() != Some(agent_slug.as_str())
+            || record.requested_scope.as_ref() != Some(&requested_scope)
+            || !refs_match
+        {
+            return Err(AppError::conflict(
+                "agent provision commit reuses an allocated agent_id with different inputs",
+            ));
+        }
+        let requested_scope_digest = arkret_sdk::agent_requested_scope_digest(
+            prepared_agent_id,
+            &Did::new(controller_id.clone())
+                .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?,
+            &requested_scope_typed,
+        )
+        .map_err(|error| AppError::internal(format!("requested_scope digest failed: {error}")))?;
+        let pairing_request_id = record.pairing_request_id.clone().ok_or_else(|| {
+            AppError::internal("completed Agent provision is missing pairing_request_id")
+        })?;
+        let expires_at = record.pairing_expires_at.ok_or_else(|| {
+            AppError::internal("completed Agent provision is missing pairing_expires_at")
+        })?;
+        res.status_code(StatusCode::CREATED);
+        return json_ok(AgentProvisionOutcome::Complete {
+            outcome: arkret_sdk::AgentProvisionComplete {
+                agent_id: prepared_agent_id.clone(),
+                principal_control_realm_id: prepared_realm_id.clone(),
+                controller_authorization_ref: record.controller_authorization_ref.clone(),
+                requested_scope_digest,
+                pcr_recovery: AgentProvisionPcrRecovery::default(),
+                pairing_request_id,
+                pairing_code: record.pairing_code.clone(),
+                expires_at,
+            },
+        });
+    }
     if existing.iter().any(|record| {
         record.agent_slug.as_deref() == Some(agent_slug.as_str())
             && agent_record_reserves_selector_slug(record, &now_utc)
@@ -66,46 +160,71 @@ pub(super) async fn provision_agent(
             "slug is already bound to an active or open agent for this controller",
         ));
     }
-    let agent_id = generate_agent_principal_did(&state.service_id);
-    let agent_principal_did = Did::new(agent_id.clone()).map_err(|err| {
-        AppError::internal(format!("generated agent principal DID invalid: {err}"))
-    })?;
+    let (agent_principal_did, principal_control_realm_id) = match prepared_ids {
+        Some(ids) => ids,
+        None => {
+            let agent_principal_did = Did::new(generate_agent_principal_did(&state.service_id))
+                .map_err(|error| {
+                    AppError::internal(format!("generated Agent DID invalid: {error}"))
+                })?;
+            let principal_control_realm_id =
+                crate::routing::identity::managed_agent_pcr::allocate_principal_control_realm_id()?;
+            let requested_scope_digest = arkret_sdk::agent_requested_scope_digest(
+                &agent_principal_did,
+                &Did::new(controller_id.clone()).map_err(|error| {
+                    AppError::internal(format!("controller DID invalid: {error}"))
+                })?,
+                &requested_scope_typed,
+            )
+            .map_err(|error| {
+                AppError::internal(format!("requested_scope digest failed: {error}"))
+            })?;
+            let controller_authorization_ref =
+                crate::routing::identity::managed_agent_pcr::controller_authorization_ref(
+                    agent_principal_did.as_str(),
+                );
+            return json_ok(AgentProvisionOutcome::AwaitingControllerEvents {
+                agent_id: agent_principal_did,
+                principal_control_realm_id,
+                controller_realm_id: RealmId::new(controller_realm.clone()).map_err(|error| {
+                    AppError::internal(format!("controller PCR id invalid: {error}"))
+                })?,
+                controller_authorization_ref,
+                requested_scope_digest,
+            });
+        }
+    };
+    let agent_id = agent_principal_did.to_string();
     let controller_did = Did::new(controller_id.clone())
         .map_err(|err| AppError::internal(format!("controller DID invalid: {err}")))?;
     let requested_scope_digest = arkret_sdk::agent_requested_scope_digest(
         &agent_principal_did,
         &controller_did,
-        &body.requested_scope,
+        &requested_scope_typed,
     )
     .map_err(|err| AppError::internal(format!("requested_scope digest failed: {err}")))?;
-    let principal_control_realm_id =
-        crate::routing::identity::managed_agent_pcr::allocate_principal_control_realm_id()?;
     let controller_authorization_ref =
         crate::routing::identity::managed_agent_pcr::controller_authorization_ref(&agent_id);
     let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
     let pairing_code = generate_pairing_code();
-    let pairing_ttl_ms = body
-        .pairing_ttl_ms
+    let pairing_ttl_ms = pairing_ttl_ms
         .unwrap_or(15 * 60 * 1000)
-        .min(24 * 60 * 60 * 1000);
+        .min(12 * 60 * 60 * 1000);
     let expires_at = now_utc + chrono::Duration::milliseconds(pairing_ttl_ms as i64);
-    if !state.config.development_mode {
-        return Err(AppError::unsupported_feature(
-            "production agent provisioning requires protocol-valid delegated fan-out",
-        )
-        .with_wire_code("agent_provision_fanout_unavailable"));
-    }
     // Persist the agent_principal row so list/get/lifecycle + grant/session
     // paths have a real principal to operate on (AKP-0008). Per the spec
     // agent lifecycle the agent starts `pending_runtime_key`; the gate
     // `ak.gate.account.command.pair_agent_key` flips it to `active` once the
     // runtime key is authorized.
-    // AKP-0008 D1: development can materialize the agent's identity sub-events
-    // with dev proofs. Production fails closed above until the delegated
-    // fan-out has a protocol-valid authorization_ref + detached-JWS path.
-    let (accountability_event, selector_event) =
-        fanout_provision_subevents(state, &session, &controller_realm, &agent_id, &agent_slug)
-            .await?;
+    let (accountability_event, selector_event) = fanout_provision_subevents(
+        state,
+        &session,
+        &controller_realm,
+        &agent_id,
+        &agent_slug,
+        provision_events.expect("commit phase carries provision_events"),
+    )
+    .await?;
     let provision_event_refs = json!({
         "accountability_grant_event_id": accountability_event,
         "selector_claim_event_id": selector_event,
@@ -144,9 +263,7 @@ pub(super) async fn provision_agent(
     principal.agent_slug = Some(agent_slug.clone());
     principal.avatar_blob_ref = avatar_blob_ref.clone();
     principal.requested_scope = Some(requested_scope);
-    principal.accountability = body
-        .accountability
-        .map(|value| Value::Object(value.into_iter().collect()));
+    principal.accountability = None;
     principal.provision_event_refs = Some(provision_event_refs);
     principal.pairing_request_id = Some(pairing_request_id.clone());
     principal.pairing_code = Some(pairing_code.clone());
@@ -175,15 +292,17 @@ pub(super) async fn provision_agent(
     )
     .await;
     res.status_code(StatusCode::CREATED);
-    json_ok(AgentProvisionOutcome {
-        agent_id: agent_principal_did,
-        principal_control_realm_id,
-        controller_authorization_ref,
-        requested_scope_digest,
-        pcr_recovery: AgentProvisionPcrRecovery::default(),
-        pairing_request_id,
-        pairing_code: Some(pairing_code),
-        expires_at,
+    json_ok(AgentProvisionOutcome::Complete {
+        outcome: arkret_sdk::AgentProvisionComplete {
+            agent_id: agent_principal_did,
+            principal_control_realm_id,
+            controller_authorization_ref,
+            requested_scope_digest,
+            pcr_recovery: AgentProvisionPcrRecovery::default(),
+            pairing_request_id,
+            pairing_code: Some(pairing_code),
+            expires_at,
+        },
     })
 }
 
@@ -277,7 +396,7 @@ pub(super) async fn renew_agent_pairing(
     let pairing_ttl_ms = body
         .pairing_ttl_ms
         .unwrap_or(15 * 60 * 1000)
-        .min(24 * 60 * 60 * 1000);
+        .min(12 * 60 * 60 * 1000);
     let expires_at = now_utc + chrono::Duration::milliseconds(pairing_ttl_ms as i64);
     let terminal_notification = account_notification_context(&record);
     let mut record = record;

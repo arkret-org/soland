@@ -486,7 +486,9 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     .take_json()
     .await
     .unwrap();
-    let arkret_event_id = msg_resp["event_ref"].as_str().expect("event_ref missing");
+    let arkret_event_id = msg_resp["event_ref"]
+        .as_str()
+        .unwrap_or_else(|| panic!("event_ref missing: {msg_resp}"));
 
     let events: Value = TestClient::get(format!(
         "http://server/_arkret/self/events?realms={demo_realm}"
@@ -515,7 +517,11 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         .find(|event| event["event_id"] == arkret_event_id)
         .expect("MIMI-ingressed message missing from projection log");
     assert_eq!(event_kind(message_event), Some("ak.message.create"));
-    assert_eq!(message_event["actor_id"], "did:web:remote.example");
+    assert_eq!(message_event["actor_id"], state.service_id().as_str());
+    assert_eq!(
+        message_event["payload"]["mimi_provenance"]["original_sender"],
+        "did:web:remote.example"
+    );
     assert_eq!(
         message_event["payload"]["content"]["parts"][0]["body"],
         "hello from MIMI P4"

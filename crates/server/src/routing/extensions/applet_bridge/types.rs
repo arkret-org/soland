@@ -6,11 +6,9 @@ use arkret_sdk::{
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use soland_storage::{CanonicalEventRecord, ProjectionEventRecord};
 
 use super::super::applet_manifest::AppletManifest;
 
-pub(super) const EVENT_SCHEMA_ID: &str = "ak.schema.event.v1";
 pub(super) const SOLAND_EDGE_APPLET_ID: &str = "ak:applet:00000000-0000-7000-8000-000000000000";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -183,6 +181,5 @@ pub struct AppletGhostIngressOutcome {
 #[derive(Clone)]
 pub(super) struct FormalAppletEvent {
     pub(super) event_id: String,
-    pub(super) canonical: CanonicalEventRecord,
-    pub(super) projection: ProjectionEventRecord,
+    pub(super) event: arkret_sdk::Event,
 }

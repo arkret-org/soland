@@ -1,23 +1,11 @@
-//! AKP-0008 — development-mode server-authored fan-out for the personal
-//! agent provisioning / lifecycle surface (architecture option B).
+//! Personal-Agent aggregate Event fan-out.
 //!
-//! Soland materialises the durable sub-events required by the personal-agent
-//! aggregate surfaces. Controller-owned accountability, selector and grant
-//! events use the controller as `actor_id`; Agent control events retain the
-//! Agent as `actor_id` and carry the controller as `executed_by` under the
-//! exact DID-document delegation reference.
-//!
-//! The dev-proof envelope shape is the one accepted by
-//! `validate_event_proofs` (event_log/validation.rs): `type="dev-proof"`,
-//! `verification_method == actor_id#session.device_id`, and `payload_digest`
-//! = the sha256 of the canonical payload bytes. Rooting the proof in the
-//! authenticated device keeps development fan-out inside the B-model device
-//! generation fence.
+//! Provisioning accepts only the closed controller-signed Event pair carried
+//! by the SDK request type. Older aggregate operations that do not yet carry a
+//! signed Event fail closed instead of asking Soland to impersonate a
+//! controller or writing a development-only proof shape into durable history.
 
-use arkret_sdk::{
-    AccountabilityGrantPayload, AccountabilityScope, AgentSelectorClaim, Did, HandleBindingState,
-    HandleVisibility, Hash, PayloadProof, canonical,
-};
+use arkret_sdk::{AccountabilityGrantPayload, AgentProvisionEvents, AgentSelectorClaim};
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
@@ -40,95 +28,34 @@ const ACTION_MESSAGE_CREATE: &str = "ak.message.create";
 /// `max_actor_seq(actor) + 1` so concurrent fan-out events stay strictly
 /// increasing.
 pub(super) async fn submit_agent_fanout_event(
-    state: &AppState,
-    session: &SessionRecord,
-    realm_id: &str,
-    kind: &str,
-    payload: Value,
+    _state: &AppState,
+    _session: &SessionRecord,
+    _realm_id: &str,
+    _kind: &str,
+    _payload: Value,
 ) -> Result<String, AppError> {
-    let actor = session.actor.clone();
-    let next_seq = state
-        .event_query_application()
-        .next_actor_sequence(&actor)
-        .await
-        .unwrap_or(1);
-    let event_uuid = uuid::Uuid::now_v7();
-    let event_id = format!("ak:event:{event_uuid}");
-    let operation_alias = format!("ak:operation:{}", uuid::Uuid::now_v7());
-    let payload_bytes = canonical::canonical_json_bytes(&payload).unwrap_or_default();
-    let payload_digest = canonical::sha256_digest(&payload_bytes);
-    let verification_method = format!("{}#{}", actor, session.device_id);
-    // Event Envelope timestamps use the dedicated millisecond wire profile.
-    // Payload timestamps below may use different schema-specific profiles.
-    let created_at = canonical::format_timestamp_millis_canonical(Utc::now());
-    let envelope = json!({
-        "event_id": event_id,
-        "kind": kind,
-        "realm_id": realm_id,
-        "actor_id": actor,
-        "actor_seq": next_seq,
-        "created_at": created_at,
-        "hlc": state.hlc.now(),
-        "prev_refs": [],
-        "refs": [],
-        "payload": payload,
-        "unsigned": { "local_operation_idempotency_alias": operation_alias },
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": verification_method,
-            "payload_digest": payload_digest,
-        }],
-    });
-    let outcome = submit_event_value(state, session, envelope)
-        .await
-        .map_err(|err| agent_fanout_submit_error(kind, err.status, err.code, err.message))?;
-    Ok(outcome.event_id)
+    Err(
+        AppError::unsupported_feature("operation requires a controller-signed SDK Event")
+            .with_wire_code("controller_signed_event_required"),
+    )
 }
 
 /// Development-only delegated authoring for control facts that belong to the
 /// Agent principal. The controller is the proof signer/executor; the Agent is
 /// the principal of record and therefore owns actor_seq and the PCR stream.
 async fn submit_managed_agent_control_event(
-    state: &AppState,
-    session: &SessionRecord,
-    realm_id: &str,
-    agent_id: &str,
-    authorization_ref: &str,
-    kind: &str,
-    payload: Value,
+    _state: &AppState,
+    _session: &SessionRecord,
+    _realm_id: &str,
+    _agent_id: &str,
+    _authorization_ref: &str,
+    _kind: &str,
+    _payload: Value,
 ) -> Result<String, AppError> {
-    let next_seq = state
-        .event_query_application()
-        .next_actor_sequence(agent_id)
-        .await
-        .unwrap_or(1);
-    let event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
-    let payload_bytes = canonical::canonical_json_bytes(&payload).unwrap_or_default();
-    let payload_digest = canonical::sha256_digest(&payload_bytes);
-    let envelope = json!({
-        "event_id": event_id,
-        "kind": kind,
-        "realm_id": realm_id,
-        "actor_id": agent_id,
-        "actor_seq": next_seq,
-        "created_at": canonical::format_timestamp_millis_canonical(Utc::now()),
-        "hlc": state.hlc.now(),
-        "prev_refs": [],
-        "refs": [],
-        "executed_by": session.actor,
-        "authorization_ref": authorization_ref,
-        "payload": payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": session.actor,
-            "payload_digest": payload_digest,
-        }],
-    });
-    let delegated_session = super::delegated_agent_session(session, agent_id);
-    let outcome = submit_event_value(state, &delegated_session, envelope)
-        .await
-        .map_err(|err| agent_fanout_submit_error(kind, err.status, err.code, err.message))?;
-    Ok(outcome.event_id)
+    Err(
+        AppError::unsupported_feature("operation requires a controller-signed delegated SDK Event")
+            .with_wire_code("controller_signed_event_required"),
+    )
 }
 
 fn agent_fanout_submit_error(
@@ -265,114 +192,175 @@ pub(super) async fn fanout_provision_subevents(
     realm_id: &str,
     agent_id: &str,
     agent_slug: &str,
+    events: AgentProvisionEvents,
 ) -> Result<(String, String), AppError> {
-    let controller = session.actor.clone();
-    let controller_did = Did::new(controller.clone())
-        .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?;
-    let agent_did = Did::new(agent_id.to_owned())
-        .map_err(|error| AppError::internal(format!("agent DID invalid: {error}")))?;
-    // 1. Accountability grant, issuer = controller and subject = Agent.
-    let now_utc = Utc::now();
-    let created_at = now_utc.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let accountability_unsigned = json!({
-        "schema": "ak.schema.accountability_grant.v1",
-        "issuer": controller,
-        "subject": agent_id,
-        "accountability_scope": "agent_operator",
-        "not_before": created_at,
-        "grant_status": "active",
-    });
-    let accountability_proof =
-        development_payload_proof(&accountability_unsigned, &controller, now_utc)?;
-    let accountability_payload = serde_json::to_value(AccountabilityGrantPayload::new(
-        controller_did.clone(),
-        agent_did.clone(),
-        AccountabilityScope::Single("agent_operator".to_owned()),
-        now_utc,
-        None,
-        accountability_proof,
-    ))
-    .map_err(|error| {
-        AppError::internal(format!(
-            "accountability grant serialization failed: {error}"
-        ))
-    })?;
-    let accountability_event = submit_agent_fanout_event(
-        state,
-        session,
-        realm_id,
-        "ak.identity.accountability_grant",
-        accountability_payload,
+    let accountability = events.accountability_grant;
+    let selector = events.selector_claim;
+    if accountability.kind.as_str() != "ak.identity.accountability_grant"
+        || selector.kind.as_str() != "ak.agent.selector_claim"
+    {
+        return Err(AppError::invalid_param(
+            "provision_events must contain accountability_grant and selector_claim Events",
+        ));
+    }
+    for event in [&accountability, &selector] {
+        if event.actor_id.as_str() != session.actor || event.realm_id.as_str() != realm_id {
+            return Err(AppError::capability_denied(
+                "provision Events must be authored by the authenticated controller in its PCR",
+            ));
+        }
+    }
+    if selector.actor_seq <= accountability.actor_seq {
+        return Err(AppError::invalid_param(
+            "selector_claim actor_seq must follow accountability_grant actor_seq",
+        ));
+    }
+    let accountability_payload: AccountabilityGrantPayload = serde_json::from_value(
+        serde_json::to_value(&accountability.payload).map_err(|error| {
+            AppError::invalid_param(format!("accountability payload invalid: {error}"))
+        })?,
     )
-    .await?;
-
-    // 2. Controller-scoped selector claim. It remains pending until the
-    // controller client has bootstrapped the Agent PCR/Profile and recovery.
-    let selector_unsigned = json!({
-        "schema": "ak.schema.agent_selector_claim.v1",
-        "controller_subject": controller,
-        "agent_slug": agent_slug,
-        "subject": agent_id,
-        "issuer": controller,
-        "binding_state": "pending",
-        "visibility": "private",
-        "created_at": created_at,
-        "source_refs": [accountability_event],
-    });
-    let selector_proof = development_payload_proof(&selector_unsigned, &controller, now_utc)?;
-    let selector_payload = serde_json::to_value(AgentSelectorClaim {
-        schema: arkret_sdk::AGENT_SELECTOR_CLAIM_SCHEMA.to_owned(),
-        controller_subject: controller_did.clone(),
-        agent_slug: agent_slug.to_owned(),
-        subject: agent_did,
-        issuer: controller_did,
-        issuer_service_id: None,
-        binding_state: HandleBindingState::Pending,
-        visibility: HandleVisibility::Private,
-        audience: None,
-        claim_scope: Default::default(),
-        expires_at: None,
-        created_at: now_utc,
-        verified_at: None,
-        source_refs: vec![accountability_event.clone()],
-        proofs: vec![selector_proof],
-    })
-    .map_err(|error| {
-        AppError::internal(format!(
-            "agent selector claim serialization failed: {error}"
-        ))
-    })?;
-    let selector_event = submit_agent_fanout_event(
+    .map_err(|error| AppError::invalid_param(format!("accountability payload invalid: {error}")))?;
+    if accountability_payload.issuer.as_str() != session.actor
+        || accountability_payload.subject.as_str() != agent_id
+        || !matches!(
+            &accountability_payload.accountability_scope,
+            arkret_sdk::AccountabilityScope::Single(scope) if scope == "agent_operator"
+        )
+        || !matches!(
+            accountability_payload.grant_status,
+            arkret_sdk::AccountabilityGrantStatus::Active
+        )
+    {
+        return Err(AppError::invalid_param(
+            "accountability payload must actively bind the controller to the requested Agent",
+        ));
+    }
+    accountability_payload
+        .validate_lifecycle_at(Utc::now())
+        .map_err(|error| {
+            AppError::invalid_param(format!("accountability payload proof is invalid: {error}"))
+        })?;
+    let accountability_proof = &accountability_payload.proof;
+    if accountability_proof.verification_method != session.actor
+        && !accountability_proof
+            .verification_method
+            .starts_with(&format!("{}#", session.actor))
+    {
+        return Err(AppError::capability_denied(
+            "accountability payload proof must be rooted in the authenticated controller",
+        ));
+    }
+    let accountability_binding = accountability_payload
+        .canonical_proof_binding_bytes()
+        .map_err(|error| {
+            AppError::invalid_param(format!(
+                "accountability payload proof binding is invalid: {error}"
+            ))
+        })?;
+    let accountability_issuer = accountability_payload.issuer.clone();
+    // The enclosing Event has already passed the ordinary high-risk DID
+    // freshness/root-anchor gate. Verify the nested proof against that same
+    // active controller key without creating a second, divergent freshness
+    // policy for one payload family.
+    crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+        &accountability_binding,
+        &accountability_proof.jws,
+        &accountability_proof.verification_method,
+        accountability_issuer.as_str(),
         state,
-        session,
-        realm_id,
-        "ak.agent.selector_claim",
-        selector_payload,
     )
-    .await?;
-
+    .await
+    .map_err(|reason| {
+        tracing::warn!(
+            %reason,
+            verification_method = %accountability_proof.verification_method,
+            issuer = %accountability_issuer,
+            "accountability payload proof verification failed"
+        );
+        AppError::invalid_param("accountability payload proof JWS verification failed")
+            .with_wire_code("invalid_proof")
+    })?;
+    let selector_payload: AgentSelectorClaim =
+        serde_json::from_value(serde_json::to_value(&selector.payload).map_err(|error| {
+            AppError::invalid_param(format!("selector payload invalid: {error}"))
+        })?)
+        .map_err(|error| AppError::invalid_param(format!("selector payload invalid: {error}")))?;
+    selector_payload
+        .validate()
+        .map_err(|error| AppError::invalid_param(format!("selector payload invalid: {error}")))?;
+    if selector_payload.controller_subject.as_str() != session.actor
+        || selector_payload.issuer.as_str() != session.actor
+        || selector_payload.subject.as_str() != agent_id
+        || selector_payload.agent_slug != agent_slug
+        || !matches!(
+            selector_payload.binding_state,
+            arkret_sdk::HandleBindingState::Pending
+        )
+        || !matches!(
+            selector_payload.visibility,
+            arkret_sdk::HandleVisibility::Private
+        )
+        || selector_payload.issuer_service_id.is_some()
+        || selector_payload.proofs.len() != 1
+        || !selector_payload
+            .source_refs
+            .iter()
+            .any(|source| source == accountability.event_id.as_str())
+    {
+        return Err(AppError::invalid_param(
+            "selector payload does not bind the provision request and accountability Event",
+        ));
+    }
+    let selector_proof = &selector_payload.proofs[0];
+    if selector_proof.verification_method != session.actor
+        && !selector_proof
+            .verification_method
+            .starts_with(&format!("{}#", session.actor))
+    {
+        return Err(AppError::capability_denied(
+            "selector payload proof must be rooted in the authenticated controller",
+        ));
+    }
+    let selector_binding = selector_payload
+        .canonical_proof_binding_bytes(selector_proof)
+        .map_err(|error| {
+            AppError::invalid_param(format!(
+                "selector payload proof binding is invalid: {error}"
+            ))
+        })?;
+    crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+        &selector_binding,
+        &selector_proof.jws,
+        &selector_proof.verification_method,
+        selector_payload.issuer.as_str(),
+        state,
+    )
+    .await
+    .map_err(|reason| {
+        tracing::warn!(
+            %reason,
+            verification_method = %selector_proof.verification_method,
+            issuer = %selector_payload.issuer,
+            "selector payload proof verification failed"
+        );
+        AppError::invalid_param("selector payload proof JWS verification failed")
+            .with_wire_code("invalid_proof")
+    })?;
+    let accountability_event = accountability.event_id.to_string();
+    let selector_event = selector.event_id.to_string();
+    for event in [accountability, selector] {
+        let kind = event.kind.to_string();
+        let envelope = serde_json::to_value(event).map_err(|error| {
+            AppError::invalid_param(format!("provision Event invalid: {error}"))
+        })?;
+        submit_event_value(state, session, envelope)
+            .await
+            .map_err(|error| {
+                agent_fanout_submit_error(&kind, error.status, error.code, error.message)
+            })?;
+    }
     Ok((accountability_event, selector_event))
-}
-
-fn development_payload_proof(
-    payload: &Value,
-    controller: &str,
-    created_at: chrono::DateTime<Utc>,
-) -> Result<PayloadProof, AppError> {
-    let digest = canonical::canonical_sha256(payload)
-        .map_err(|error| AppError::internal(format!("nested proof digest failed: {error}")))?;
-    Ok(PayloadProof {
-        kind: "detached_jws".to_owned(),
-        alg: "EdDSA".to_owned(),
-        verification_method: format!("{controller}#controller-key"),
-        payload_digest: Hash::new(digest)
-            .map_err(|error| AppError::internal(format!("proof digest invalid: {error}")))?,
-        created_at,
-        domain: None,
-        audience: None,
-        proof_purpose: None,
-        jws: "eyJhbGciOiJFZERTQSJ9..c2ln".to_owned(),
-    })
 }
 
 async fn materialize_grant(
@@ -693,9 +681,9 @@ mod tests {
 
     #[test]
     fn fanout_event_timestamp_uses_canonical_millisecond_profile() {
-        let created_at = canonical::format_timestamp_millis_canonical(Utc::now());
+        let created_at = arkret_sdk::canonical::format_timestamp_millis_canonical(Utc::now());
 
-        canonical::validate_timestamp_millis_canonical(&created_at)
+        arkret_sdk::canonical::validate_timestamp_millis_canonical(&created_at)
             .expect("fan-out Event Envelope timestamp must pass the shared validator");
         assert_eq!(created_at.len(), "2026-07-18T00:00:00.000Z".len());
         assert!(created_at.ends_with('Z'));

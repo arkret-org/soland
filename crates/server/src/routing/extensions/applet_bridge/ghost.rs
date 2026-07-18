@@ -4,22 +4,20 @@
 use arkret_sdk::{
     AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
     AppletDelegatedEventAuthorization, AppletId, AppletNamespaceDomain, Did, Event, EventRef,
-    GhostActorProfileRequest, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof, Proof,
-    RealmId, canonical, namespace_pattern_matches,
+    GhostActorProfileRequest, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof, RealmId,
+    canonical, namespace_pattern_matches,
 };
 use serde_json::{Value, json};
 use soland_http::error::AppError;
-use soland_storage::{CanonicalEventRecord, ProjectionEventRecord};
+use soland_storage::SessionRecord;
 
 use super::record::{
     applet_record, applet_records, ensure_not_revoked, extension_actor_id_document,
     ghost_actor_id_for, persist_applet_record,
 };
 use super::types::{
-    AppletGhostIngressRequestBody, AppletRecord, EVENT_SCHEMA_ID, FormalAppletEvent,
-    GhostActorRecord,
+    AppletGhostIngressRequestBody, AppletRecord, FormalAppletEvent, GhostActorRecord,
 };
-use crate::ids;
 use crate::state::AppState;
 
 pub(super) async fn revoke_applet_record(
@@ -133,7 +131,6 @@ pub async fn did_document_for_extension_actor(
 
 pub(super) async fn build_ghost_accountability_grant_event(
     state: &AppState,
-    record: &AppletRecord,
     provision: &GhostActorProvisionRequestBody,
     service_id: &Did,
     ghost_actor_id: &Did,
@@ -185,22 +182,7 @@ pub(super) async fn build_ghost_accountability_grant_event(
         .map_err(|error| {
             AppError::internal(format!("accountability grant event build failed: {error}"))
         })?;
-    formal_event_from_sdk_event(
-        state,
-        event,
-        service_id,
-        "applet_ghost_accountability_grant",
-        Some(service_id.as_str()),
-        json!({
-            "applet_id": record.applet_id,
-            "service_id": service_id,
-            "ghost_actor_id": ghost_actor_id,
-            "protocol": provision.protocol,
-            "tenant": provision.tenant,
-            "external_user_id": provision.external_user_id,
-            "external_ref": provision.external_ref,
-        }),
-    )
+    formal_event_from_sdk_event(state, event, service_id)
 }
 
 pub(super) async fn build_ghost_profile_create_event(
@@ -267,148 +249,60 @@ pub(super) async fn build_ghost_profile_create_event(
     event
         .refs
         .push(EventRef::new(authorization_ref, "authorized_by"));
-    formal_event_from_sdk_event(
-        state,
-        event,
-        service_id,
-        "applet_ghost_profile_create",
-        Some(ghost_actor_id.as_str()),
-        json!({
-            "applet_id": record.applet_id,
-            "service_id": service_id,
-            "ghost_actor_id": ghost_actor_id,
-            "authorization_ref": authorization_ref,
-            "protocol": provision.protocol,
-            "tenant": provision.tenant,
-            "external_user_id": provision.external_user_id,
-            "display_name": provision.display_name,
-            "external_ref": provision.external_ref,
-        }),
-    )
+    formal_event_from_sdk_event(state, event, service_id)
 }
 
 pub(super) async fn persist_formal_applet_event(
     state: &AppState,
     event: FormalAppletEvent,
 ) -> Result<(), AppError> {
-    if let Err(error) = state.events_store().put(event.canonical).await {
-        tracing::error!(%error, event_id = %event.event_id, "applet ghost provisioning: failed to persist canonical event");
-        return Err(AppError::internal(
-            "failed to persist ghost actor provisioning event",
-        ));
-    }
-    if let Err(error) = crate::routing::events::projection::persist_and_publish_projection_event(
-        state,
-        event.projection,
-    )
-    .await
-    {
-        tracing::error!(%error, event_id = %event.event_id, "applet ghost provisioning: failed to persist projection event");
-        return Err(AppError::internal(
-            "failed to persist ghost actor provisioning projection",
-        ));
-    }
+    let now = chrono::Utc::now();
+    let session = SessionRecord {
+        token_hash: "applet-formal-event".to_owned(),
+        actor: event.event.actor_id.to_string(),
+        device_id: "applet-service".to_owned(),
+        audience: state.service_id.clone(),
+        session_public_key: None,
+        agent_session: None,
+        expires_at: now + chrono::Duration::minutes(5),
+        created_at: now,
+        revoked_at: None,
+    };
+    let envelope = serde_json::to_value(event.event)
+        .map_err(|error| AppError::internal(format!("event serialize failed: {error}")))?;
+    crate::routing::events::event_log::submit_event_value(state, &session, envelope)
+        .await
+        .map_err(|error| {
+            AppError::new(
+                soland_http::error::ErrorCode::InvalidParam,
+                format!("applet formal Event admission failed: {}", error.message),
+            )
+            .with_status(error.status)
+            .with_wire_code(error.code)
+        })?;
     Ok(())
 }
 
 pub(super) fn formal_event_from_sdk_event(
     state: &AppState,
-    event: Event,
+    mut event: Event,
     signing_did: &Did,
-    operation_type: &str,
-    sender: Option<&str>,
-    projection_payload: Value,
 ) -> Result<FormalAppletEvent, AppError> {
     let event_id = event.event_id.to_string();
-    let actor_id = event.actor_id.to_string();
-    let actor_seq = event.actor_seq;
-    let realm_id = event.realm_id.to_string();
-    let kind = event.kind.clone();
-    let mut envelope = serde_json::to_value(&event)
-        .map_err(|error| AppError::internal(format!("event serialize failed: {error}")))?;
-    let canonical_source = event_canonical_source(&envelope);
-    let canonical_bytes = canonical::canonical_json_bytes(&canonical_source)
-        .map_err(|error| AppError::internal(format!("event canonicalization failed: {error}")))?;
-    let canonical_digest = canonical::sha256_digest(&canonical_bytes);
-    let proof = event_proof(state, signing_did, &actor_id, &canonical_digest)?;
-    envelope
-        .as_object_mut()
-        .ok_or_else(|| AppError::internal("event envelope is not an object"))?
-        .insert("proofs".to_owned(), json!([proof]));
-
-    let received_at = chrono::Utc::now();
-    let canonical = CanonicalEventRecord {
-        event_id: event_id.clone(),
-        actor_id,
-        actor_seq,
-        realm_id: Some(realm_id.clone()),
-        kind: kind.as_str().to_owned(),
-        schema_id: EVENT_SCHEMA_ID.to_owned(),
-        canonical_digest,
-        canonical_bytes,
-        envelope,
-        received_at,
-    };
-    let projection = ProjectionEventRecord {
-        event_id: event_id.clone(),
-        realm_id,
-        event_kind: kind.as_str().to_owned(),
-        operation_type: operation_type.to_owned(),
-        operation_id: Some(ids::generate_operation_id()),
-        sender: sender.map(ToOwned::to_owned),
-        payload: projection_payload,
-        created_at: received_at,
-        received_at,
-    };
-    Ok(FormalAppletEvent {
-        event_id,
-        canonical,
-        projection,
-    })
-}
-
-pub(super) fn event_canonical_source(envelope: &Value) -> Value {
-    let mut value = envelope.clone();
-    if let Value::Object(object) = &mut value {
-        object.remove("proofs");
-        object.remove("unsigned");
-        object.remove("canonical_digest");
-        object.remove("canonical_hash");
-    }
-    value
-}
-
-pub(super) fn event_proof(
-    state: &AppState,
-    signing_did: &Did,
-    actor_id: &str,
-    event_digest: &str,
-) -> Result<Proof, AppError> {
-    let created_at = chrono::Utc::now();
-    let verification_method = format!("{signing_did}#applet-service-key");
-    let binding = json!({
-        "event_digest": event_digest,
-        "actor_id": actor_id,
-        "verification_method": verification_method,
-        "created_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-    });
-    let binding_bytes = canonical::canonical_json_bytes(&binding).map_err(|error| {
-        AppError::internal(format!("proof binding canonicalization failed: {error}"))
-    })?;
-    let jws =
-        arkret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
-            .map_err(|error| AppError::internal(format!("event proof signing failed: {error}")))?;
-    Ok(Proof {
-        kind: "detached_jws".to_owned(),
-        alg: "EdDSA".to_owned(),
-        verification_method,
-        event_digest: Hash::new(event_digest.to_owned())
-            .map_err(|error| AppError::internal(format!("event digest invalid: {error}")))?,
-        created_at,
-        domain: None,
-        audience: None,
-        jws,
-    })
+    let verification_method = format!("{signing_did}#notary-key");
+    let signer = arkret_sdk::Ed25519MoveSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        signing_did.clone(),
+        verification_method.clone(),
+    );
+    arkret_sdk::signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_sdk::signatures::SignEventOptions::new(),
+    )
+    .map_err(|error| AppError::internal(format!("event proof signing failed: {error}")))?;
+    Ok(FormalAppletEvent { event_id, event })
 }
 
 pub(super) fn production_payload_proof(

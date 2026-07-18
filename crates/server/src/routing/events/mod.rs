@@ -19,7 +19,8 @@ pub(super) mod sync;
 
 use operations::{
     validate_agent_participation_ceiling, validate_agent_reply_participation,
-    validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
+    validate_content_encryption_floor, validate_operation_policy,
+    validate_operation_policy_with_plaintext_service_binding, validate_operation_semantics,
 };
 use projection::{
     projected_event_page, projected_event_page_for_realms_through,

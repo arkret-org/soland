@@ -72,7 +72,8 @@ pub(super) async fn submit_identity_anchor_batch(
         .map(std::slice::from_ref)
         .unwrap_or_default();
     let first =
-        validate_event_envelope_with_context(state, session, &envelopes[0], first_contexts).await?;
+        validate_event_envelope_with_context(state, session, &envelopes[0], first_contexts, None)
+            .await?;
     let identity_anchor_context =
         self_principal_pcr_context.unwrap_or(RealmBootstrapBatchContext {
             realm_id: first.realm_id.clone(),
@@ -91,7 +92,7 @@ pub(super) async fn submit_identity_anchor_batch(
     }
     let second_contexts = std::slice::from_ref(&identity_anchor_context);
     let second =
-        validate_event_envelope_with_context(state, session, &envelopes[1], second_contexts)
+        validate_event_envelope_with_context(state, session, &envelopes[1], second_contexts, None)
             .await?;
     validate_unit_relationships(state, &first, &second, &envelopes, is_bootstrap).await?;
 

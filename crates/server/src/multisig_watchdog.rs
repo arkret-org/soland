@@ -123,7 +123,7 @@ pub async fn run_watchdog_pass(
     state: &AppState,
     config: &MultisigWatchdogConfig,
 ) -> WatchdogPassReport {
-    let store = state.persistence.multisig_pending();
+    let store = state.multisig_pending_store();
     let now = Utc::now();
     let lease_expiry = now
         + chrono::Duration::from_std(config.lease_duration)
@@ -224,7 +224,7 @@ pub async fn renew_lease_during_aggregation(
     seal_id: &str,
     fence_seq: i64,
 ) -> Result<bool, String> {
-    let store = state.persistence.multisig_pending();
+    let store = state.multisig_pending_store();
     let now = Utc::now();
     let new_until = now
         + chrono::Duration::from_std(config.lease_duration)
@@ -430,7 +430,7 @@ mod tests {
         let cfg = MultisigWatchdogConfig::for_service(&state.service_id);
         let record = make_record("ak:seal:sha256:01", 3, 1);
         state
-            .persistence
+            .test_persistence()
             .multisig_pending()
             .upsert(record)
             .await
@@ -448,7 +448,7 @@ mod tests {
         let mut record = make_record("ak:seal:sha256:02", 1, 1);
         record.canonical_b64 = String::new();
         state
-            .persistence
+            .test_persistence()
             .multisig_pending()
             .upsert(record)
             .await
@@ -463,7 +463,7 @@ mod tests {
         let cfg = MultisigWatchdogConfig::for_service(&state.service_id);
         let record = make_record("ak:seal:sha256:03", 1, 1);
         state
-            .persistence
+            .test_persistence()
             .multisig_pending()
             .upsert(record)
             .await
@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(report.failed.len(), 1);
         // After the release the row must again be claimable on the next pass.
         let row_back = state
-            .persistence
+            .test_persistence()
             .multisig_pending()
             .get("ak:seal:sha256:03")
             .await
@@ -493,7 +493,7 @@ mod tests {
         record.claimed_by_node_id = Some("other-node".to_owned());
         record.claimed_until = Some(Utc::now() + chrono::Duration::seconds(120));
         state
-            .persistence
+            .test_persistence()
             .multisig_pending()
             .upsert(record)
             .await
@@ -529,7 +529,7 @@ mod tests {
             node_id: "node-B".to_owned(),
         };
 
-        let store = state.persistence.multisig_pending();
+        let store = state.test_persistence().multisig_pending();
         let record = make_record("ak:seal:sha256:partition-a", 1, 1);
         store.upsert(record).await.unwrap();
 
@@ -609,7 +609,7 @@ mod tests {
             node_id: "node-B".to_owned(),
         };
 
-        let store = state.persistence.multisig_pending();
+        let store = state.test_persistence().multisig_pending();
         let record = make_record("ak:seal:sha256:partition-b", 1, 1);
         store.upsert(record).await.unwrap();
 
@@ -697,7 +697,7 @@ mod tests {
             node_id: "node-A".to_owned(),
         };
 
-        let store = state.persistence.multisig_pending();
+        let store = state.test_persistence().multisig_pending();
         let record = make_record("ak:seal:sha256:partition-c", 1, 1);
         store.upsert(record).await.unwrap();
 
@@ -770,7 +770,7 @@ mod tests {
             node_id: "node-A".to_owned(),
         };
 
-        let store = state.persistence.multisig_pending();
+        let store = state.test_persistence().multisig_pending();
         let record = make_record("ak:seal:sha256:happy-renewal", 1, 1);
         store.upsert(record).await.unwrap();
 

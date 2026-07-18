@@ -1,4 +1,5 @@
 use super::*;
+use crate::routing::events::event_log::submit::InternalEventAdmission;
 
 #[cfg(test)]
 pub(crate) async fn validate_event_envelope(
@@ -6,7 +7,7 @@ pub(crate) async fn validate_event_envelope(
     session: &SessionRecord,
     envelope: &Value,
 ) -> Result<ValidatedEventEnvelope, EventValidationError> {
-    validate_event_envelope_with_context(state, session, envelope, &[]).await
+    validate_event_envelope_with_context(state, session, envelope, &[], None).await
 }
 
 pub(crate) async fn validate_event_envelope_with_context(
@@ -14,6 +15,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     session: &SessionRecord,
     envelope: &Value,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
+    internal_admission: Option<&InternalEventAdmission>,
 ) -> Result<ValidatedEventEnvelope, EventValidationError> {
     let object = envelope.as_object().ok_or_else(|| {
         event_validation_error(
@@ -269,6 +271,8 @@ pub(crate) async fn validate_event_envelope_with_context(
     // application sub-payload it carries). Gate / review enforcement happens at
     // the later `join` transition, not on the knock itself.
     let is_member_self_knock = member_self_knock(object, &session.actor);
+    let is_authorized_internal_adapter =
+        internal_admission.is_some_and(|admission| admission.matches(session, object));
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
         && !is_invitee_invite_cancel
@@ -279,6 +283,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         && !is_member_self_knock
         && !is_realm_bootstrap_followup
         && !is_identity_anchor_authorize
+        && !is_authorized_internal_adapter
         && !realm_has_member(state, &realm_id, &session.actor).await
     {
         return Err(event_validation_error(

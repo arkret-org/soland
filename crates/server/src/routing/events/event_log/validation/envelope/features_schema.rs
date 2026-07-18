@@ -233,11 +233,11 @@ pub(crate) fn validate_event_schema_and_payload(
             })?;
         registry
             .validate_value("ak.schema.event.v1", envelope)
-            .map_err(|_| {
+            .map_err(|error| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "schema_violation",
-                    "event envelope violates ak.schema.event.v1",
+                    format!("event envelope violates ak.schema.event.v1: {error}"),
                 )
             })?;
     }

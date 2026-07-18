@@ -1754,6 +1754,13 @@ fn assert_integrity_error(error: SyncCursorError) {
     }
 }
 
+fn assert_invalid_or_integrity_error(error: SyncCursorError) {
+    match error {
+        SyncCursorError::Invalid(_) | SyncCursorError::Integrity(_) => {}
+        other => panic!("expected cursor structure/integrity error, got {other:?}"),
+    }
+}
+
 fn insert_cursor_field(cursor: &mut Value, key: &str, value: Value) {
     cursor
         .as_object_mut()
@@ -1768,7 +1775,7 @@ async fn inline_cursor_body_is_rejected_by_core_stateful_cursor_parser() {
     let token = encode_sync_cursor_value(json!({
         "v": "1",
         "purpose": "stream",
-        "t": chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        "t": arkret_sdk::canonical::format_timestamp_canonical(chrono::Utc::now()),
         "x": now_ms + 60_000,
         "issuer_kid": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#notary-key",
         "positions": {
@@ -1782,7 +1789,7 @@ async fn inline_cursor_body_is_rejected_by_core_stateful_cursor_parser() {
         .await
         .expect_err("inline cursor body must be rejected");
 
-    assert_integrity_error(error);
+    assert_invalid_or_integrity_error(error);
 }
 
 #[tokio::test]
@@ -1795,7 +1802,7 @@ async fn inline_filter_digest_pseudo_fields_are_rejected_by_cursor_parsers() {
         let mut stream_cursor = json!({
             "v": "1",
             "purpose": "stream",
-            "t": chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            "t": arkret_sdk::canonical::format_timestamp_canonical(chrono::Utc::now()),
             "x": now_ms + 60_000,
             "h": handle.clone(),
         });
@@ -1804,12 +1811,12 @@ async fn inline_filter_digest_pseudo_fields_are_rejected_by_cursor_parsers() {
         let error = parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
             .await
             .expect_err("inline filter digest pseudo-field must be rejected");
-        assert_integrity_error(error);
+        assert_invalid_or_integrity_error(error);
 
         let mut events_cursor = json!({
             "v": "1",
             "purpose": STREAM_CURSOR_PURPOSE,
-            "t": chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            "t": arkret_sdk::canonical::format_timestamp_canonical(chrono::Utc::now()),
             "x": now_ms + 60_000,
             "h": handle.clone(),
         });
@@ -1819,7 +1826,7 @@ async fn inline_filter_digest_pseudo_fields_are_rejected_by_cursor_parsers() {
             parse_and_validate_events_query_cursor(&token, &state, None, "digest-a", now_ms)
                 .await
                 .expect_err("events query inline filter digest pseudo-field must be rejected");
-        assert_integrity_error(error);
+        assert_invalid_or_integrity_error(error);
     }
 }
 

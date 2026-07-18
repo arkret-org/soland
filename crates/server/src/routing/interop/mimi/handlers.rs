@@ -297,25 +297,14 @@ pub(super) async fn mimi_room_message(
         "mimi_room_id": room_id,
         "mimi_room_binding_ref": room_binding.event_id.clone(),
         "mimi_message_id": mimi_message_id,
+        "original_sender": sender,
         "original_envelope_hash": original_hash,
         "source_format": source_format,
-        "accepted_at": created_at,
+        "accepted_at": arkret_sdk::canonical::format_timestamp_canonical(created_at),
     });
-    let message_record = MessageRecord {
-        event_id: event_id.clone(),
-        message_id: crate::routing::events::strand::message_id_from_event_id(&event_id),
-        realm_id: realm_id.clone(),
-        sender: sender.clone(),
-        thread_id: thread_id.clone(),
-        content: mapped_content.content.clone(),
-        encrypted: mapped_content.encrypted,
-        created_at,
-    };
-    if let Err(error) = state.messages_store().put(&message_record).await {
-        tracing::error!(%error, "mimi: failed to persist MessageRecord");
-    }
     let projection_payload = json!({
-        "thread_id": thread_id.clone(),
+        "strand_id": thread_id.clone(),
+        "track_name": "discussion",
         "content": mapped_content.content.clone(),
         "encrypted": mapped_content.encrypted,
         "mimi_provenance": mimi_provenance.clone(),
@@ -326,27 +315,10 @@ pub(super) async fn mimi_room_message(
         state,
         &event_id,
         &realm_id,
-        &sender,
         created_at,
         projection_payload.clone(),
     )
     .await?;
-    let projection_record = ProjectionEventRecord {
-        event_id: event_id.clone(),
-        realm_id: realm_id.clone(),
-        event_kind: arkret_sdk::events::EventKind::MESSAGE_CREATE.to_owned(),
-        operation_type: "mimi_facade_ingress".to_owned(),
-        operation_id: Some(operation_id.clone()),
-        sender: Some(sender.clone()),
-        payload: projection_payload,
-        created_at,
-        received_at: chrono::Utc::now(),
-    };
-    let _ = crate::routing::events::projection::persist_and_publish_projection_event(
-        state,
-        projection_record,
-    )
-    .await;
 
     let _receipt = mimi_receipt(
         state,
