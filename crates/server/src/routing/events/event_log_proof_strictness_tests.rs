@@ -1297,13 +1297,12 @@ async fn production_rejects_dev_proof_type_field() {
 }
 
 #[tokio::test]
-async fn development_accepts_dev_proof_type_field_when_hash_matches() {
+async fn development_rejects_dev_proof_type_field_even_when_hash_matches() {
     let state = make_state(true);
     let session = session();
     let mut object = dev_proof_envelope();
-    // Use payload-only hash so the dev path's `payload_only_hash_accept`
-    // matches; production would still reject this even with the correct
-    // payload hash because the proof lacks a JWS.
+    // A matching payload-only hash must not create a development-only
+    // durable Event protocol.
     let payload_bytes = canonical::canonical_json_bytes(&object["payload"]).unwrap();
     let payload_digest = arkret_sdk::canonical::sha256_digest(&payload_bytes);
     if let Some(proofs) = object.get_mut("proofs").and_then(Value::as_array_mut)
@@ -1312,18 +1311,16 @@ async fn development_accepts_dev_proof_type_field_when_hash_matches() {
     {
         map.insert("payload_digest".to_owned(), json!(payload_digest));
     }
-    let result = validate_event_proofs(
+    let error = validate_event_proofs(
         &object,
         &state,
         &session,
         "did:web:alice.example",
         "sha256:dead",
     )
-    .await;
-    assert!(
-        result.is_ok(),
-        "development mode should accept matching dev-proof: {result:?}"
-    );
+    .await
+    .expect_err("development mode must reject the non-SDK proof shape");
+    assert_eq!(error.code, "invalid_proof");
 }
 
 #[tokio::test]
@@ -1343,7 +1340,7 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
             "alg": "EdDSA",
             "verification_method": "did:web:alice.example#k1",
             "event_digest": event_digest,
-            "created_at": "2026-05-17T00:00:00Z",
+            "created_at": "2026-05-17T00:00:00.000Z",
             "jws": "eyJhbGciOiJFZERTQSJ9..AAAAAAAA"
         }]),
     );
@@ -1385,7 +1382,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
             "alg": "EdDSA",
             "verification_method": "did:web:alice.example#k1",
             "event_digest": event_digest,
-            "created_at": "2026-05-17T00:00:00Z",
+            "created_at": "2026-05-17T00:00:00.000Z",
             "jws": "eyJhbGciOiJFZERTQSJ9..AAAAAAAA"
         }]),
     );
@@ -1405,9 +1402,8 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
 
 /// T5.3 (Round 22) — pin the SDK production-verifier surface used by
 /// soland's federation / event paths. The hand-rolled
-/// `dev_proof_in_production` gate above rejects `type == "dev-proof"`
-/// and the `"a..b"` / empty placeholder JWS specifically (those are
-/// soland-shape concerns the SDK doesn't know about). The SDK
+/// The strict Event validator above rejects `type == "dev-proof"` in every
+/// deployment mode. The SDK
 /// `ProductionVerifier::assert_production_proof` enforces the
 /// orthogonal rule that the wire `Proof.kind` MUST NOT be in
 /// `core::DEV_PROOF_KINDS` (`dev` / `test` / `mock` / `stub` /

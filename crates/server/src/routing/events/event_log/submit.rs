@@ -109,6 +109,51 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) self_principal_pcr_bootstrap: bool,
 }
 
+/// Closed authorization context for trusted internal protocol adapters. This
+/// does not skip schema, proof, actor-lock, idempotency or reducer admission;
+/// it only supplies the protocol-specific substitute for ordinary Realm
+/// membership after the adapter has verified its durable binding.
+#[derive(Debug, Clone)]
+pub(in crate::routing) struct InternalEventAdmission {
+    realm_id: String,
+    actor_id: String,
+    kind: String,
+    binding_ref: String,
+}
+
+impl InternalEventAdmission {
+    pub(in crate::routing) fn mimi_provider(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        binding_ref: impl Into<String>,
+    ) -> Self {
+        Self {
+            realm_id: realm_id.into(),
+            actor_id: actor_id.into(),
+            kind: arkret_sdk::events::EventKind::MESSAGE_CREATE.to_owned(),
+            binding_ref: binding_ref.into(),
+        }
+    }
+
+    pub(in crate::routing::events::event_log) fn matches(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+    ) -> bool {
+        session.actor == self.actor_id
+            && session.device_id == "mimi-provider-facade"
+            && object.get("actor_id").and_then(Value::as_str) == Some(self.actor_id.as_str())
+            && object.get("realm_id").and_then(Value::as_str) == Some(self.realm_id.as_str())
+            && object.get("kind").and_then(Value::as_str) == Some(self.kind.as_str())
+            && object
+                .get("payload")
+                .and_then(|payload| payload.get("mimi_provenance"))
+                .and_then(|provenance| provenance.get("mimi_room_binding_ref"))
+                .and_then(Value::as_str)
+                == Some(self.binding_ref.as_str())
+    }
+}
+
 const DELIVERY_BINDING_HANDOVER_GRACE_SECONDS: i64 = 86_400;
 
 #[derive(Debug, Clone)]
@@ -297,6 +342,7 @@ pub(super) async fn submit_event_batch_outcome(
             session,
             envelope,
             &realm_bootstrap_contexts,
+            None,
             None,
         )
         .await
@@ -769,9 +815,9 @@ pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;
 use preflight::*;
-pub(in crate::routing) use value::submit_event_value;
 pub(in crate::routing::events::event_log) use value::submit_event_value_with_idempotency;
 use value::*;
+pub(in crate::routing) use value::{submit_event_value, submit_mimi_event_value};
 
 #[cfg(test)]
 mod received_at_stamp_tests {

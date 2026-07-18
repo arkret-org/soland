@@ -19,6 +19,8 @@
 //!   [`AppState::jws_verifier`]'s closure factory — same shape checks PLUS DID resolution + Ed25519
 //!   public-key extraction + RFC 7515 §5.2 signing-input reconstruction + ed25519-dalek verify.
 
+use std::collections::BTreeMap;
+
 use arkret_sdk::identity::{DidDocument, DidResolver};
 use arkret_sdk::signatures::{
     Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
@@ -157,7 +159,22 @@ pub async fn verify_jws_ed25519_async(
 ) -> Result<(), String> {
     let did = arkret_sdk::identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
-    let document = resolve_did_document_async(state, &did).await?;
+    let document = if is_local_service_notary_method(state, &did, verification_method) {
+        DidDocument {
+            id: did.clone(),
+            verification_methods: BTreeMap::from([(
+                verification_method.to_owned(),
+                arkret_sdk::ed25519_pubkey_to_did_key_multibase(
+                    state.notary_verifying_key().as_bytes(),
+                ),
+            )]),
+            also_known_as: Vec::new(),
+            updated_at: Some(chrono::Utc::now()),
+            raw_properties: BTreeMap::new(),
+        }
+    } else {
+        resolve_did_document_async(state, &did).await?
+    };
     let resolver = ResolvedDidDocumentResolver {
         document: &document,
     };
@@ -169,6 +186,139 @@ pub async fn verify_jws_ed25519_async(
         &resolver,
     )
     .map_err(|error| error.to_string())
+}
+
+/// Verify a proof made by either a principal DID control method or one of the
+/// principal's currently-authorized device keys.
+///
+/// `device-lifecycle.md` §5.4/§8.2 deliberately keeps ordinary device keys in
+/// the principal-control device-set projection instead of the DID document.
+/// A verification method shaped as `{principal}#{device_id}` therefore MUST
+/// resolve through that projection. Non-device methods (identity control,
+/// delegated enrollment authority, service notary, and similar methods) keep
+/// using the DID-document verifier and its high-risk freshness gate.
+#[derive(Debug)]
+pub enum PrincipalAuthorizedJwsError {
+    HighRiskDidFreshness(String),
+    Verification(String),
+}
+
+impl std::fmt::Display for PrincipalAuthorizedJwsError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HighRiskDidFreshness(reason) | Self::Verification(reason) => {
+                formatter.write_str(reason)
+            }
+        }
+    }
+}
+
+pub async fn verify_principal_authorized_jws_ed25519_async(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    principal_id: &str,
+    state: &AppState,
+) -> Result<(), PrincipalAuthorizedJwsError> {
+    let method_did = arkret_sdk::identity::verification_method_did(verification_method)
+        .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()))?;
+    if method_did.as_str() != principal_id {
+        return Err(PrincipalAuthorizedJwsError::Verification(
+            "verification method controller does not match principal".to_owned(),
+        ));
+    }
+
+    let device_prefix = format!("{principal_id}#");
+    if let Some(device_id) = verification_method.strip_prefix(&device_prefix)
+        && arkret_sdk::DeviceId::new(device_id.to_owned()).is_ok()
+    {
+        let facet =
+            crate::routing::identity::cross_signing::try_resolve_device_signing_directory_facet(
+                state,
+                principal_id,
+                device_id,
+            )
+            .await
+            .map_err(|error| {
+                PrincipalAuthorizedJwsError::Verification(format!(
+                    "device signing directory unavailable: {error}"
+                ))
+            })?;
+        if !matches!(facet.status, arkret_sdk::DeviceStatus::Active) {
+            return Err(PrincipalAuthorizedJwsError::Verification(
+                "device signing key is not active and authorized".to_owned(),
+            ));
+        }
+        let multibase = facet
+            .signing_key_did
+            .as_deref()
+            .and_then(|value| value.strip_prefix("did:key:"))
+            .ok_or_else(|| {
+                PrincipalAuthorizedJwsError::Verification(
+                    "authorized device signing key is unavailable".to_owned(),
+                )
+            })?;
+        let material = PublicKeyMaterial::Ed25519Multibase {
+            value: multibase.to_owned(),
+        };
+        return Ed25519DetachedJwsVerifier::new()
+            .verify_detached_jws(jws, canonical_bytes, &material)
+            .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()));
+    }
+
+    if method_did.method() != "key"
+        && !is_local_service_notary_method(state, &method_did, verification_method)
+    {
+        if state.config.development_mode {
+            let ingested = state
+                .webvh_store()
+                .get_document(method_did.as_str())
+                .await
+                .map_err(|error| {
+                    PrincipalAuthorizedJwsError::HighRiskDidFreshness(format!(
+                        "DID freshness lookup failed: {error}"
+                    ))
+                })?
+                .is_some();
+            if !ingested {
+                // Local development still verifies a real detached Ed25519
+                // JWS. Only key discovery is deterministic, and the derivation
+                // lives in the SDK so cotest and every server reconstruct the
+                // same fixture identity without accepting a dev-proof type.
+                let key = arkret_sdk::signatures::development_verifying_key(verification_method);
+                let material = PublicKeyMaterial::Ed25519Raw {
+                    bytes: key.to_bytes().to_vec(),
+                };
+                return Ed25519DetachedJwsVerifier::new()
+                    .verify_detached_jws(jws, canonical_bytes, &material)
+                    .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()));
+            }
+        }
+        enforce_high_risk_did_freshness(state, &method_did)
+            .await
+            .map_err(PrincipalAuthorizedJwsError::HighRiskDidFreshness)?;
+    }
+    verify_jws_ed25519_async(
+        canonical_bytes,
+        jws,
+        verification_method,
+        principal_id,
+        state,
+    )
+    .await
+    .map_err(PrincipalAuthorizedJwsError::Verification)
+}
+
+/// The local service notary is anchored by the configured service identity
+/// and the exact runtime notary key. It therefore does not depend on a cached
+/// remote DID document in order to verify service-authored Events.
+pub fn is_local_service_notary_method(
+    state: &AppState,
+    did: &Did,
+    verification_method: &str,
+) -> bool {
+    did.as_str() == state.service_id()
+        && verification_method == format!("{}#notary-key", state.service_id())
 }
 
 /// Resolve a DID URL to its Ed25519 [`VerifyingKey`] via the AppState

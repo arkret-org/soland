@@ -12,6 +12,14 @@ use soland_storage_postgres::Db;
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(2_000);
 
+fn test_event_signer_did() -> String {
+    let key = ed25519_dalek::SigningKey::from_bytes(&[21_u8; 32]);
+    format!(
+        "did:key:{}",
+        arkret_sdk::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+    )
+}
+
 fn test_config() -> AppConfig {
     AppConfig {
         object_storage: ObjectStorageConfig::local(
@@ -137,30 +145,40 @@ fn signed_actor_private_event_envelope(
     payload: Value,
 ) -> Value {
     let now = chrono::Utc::now();
-    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut event = json!({
-        "event_id": arkret_sdk::new_prefixed_uuid7("ak:event:"),
-        "kind": kind,
-        "realm_id": realm_id,
-        "actor_id": actor,
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "created_at": created_at,
-        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
-        "prev_refs": [],
-        "refs": [],
-        "payload": payload,
-        "proofs": []
-    });
-    let event_digest = event_canonical_digest(&event);
-    event["proofs"] = json!([{
-        "kind": "detached_jws",
-        "alg": "EdDSA",
-        "verification_method": format!("{actor}#{device_id}"),
-        "event_digest": event_digest,
-        "created_at": created_at,
-        "jws": "dev-mode-fixture"
-    }]);
-    event
+    let actor_id = arkret_sdk::Did::new(actor.to_owned()).expect("fixture actor DID");
+    let verification_method = actor.strip_prefix("did:key:").map_or_else(
+        || format!("{actor}#{device_id}"),
+        |key| format!("{actor}#{key}"),
+    );
+    let mut event = arkret_sdk::Event::new_with_id_at(
+        arkret_sdk::EventId::new(arkret_sdk::new_prefixed_uuid7("ak:event:"))
+            .expect("fixture Event id"),
+        kind,
+        arkret_sdk::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        actor_id.clone(),
+        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        arkret_sdk::Hlc::new(format!(
+            "{:012x}-0000-00000000",
+            now.timestamp_millis().max(0) as u64
+        ))
+        .expect("fixture HLC"),
+        payload,
+        now,
+    )
+    .expect("SDK Event builder accepts actor-private fixture");
+    let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
+        [21_u8; 32],
+        actor_id,
+        verification_method.clone(),
+    );
+    arkret_sdk::signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_sdk::signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .expect("SDK Event signer accepts actor-private fixture");
+    serde_json::to_value(event).expect("SDK Event serializes")
 }
 
 async fn submit_actor_private_event(
@@ -236,19 +254,6 @@ fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>)
             })
         })
         .collect()
-}
-
-fn event_canonical_digest(event: &Value) -> String {
-    let mut canonical = event.clone();
-    if let Value::Object(object) = &mut canonical {
-        object.remove("proofs");
-        object.remove("unsigned");
-        object.remove("canonical_digest");
-        object.remove("canonical_hash");
-    }
-    let bytes =
-        arkret_sdk::canonical::canonical_json_bytes(&canonical).expect("json canonicalizes");
-    arkret_sdk::canonical::sha256_digest(&bytes)
 }
 
 fn encrypted_account_data_value(actor_id: &str, data_type: &str, plaintext: &Value) -> Value {
@@ -411,16 +416,17 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
 #[tokio::test]
 async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     let state = AppState::new(test_config(), Db { pool: None });
+    let alice_actor = test_event_signer_did();
     let alice_desktop = dev_token(
         state.clone(),
-        "did:web:alice.example",
+        &alice_actor,
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "Alice Desktop",
     )
     .await;
     let alice_phone = dev_token(
         state.clone(),
-        "did:web:alice.example",
+        &alice_actor,
         "ak:device:01904100-0000-7000-8000-a11ce0000002",
         "Alice Phone",
     )
@@ -434,18 +440,20 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     .await;
     let realm_a = create_plaintext_realm(state.clone(), &alice_desktop, "Parent Realm").await;
     let realm_b = create_plaintext_realm(state.clone(), &alice_desktop, "Discussion Realm").await;
+    add_realm_member(state.clone(), &alice_desktop, &realm_a, &alice_actor).await;
+    add_realm_member(state.clone(), &alice_desktop, &realm_b, &alice_actor).await;
     let event_a = "ak:event:01904100-0000-7000-8000-0000000000aa";
     let event_b = "ak:event:01904100-0000-7000-8000-0000000000bb";
 
     let marker_a = submit_actor_private_event(
         state.clone(),
         &alice_desktop,
-        "did:web:alice.example",
+        &alice_actor,
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_a,
         "ak.read_cursor.advance",
         read_cursor_payload(
-            "did:web:alice.example",
+            &alice_actor,
             "ak:device:01904100-0000-7000-8000-a11ce0000001",
             &realm_a,
             event_a,
@@ -461,12 +469,12 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     let marker_b = submit_actor_private_event(
         state.clone(),
         &alice_desktop,
-        "did:web:alice.example",
+        &alice_actor,
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_b,
         "ak.read_cursor.advance",
         read_cursor_payload(
-            "did:web:alice.example",
+            &alice_actor,
             "ak:device:01904100-0000-7000-8000-a11ce0000001",
             &realm_b,
             event_b,
@@ -479,13 +487,13 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         "marker_b response: {marker_b}"
     );
 
-    let markers_a = projected_read_markers(&state, "did:web:alice.example", Some(&realm_a));
+    let markers_a = projected_read_markers(&state, &alice_actor, Some(&realm_a));
     assert_eq!(markers_a.len(), 1);
     assert_eq!(markers_a[0]["position"]["event_id"], event_a);
     assert_eq!(markers_a[0]["realm_id"], realm_a);
     assert_eq!(markers_a[0]["read_scope"]["track_name"], "discussion");
 
-    let markers_b = projected_read_markers(&state, "did:web:alice.example", Some(&realm_b));
+    let markers_b = projected_read_markers(&state, &alice_actor, Some(&realm_b));
     assert_eq!(markers_b.len(), 1);
     assert_eq!(markers_b[0]["position"]["event_id"], event_b);
     assert_eq!(markers_b[0]["realm_id"], realm_b);

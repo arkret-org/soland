@@ -69,28 +69,36 @@ pub(in crate::routing) fn event_semantic_refs(
     Ok(authorized_refs)
 }
 
-fn event_canonical_source(envelope: &Value) -> Value {
-    // Per arkret-spec event-and-patch.md §3: both the event digest and every
-    // proof's `event_digest` derive from producer canonical event bytes with
-    // `proofs`, `unsigned`, and reducer-stamped top-level fields removed.
-    // Stripping derived `canonical_*` slots keeps fixtures that round-trip
-    // them in the envelope from poisoning the digest.
+fn event_for_canonical_digest(envelope: &Value) -> Result<Event, EventValidationError> {
+    // `canonical_*` are storage adapter metadata, not Event fields. All
+    // protocol exclusions (`proofs`, `unsigned`, reducer-stamped fields) are
+    // owned by SDK `Event::digest_payload`; Soland must not mirror that list.
     let mut value = envelope.clone();
     if let Value::Object(object) = &mut value {
-        object.remove("proofs");
-        object.remove("unsigned");
-        object.remove("effective_scope");
-        object.remove("actor_kind");
         object.remove("canonical_digest");
         object.remove("canonical_hash");
     }
-    value
+    serde_json::from_value(value).map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_event_envelope",
+            format!("event envelope is not an SDK Event: {error}"),
+        )
+    })
 }
 
 pub(in crate::routing) fn event_canonical_bytes(
     envelope: &Value,
 ) -> Result<Vec<u8>, EventValidationError> {
-    canonical::canonical_json_bytes(&event_canonical_source(envelope)).map_err(|_| {
+    let event = event_for_canonical_digest(envelope)?;
+    let payload = event.digest_payload().map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_event_envelope",
+            format!("event digest payload cannot be built: {error}"),
+        )
+    })?;
+    canonical::canonical_json_bytes(&payload).map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_event_envelope",

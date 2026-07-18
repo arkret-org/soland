@@ -47,7 +47,19 @@ pub(in crate::routing) async fn submit_event_value(
             "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
         ));
     }
-    submit_event_value_with_context(state, session, envelope, &[], None).await
+    submit_event_value_with_context(state, session, envelope, &[], None, None).await
+}
+
+pub(in crate::routing) async fn submit_mimi_event_value(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: Value,
+    realm_id: &str,
+    binding_ref: &str,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let admission =
+        InternalEventAdmission::mimi_provider(realm_id, state.service_id.as_str(), binding_ref);
+    submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission)).await
 }
 
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
@@ -63,7 +75,7 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
             "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
         ));
     }
-    submit_event_value_with_context(state, session, envelope, &[], Some(idempotency)).await
+    submit_event_value_with_context(state, session, envelope, &[], Some(idempotency), None).await
 }
 
 pub(super) async fn submit_event_value_with_context(
@@ -72,6 +84,7 @@ pub(super) async fn submit_event_value_with_context(
     mut envelope: Value,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
     commit_idempotency: Option<EventCommitIdempotency>,
+    internal_admission: Option<&InternalEventAdmission>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
@@ -88,9 +101,19 @@ pub(super) async fn submit_event_value_with_context(
         ));
     }
 
-    let parsed =
-        validate_event_envelope_with_context(state, session, &envelope, realm_bootstrap_contexts)
-            .await?;
+    let parsed = validate_event_envelope_with_context(
+        state,
+        session,
+        &envelope,
+        realm_bootstrap_contexts,
+        internal_admission,
+    )
+    .await?;
+    let has_internal_plaintext_service_binding = internal_admission.is_some_and(|admission| {
+        envelope
+            .as_object()
+            .is_some_and(|object| admission.matches(session, object))
+    });
     let actor_lock = actor_submit_lock(&parsed.actor_id);
     let _actor_submit_guard = actor_lock.lock().await;
     let received_at = now();
@@ -229,8 +252,12 @@ pub(super) async fn submit_event_value_with_context(
                 reason,
             ));
         }
-        if let Err(message) =
-            validate_operation_policy(state, std::slice::from_ref(operation)).await
+        if let Err(message) = validate_operation_policy_with_plaintext_service_binding(
+            state,
+            std::slice::from_ref(operation),
+            has_internal_plaintext_service_binding,
+        )
+        .await
         {
             let (status, code) =
                 crate::routing::events::operations::operation_policy_reason_code(message);

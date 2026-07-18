@@ -12,10 +12,10 @@ pub(super) async fn persist_mimi_canonical_message_event(
     state: &AppState,
     event_id: &str,
     realm_id: &str,
-    actor_id: &str,
     created_at: chrono::DateTime<chrono::Utc>,
     payload: Value,
 ) -> Result<(), AppError> {
+    let actor_id = state.service_id.as_str();
     let actor_seq = state
         .events_store()
         .max_actor_seq(actor_id)
@@ -23,93 +23,74 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .map_err(|error| AppError::internal(format!("MIMI actor frontier lookup: {error}")))?
         .unwrap_or(0)
         + 1;
-    let mut envelope = json!({
-        "event_id": event_id,
-        "kind": arkret_sdk::events::EventKind::MESSAGE_CREATE,
-        "realm_id": realm_id,
-        "actor_id": actor_id,
-        "actor_seq": actor_seq,
-        "created_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "hlc": state.hlc.now(),
-        "prev_refs": [],
-        "payload": payload,
-        "executed_by": state.service_id,
-    });
-    let canonical_source = mimi_event_canonical_source(&envelope);
-    let canonical_bytes = canonical::canonical_json_bytes(&canonical_source).map_err(|error| {
-        AppError::internal(format!("MIMI event canonicalization failed: {error}"))
-    })?;
-    let canonical_digest = canonical::sha256_digest(&canonical_bytes);
-    let proof = mimi_event_proof(state, actor_id, &canonical_digest, created_at)?;
-    envelope
-        .as_object_mut()
-        .ok_or_else(|| AppError::internal("MIMI event envelope is not an object"))?
-        .insert("proofs".to_owned(), json!([proof]));
-    let record = CanonicalEventRecord {
-        event_id: event_id.to_owned(),
-        actor_id: actor_id.to_owned(),
+    let service_did = arkret_sdk::Did::new(state.service_id.clone())
+        .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
+    let mut event = arkret_sdk::Event::new_with_id_at(
+        arkret_sdk::EventId::new(event_id.to_owned())
+            .map_err(|error| AppError::internal(format!("MIMI event id invalid: {error}")))?,
+        arkret_sdk::events::EventKind::MESSAGE_CREATE,
+        arkret_sdk::RealmId::new(realm_id.to_owned())
+            .map_err(|error| AppError::internal(format!("MIMI realm id invalid: {error}")))?,
+        service_did.clone(),
         actor_seq,
-        realm_id: Some(realm_id.to_owned()),
-        kind: arkret_sdk::events::EventKind::MESSAGE_CREATE.to_owned(),
-        schema_id: EVENT_SCHEMA_ID.to_owned(),
-        canonical_digest,
-        canonical_bytes,
-        envelope,
-        received_at: created_at,
-    };
-    if let Err(error) = state.events_store().put(record).await {
-        tracing::error!(%error, "mimi: failed to persist canonical message event");
-        return Err(AppError::internal("MIMI canonical event store unavailable"));
-    }
-    Ok(())
-}
-
-pub(super) fn mimi_event_canonical_source(envelope: &Value) -> Value {
-    let mut value = envelope.clone();
-    if let Value::Object(object) = &mut value {
-        object.remove("proofs");
-        object.remove("unsigned");
-        object.remove("canonical_digest");
-        object.remove("canonical_hash");
-    }
-    value
-}
-
-pub(super) fn mimi_event_proof(
-    state: &AppState,
-    actor_id: &str,
-    event_digest: &str,
-    created_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Proof, AppError> {
-    let verification_method = format!("{}#mimi-provider-facade-key", state.service_id);
-    let binding = json!({
-        "kind": "mimi_provider_service_proof",
-        "event_digest": event_digest,
-        "actor_id": actor_id,
-        "verification_method": verification_method,
-        "created_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-    });
-    let binding_bytes = canonical::canonical_json_bytes(&binding).map_err(|error| {
-        AppError::internal(format!(
-            "MIMI proof binding canonicalization failed: {error}"
-        ))
-    })?;
-    let jws =
-        arkret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
-            .map_err(|error| {
-                AppError::internal(format!("MIMI event proof signing failed: {error}"))
-            })?;
-    Ok(Proof {
-        kind: proof_kind::DETACHED_JWS.to_owned(),
-        alg: "EdDSA".to_owned(),
-        verification_method,
-        event_digest: Hash::new(event_digest.to_owned())
-            .map_err(|error| AppError::internal(format!("MIMI event digest invalid: {error}")))?,
+        arkret_sdk::Hlc::new(state.hlc.now())
+            .map_err(|error| AppError::internal(format!("MIMI HLC invalid: {error}")))?,
+        payload,
         created_at,
-        domain: None,
-        audience: None,
-        jws,
-    })
+    )
+    .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
+    let verification_method = format!("{}#notary-key", state.service_id);
+    let signer = arkret_sdk::Ed25519MoveSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        service_did,
+        verification_method.clone(),
+    );
+    let canonical_created_at = event.created_at;
+    arkret_sdk::signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_sdk::signatures::SignEventOptions::new().with_created_at(canonical_created_at),
+    )
+    .map_err(|error| AppError::internal(format!("MIMI Event signing failed: {error}")))?;
+    let now = chrono::Utc::now();
+    let session = soland_storage::SessionRecord {
+        token_hash: "mimi-provider-facade".to_owned(),
+        actor: state.service_id.clone(),
+        device_id: "mimi-provider-facade".to_owned(),
+        audience: state.service_id.clone(),
+        session_public_key: None,
+        agent_session: None,
+        expires_at: now + chrono::Duration::minutes(5),
+        created_at: now,
+        revoked_at: None,
+    };
+    let envelope = serde_json::to_value(event)
+        .map_err(|error| AppError::internal(format!("MIMI Event serialize failed: {error}")))?;
+    let binding_ref = envelope
+        .get("payload")
+        .and_then(|payload| payload.get("mimi_provenance"))
+        .and_then(|provenance| provenance.get("mimi_room_binding_ref"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::internal("MIMI room binding ref missing from Event payload"))?
+        .to_owned();
+    crate::routing::events::event_log::submit_mimi_event_value(
+        state,
+        &session,
+        envelope,
+        realm_id,
+        &binding_ref,
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(
+            soland_http::error::ErrorCode::InvalidParam,
+            format!("MIMI Event admission failed: {}", error.message),
+        )
+        .with_status(error.status)
+        .with_wire_code(error.code)
+    })?;
+    Ok(())
 }
 
 pub(super) fn decode_mimi_update_payload(body: &Value) -> Result<Option<Value>, AppError> {

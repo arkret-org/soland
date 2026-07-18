@@ -59,7 +59,6 @@ pub(crate) async fn persist_managed_agent_did_binding(
                 "realm_id": principal_control_realm_id,
                 "controller_did": controller_id,
                 "authorization_ref": authorization_ref,
-                "requested_scope": requested_scope,
                 "requested_scope_digest": requested_scope_digest,
             },
         }],
@@ -770,13 +769,11 @@ fn validate_agent_did_document_binding(
                 "authorization_ref",
                 "controller_did",
                 "realm_id",
-                "requested_scope",
                 "requested_scope_digest",
             ])
         || endpoint.get("realm_id").and_then(Value::as_str) != Some(pcr_id)
         || endpoint.get("controller_did").and_then(Value::as_str) != Some(controller_id)
         || endpoint.get("authorization_ref").and_then(Value::as_str) != Some(authorization_ref)
-        || endpoint.get("requested_scope") != Some(expected_requested_scope)
     {
         return Err(schema_error(
             "ArkretPrincipalControlRealm service does not match the managed Agent binding",
@@ -995,7 +992,6 @@ mod tests {
                     "realm_id": PCR,
                     "controller_did": CONTROLLER,
                     "authorization_ref": AUTHORIZATION,
-                    "requested_scope": requested_scope,
                     "requested_scope_digest": digest,
                 },
             }],
@@ -1075,8 +1071,8 @@ mod tests {
         );
 
         let mut changed_scope = did_document();
-        changed_scope["service"][0]["serviceEndpoint"]["requested_scope"]["actions"] =
-            json!(["ak.event.read", "ak.message.create"]);
+        changed_scope["service"][0]["serviceEndpoint"]["requested_scope_digest"] =
+            json!(format!("sha256:{}", "0".repeat(64)));
         assert!(
             validate_agent_did_document_binding(
                 &changed_scope,

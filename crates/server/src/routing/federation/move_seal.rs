@@ -40,7 +40,7 @@ use crate::{JsonResult, json_ok};
 
 struct DeviceGenerationEventSealContext {
     principal_id: String,
-    current_generation_ref: String,
+    current_generation_ref: Option<String>,
     records: Vec<soland_storage::CanonicalEventRecord>,
     accepted_frontier_refs: Vec<SealId>,
     cas_frontier_refs: Vec<SealId>,
@@ -165,7 +165,7 @@ async fn device_generation_event_seal_context(
             "principal-control bootstrap is stored under a non-deterministic Realm",
         ));
     }
-    let Some(generation) = crate::routing::identity::device_generation::current_device_generation(
+    let generation = crate::routing::identity::device_generation::current_device_generation(
         state,
         &principal_id,
     )
@@ -175,13 +175,11 @@ async fn device_generation_event_seal_context(
             ErrorCode::FrontierUnavailable,
             format!("device generation state unavailable: {error}"),
         )
-    })?
-    else {
-        return Ok(None);
-    };
-    if generation.status
-        == crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted
-    {
+    })?;
+    if generation.as_ref().is_some_and(|generation| {
+        generation.status
+            == crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted
+    }) {
         return Err(device_generation_fenced(
             "Seal admission is closed while the B-model generation slot is conflicted",
         ));
@@ -233,11 +231,14 @@ async fn device_generation_event_seal_context(
     .collect::<Result<Vec<_>, _>>()
     .map_err(|error| seal_admission_error(format!("invalid bootstrap Event digest: {error}")))?;
 
-    let generation_fence =
+    let generation_fence = if generation.is_some() {
         crate::routing::events::event_log::governance_proof::first_generation_event_seal_requirement(
             state, &records,
         )
-        .await?;
+        .await?
+    } else {
+        None
+    };
     if generation_fence
         .as_ref()
         .is_some_and(|requirement| requirement.principal_id != principal_id)
@@ -260,7 +261,7 @@ async fn device_generation_event_seal_context(
 
     Ok(Some(DeviceGenerationEventSealContext {
         principal_id,
-        current_generation_ref: generation.current_ref,
+        current_generation_ref: generation.map(|generation| generation.current_ref),
         records,
         accepted_frontier_refs,
         cas_frontier_refs,
@@ -579,11 +580,16 @@ async fn try_apply_device_generation_event_seal(
         .ok_or_else(|| device_generation_fenced("B-model Event Seal signer key is missing"))?;
     if signer.revoked_at.is_some()
         || signer.verification_state != "verified"
-        || signer
-            .payload
-            .get("authorized_generation_ref")
-            .and_then(serde_json::Value::as_str)
-            != Some(context.current_generation_ref.as_str())
+        || context
+            .current_generation_ref
+            .as_ref()
+            .is_some_and(|generation| {
+                signer
+                    .payload
+                    .get("authorized_generation_ref")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(generation.as_str())
+            })
     {
         return Err(device_generation_fenced(
             "B-model Event Seal signer does not belong to the active device generation",
@@ -729,11 +735,16 @@ async fn try_apply_device_generation_event_seal(
                 })?;
             if event_device.revoked_at.is_some()
                 || event_device.verification_state != "verified"
-                || event_device
-                    .payload
-                    .get("authorized_generation_ref")
-                    .and_then(serde_json::Value::as_str)
-                    != Some(context.current_generation_ref.as_str())
+                || context
+                    .current_generation_ref
+                    .as_ref()
+                    .is_some_and(|generation| {
+                        event_device
+                            .payload
+                            .get("authorized_generation_ref")
+                            .and_then(serde_json::Value::as_str)
+                            != Some(generation.as_str())
+                    })
             {
                 return Err(device_generation_fenced(
                     "B-model Event Seal delta contains an Event from an older device generation",
@@ -1023,20 +1034,21 @@ pub(crate) async fn apply_managed_agent_event_seal(
             ErrorCode::FrontierUnavailable,
             format!("controller device generation unavailable: {error}"),
         )
-    })?
-    .ok_or_else(|| device_generation_fenced("controller has no active device generation"))?;
-    if generation.status
-        != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
-        || device.revoked_at.is_some()
+    })?;
+    if device.revoked_at.is_some()
         || device.verification_state != "verified"
-        || device
-            .payload
-            .get("authorized_generation_ref")
-            .and_then(serde_json::Value::as_str)
-            != Some(generation.current_ref.as_str())
+        || generation.as_ref().is_some_and(|generation| {
+            generation.status
+                != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+                || device
+                    .payload
+                    .get("authorized_generation_ref")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(generation.current_ref.as_str())
+        })
     {
         return Err(device_generation_fenced(
-            "managed Agent PCR Seal signer is not in the active controller device generation",
+            "managed Agent PCR Seal signer is not an active controller device",
         ));
     }
     let public_key = device

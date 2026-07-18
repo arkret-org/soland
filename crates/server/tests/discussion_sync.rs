@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arkret_sdk::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
@@ -15,6 +16,18 @@ use soland_storage::{RealmInviteRecord, RealmMetaRecord};
 use soland_storage_postgres::Db;
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(1_000);
+static ALICE_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([21_u8; 32]));
+static BOB_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([22_u8; 32]));
+static CAROL_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([23_u8; 32]));
+static MALLORY_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([24_u8; 32]));
+
+fn test_signer_did(seed: [u8; 32]) -> String {
+    let key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    format!(
+        "did:key:{}",
+        arkret_sdk::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+    )
+}
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -261,7 +274,7 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
     let event_id = new_prefixed_uuid7("ak:event:");
     let event = signed_event(
         &event_id,
-        "did:web:alice.example",
+        ALICE_DID.as_str(),
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         realm_id,
         "ak.message.create",
@@ -488,30 +501,45 @@ fn signed_event(
     payload: Value,
 ) -> Value {
     let now = chrono::Utc::now();
-    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut event = json!({
-        "event_id": event_id,
-        "kind": kind,
-        "realm_id": realm_id,
-        "actor_id": actor_id,
-        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "created_at": created_at,
-        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
-        "prev_refs": [],
-        "refs": [],
-        "payload": payload,
-        "proofs": []
-    });
-    let event_digest = event_canonical_digest(&event);
-    event["proofs"] = json!([{
-        "kind": "detached_jws",
-        "alg": "EdDSA",
-        "verification_method": format!("{actor_id}#{device_id}"),
-        "event_digest": event_digest,
-        "created_at": created_at,
-        "jws": "dev-mode-fixture"
-    }]);
-    event
+    let actor = arkret_sdk::Did::new(actor_id.to_owned()).expect("fixture actor DID");
+    let verification_method = actor_id.strip_prefix("did:key:").map_or_else(
+        || format!("{actor_id}#{device_id}"),
+        |key| format!("{actor_id}#{key}"),
+    );
+    let mut event = arkret_sdk::Event::new_with_id_at(
+        arkret_sdk::EventId::new(event_id.to_owned()).expect("fixture Event id"),
+        kind,
+        arkret_sdk::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        actor.clone(),
+        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        arkret_sdk::Hlc::new(format!(
+            "{:012x}-0000-00000000",
+            now.timestamp_millis().max(0) as u64
+        ))
+        .expect("fixture HLC"),
+        payload,
+        now,
+    )
+    .expect("SDK Event builder accepts discussion fixture");
+    let seed = if actor_id == BOB_DID.as_str() {
+        [22_u8; 32]
+    } else if actor_id == CAROL_DID.as_str() {
+        [23_u8; 32]
+    } else if actor_id == MALLORY_DID.as_str() {
+        [24_u8; 32]
+    } else {
+        [21_u8; 32]
+    };
+    let signer =
+        arkret_sdk::Ed25519MoveSigner::from_did_key_seed(seed, actor, verification_method.clone());
+    arkret_sdk::signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_sdk::signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .expect("SDK Event signer accepts discussion fixture");
+    serde_json::to_value(event).expect("SDK Event serializes")
 }
 
 fn strand_id_for_realm(realm_id: &str) -> String {
@@ -519,19 +547,6 @@ fn strand_id_for_realm(realm_id: &str) -> String {
         .strip_prefix("ak:realm:")
         .map(|suffix| format!("ak:strand:{suffix}"))
         .unwrap_or_else(|| "ak:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
-}
-
-fn event_canonical_digest(event: &Value) -> String {
-    let mut canonical = event.clone();
-    if let Value::Object(object) = &mut canonical {
-        object.remove("proofs");
-        object.remove("unsigned");
-        object.remove("canonical_digest");
-        object.remove("canonical_hash");
-    }
-    let bytes =
-        arkret_sdk::canonical::canonical_json_bytes(&canonical).expect("json canonicalizes");
-    arkret_sdk::canonical::sha256_digest(&bytes)
 }
 
 fn sync_bodies(sync: &Value, realm_id: &str) -> Vec<String> {
@@ -563,10 +578,10 @@ fn event_query_bodies(events: &Value) -> Vec<String> {
 #[tokio::test]
 async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice_did = "did:web:alice.example";
+    let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
-    let bob_did = "did:web:bob.example";
+    let bob_did = BOB_DID.as_str();
     let _bob_session_device = dev_token(state.clone(), bob_did, "b0b000000000").await;
     let bob = _bob_session_device;
     let realm_id = seed_realm(&state, alice_did, "joined history", "joined").await;
@@ -619,10 +634,10 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
 #[tokio::test]
 async fn joined_history_incremental_sync_includes_post_join_messages_after_cursor() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice_did = "did:web:alice.example";
+    let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
-    let bob_did = "did:web:bob.example";
+    let bob_did = BOB_DID.as_str();
     let bob = dev_token(state.clone(), bob_did, "b0b000000020").await;
     let realm_id = seed_realm(&state, alice_did, "joined incremental history", "joined").await;
 
@@ -664,9 +679,9 @@ async fn joined_history_incremental_sync_includes_post_join_messages_after_curso
 #[tokio::test]
 async fn invite_accept_member_receives_joined_history_messages_after_accept() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice_did = "did:web:alice.example";
+    let alice_did = ALICE_DID.as_str();
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
-    let bob_did = "did:web:bob.example";
+    let bob_did = BOB_DID.as_str();
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b000000003";
     let bob = dev_token(state.clone(), bob_did, "b0b000000003").await;
     let realm_id = seed_realm(&state, alice_did, "invite accept joined history", "joined").await;
@@ -709,10 +724,10 @@ async fn invite_accept_member_receives_joined_history_messages_after_accept() {
 #[tokio::test]
 async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice_did = "did:web:alice.example";
+    let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
-    let bob_did = "did:web:bob.example";
+    let bob_did = BOB_DID.as_str();
     let bob = dev_token(state.clone(), bob_did, "b0b000000002").await;
     let realm_id = seed_realm(&state, alice_did, "shared history", "shared").await;
 
@@ -752,12 +767,12 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
 #[tokio::test]
 async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_circle() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice_did = "did:web:alice.example";
+    let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000010";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000010").await;
-    let bob_did = "did:web:bob.example";
+    let bob_did = BOB_DID.as_str();
     let bob = dev_token(state.clone(), bob_did, "b0b000000010").await;
-    let mallory_did = "did:web:mallory.example";
+    let mallory_did = MALLORY_DID.as_str();
     let mallory = dev_token(state.clone(), mallory_did, "ca2010000010").await;
     let realm_id = seed_realm(&state, alice_did, "circle scoped e2ee", "shared").await;
     for actor in [alice_did, bob_did, mallory_did] {
@@ -863,10 +878,10 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
 #[tokio::test]
 async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice_did = "did:web:alice.example";
+    let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
-    let bob_did = "did:web:bob.example";
+    let bob_did = BOB_DID.as_str();
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b000000011";
     let bob = dev_token(state.clone(), bob_did, "b0b000000011").await;
     let realm_id = seed_realm(&state, alice_did, "chat projection metadata", "shared").await;
@@ -1004,13 +1019,13 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
 #[tokio::test]
 async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice_did = "did:web:alice.example";
+    let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
-    let bob_did = "did:web:bob.example";
+    let bob_did = BOB_DID.as_str();
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b000000022";
     let bob = dev_token(state.clone(), bob_did, "b0b000000022").await;
-    let carol_did = "did:web:carol.example";
+    let carol_did = CAROL_DID.as_str();
     let carol_device_id = "ak:device:01904100-0000-7000-8000-ca2010000022";
     let carol = dev_token(state.clone(), carol_did, "ca2010000022").await;
     let realm_id = seed_realm(&state, alice_did, "poll content reducer", "shared").await;
@@ -1142,6 +1157,8 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
             .all(|choices| !choices.contains("now")),
         "{poll_state:?}"
     );
+    let mut expected_backup_voters = vec![bob_did, carol_did];
+    expected_backup_voters.sort_unstable();
     assert_eq!(
         poll_state
             .votes
@@ -1149,7 +1166,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
             .filter(|(_, choices)| choices.contains("backup"))
             .map(|(actor, _)| actor.as_str())
             .collect::<Vec<_>>(),
-        vec![bob_did, carol_did]
+        expected_backup_voters
     );
     drop(projection);
 

@@ -528,7 +528,6 @@ async fn provision_ghost_actor_endpoint(
     let now = chrono::Utc::now();
     let grant_event = build_ghost_accountability_grant_event(
         state,
-        &record,
         &provision,
         &service_id,
         &ghost_actor_id,

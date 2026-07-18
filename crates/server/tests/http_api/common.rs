@@ -4,6 +4,7 @@
 //! file was split into per-domain submodules. All items are reachable
 //! to siblings via `super::common::*` from the `main.rs` integration-test root.
 
+pub(crate) use std::sync::LazyLock;
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 
@@ -35,6 +36,17 @@ pub(crate) const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-0000000
 pub(crate) const SOLAND_TEST_TURN_SHARED_SECRET: &str = "soland-test-turn-shared-secret-0123456789";
 pub(crate) const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
 pub(crate) static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
+static TEST_EVENT_SIGNER_DID: LazyLock<String> = LazyLock::new(|| {
+    let key = SigningKey::from_bytes(&[21_u8; 32]);
+    format!(
+        "did:key:{}",
+        arkret_sdk::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+    )
+});
+
+pub(crate) fn test_event_signer_did() -> &'static str {
+    TEST_EVENT_SIGNER_DID.as_str()
+}
 pub(crate) fn test_config() -> AppConfig {
     AppConfig {
         ice: IceServersConfig {
@@ -607,30 +619,43 @@ pub(crate) fn signed_canonical_event(
     payload: Value,
 ) -> Value {
     let now = chrono::Utc::now();
-    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    let mut event = serde_json::json!({
-        "event_id": event_id,
-        "kind": kind,
-        "realm_id": realm_id,
-        "actor_id": actor_id,
-        "actor_seq": actor_seq,
-        "created_at": created_at,
-        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
-        "prev_refs": prev_refs,
-        "refs": [],
-        "payload": payload,
-        "proofs": [],
-    });
-    let event_digest = event_canonical_digest(&event);
-    event["proofs"] = serde_json::json!([{
-        "kind": "detached_jws",
-        "alg": "EdDSA",
-        "verification_method": format!("{actor_id}#{device_id}"),
-        "event_digest": event_digest,
-        "created_at": created_at,
-        "jws": "dev-mode-fixture",
-    }]);
-    event
+    let actor = arkret_sdk::Did::new(actor_id.to_owned()).expect("fixture actor DID");
+    let verification_method = actor_id.strip_prefix("did:key:").map_or_else(
+        || format!("{actor_id}#{device_id}"),
+        |key| format!("{actor_id}#{key}"),
+    );
+    let mut event = arkret_sdk::Event::new_with_id_at(
+        arkret_sdk::EventId::new(event_id.to_owned()).expect("fixture Event id"),
+        kind,
+        arkret_sdk::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        actor.clone(),
+        actor_seq,
+        arkret_sdk::Hlc::new(format!(
+            "{:012x}-0000-00000000",
+            now.timestamp_millis().max(0) as u64
+        ))
+        .expect("fixture HLC"),
+        payload,
+        now,
+    )
+    .expect("SDK Event builder accepts HTTP fixture");
+    event.prev_refs = prev_refs
+        .into_iter()
+        .map(|event_id| arkret_sdk::EventId::new(event_id.to_owned()).expect("fixture prev_ref"))
+        .collect();
+    let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
+        [21_u8; 32],
+        actor,
+        verification_method.clone(),
+    );
+    arkret_sdk::signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_sdk::signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .expect("SDK Event signer accepts HTTP fixture");
+    serde_json::to_value(event).expect("SDK Event serializes")
 }
 
 pub(crate) fn reseal_canonical_event(event: &mut Value) {

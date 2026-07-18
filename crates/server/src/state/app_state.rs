@@ -1865,6 +1865,11 @@ impl AppState {
     }
 
     #[doc(hidden)]
+    pub fn test_seal_store(&self) -> &Arc<dyn arkret_sdk::SealStore> {
+        &self.seal_store
+    }
+
+    #[doc(hidden)]
     pub fn test_realms(&self) -> &Arc<Mutex<RealmDirectoryIndex>> {
         &self.realms
     }

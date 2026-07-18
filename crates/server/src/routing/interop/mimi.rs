@@ -20,7 +20,6 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::models::proof_kind;
 use arkret_sdk::{
     Base64UrlString, Did, EventId, Hash, MimiDelivery, MimiDeliveryStatus, MimiGroupInfo,
     MimiGroupInfoOutcome, MimiIdentifierMatch, MimiIdentifierQueryOutcome,
@@ -29,7 +28,7 @@ use arkret_sdk::{
     MimiProxyDownloadRequestBody, MimiReportAbuseOutcome, MimiReportAbuseRequestBody,
     MimiRequestConsentOutcome, MimiRequestConsentRequestBody, MimiRoomUpdateOutcome,
     MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody,
-    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, MlsGroupId, Proof, ReportId, canonical,
+    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, MlsGroupId, ReportId,
 };
 use chrono::Duration;
 use salvo::http::StatusCode;
@@ -40,7 +39,7 @@ use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_http::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 use soland_http::result::{JsonResult, json_ok};
-use soland_storage::{CanonicalEventRecord, MessageRecord, ProjectionEventRecord};
+use soland_storage::ProjectionEventRecord;
 
 use super::moderation::{
     moderation_request_source_ip_hash, moderation_request_source_service,
@@ -53,8 +52,6 @@ use crate::routing::identity::consent::{
 };
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-
-const EVENT_SCHEMA_ID: &str = "ak.schema.event.v1";
 
 struct MimiRoomBindingProjection {
     event_id: String,
