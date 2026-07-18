@@ -566,6 +566,48 @@ pub struct DeviceMessageRecord {
 }
 
 #[derive(Clone, Debug)]
+pub struct DeviceMessageIntentRecord {
+    pub message_key: String,
+    pub intent_digest: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeviceMessageBatchItemRecord {
+    pub message_key: String,
+    pub intent_digest: String,
+    pub idempotency_expires_at: chrono::DateTime<chrono::Utc>,
+    pub message: Option<DeviceMessageRecord>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeviceMessageBatchRecord {
+    pub request_key: String,
+    pub request_digest: String,
+    pub idempotency_expires_at: chrono::DateTime<chrono::Utc>,
+    pub items: Vec<DeviceMessageBatchItemRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DeviceMessageBatchInspection {
+    Fresh {
+        existing_message_outcomes: BTreeMap<String, bool>,
+    },
+    Duplicate(BTreeMap<String, bool>),
+    RequestConflict,
+    MessageConflict {
+        message_key: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DeviceMessageBatchCommitOutcome {
+    Stored(BTreeMap<String, bool>),
+    Duplicate(BTreeMap<String, bool>),
+    RequestConflict,
+    MessageConflict { message_key: String },
+}
+
+#[derive(Clone, Debug)]
 pub struct BlobRecord {
     pub sha256: String,
     pub size_bytes: i64,

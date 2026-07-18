@@ -698,19 +698,18 @@ pub(crate) async fn submit_federation_events(
             });
             continue;
         }
-        // SOL-02-007 — bind the envelope actor to the asserted source trust
-        // domain BEFORE constructing a session, instead of leaving author
+        // SOL-02-007 — bind the envelope actor to the authenticated source
+        // service BEFORE constructing a session, instead of leaving author
         // identity entirely to the downstream proof chain. Two acceptance
         // paths:
-        //   1. the actor's home trust domain (derived from its DID host, same derivation as the
-        //      service-DID → trust-domain rule) equals the `source-trust-domain` header; or
+        //   1. the actor DID and source service DID share their deployment authority; or
         //   2. the actor is already a member of the binding Realm in the local membership index
-        //      (the source domain is then relaying for a known member; identity is re-verified
+        //      (the source service is then relaying for a known member; identity is re-verified
         //      downstream by `validate_event_envelope`'s proof checks).
         if !crate::routing::federation::federation::federation_actor_origin_acceptable(
             state,
             &actor,
-            &source_trust_domain,
+            &source_service_id,
             &binding_realm,
         )
         .await
@@ -718,7 +717,7 @@ pub(crate) async fn submit_federation_events(
             rejected.push(EventsSubmitRejectedItem {
                 id,
                 reason_code: "capability_denied".to_owned(),
-                detail: Some("actor_id home domain does not match source-trust-domain and the actor is not a known member of the binding realm".to_owned()),
+                detail: Some("actor_id is not hosted by the source service authority and is not a known member of the binding realm".to_owned()),
             });
             continue;
         }

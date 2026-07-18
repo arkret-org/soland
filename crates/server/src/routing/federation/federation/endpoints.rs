@@ -903,7 +903,6 @@ pub(crate) async fn federation_seals_push(
     //      exactly like the sibling `federation_transaction` / `federation_push_operations` tracks
     //      run `federation_actor_origin_acceptable` per operation. A signed peer MUST NOT be able
     //      to push Seals covering Moves authored in a trust domain it does not speak for.
-    let origin_trust_domain = super::signature::trust_domain_from_service_id(&body.origin);
     let mut accepted: Vec<String> = Vec::new();
     let mut rejected: Vec<serde_json::Value> = Vec::new();
     'seals: for seal in body.seals {
@@ -961,7 +960,7 @@ pub(crate) async fn federation_seals_push(
             if !super::inbound_policy::federation_actor_origin_acceptable(
                 state,
                 &issuer,
-                &origin_trust_domain,
+                body.origin.as_str(),
                 seal.realm_id.as_str(),
             )
             .await

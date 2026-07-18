@@ -112,8 +112,9 @@ impl InviteLocatorStore for MemoryInviteLocatorStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::Duration;
+
+    use super::*;
 
     fn record(locator_id: &str, digest: &str, one_time_use: bool) -> InviteLocatorRecord {
         let issued_at = Utc::now();

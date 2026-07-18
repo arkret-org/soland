@@ -1,6 +1,8 @@
 use super::{
-    BigInt, DeviceInventoryRecord, DeviceInventoryStore, DeviceMessageRecord, DeviceMessageStore,
-    Jsonb, MaxSeqRow, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
+    AsyncConnection, BTreeMap, BTreeSet, BigInt, Bool, DeviceInventoryRecord, DeviceInventoryStore,
+    DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
+    DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore, Jsonb, MaxSeqRow, Nullable,
+    OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Utc, Uuid, Value, async_trait,
     ensure_device_message_id, fresh_device_message_ack_token, pg_conn, sql_query,
 };
@@ -50,6 +52,20 @@ struct DeviceMessageAckTokenRow {
     #[diesel(sql_type = Nullable<Timestamptz>)]
     consumed_at: Option<chrono::DateTime<Utc>>,
 }
+#[derive(QueryableByName)]
+struct DeviceMessageTxnRow {
+    #[diesel(sql_type = Text)]
+    request_digest: String,
+    #[diesel(sql_type = Jsonb)]
+    outcome: Value,
+}
+#[derive(QueryableByName)]
+struct DeviceMessageIntentRow {
+    #[diesel(sql_type = Text)]
+    intent_digest: String,
+    #[diesel(sql_type = Bool)]
+    delivered: bool,
+}
 #[async_trait]
 impl DeviceMessageStore for PgDeviceMessageStore {
     async fn append(&self, mut message: DeviceMessageRecord) -> PersistenceResult<()> {
@@ -77,20 +93,220 @@ impl DeviceMessageStore for PgDeviceMessageStore {
         .map_err(PersistenceError::database)
     }
 
-    async fn try_register_txn(&self, key: String) -> PersistenceResult<bool> {
+    async fn inspect_batch(
+        &self,
+        request_key: &str,
+        request_digest: &str,
+        items: &[DeviceMessageIntentRecord],
+    ) -> PersistenceResult<DeviceMessageBatchInspection> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO device_message_txns (key, created_at) \
-             VALUES ($1, NOW()) \
-             ON CONFLICT (key) DO NOTHING",
+        let existing_request = sql_query(
+            "SELECT request_digest, outcome FROM device_message_txns \
+             WHERE key = $1 AND expires_at > NOW()",
         )
-        .bind::<Text, _>(&key)
-        .execute(&mut *conn)
+        .bind::<Text, _>(request_key)
+        .get_result::<DeviceMessageTxnRow>(&mut *conn)
         .await
-        .map(|affected| affected > 0)
-        .map_err(PersistenceError::database)
+        .optional()
+        .map_err(PersistenceError::database)?;
+        if let Some(existing) = existing_request {
+            return if existing.request_digest == request_digest {
+                let outcome = serde_json::from_value(existing.outcome).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "device message request outcome deserialize: {error}"
+                    ))
+                })?;
+                Ok(DeviceMessageBatchInspection::Duplicate(outcome))
+            } else {
+                Ok(DeviceMessageBatchInspection::RequestConflict)
+            };
+        }
+        let mut batch_digests = BTreeMap::new();
+        let mut existing_message_outcomes = BTreeMap::new();
+        for item in items {
+            if let Some(digest) =
+                batch_digests.insert(item.message_key.clone(), item.intent_digest.clone())
+                && digest != item.intent_digest
+            {
+                return Ok(DeviceMessageBatchInspection::MessageConflict {
+                    message_key: item.message_key.clone(),
+                });
+            }
+            let existing = sql_query(
+                "SELECT intent_digest, delivered FROM device_message_idempotency \
+                 WHERE message_key = $1 AND expires_at > NOW()",
+            )
+            .bind::<Text, _>(&item.message_key)
+            .get_result::<DeviceMessageIntentRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+            if let Some(existing) = existing {
+                if existing.intent_digest != item.intent_digest {
+                    return Ok(DeviceMessageBatchInspection::MessageConflict {
+                        message_key: item.message_key.clone(),
+                    });
+                }
+                existing_message_outcomes.insert(item.message_key.clone(), existing.delivered);
+            }
+        }
+        Ok(DeviceMessageBatchInspection::Fresh {
+            existing_message_outcomes,
+        })
+    }
+
+    async fn commit_batch(
+        &self,
+        batch: DeviceMessageBatchRecord,
+    ) -> PersistenceResult<DeviceMessageBatchCommitOutcome> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query(
+                "LOCK TABLE device_message_txns, device_message_idempotency \
+                 IN SHARE ROW EXCLUSIVE MODE",
+            )
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            sql_query("DELETE FROM device_message_txns WHERE expires_at <= NOW()")
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+            sql_query("DELETE FROM device_message_idempotency WHERE expires_at <= NOW()")
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+
+            let existing_request = sql_query(
+                "SELECT request_digest, outcome FROM device_message_txns WHERE key = $1",
+            )
+            .bind::<Text, _>(&batch.request_key)
+            .get_result::<DeviceMessageTxnRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+            if let Some(existing) = existing_request {
+                return if existing.request_digest == batch.request_digest {
+                    let outcome = serde_json::from_value(existing.outcome).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "device message request outcome deserialize: {error}"
+                        ))
+                    })?;
+                    Ok(DeviceMessageBatchCommitOutcome::Duplicate(outcome))
+                } else {
+                    Ok(DeviceMessageBatchCommitOutcome::RequestConflict)
+                };
+            }
+
+            let mut batch_digests = BTreeMap::new();
+            let mut fresh_message_keys = BTreeSet::new();
+            for item in &batch.items {
+                if let Some(digest) = batch_digests.insert(
+                    item.message_key.clone(),
+                    item.intent_digest.clone(),
+                ) && digest != item.intent_digest
+                {
+                    return Ok(DeviceMessageBatchCommitOutcome::MessageConflict {
+                        message_key: item.message_key.clone(),
+                    });
+                }
+                let existing = sql_query(
+                    "SELECT intent_digest, delivered FROM device_message_idempotency \
+                     WHERE message_key = $1",
+                )
+                .bind::<Text, _>(&item.message_key)
+                .get_result::<DeviceMessageIntentRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?;
+                match existing {
+                    Some(existing) if existing.intent_digest != item.intent_digest => {
+                        return Ok(DeviceMessageBatchCommitOutcome::MessageConflict {
+                            message_key: item.message_key.clone(),
+                        });
+                    }
+                    Some(_) => {}
+                    None => {
+                        fresh_message_keys.insert(item.message_key.clone());
+                    }
+                }
+            }
+
+            let mut outcomes = BTreeMap::new();
+            for item in batch.items {
+                if !fresh_message_keys.remove(&item.message_key) {
+                    let existing = sql_query(
+                        "SELECT intent_digest, delivered FROM device_message_idempotency \
+                         WHERE message_key = $1",
+                    )
+                    .bind::<Text, _>(&item.message_key)
+                    .get_result::<DeviceMessageIntentRow>(&mut *conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+                    outcomes.insert(item.message_key, existing.delivered);
+                    continue;
+                }
+                let delivered = item.message.is_some();
+                sql_query(
+                    "INSERT INTO device_message_idempotency \
+                     (message_key, intent_digest, delivered, expires_at, created_at) \
+                     VALUES ($1, $2, $3, $4, NOW())",
+                )
+                .bind::<Text, _>(&item.message_key)
+                .bind::<Text, _>(&item.intent_digest)
+                .bind::<Bool, _>(delivered)
+                .bind::<Timestamptz, _>(item.idempotency_expires_at)
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                outcomes.insert(item.message_key, delivered);
+                let Some(mut message) = item.message else {
+                    continue;
+                };
+                ensure_device_message_id(&mut message);
+                sql_query(
+                    "INSERT INTO device_messages \
+                     (id, idempotency_key, sender, recipient, device_id, position, content, created_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                )
+                .bind::<SqlUuid, _>(Uuid::new_v4())
+                .bind::<Text, _>(&message.idempotency_key)
+                .bind::<Text, _>(&message.sender)
+                .bind::<Text, _>(&message.recipient)
+                .bind::<Text, _>(&message.device_id)
+                .bind::<BigInt, _>(message.position)
+                .bind::<Jsonb, _>(&message.content)
+                .bind::<Timestamptz, _>(message.created_at)
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+            }
+            sql_query(
+                "INSERT INTO device_message_txns \
+                 (key, request_digest, outcome, expires_at, created_at) \
+                 VALUES ($1, $2, $3, $4, NOW())",
+            )
+            .bind::<Text, _>(&batch.request_key)
+            .bind::<Text, _>(&batch.request_digest)
+            .bind::<Jsonb, _>(
+                serde_json::to_value(&outcomes).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "device message request outcome serialize: {error}"
+                    ))
+                })?,
+            )
+            .bind::<Timestamptz, _>(batch.idempotency_expires_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            Ok(DeviceMessageBatchCommitOutcome::Stored(outcomes))
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn issue_ack_token(

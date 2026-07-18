@@ -186,13 +186,9 @@ fn verify_inbound_federation_http_signature_inner(
             "Destination-Trust-Domain does not match this service",
         ));
     }
-    let expected_source_trust_domain = trust_domain_from_service_id(&source_service_id);
-    if source_trust_domain != expected_source_trust_domain {
-        return Err(signature_error(
-            "Source-Trust-Domain does not match Source-Service-ID",
-        ));
-    }
-
+    // A deployment trust domain is the ServiceDescribe claim, not a value
+    // derivable from the service DID. The signed header is checked against the
+    // peer ServiceDescribe by the profile-intersection gate.
     let target_uri = signature_target_uri(req, state);
     let authority = signature_authority(req, state);
     let endpoint_digest =
@@ -325,13 +321,9 @@ fn verify_inbound_peer_http_signature_inner(
             "Destination-Trust-Domain does not match this service",
         ));
     }
-    let expected_source_trust_domain = trust_domain_from_service_id(&source_service_id);
-    if source_trust_domain != expected_source_trust_domain {
-        return Err(signature_error(
-            "Source-Trust-Domain does not match Source-Service-ID",
-        ));
-    }
-
+    // Keep the asserted source domain in the signature transcript. A service
+    // DID may legitimately describe a separately named deployment domain, so
+    // deriving and comparing a domain from the DID would reject valid peers.
     let target_uri = signature_target_uri(req, state);
     let authority = signature_authority(req, state);
     let endpoint_digest =

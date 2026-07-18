@@ -133,14 +133,17 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "schema_violation"
     );
 
+    let device_message = device_message_target(
+        "ak.mls.welcome",
+        encrypted_envelope("ak.mls.welcome", "opaque"),
+    );
     let send: Value = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "txn1", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ak.mls.welcome", encrypted_envelope("ak.mls.welcome", "opaque"))
+                    "ak:device:01904100-0000-7000-8000-a11ce0000001": device_message.clone()
                 }
             }
         }))
@@ -157,8 +160,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ak.mls.welcome", encrypted_envelope("ak.mls.welcome", "opaque"))
+                    "ak:device:01904100-0000-7000-8000-a11ce0000001": device_message
                 }
             }
         }))
@@ -168,13 +170,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await
         .unwrap();
     assert_eq!(
-        duplicate
-            .get("delivered")
-            .and_then(Value::as_object)
-            .map(|delivered| delivered.len())
-            .unwrap_or(0),
-        0,
-        "duplicate send must not re-queue messages: {duplicate}"
+        duplicate, send,
+        "request replay must return its stored outcome"
     );
 
     let (bad_blob_content_type, bad_blob_body) =

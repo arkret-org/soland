@@ -409,6 +409,17 @@ CREATE TABLE public.device_messages (
 
 CREATE TABLE public.device_message_txns (
     key text NOT NULL,
+    request_digest text NOT NULL,
+    outcome jsonb NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE public.device_message_idempotency (
+    message_key text NOT NULL,
+    intent_digest text NOT NULL,
+    delivered boolean NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -1412,6 +1423,9 @@ ALTER TABLE ONLY public.device_messages
 
 ALTER TABLE ONLY public.device_message_txns
     ADD CONSTRAINT device_message_txns_pkey PRIMARY KEY (key);
+
+ALTER TABLE ONLY public.device_message_idempotency
+    ADD CONSTRAINT device_message_idempotency_pkey PRIMARY KEY (message_key);
 
 ALTER TABLE ONLY public.device_message_ack_tokens
     ADD CONSTRAINT device_message_ack_tokens_pkey PRIMARY KEY (ack_token);

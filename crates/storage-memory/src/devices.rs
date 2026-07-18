@@ -1,7 +1,8 @@
 use super::{
-    Arc, BTreeMap, BTreeSet, DeviceInventoryRecord, DeviceInventoryStore, DeviceKeyStore,
-    DeviceMessageAckTokenRecord, DeviceMessageRecord, DeviceMessageStore, Mutex, OneTimeKeyStore,
-    PersistenceResult, Utc, Value, VecDeque, async_trait,
+    Arc, BTreeMap, DeviceInventoryRecord, DeviceInventoryStore, DeviceKeyStore,
+    DeviceMessageAckTokenRecord, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
+    Mutex, OneTimeKeyStore, PersistenceResult, Utc, Value, VecDeque, async_trait,
     cross_signing_reset_blocks_queued_message, device_message_expires_at, ensure_device_message_id,
     fresh_device_message_ack_token,
 };
@@ -85,7 +86,8 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
 #[derive(Default)]
 pub(crate) struct MemoryDeviceMessageStore {
     queue: Mutex<VecDeque<DeviceMessageRecord>>,
-    txns: Mutex<BTreeSet<String>>,
+    txns: Mutex<BTreeMap<String, (String, BTreeMap<String, bool>, chrono::DateTime<Utc>)>>,
+    message_intents: Mutex<BTreeMap<String, (String, bool, chrono::DateTime<Utc>)>>,
     ack_tokens: Mutex<BTreeMap<String, DeviceMessageAckTokenRecord>>,
     lost_watermarks: Mutex<BTreeMap<(String, String), i64>>,
 }
@@ -102,8 +104,116 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         Ok(())
     }
 
-    async fn try_register_txn(&self, key: String) -> PersistenceResult<bool> {
-        Ok(self.txns.lock().insert(key))
+    async fn inspect_batch(
+        &self,
+        request_key: &str,
+        request_digest: &str,
+        items: &[DeviceMessageIntentRecord],
+    ) -> PersistenceResult<DeviceMessageBatchInspection> {
+        let now = Utc::now();
+        let mut txns = self.txns.lock();
+        let mut intents = self.message_intents.lock();
+        txns.retain(|_, (_, _, expires_at)| *expires_at > now);
+        intents.retain(|_, (_, _, expires_at)| *expires_at > now);
+        if let Some((digest, outcome, _)) = txns.get(request_key) {
+            return if digest == request_digest {
+                Ok(DeviceMessageBatchInspection::Duplicate(outcome.clone()))
+            } else {
+                Ok(DeviceMessageBatchInspection::RequestConflict)
+            };
+        }
+        let mut batch_digests = BTreeMap::new();
+        let mut existing_message_outcomes = BTreeMap::new();
+        for item in items {
+            if let Some(digest) =
+                batch_digests.insert(item.message_key.clone(), item.intent_digest.clone())
+                && digest != item.intent_digest
+            {
+                return Ok(DeviceMessageBatchInspection::MessageConflict {
+                    message_key: item.message_key.clone(),
+                });
+            }
+            if let Some((digest, delivered, _)) = intents.get(&item.message_key) {
+                if digest != &item.intent_digest {
+                    return Ok(DeviceMessageBatchInspection::MessageConflict {
+                        message_key: item.message_key.clone(),
+                    });
+                }
+                existing_message_outcomes.insert(item.message_key.clone(), *delivered);
+            }
+        }
+        Ok(DeviceMessageBatchInspection::Fresh {
+            existing_message_outcomes,
+        })
+    }
+
+    async fn commit_batch(
+        &self,
+        mut batch: DeviceMessageBatchRecord,
+    ) -> PersistenceResult<DeviceMessageBatchCommitOutcome> {
+        let now = Utc::now();
+        let mut txns = self.txns.lock();
+        let mut intents = self.message_intents.lock();
+        txns.retain(|_, (_, _, expires_at)| *expires_at > now);
+        intents.retain(|_, (_, _, expires_at)| *expires_at > now);
+
+        if let Some((digest, outcome, _)) = txns.get(&batch.request_key) {
+            return if digest == &batch.request_digest {
+                Ok(DeviceMessageBatchCommitOutcome::Duplicate(outcome.clone()))
+            } else {
+                Ok(DeviceMessageBatchCommitOutcome::RequestConflict)
+            };
+        }
+        let mut batch_digests = BTreeMap::new();
+        for item in &batch.items {
+            if let Some(digest) =
+                batch_digests.insert(item.message_key.clone(), item.intent_digest.clone())
+                && digest != item.intent_digest
+            {
+                return Ok(DeviceMessageBatchCommitOutcome::MessageConflict {
+                    message_key: item.message_key.clone(),
+                });
+            }
+            if let Some((digest, ..)) = intents.get(&item.message_key) {
+                if digest != &item.intent_digest {
+                    return Ok(DeviceMessageBatchCommitOutcome::MessageConflict {
+                        message_key: item.message_key.clone(),
+                    });
+                }
+            }
+        }
+
+        let mut queue = self.queue.lock();
+        let mut outcomes = BTreeMap::new();
+        for item in &mut batch.items {
+            if let Some((_, delivered, _)) = intents.get(&item.message_key) {
+                outcomes.insert(item.message_key.clone(), *delivered);
+                continue;
+            }
+            let delivered = item.message.is_some();
+            intents.insert(
+                item.message_key.clone(),
+                (
+                    item.intent_digest.clone(),
+                    delivered,
+                    item.idempotency_expires_at,
+                ),
+            );
+            outcomes.insert(item.message_key.clone(), delivered);
+            if let Some(message) = item.message.as_mut() {
+                ensure_device_message_id(message);
+                queue.push_back(message.clone());
+            }
+        }
+        txns.insert(
+            batch.request_key,
+            (
+                batch.request_digest,
+                outcomes.clone(),
+                batch.idempotency_expires_at,
+            ),
+        );
+        Ok(DeviceMessageBatchCommitOutcome::Stored(outcomes))
     }
 
     async fn issue_ack_token(

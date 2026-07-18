@@ -49,6 +49,175 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
 }
 
 #[tokio::test]
+async fn message_id_idempotency_survives_ack_and_rejects_canonical_target_conflicts() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let target_device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
+    let mut target_record = state
+        .test_persistence()
+        .devices()
+        .get("did:web:alice.example", sender_device)
+        .await
+        .unwrap()
+        .unwrap();
+    target_record.device_id = target_device.to_owned();
+    state
+        .test_persistence()
+        .devices()
+        .put(&target_record)
+        .await
+        .unwrap();
+    let target_token = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        target_device,
+        "Alice Target",
+    )
+    .await;
+    let target = device_message_target(
+        "ak.mls.application",
+        encrypted_envelope("ak.mls.application", "idempotent-ciphertext"),
+    );
+    let body = serde_json::json!({
+        "messages": {
+            "did:web:alice.example": {
+                (target_device): target.clone()
+            }
+        }
+    });
+
+    let first: Value = TestClient::post("http://server/_arkret/self/device_messages")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "logical-message-request-1", true)
+        .json(&body)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let request_replay: Value = TestClient::post("http://server/_arkret/self/device_messages")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "logical-message-request-1", true)
+        .json(&body)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(request_replay, first);
+
+    let mut changed_request_body = body.clone();
+    changed_request_body["messages"]["did:web:alice.example"][target_device]["content"]["ciphertext"] =
+        serde_json::json!("different-request-body");
+    let mut request_conflict = TestClient::post("http://server/_arkret/self/device_messages")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "logical-message-request-1", true)
+        .json(&changed_request_body)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(request_conflict.status_code, Some(StatusCode::CONFLICT));
+    let request_conflict: Value = request_conflict.take_json().await.unwrap();
+    assert_eq!(request_conflict["error"]["code"], "duplicate_conflict");
+
+    let message_replay: Value = TestClient::post("http://server/_arkret/self/device_messages")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "logical-message-request-2", true)
+        .json(&body)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(message_replay, first);
+
+    let pulled: Value = TestClient::get("http://server/_arkret/self/device_messages")
+        .add_header("authorization", format!("Bearer {target_token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(pulled["messages"].as_array().unwrap().len(), 1);
+    let ack_token = pulled["ack_token"].as_str().unwrap();
+    TestClient::post("http://server/_arkret/self/device_messages/ack")
+        .add_header("authorization", format!("Bearer {target_token}"), true)
+        .json(&serde_json::json!({ "ack_token": ack_token }))
+        .send(&app_from_state(state.clone()))
+        .await;
+
+    let replay_after_ack: Value = TestClient::post("http://server/_arkret/self/device_messages")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "logical-message-request-3", true)
+        .json(&body)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(replay_after_ack, first);
+    let after_ack: Value = TestClient::get("http://server/_arkret/self/device_messages")
+        .add_header("authorization", format!("Bearer {target_token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(after_ack["messages"].as_array().unwrap().is_empty());
+
+    let mut revoked_target = state
+        .test_persistence()
+        .devices()
+        .get("did:web:alice.example", target_device)
+        .await
+        .unwrap()
+        .unwrap();
+    revoked_target.revoked_at = Some(chrono::Utc::now());
+    state
+        .test_persistence()
+        .devices()
+        .put(&revoked_target)
+        .await
+        .unwrap();
+    let replay_after_revoke: Value = TestClient::post("http://server/_arkret/self/device_messages")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Idempotency-Key",
+            "logical-message-request-after-revoke",
+            true,
+        )
+        .json(&body)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(replay_after_revoke, first);
+
+    let mut conflicting_target = target;
+    conflicting_target["content"]["ciphertext"] = serde_json::json!("different-ciphertext");
+    let mut conflict = TestClient::post("http://server/_arkret/self/device_messages")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", "logical-message-request-4", true)
+        .json(&serde_json::json!({
+            "messages": {
+                "did:web:alice.example": {
+                    (target_device): conflicting_target
+                }
+            }
+        }))
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(conflict.status_code, Some(StatusCode::CONFLICT));
+    let conflict: Value = conflict.take_json().await.unwrap();
+    assert_eq!(conflict["error"]["code"], "duplicate_conflict");
+    assert_eq!(
+        conflict["error"]["details"]["reason_code"],
+        "message_id_conflict"
+    );
+}
+
+#[tokio::test]
 async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

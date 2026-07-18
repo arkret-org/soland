@@ -37,6 +37,33 @@ const DESTINATION_TRUST_DOMAIN: &str = "ak:trust_domain:soland.local";
 const TEST_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
 const TEST_CIRCLE_ID: &str = "ak:circle:0196419b-0000-7000-8000-0000000000c1";
 
+fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
+    resign_federation_event(super::common::signed_event_envelope(
+        event_id, actor_seq, prev_refs,
+    ))
+}
+
+fn resign_federation_event(event: Value) -> Value {
+    let mut event: arkret_sdk::Event =
+        serde_json::from_value(event).expect("federation fixture is a typed Event");
+    let verification_method = format!("{}#cotest", event.actor_id);
+    let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
+        arkret_sdk::signatures::development_signing_key_seed(&verification_method),
+        event.actor_id.clone(),
+        verification_method.clone(),
+    );
+    let created_at = event.created_at;
+    event.proofs.clear();
+    arkret_sdk::signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_sdk::signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .expect("federation fixture signs with its development verification method");
+    serde_json::to_value(event).expect("federation fixture serializes")
+}
+
 #[tokio::test]
 async fn peer_events_describe_advertises_formal_surface() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -294,9 +321,9 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
 }
 
 /// SOL-02-007 - the federation submit path MUST bind the envelope actor to
-/// the asserted `source-trust-domain`: an actor whose home domain differs
-/// from the source domain AND who is not a known member of the binding
-/// Realm is rejected before any session is constructed.
+/// the authenticated source service authority. An actor hosted elsewhere and
+/// not known as a member of the binding Realm is rejected before any session
+/// is constructed.
 #[tokio::test]
 async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -306,9 +333,8 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
         1,
         Vec::new(),
     );
-    // Re-author the envelope as an actor that is neither homed in the
-    // source trust domain (`remote.example`) nor a member of the demo
-    // Realm's membership index.
+    // Re-author the envelope as an actor that is neither hosted by the source
+    // service authority nor a member of the demo Realm's membership index.
     event["actor_id"] = serde_json::json!("did:web:intruder.evil");
     reseal_canonical_event(&mut event);
     let body = peer_submit_body(&event);
@@ -338,7 +364,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
         rejected[0]["detail"]
             .as_str()
             .unwrap()
-            .contains("source-trust-domain")
+            .contains("source service authority")
     );
 }
 
@@ -792,7 +818,7 @@ fn event_envelope(
     actor_seq: u64,
     payload: Value,
 ) -> Value {
-    signed_canonical_event(
+    resign_federation_event(signed_canonical_event(
         event_id,
         kind,
         actor_id,
@@ -801,7 +827,7 @@ fn event_envelope(
         actor_seq,
         Vec::new(),
         payload,
-    )
+    ))
 }
 
 async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<Utc>) {

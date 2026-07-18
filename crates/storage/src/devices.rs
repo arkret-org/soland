@@ -2,7 +2,9 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use super::{
-    DeviceInventoryRecord, DeviceMessageRecord, PersistenceResult, Utc, Uuid, Value, async_trait,
+    DeviceInventoryRecord, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, PersistenceResult,
+    Utc, Uuid, Value, async_trait,
 };
 /// Trait for durable device inventory operations.
 #[async_trait]
@@ -30,8 +32,20 @@ pub trait DeviceInventoryStore: Send + Sync {
 #[async_trait]
 pub trait DeviceMessageStore: Send + Sync {
     async fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()>;
-    /// Insert a fresh `(actor:idempotency_key)` key — returns `false` if it was already there.
-    async fn try_register_txn(&self, key: String) -> PersistenceResult<bool>;
+    /// Read current request/message idempotency state before dynamic device-policy checks. The
+    /// subsequent commit rechecks the same records atomically to close inspection races.
+    async fn inspect_batch(
+        &self,
+        request_key: &str,
+        request_digest: &str,
+        items: &[DeviceMessageIntentRecord],
+    ) -> PersistenceResult<DeviceMessageBatchInspection>;
+    /// Atomically bind request- and message-level idempotency records and enqueue only fresh
+    /// logical messages.
+    async fn commit_batch(
+        &self,
+        batch: DeviceMessageBatchRecord,
+    ) -> PersistenceResult<DeviceMessageBatchCommitOutcome>;
     /// Issue a bearer ack token for the delivered high-water queue position.
     async fn issue_ack_token(
         &self,

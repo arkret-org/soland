@@ -64,22 +64,41 @@ pub(crate) fn ensure_private_inbound_read_rail_local(state: &AppState) -> Result
 /// SOL-02-007 / SOL-SEC-01 — federation actor↔origin binding, shared by both
 /// inbound rails (the `/_arkret/peer/events` envelope track and the
 /// `/_soland/peer/federation/*` operation track). Accept an inbound author when
-/// its derived home trust domain equals the asserted source trust domain, or
-/// when the actor is already present in the local membership index of the
-/// binding Realm (the source domain relays for a known member; proofs are still
-/// verified downstream). Converging both rails on this single gate keeps the
-/// two surfaces from diverging again (SOL-DRY-01).
+/// its DID is hosted by the authenticated source service authority, or when the
+/// actor is already present in the local membership index of the binding Realm
+/// (the source service relays for a known member; proofs are still verified
+/// downstream). A deployment trust domain is a ServiceDescribe claim and MUST
+/// NOT be inferred from either DID's host. Converging both rails on this single
+/// gate keeps the two surfaces from diverging again (SOL-DRY-01).
 pub(crate) async fn federation_actor_origin_acceptable(
     state: &AppState,
     actor: &str,
-    source_trust_domain: &str,
+    source_service_id: &str,
     binding_realm: &str,
 ) -> bool {
-    let actor_home_domain = super::trust_domain_from_service_id(actor);
-    if actor_home_domain == source_trust_domain {
+    if did_deployment_authority(actor).is_some()
+        && did_deployment_authority(actor) == did_deployment_authority(source_service_id)
+    {
         return true;
     }
     crate::routing::spaces::space::realm_has_member(state, binding_realm, actor).await
+}
+
+fn did_deployment_authority(did: &str) -> Option<String> {
+    let authority = if let Some(rest) = did.strip_prefix("did:web:") {
+        rest.split(':').next()?
+    } else if let Some(rest) = did.strip_prefix("did:webvh:") {
+        let mut parts = rest.split(':');
+        let scid = parts.next()?;
+        if scid.is_empty() {
+            return None;
+        }
+        parts.next()?
+    } else {
+        return None;
+    };
+    let authority = authority.trim_end_matches('.');
+    (!authority.is_empty()).then(|| authority.to_ascii_lowercase())
 }
 
 pub(super) async fn enforce_inbound_operation_batch_policy(
@@ -99,19 +118,15 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
         .with_status(StatusCode::PAYLOAD_TOO_LARGE)
         .with_wire_code("payload_too_large"));
     }
-    // The origin peer authenticated as a service DID; derive its trust domain so
-    // each operation's embedded author can be bound to it.
-    let origin_trust_domain = super::trust_domain_from_service_id(origin_service_id);
     for operation in operations {
         // SOL-SEC-01 — bind the operation's embedded actor DID to the origin
-        // peer's domain before any side effect, so a verified peer cannot speak
-        // for an actor in another trust domain that is not a known member of the
-        // target Realm.
+        // service authority before any side effect, so a verified peer cannot
+        // speak for an unrelated actor that is not a known Realm member.
         if let Some(actor) = operation.actor() {
             if !federation_actor_origin_acceptable(
                 state,
                 actor.as_str(),
-                &origin_trust_domain,
+                origin_service_id,
                 operation.realm_id.as_str(),
             )
             .await
@@ -351,4 +366,34 @@ fn configured_peer_matches(state: &AppState, peer_did: &str, peer_url: Option<&s
                 || peer_url
                     .is_some_and(|url| peer.url.trim_end_matches('/') == url.trim_end_matches('/'))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::did_deployment_authority;
+
+    #[test]
+    fn actor_origin_binding_preserves_encoded_development_port() {
+        let actor = "did:webvh:zActor:127.0.0.1%3A3262:webvh:alice";
+        let source = "did:webvh:zService:127.0.0.1%3a3262:webvh:service";
+        let other = "did:webvh:zOther:127.0.0.1%3A3264:webvh:service";
+
+        assert_eq!(
+            did_deployment_authority(actor),
+            did_deployment_authority(source)
+        );
+        assert_ne!(
+            did_deployment_authority(actor),
+            did_deployment_authority(other)
+        );
+    }
+
+    #[test]
+    fn actor_origin_binding_supports_did_web_and_rejects_non_hosted_methods() {
+        assert_eq!(
+            did_deployment_authority("did:web:EXAMPLE.com:alice"),
+            Some("example.com".to_owned())
+        );
+        assert_eq!(did_deployment_authority("did:key:z6MkExample"), None);
+    }
 }

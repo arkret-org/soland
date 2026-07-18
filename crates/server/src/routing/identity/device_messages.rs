@@ -9,7 +9,7 @@
 //! - `POST /_arkret/self/device_messages/ack` — consume a bearer ack token and prune the messages
 //!   covered by that delivery batch.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
@@ -18,9 +18,12 @@ use soland_application::delivery::DeviceMessageState;
 use soland_application::identity::DeviceIdentity;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
+use soland_storage::{
+    DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord,
+};
 
 use super::{SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync};
-use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -32,6 +35,14 @@ pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "ak.account_data.update";
 pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "ak.account.blocklist.update";
 pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "ak.read_cursor.update";
 pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
+
+struct PreparedDeviceMessageTarget {
+    recipient: String,
+    device_id: String,
+    target: arkret_sdk::DeviceMessageTarget,
+    message_key: String,
+    intent_digest: String,
+}
 
 pub(crate) async fn prune_device_messages_for_limits(
     state: &AppState,
@@ -70,38 +81,112 @@ async fn send_device_messages(
         .headers()
         .get("Idempotency-Key")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_owned())
-        .unwrap_or_else(ids::generate_request_id);
+        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?
+        .trim();
+    if idempotency_key.is_empty() || idempotency_key.len() > 128 {
+        return Err(AppError::invalid_param(
+            "Idempotency-Key must contain 1 to 128 characters",
+        ));
+    }
+    let idempotency_key = idempotency_key.to_owned();
     let body = body.into_inner();
-    let sender_device = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
-            actor_id: session.actor.clone(),
-            device_id: session.device_id.clone(),
+    let request_digest = arkret_sdk::canonical::canonical_sha256(&body)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let request_key =
+        arkret_sdk::canonical::canonical_sha256(&json!([session.actor, idempotency_key,]))
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    let mut prepared_targets = Vec::new();
+    let mut idempotency_expires_at = now();
+    for (recipient, devices) in body.messages {
+        for (device_id, target) in devices {
+            idempotency_expires_at = idempotency_expires_at.max(target.expires_at);
+            let message_key = arkret_sdk::canonical::canonical_sha256(&json!({
+                "sender_principal_id": session.actor,
+                "sender_device_id": session.device_id,
+                "message_id": target.message_id,
+            }))
+            .map_err(|error| AppError::internal(error.to_string()))?;
+            let intent_digest = arkret_sdk::canonical::canonical_sha256(&json!({
+                "message_id": target.message_id,
+                "kind": target.kind,
+                "sender_principal_id": session.actor,
+                "sender_device_id": session.device_id,
+                "recipient_principal_id": recipient,
+                "recipient_device_id": device_id,
+                "expires_at": target.expires_at,
+                "content": target.content,
+            }))
+            .map_err(|error| AppError::internal(error.to_string()))?;
+            prepared_targets.push(PreparedDeviceMessageTarget {
+                recipient: recipient.to_string(),
+                device_id: device_id.to_string(),
+                target,
+                message_key,
+                intent_digest,
+            });
+        }
+    }
+    let intents = prepared_targets
+        .iter()
+        .map(|target| DeviceMessageIntentRecord {
+            message_key: target.message_key.clone(),
+            intent_digest: target.intent_digest.clone(),
         })
+        .collect::<Vec<_>>();
+    let inspection = state
+        .delivery_application()
+        .inspect_device_message_batch(&request_key, &request_digest, &intents)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let sender_verified = device_is_active_verified(sender_device.as_ref());
-    let mut deliverable_targets = BTreeSet::new();
-    let mut unknown_devices = BTreeMap::new();
-    for (recipient, devices) in &body.messages {
-        for (device_id, target) in devices {
-            let recipient = recipient.to_string();
-            let device_id = device_id.to_string();
-            let same_principal = recipient == session.actor;
-            let verification_bootstrap = target.kind.starts_with("ak.key.verification.");
-            let secret_message = target.kind.starts_with("ak.secret.");
+    let existing_message_outcomes = match inspection {
+        DeviceMessageBatchInspection::Fresh {
+            existing_message_outcomes,
+        } => existing_message_outcomes,
+        DeviceMessageBatchInspection::Duplicate(outcomes) => {
+            return json_ok(device_message_send_outcome(&prepared_targets, &outcomes)?);
+        }
+        DeviceMessageBatchInspection::RequestConflict => {
+            return Err(device_message_request_conflict());
+        }
+        DeviceMessageBatchInspection::MessageConflict { .. } => {
+            return Err(device_message_intent_conflict());
+        }
+    };
+    let has_fresh_targets = prepared_targets
+        .iter()
+        .any(|target| !existing_message_outcomes.contains_key(&target.message_key));
+    let sender_verified = if has_fresh_targets {
+        let sender_device = state
+            .identity_application()
+            .find_device(soland_application::identity::FindDeviceQuery {
+                actor_id: session.actor.clone(),
+                device_id: session.device_id.clone(),
+            })
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        device_is_active_verified(sender_device.as_ref())
+    } else {
+        false
+    };
+
+    let mut batch_items = Vec::with_capacity(prepared_targets.len());
+    for prepared in &prepared_targets {
+        let message = if existing_message_outcomes.contains_key(&prepared.message_key) {
+            None
+        } else {
+            let same_principal = prepared.recipient == session.actor;
+            let verification_bootstrap = prepared.target.kind.starts_with("ak.key.verification.");
+            let secret_message = prepared.target.kind.starts_with("ak.secret.");
             let target_record = state
                 .identity_application()
                 .find_device(soland_application::identity::FindDeviceQuery {
-                    actor_id: recipient.clone(),
-                    device_id: device_id.clone(),
+                    actor_id: prepared.recipient.clone(),
+                    device_id: prepared.device_id.clone(),
                 })
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             let target_active = device_is_active(target_record.as_ref());
             let target_verified = device_is_active_verified(target_record.as_ref());
-
             if !(sender_verified || same_principal && target_verified && verification_bootstrap) {
                 return Err(AppError::capability_denied(
                     "fresh device sessions may only send verification bootstrap to authorized same-principal devices",
@@ -114,72 +199,102 @@ async fn send_device_messages(
                 )
                 .with_wire_code("device_not_authorized"));
             }
-            if !target_active
-                || !(target_verified || sender_verified && same_principal && verification_bootstrap)
-            {
-                note_unknown_device(&mut unknown_devices, &recipient, &device_id);
-                continue;
-            }
-            deliverable_targets.insert((recipient, device_id));
-        }
-    }
-    let registered = state
-        .delivery_application()
-        .register_device_message_transaction(format!("{}:{idempotency_key}", session.actor))
-        .await
-        .unwrap_or(false);
-    if !registered {
-        return json_ok(DeviceMessagesSendOutcome {
-            ok: true,
-            delivered: BTreeMap::new(),
-            unknown_devices: BTreeMap::new(),
-        });
-    }
-    let mut delivered = BTreeMap::new();
-    for (recipient, devices) in body.messages {
-        let mut delivered_devices = Vec::new();
-        for (device_id, content) in devices {
-            let recipient_key = recipient.to_string();
-            let device_key = device_id.to_string();
-            if !deliverable_targets.contains(&(recipient_key.clone(), device_key.clone())) {
-                continue;
-            }
-            let created_at = now();
-            let position = state.next_to_device_position();
-            let mut content = serde_json::to_value(&content)
-                .map_err(|error| AppError::internal(error.to_string()))?;
-            if let Some(object) = content.as_object_mut() {
-                object.insert("sender_device_id".to_owned(), json!(session.device_id));
-            }
-            if let Err(error) = state
-                .delivery_application()
-                .append_device_message(DeviceMessageState {
+            let deliverable = target_active
+                && (target_verified || sender_verified && same_principal && verification_bootstrap);
+            if deliverable {
+                let created_at = now();
+                let mut content = serde_json::to_value(&prepared.target)
+                    .map_err(|error| AppError::internal(error.to_string()))?;
+                if let Some(object) = content.as_object_mut() {
+                    object.insert("sender_device_id".to_owned(), json!(session.device_id));
+                }
+                Some(DeviceMessageRecord {
                     idempotency_key: idempotency_key.clone(),
                     sender: session.actor.clone(),
-                    recipient: recipient_key.clone(),
-                    device_id: device_key.clone(),
-                    position,
+                    recipient: prepared.recipient.clone(),
+                    device_id: prepared.device_id.clone(),
+                    position: state.next_to_device_position(),
                     content,
                     created_at,
                 })
-                .await
-            {
-                tracing::error!(%error, "failed to append device message");
+            } else {
+                None
             }
-            delivered_devices.push(device_key);
-        }
-        if !delivered_devices.is_empty() {
-            delivered.insert(recipient.to_string(), json!(delivered_devices));
-        }
+        };
+        batch_items.push(DeviceMessageBatchItemRecord {
+            message_key: prepared.message_key.clone(),
+            intent_digest: prepared.intent_digest.clone(),
+            idempotency_expires_at: prepared.target.expires_at + chrono::Duration::hours(1),
+            message,
+        });
     }
+    let batch_outcome = state
+        .delivery_application()
+        .commit_device_message_batch(DeviceMessageBatchRecord {
+            request_key,
+            request_digest,
+            idempotency_expires_at: idempotency_expires_at + chrono::Duration::hours(1),
+            items: batch_items,
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let message_outcomes = match batch_outcome {
+        DeviceMessageBatchCommitOutcome::Stored(outcomes)
+        | DeviceMessageBatchCommitOutcome::Duplicate(outcomes) => outcomes,
+        DeviceMessageBatchCommitOutcome::RequestConflict => {
+            return Err(device_message_request_conflict());
+        }
+        DeviceMessageBatchCommitOutcome::MessageConflict { .. } => {
+            return Err(device_message_intent_conflict());
+        }
+    };
+    let outcome = device_message_send_outcome(&prepared_targets, &message_outcomes)?;
     if let Err(error) = prune_device_messages_for_limits(state).await {
         tracing::error!(%error, "failed to prune to-device messages after send");
     }
-    json_ok(DeviceMessagesSendOutcome {
+    json_ok(outcome)
+}
+
+fn device_message_send_outcome(
+    targets: &[PreparedDeviceMessageTarget],
+    outcomes: &BTreeMap<String, bool>,
+) -> Result<DeviceMessagesSendOutcome, AppError> {
+    let mut delivered_by_recipient: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut unknown_devices = BTreeMap::new();
+    for target in targets {
+        let delivered = outcomes
+            .get(&target.message_key)
+            .copied()
+            .ok_or_else(|| AppError::internal("stored device-message outcome omitted a target"))?;
+        if delivered {
+            delivered_by_recipient
+                .entry(target.recipient.clone())
+                .or_default()
+                .push(target.device_id.clone());
+        } else {
+            note_unknown_device(&mut unknown_devices, &target.recipient, &target.device_id);
+        }
+    }
+    let delivered = delivered_by_recipient
+        .into_iter()
+        .map(|(recipient, devices)| (recipient, json!(devices)))
+        .collect();
+    Ok(DeviceMessagesSendOutcome {
         ok: true,
         delivered,
         unknown_devices,
     })
+}
+
+fn device_message_request_conflict() -> AppError {
+    AppError::conflict("Idempotency-Key was already used for a different request body")
+        .with_wire_code("duplicate_conflict")
+}
+
+fn device_message_intent_conflict() -> AppError {
+    AppError::conflict("message_id was already used for a different canonical target")
+        .with_wire_code("duplicate_conflict")
+        .with_reason_code("message_id_conflict")
 }
 
 pub(crate) async fn fanout_actor_private_update(

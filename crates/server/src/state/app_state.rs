@@ -3831,11 +3831,25 @@ impl soland_application::delivery::DeviceMessagePort for PersistenceDeviceMessag
         Ok(())
     }
 
-    async fn register_transaction(
+    async fn commit_batch(
         &self,
-        key: String,
-    ) -> soland_application::ApplicationResult<bool> {
-        Ok(self.0.device_messages().try_register_txn(key).await?)
+        batch: soland_storage::DeviceMessageBatchRecord,
+    ) -> soland_application::ApplicationResult<soland_storage::DeviceMessageBatchCommitOutcome>
+    {
+        Ok(self.0.device_messages().commit_batch(batch).await?)
+    }
+
+    async fn inspect_batch(
+        &self,
+        request_key: &str,
+        request_digest: &str,
+        items: &[soland_storage::DeviceMessageIntentRecord],
+    ) -> soland_application::ApplicationResult<soland_storage::DeviceMessageBatchInspection> {
+        Ok(self
+            .0
+            .device_messages()
+            .inspect_batch(request_key, request_digest, items)
+            .await?)
     }
 
     async fn issue_ack_token(

@@ -3,6 +3,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use soland_storage::{
+    DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
+    DeviceMessageIntentRecord,
+};
 
 use crate::ApplicationResult;
 
@@ -75,7 +79,16 @@ pub struct DeviceMessageState {
 #[async_trait]
 pub trait DeviceMessagePort: Send + Sync {
     async fn append(&self, message: DeviceMessageState) -> ApplicationResult<()>;
-    async fn register_transaction(&self, key: String) -> ApplicationResult<bool>;
+    async fn inspect_batch(
+        &self,
+        request_key: &str,
+        request_digest: &str,
+        items: &[DeviceMessageIntentRecord],
+    ) -> ApplicationResult<DeviceMessageBatchInspection>;
+    async fn commit_batch(
+        &self,
+        batch: DeviceMessageBatchRecord,
+    ) -> ApplicationResult<DeviceMessageBatchCommitOutcome>;
     async fn issue_ack_token(
         &self,
         recipient: &str,
@@ -185,11 +198,22 @@ impl DeliveryApplicationService {
         self.device_messages.append(message).await
     }
 
-    pub async fn register_device_message_transaction(
+    pub async fn commit_device_message_batch(
         &self,
-        key: String,
-    ) -> ApplicationResult<bool> {
-        self.device_messages.register_transaction(key).await
+        batch: DeviceMessageBatchRecord,
+    ) -> ApplicationResult<DeviceMessageBatchCommitOutcome> {
+        self.device_messages.commit_batch(batch).await
+    }
+
+    pub async fn inspect_device_message_batch(
+        &self,
+        request_key: &str,
+        request_digest: &str,
+        items: &[DeviceMessageIntentRecord],
+    ) -> ApplicationResult<DeviceMessageBatchInspection> {
+        self.device_messages
+            .inspect_batch(request_key, request_digest, items)
+            .await
     }
 
     pub async fn issue_device_message_ack_token(
@@ -262,8 +286,21 @@ mod tests {
         async fn append(&self, _message: DeviceMessageState) -> ApplicationResult<()> {
             Ok(())
         }
-        async fn register_transaction(&self, _key: String) -> ApplicationResult<bool> {
-            Ok(true)
+        async fn inspect_batch(
+            &self,
+            _request_key: &str,
+            _request_digest: &str,
+            _items: &[DeviceMessageIntentRecord],
+        ) -> ApplicationResult<DeviceMessageBatchInspection> {
+            Ok(DeviceMessageBatchInspection::Fresh {
+                existing_message_outcomes: Default::default(),
+            })
+        }
+        async fn commit_batch(
+            &self,
+            _batch: DeviceMessageBatchRecord,
+        ) -> ApplicationResult<DeviceMessageBatchCommitOutcome> {
+            Ok(DeviceMessageBatchCommitOutcome::Stored(Default::default()))
         }
         async fn issue_ack_token(
             &self,
