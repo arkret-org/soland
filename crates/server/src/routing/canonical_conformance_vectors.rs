@@ -61,6 +61,18 @@ fn validator_accepts_rfc3339_utc_z_timestamp() {
 }
 
 #[test]
+fn validator_accepts_event_bound_fixed_millisecond_timestamp() {
+    let value = json!({"object": {"created_at": "2026-04-29T12:00:00.123Z"}});
+    assert!(validate_canonical_json_value(&value).is_ok());
+}
+
+#[test]
+fn validator_rejects_noncanonical_timestamp_precision() {
+    let value = json!({"created_at": "2026-04-29T12:00:00.123456Z"});
+    assert!(validate_canonical_json_value(&value).is_err());
+}
+
+#[test]
 fn validator_rejects_non_utc_timestamp() {
     let value = json!({"created_at": "2026-04-29T12:00:00+05:00"});
     assert!(validate_canonical_json_value(&value).is_err());

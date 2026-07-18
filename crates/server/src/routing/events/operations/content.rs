@@ -622,14 +622,25 @@ pub fn validate_canonical_json_value_inner(
                 }
                 validate_canonical_json_value_inner(value, false)?;
             }
-            // RFC3339 UTC Z timestamp validation for fields named *_at or *_at_ms.
+            // Generic payload traversal accepts the two canonical timestamp
+            // profiles used by v1: ordinary artifact fields use whole seconds,
+            // while Event-bound create-object fields use fixed milliseconds so
+            // `payload.object.created_at == Event.created_at` remains possible.
+            // Kind-specific validators still enforce the narrower profile for
+            // fields such as invite expiry.
             for (key, value) in object {
                 if key.ends_with("_at")
                     && let Some(s) = value.as_str()
                 {
-                    arkret_sdk::canonical::validate_timestamp_canonical(s).map_err(
-                        |_| "timestamp must be canonical RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ)",
-                    )?;
+                    let canonical_seconds =
+                        arkret_sdk::canonical::validate_timestamp_canonical(s).is_ok();
+                    let canonical_millis =
+                        arkret_sdk::canonical::validate_timestamp_millis_canonical(s).is_ok();
+                    if !canonical_seconds && !canonical_millis {
+                        return Err(
+                            "timestamp must use canonical RFC 3339 UTC whole-second or fixed-millisecond form",
+                        );
+                    }
                 }
             }
         }
