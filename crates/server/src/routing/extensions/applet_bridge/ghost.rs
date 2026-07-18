@@ -2,7 +2,7 @@
 //! build + persistence path.
 
 use arkret_sdk::{
-    AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
+    AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind, ActorProfileId,
     AppletDelegatedEventAuthorization, AppletId, AppletNamespaceDomain, Did, Event, EventRef,
     GhostActorProfileRequest, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof, RealmId,
     canonical, namespace_pattern_matches,
@@ -156,12 +156,7 @@ pub(super) async fn build_ghost_accountability_grant_event(
     let grant = AccountabilityGrantPayload::new(
         service_id.clone(),
         ghost_actor_id.clone(),
-        AccountabilityScope::Multiple(vec![
-            "applet_ghost_actor".to_owned(),
-            format!("applet:{}", provision.applet_id),
-            format!("protocol:{}", provision.protocol),
-            format!("tenant:{}", provision.tenant),
-        ]),
+        AccountabilityScope::Single(AccountabilityScopeKind::ContractedService),
         now - chrono::Duration::seconds(1),
         // Longevity-safe default: no expiry cliff; the grant is governed by
         // grant_status revocation and Applet registration lifecycle
