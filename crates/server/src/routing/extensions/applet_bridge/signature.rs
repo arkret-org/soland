@@ -115,7 +115,7 @@ pub(super) async fn verify_inbound_transaction_signature(
 
     let target_uri = crate::routing::federation::signature_target_uri(req, state);
     let authority = crate::routing::federation::signature_authority(req, state);
-    let method = req.method().as_str().to_ascii_uppercase();
+    let method = req.method().as_str().to_owned();
     let signature_base = applet_http_signature_base(
         &method,
         &target_uri,

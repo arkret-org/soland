@@ -363,7 +363,7 @@ fn service_binding_ref_for_target(
         typed_frontier_or_fallback(&target.delivery_binding_frontier, &parsed.event_id)?;
     Some(arkret_sdk::FederationServiceBindingRef {
         realm_id: RealmId::new(parsed.realm_id.clone()).ok()?,
-        realm_policy_digest: Hash::new(canonical_json_hash(binding_payload)).ok()?,
+        realm_policy_digest: Hash::new(canonical_json_hash(binding_payload)?).ok()?,
         membership_frontier,
         delivery_binding_frontier,
         destination_service_type: "principal_server".to_owned(),

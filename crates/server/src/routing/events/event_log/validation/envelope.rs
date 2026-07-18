@@ -18,11 +18,8 @@ const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 3] = [
     "ak.proof.event_digest.v1",
 ];
 
-pub(crate) fn canonical_json_hash(value: &Value) -> String {
-    canonical::canonical_sha256(value).unwrap_or_else(|_| {
-        let bytes = serde_json::to_vec(value).unwrap_or_default();
-        arkret_sdk::canonical::sha256_digest(&bytes)
-    })
+pub(crate) fn canonical_json_hash(value: &Value) -> Option<String> {
+    canonical::canonical_sha256(value).ok()
 }
 
 fn event_digest_suite(

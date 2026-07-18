@@ -1,8 +1,12 @@
 use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use chrono::{DateTime, Duration, Utc};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::Duration;
+#[cfg(test)]
+use chrono::{DateTime, Utc};
 use ed25519_dalek::Signer as _;
-use serde_json::{Value, json};
+#[cfg(test)]
+use serde_json::Value;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use soland_storage::FederationTransactionRecord;
 
@@ -174,7 +178,7 @@ pub(super) async fn record_outbound_fanout_attempt(
         "attempt": attempt,
         "created_at": attempted_at,
     });
-    let signing = signed_fanout_intent_evidence(state, peer, target_path, &intent, attempted_at);
+    let signing = signed_fanout_intent_evidence(state, &intent);
     let transcript = json!({
         "schema": "ak.federation.outbound_fanout.transcript.v1",
         "direction": "outbound",
@@ -188,11 +192,10 @@ pub(super) async fn record_outbound_fanout_attempt(
         "intent": intent,
         "signing": signing,
         "dispatch_attempt": {
-            "status": "signed_request_prepared",
+            "status": "dispatch_not_recorded",
             "method": "POST",
             "peer": peer,
             "path": target_path,
-            "signature_scheme": "rfc9421-http-message-signatures",
             "prepared_at": attempted_at,
             "peer_response_recorded": false
         },
@@ -205,7 +208,7 @@ pub(super) async fn record_outbound_fanout_attempt(
             "accepted_by_peer": false,
             "last_error": {
                 "code": "peer_delivery_not_confirmed",
-                "message": "signed outbound federation request prepared; peer response not yet recorded"
+                "message": "outbound federation intent persisted; delivery is tracked by the durable outbox"
             }
         },
         "retry": {
@@ -268,10 +271,7 @@ pub(super) async fn record_outbound_fanout_attempt(
 
 fn signed_fanout_intent_evidence(
     state: &AppState,
-    peer: &str,
-    target_path: &str,
     intent: &serde_json::Value,
-    attempted_at: DateTime<Utc>,
 ) -> serde_json::Value {
     let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(intent)
         .unwrap_or_else(|_| serde_json::to_vec(intent).unwrap_or_default());
@@ -295,72 +295,8 @@ fn signed_fanout_intent_evidence(
         ),
         "payload_digest": payload_digest,
         "jws": jws,
-        "key_origin": key_origin,
-        "http_message_signatures": http_message_signature_evidence(
-            state,
-            peer,
-            target_path,
-            &canonical_bytes,
-            &payload_digest,
-            attempted_at,
-            key_origin,
-        )
+        "key_origin": key_origin
     })
-}
-
-fn http_message_signature_evidence(
-    state: &AppState,
-    peer: &str,
-    target_path: &str,
-    body_bytes: &[u8],
-    payload_digest: &str,
-    attempted_at: DateTime<Utc>,
-    key_origin: &str,
-) -> Value {
-    let created = attempted_at.timestamp();
-    let content_digest = content_digest_header(body_bytes);
-    let keyid = crate::routing::federation::federation_service_signature_key_id(&state.service_id);
-    let signature_params = format!(
-        "(\"@method\" \"@path\" \"content-digest\" \"x-arkret-fanout-digest\");created={created};keyid=\"{keyid}\";alg=\"ed25519\""
-    );
-    let signature_input_header = format!("sig1={signature_params}");
-    let signature_base = format!(
-        "\"@method\": POST\n\"@path\": {target_path}\n\"content-digest\": {content_digest}\n\"x-arkret-fanout-digest\": {payload_digest}\n\"@signature-params\": {signature_params}"
-    );
-    let signature = state.notary_signing_key().sign(signature_base.as_bytes());
-    let signature_header = format!("sig1=:{}:", STANDARD.encode(signature.to_bytes()));
-    json!({
-        "status": "emitted",
-        "scheme": "rfc9421-http-message-signatures",
-        "request": {
-            "method": "POST",
-            "peer": peer,
-            "path": target_path,
-        },
-        "covered_components": [
-            "@method",
-            "@path",
-            "content-digest",
-            "x-arkret-fanout-digest"
-        ],
-        "headers": {
-            "content-digest": content_digest,
-            "signature-input": signature_input_header,
-            "signature": signature_header,
-            "x-arkret-fanout-digest": payload_digest
-        },
-        "signature_base": signature_base,
-        "verification_material": {
-            "keyid": keyid,
-            "alg": "ed25519",
-            "key_origin": key_origin,
-            "public_key_material": "service DID document verification method"
-        }
-    })
-}
-
-pub(super) fn content_digest_header(bytes: &[u8]) -> String {
-    crate::routing::federation::rfc9530_content_digest(bytes)
 }
 
 #[cfg(test)]

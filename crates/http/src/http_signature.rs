@@ -1,9 +1,5 @@
-use std::fmt::Write as _;
-
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
-use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use salvo::prelude::Request;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -45,7 +41,11 @@ impl<'a> SignatureBaseComponent<'a> {
 }
 
 pub fn rfc9530_content_digest(bytes: &[u8]) -> String {
-    format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(bytes)))
+    arkret_sdk::http_signature::ContentDigest::compute(
+        bytes,
+        arkret_sdk::http_signature::ContentDigestAlgorithm::Sha256,
+    )
+    .wire_value
 }
 
 pub fn canonical_body_digests(
@@ -124,14 +124,24 @@ pub fn validate_signature_freshness(
 }
 
 pub fn signature_base(components: &[SignatureBaseComponent<'_>], signature_params: &str) -> String {
-    let mut base = String::new();
-    for component in components {
-        if let Some(value) = component.value {
-            let _ = writeln!(base, "\"{}\": {}", component.name, value);
-        }
-    }
-    let _ = write!(base, "\"@signature-params\": {signature_params}");
-    base
+    let components = components
+        .iter()
+        .filter_map(|component| {
+            component.value.map(|value| {
+                (
+                    arkret_sdk::http_signature::Component::parse(component.name),
+                    value.to_owned(),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    String::from_utf8(
+        arkret_sdk::http_signature::canonical_message_from_component_values(
+            &components,
+            signature_params,
+        ),
+    )
+    .expect("RFC 9421 canonical message is UTF-8")
 }
 
 pub fn verify_signature_header(
@@ -147,18 +157,13 @@ pub fn verify_signature_header(
     let signature = decode_signature_header(&signature_header).map_err(decode_error)?;
     let verifying_key = resolve_key()?;
     verifying_key
-        .verify(signature_base.as_bytes(), &signature)
+        .verify_strict(signature_base.as_bytes(), &signature)
         .map_err(|_| verify_error())
 }
 
 pub fn decode_signature_header(value: &str) -> Result<Signature, &'static str> {
-    let signature_b64 = value
-        .strip_prefix("sig1=:")
-        .and_then(|value| value.strip_suffix(':'))
-        .ok_or("Signature header must use sig1=:base64: form")?;
-    let signature_bytes = STANDARD
-        .decode(signature_b64)
-        .map_err(|_| "Signature header base64 is invalid")?;
+    let signature_bytes = arkret_sdk::http_signature::parse_signature_header(value, "sig1")
+        .map_err(|_| "Signature header must contain a valid sig1 byte sequence")?;
     Signature::from_slice(&signature_bytes).map_err(|_| "Signature header is not Ed25519 length")
 }
 

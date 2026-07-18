@@ -22,10 +22,9 @@
 
 use std::collections::BTreeSet;
 
-use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use soland_http::error::{AppError, ErrorCode};
 
 #[cfg(test)]
@@ -1000,7 +999,7 @@ fn verify_one_witness_proof(
                 reason: error.to_string(),
             }
         })?;
-    public_key.verify(&payload, &signature).map_err(|_| {
+    public_key.verify_strict(&payload, &signature).map_err(|_| {
         WebvhValidationError::WitnessSignatureInvalid {
             reason: "ed25519 verification failed".to_owned(),
         }
@@ -1204,12 +1203,7 @@ fn scid_skeleton_from_genesis(entry: &Value) -> Result<Value, String> {
 /// `z` prefix, per DIF did:webvh v1.0 (SCIDs and entry hashes are 46-char
 /// `Qm…` strings; multibase `z` applies to keys/signatures only).
 pub(crate) fn sha256_multihash_base58btc(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut multihash = Vec::with_capacity(34);
-    multihash.push(0x12); // sha2-256
-    multihash.push(0x20); // 32 bytes
-    multihash.extend_from_slice(&digest);
-    bs58::encode(multihash).into_string()
+    arkret_sdk::sha256_multihash_base58btc(bytes)
 }
 
 pub(crate) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {
@@ -1219,17 +1213,8 @@ pub(crate) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, Str
 }
 
 pub(crate) fn decode_webvh_signature(value: &str) -> Result<Signature, String> {
-    let rest = value
-        .strip_prefix('z')
-        .ok_or_else(|| "proofValue must use base58btc multibase".to_owned())?;
-    let raw = bs58::decode(rest)
-        .into_vec()
-        .map_err(|error| format!("proofValue base58 decode failed: {error}"))?;
-    if raw.len() != SIGNATURE_LENGTH {
-        return Err("ed25519 proofValue must be 64 bytes".to_owned());
-    }
-    let mut signature_bytes = [0u8; SIGNATURE_LENGTH];
-    signature_bytes.copy_from_slice(&raw);
+    let signature_bytes = arkret_sdk::decode_ed25519_signature_multibase(value)
+        .map_err(|error| format!("invalid ed25519 proofValue: {error}"))?;
     Ok(Signature::from_bytes(&signature_bytes))
 }
 

@@ -35,9 +35,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
-use ed25519_dalek::Signer as _;
+use soland_http::http_signature::{self, SignatureBaseComponent};
 use soland_storage::{FederationOutboxRecord, PersistenceResult};
 use uuid::Uuid;
 
@@ -203,30 +201,32 @@ fn rfc9421_sign(
     let signature_input = format!("sig1={signature_params}");
     let authority = authority_from_target_url(target_url);
 
-    let signature_base = format!(
-        "\"@method\": {}\n\
-         \"@target-uri\": {}\n\
-         \"@authority\": {}\n\
-         \"content-digest\": {}\n\
-         \"source-service-id\": {}\n\
-         \"destination-service-id\": {}\n\
-         \"source-trust-domain\": {}\n\
-         \"destination-trust-domain\": {}\n\
-         \"request-canonical-digest\": {}\n\
-         \"@signature-params\": {}",
-        method.to_ascii_uppercase(),
-        target_url,
-        authority,
-        header_value(&headers, "content-digest").unwrap_or_default(),
-        header_value(&headers, "source-service-id").unwrap_or_default(),
-        header_value(&headers, "destination-service-id").unwrap_or_default(),
-        header_value(&headers, "source-trust-domain").unwrap_or_default(),
-        header_value(&headers, "destination-trust-domain").unwrap_or_default(),
-        request_canonical_digest,
-        signature_params,
+    let content_digest = header_value(&headers, "content-digest").unwrap_or_default();
+    let source_service_id = header_value(&headers, "source-service-id").unwrap_or_default();
+    let destination_service_id =
+        header_value(&headers, "destination-service-id").unwrap_or_default();
+    let source_trust_domain = header_value(&headers, "source-trust-domain").unwrap_or_default();
+    let destination_trust_domain =
+        header_value(&headers, "destination-trust-domain").unwrap_or_default();
+    let signature_base = http_signature::signature_base(
+        &[
+            SignatureBaseComponent::required("@method", method),
+            SignatureBaseComponent::required("@target-uri", target_url),
+            SignatureBaseComponent::required("@authority", &authority),
+            SignatureBaseComponent::required("content-digest", &content_digest),
+            SignatureBaseComponent::required("source-service-id", &source_service_id),
+            SignatureBaseComponent::required("destination-service-id", &destination_service_id),
+            SignatureBaseComponent::required("source-trust-domain", &source_trust_domain),
+            SignatureBaseComponent::required("destination-trust-domain", &destination_trust_domain),
+            SignatureBaseComponent::required("request-canonical-digest", &request_canonical_digest),
+        ],
+        &signature_params,
     );
-    let signature = state.notary_signing_key().sign(signature_base.as_bytes());
-    let signature_header = format!("sig1=:{}:", STANDARD.encode(signature.to_bytes()));
+    let signature = arkret_sdk::http_signature::sign_message(
+        signature_base.as_bytes(),
+        &state.notary_signing_key(),
+    );
+    let signature_header = format!("sig1=:{signature}:");
 
     insert_header_if_valid(&mut headers, "signature-input", &signature_input);
     insert_header_if_valid(&mut headers, "signature", &signature_header);

@@ -313,8 +313,7 @@ impl DidResolver for ResolvedDidDocumentResolver<'_> {
 pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Result<(), String> {
     let max_age = chrono::Duration::seconds(HIGH_RISK_DID_FRESHNESS_MAX_SECS);
     let record = state
-        .persistence
-        .webvh()
+        .webvh_store()
         .get_document(did.as_str())
         .await
         .map_err(|error| format!("DID freshness lookup failed: {error}"))?;
@@ -371,8 +370,7 @@ async fn refresh_embedded_webvh_document_for_high_risk(
     }
 
     let events = state
-        .persistence
-        .webvh()
+        .webvh_store()
         .list_log_events(did.as_str())
         .await
         .map_err(|error| format!("DID log lookup failed: {error}"))?;
@@ -399,8 +397,7 @@ async fn refresh_embedded_webvh_document_for_high_risk(
         .map_err(|error| error.to_string())?;
 
     state
-        .persistence
-        .webvh()
+        .webvh_store()
         .put_document(record.clone())
         .await
         .map_err(|error| format!("DID document refresh write failed: {error}"))?;
@@ -451,7 +448,7 @@ async fn did_document_key_log_head(
     did: &Did,
     document: &DidDocument,
 ) -> Result<Hash, String> {
-    if let Ok(Some(record)) = state.persistence.webvh().get_document(did.as_str()).await
+    if let Ok(Some(record)) = state.webvh_store().get_document(did.as_str()).await
         && let Some(head) = record.key_log_head
         && let Ok(hash) = Hash::new(head)
     {

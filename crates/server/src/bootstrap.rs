@@ -15,7 +15,7 @@ use arkret_sdk::{
     ServiceRegistrationKey, ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceType,
     ServiceWebvhDataIntegrityProof, StoredServiceIdentity,
 };
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
+use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -795,20 +795,14 @@ fn validate_registration_receipt_signature(
         &receipt.provider_service_id,
         &receipt.proof.verification_method,
     )?;
-    let encoded = receipt
-        .proof
-        .proof_value
-        .strip_prefix('z')
-        .ok_or_else(|| anyhow::anyhow!("identity bundle receipt proof is not base58btc"))?;
-    let bytes = bs58::decode(encoded)
-        .into_vec()
-        .map_err(|error| anyhow::anyhow!("identity bundle receipt proof is invalid: {error}"))?;
-    let signature = Signature::from_slice(&bytes).map_err(|error| {
-        anyhow::anyhow!("identity bundle receipt signature is invalid: {error}")
-    })?;
+    let signature_bytes = arkret_sdk::decode_ed25519_signature_multibase(
+        &receipt.proof.proof_value,
+    )
+    .map_err(|error| anyhow::anyhow!("identity bundle receipt proof is invalid: {error}"))?;
+    let signature = Signature::from_bytes(&signature_bytes);
     SigningKey::from_bytes(signing_seed)
         .verifying_key()
-        .verify(&signing_input, &signature)
+        .verify_strict(&signing_input, &signature)
         .map_err(|error| anyhow::anyhow!("identity bundle receipt signature failed: {error}"))
 }
 
@@ -1174,7 +1168,7 @@ fn sign_registration_receipt(
             cryptosuite: "eddsa-jcs-2022".to_owned(),
             verification_method,
             proof_purpose: "assertionMethod".to_owned(),
-            proof_value: format!("z{}", bs58::encode(signature.to_bytes()).into_string()),
+            proof_value: arkret_sdk::encode_multibase_base58btc(signature.to_bytes()),
         },
     };
     receipt.validate_for(key, &receipt.service_id)?;

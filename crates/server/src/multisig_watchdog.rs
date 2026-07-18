@@ -123,7 +123,7 @@ pub async fn run_watchdog_pass(
     state: &AppState,
     config: &MultisigWatchdogConfig,
 ) -> WatchdogPassReport {
-    let store = state.persistence.multisig_pending();
+    let store = state.multisig_pending_store();
     let now = Utc::now();
     let lease_expiry = now
         + chrono::Duration::from_std(config.lease_duration)
@@ -224,7 +224,7 @@ pub async fn renew_lease_during_aggregation(
     seal_id: &str,
     fence_seq: i64,
 ) -> Result<bool, String> {
-    let store = state.persistence.multisig_pending();
+    let store = state.multisig_pending_store();
     let now = Utc::now();
     let new_until = now
         + chrono::Duration::from_std(config.lease_duration)
