@@ -1,5 +1,88 @@
 use super::*;
 
+const AGENT_PROVISION_ALLOCATION_TTL_HOURS: i64 = 24;
+
+fn agent_provision_allocation_key(agent_id: &Did) -> String {
+    format!("agent-provision-allocation:{}", agent_id.as_str())
+}
+
+fn agent_provision_allocation_hash(
+    controller_id: &str,
+    agent_id: &Did,
+    principal_control_realm_id: &RealmId,
+    display_name: Option<&str>,
+    agent_slug: &str,
+    avatar_blob_ref: Option<&str>,
+    requested_scope: &Value,
+    pairing_ttl_ms: Option<u64>,
+) -> Result<String, AppError> {
+    arkret_sdk::canonical::canonical_sha256(&json!({
+        "controller_id": controller_id,
+        "agent_id": agent_id,
+        "principal_control_realm_id": principal_control_realm_id,
+        "display_name": display_name,
+        "slug": agent_slug,
+        "avatar_blob_ref": avatar_blob_ref,
+        "requested_scope": requested_scope,
+        "pairing_ttl_ms": pairing_ttl_ms,
+    }))
+    .map(|digest| digest.to_string())
+    .map_err(|error| {
+        AppError::internal(format!("Agent provision allocation digest failed: {error}"))
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn require_agent_provision_allocation(
+    state: &AppState,
+    controller_id: &str,
+    agent_id: &Did,
+    principal_control_realm_id: &RealmId,
+    display_name: Option<&str>,
+    agent_slug: &str,
+    avatar_blob_ref: Option<&str>,
+    requested_scope: &Value,
+    pairing_ttl_ms: Option<u64>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AppError> {
+    let key = agent_provision_allocation_key(agent_id);
+    let allocation = state
+        .idempotency_keys_store()
+        .get(controller_id, &key)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Agent provision allocation lookup failed: {error}"))
+        })?
+        .filter(|record| record.expires_at > now && record.service_id == state.service_id)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "Agent provision commit has no active server allocation",
+            )
+            .with_status(StatusCode::PRECONDITION_FAILED)
+            .with_reason_code("agent_provision_allocation_missing")
+        })?;
+    let expected_hash = agent_provision_allocation_hash(
+        controller_id,
+        agent_id,
+        principal_control_realm_id,
+        display_name,
+        agent_slug,
+        avatar_blob_ref,
+        requested_scope,
+        pairing_ttl_ms,
+    )?;
+    if allocation.request_hash != expected_hash {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Agent provision commit differs from its server allocation",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("agent_provision_allocation_mismatch"));
+    }
+    Ok(())
+}
+
 #[endpoint(
     operation_id = "ak.self.agent.command.provision",
     tags("agents"),
@@ -152,6 +235,21 @@ pub(super) async fn provision_agent(
             },
         });
     }
+    if let Some((prepared_agent_id, prepared_realm_id)) = &prepared_ids {
+        require_agent_provision_allocation(
+            state,
+            &controller_id,
+            prepared_agent_id,
+            prepared_realm_id,
+            display_name.as_deref(),
+            &agent_slug,
+            avatar_blob_ref.as_deref(),
+            &requested_scope,
+            pairing_ttl_ms,
+            now_utc,
+        )
+        .await?;
+    }
     if existing.iter().any(|record| {
         record.agent_slug.as_deref() == Some(agent_slug.as_str())
             && agent_record_reserves_selector_slug(record, &now_utc)
@@ -183,7 +281,7 @@ pub(super) async fn provision_agent(
                 crate::routing::identity::managed_agent_pcr::controller_authorization_ref(
                     agent_principal_did.as_str(),
                 );
-            return json_ok(AgentProvisionOutcome::AwaitingControllerEvents {
+            let outcome = AgentProvisionOutcome::AwaitingControllerEvents {
                 agent_id: agent_principal_did,
                 principal_control_realm_id,
                 controller_realm_id: RealmId::new(controller_realm.clone()).map_err(|error| {
@@ -191,7 +289,47 @@ pub(super) async fn provision_agent(
                 })?,
                 controller_authorization_ref,
                 requested_scope_digest,
-            });
+            };
+            let AgentProvisionOutcome::AwaitingControllerEvents {
+                agent_id,
+                principal_control_realm_id,
+                ..
+            } = &outcome
+            else {
+                unreachable!("prepare outcome is awaiting controller events")
+            };
+            let allocation_hash = agent_provision_allocation_hash(
+                &controller_id,
+                agent_id,
+                principal_control_realm_id,
+                display_name.as_deref(),
+                &agent_slug,
+                avatar_blob_ref.as_deref(),
+                &requested_scope,
+                pairing_ttl_ms,
+            )?;
+            let allocation = soland_storage::IdempotencyRecord {
+                principal_id: controller_id.clone(),
+                idempotency_key: agent_provision_allocation_key(agent_id),
+                service_id: state.service_id.clone(),
+                request_hash: allocation_hash,
+                response_status: i32::from(StatusCode::OK.as_u16()),
+                response_body: serde_json::to_value(&outcome).map_err(|error| {
+                    AppError::internal(format!("Agent provision prepare outcome failed: {error}"))
+                })?,
+                created_at: now_utc,
+                expires_at: now_utc + chrono::Duration::hours(AGENT_PROVISION_ALLOCATION_TTL_HOURS),
+            };
+            state
+                .idempotency_keys_store()
+                .record(&allocation)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!(
+                        "Agent provision allocation persist failed: {error}"
+                    ))
+                })?;
+            return json_ok(outcome);
         }
     };
     let agent_id = agent_principal_did.to_string();

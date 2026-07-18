@@ -533,6 +533,81 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
 }
 
 #[tokio::test]
+async fn agent_provision_commit_requires_its_server_allocation() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let controller = "did:web:alice.example";
+    let token = "agent-unallocated-commit-session";
+    seed_controller_session(&state, token, controller).await;
+    seed_agent_provision_prerequisites(&state, controller).await;
+
+    let controller_id = arkret_sdk::Did::new(controller.to_owned()).unwrap();
+    let controller_realm_id = arkret_sdk::RealmId::new(
+        soland_domain::identity::principal_control_realm_for_did(controller),
+    )
+    .unwrap();
+    let now = chrono::Utc::now();
+    let hlc =
+        arkret_sdk::Hlc::new(format!("{:012x}-0000-a13f9c2e", now.timestamp_millis())).unwrap();
+    let accountability = arkret_sdk::Event::new(
+        arkret_sdk::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
+        controller_realm_id.clone(),
+        controller_id.clone(),
+        1,
+        hlc.clone(),
+        serde_json::json!({}),
+    )
+    .unwrap();
+    let selector = arkret_sdk::Event::new(
+        arkret_sdk::events::EventKind::AGENT_SELECTOR_CLAIM,
+        controller_realm_id,
+        controller_id,
+        2,
+        hlc,
+        serde_json::json!({}),
+    )
+    .unwrap();
+    let app = app_from_state(state.clone());
+    let mut response = TestClient::post("http://server/_arkret/self/agents")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "phase": "commit",
+            "agent_id": "did:web:unallocated-agent.example",
+            "principal_control_realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
+            "slug": "unallocated-agent",
+            "requested_scope": {
+                "actions": ["ak.self.events.stream.subscribe"],
+                "resources": [{
+                    "kind": "operation",
+                    "operation": "ak.self.events.stream.subscribe"
+                }],
+                "constraints": []
+            },
+            "provision_events": {
+                "accountability_grant": accountability,
+                "selector_claim": selector
+            }
+        }))
+        .send(&app)
+        .await;
+
+    assert_eq!(response.status_code, Some(StatusCode::PRECONDITION_FAILED));
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(
+        body["error"]["details"]["reason_code"], "agent_provision_allocation_missing",
+        "{body}"
+    );
+    assert!(
+        state
+            .test_persistence()
+            .agents()
+            .list_for_controller(controller)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     let mut config = test_config();
     config.development_mode = true;
