@@ -89,7 +89,7 @@ pub(crate) async fn admin_submit_multisig_partial(
     let mut record = match store
         .get(&seal_id_str)
         .await
-        .map_err(|soland_application::ApplicationError::Storage(e)| persistence_to_app_err(e))?
+        .map_err(persistence_to_app_err)?
     {
         Some(r) => r,
         None => soland_storage::MultisigPendingRecord {
@@ -133,7 +133,7 @@ pub(crate) async fn admin_submit_multisig_partial(
     store
         .upsert(record.clone())
         .await
-        .map_err(|soland_application::ApplicationError::Storage(e)| persistence_to_app_err(e))?;
+        .map_err(persistence_to_app_err)?;
 
     let collected = record.partials.len() as u32;
     let threshold = record.threshold_k;
@@ -187,7 +187,7 @@ pub(crate) async fn admin_list_multisig_pending(
         .multisig_pending_store()
         .list_for_realm(&realm_id_str)
         .await
-        .map_err(|soland_application::ApplicationError::Storage(e)| persistence_to_app_err(e))?;
+        .map_err(persistence_to_app_err)?;
 
     let entries = rows
         .into_iter()

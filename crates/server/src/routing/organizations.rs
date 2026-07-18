@@ -195,7 +195,7 @@ fn ensure_organization_registry_admin(state: &AppState, actor: &str) -> Result<(
 
 pub(crate) async fn refresh_organization_projection(
     state: &AppState,
-) -> Result<(), soland_application::ApplicationError> {
+) -> soland_storage::PersistenceResult<()> {
     let organizations = state.organizations_store().list().await?;
     {
         let mut map = state.organizations.lock();
@@ -559,7 +559,7 @@ pub(crate) async fn link_realm_to_organization(
     state: &AppState,
     realm_id: &str,
     organization_id: &str,
-) -> Result<(), soland_application::ApplicationError> {
+) -> soland_storage::PersistenceResult<()> {
     state
         .realm_organizations_store()
         .link(realm_id, organization_id)
@@ -802,7 +802,7 @@ pub(crate) async fn persist_realm_moderation_policy(
     realm_id: &str,
     payload: Value,
     actor: &str,
-) -> Result<RealmModerationPolicyRecord, soland_application::ApplicationError> {
+) -> soland_storage::PersistenceResult<RealmModerationPolicyRecord> {
     let record = RealmModerationPolicyRecord {
         realm_id: realm_id.to_owned(),
         payload,
@@ -830,7 +830,7 @@ async fn ensure_organization_placeholder(
     state: &AppState,
     organization_id: &str,
     actor: &str,
-) -> Result<(), soland_application::ApplicationError> {
+) -> soland_storage::PersistenceResult<()> {
     if state
         .organizations_store()
         .get(organization_id)

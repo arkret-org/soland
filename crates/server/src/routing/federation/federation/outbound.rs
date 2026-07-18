@@ -385,11 +385,7 @@ pub(super) async fn run_outbound_fanout_retry_pass_at(
         return Ok(report);
     }
 
-    let records = state
-        .federation_transactions_store()
-        .snapshot_all()
-        .await
-        .map_err(|soland_application::ApplicationError::Storage(error)| error)?;
+    let records = state.federation_transactions_store().snapshot_all().await?;
     for record in records {
         report.scanned += 1;
         if record.origin != state.service_id || !record.txn_id.starts_with("outbound_") {
@@ -422,11 +418,7 @@ pub(super) async fn run_outbound_fanout_retry_pass_at(
         } else {
             report.retried += 1;
         }
-        state
-            .federation_transactions_store()
-            .put(&updated)
-            .await
-            .map_err(|soland_application::ApplicationError::Storage(error)| error)?;
+        state.federation_transactions_store().put(&updated).await?;
     }
 
     Ok(report)

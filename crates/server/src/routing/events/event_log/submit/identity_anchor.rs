@@ -260,7 +260,6 @@ pub(super) async fn submit_identity_anchor_batch(
         )
         .await
         .map_err(|error| {
-            let soland_application::ApplicationError::Storage(error) = error;
             if persistence_error_is_realm_already_exists(&error) {
                 realm_already_exists_error()
             } else if matches!(

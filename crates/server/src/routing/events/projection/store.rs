@@ -11,11 +11,7 @@ pub async fn append_projection_event(
     state: &AppState,
     event: ProjectionEventRecord,
 ) -> soland_storage::PersistenceResult<soland_storage::ProjectionEventAppendOutcome> {
-    state
-        .projection_events_store()
-        .append(event)
-        .await
-        .map_err(|soland_application::ApplicationError::Storage(error)| error)
+    state.projection_events_store().append(event).await
 }
 
 pub async fn persist_and_publish_projection_event(
