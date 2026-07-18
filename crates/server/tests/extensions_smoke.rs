@@ -113,6 +113,25 @@ async fn applet_protocol_describe_smoke() {
 }
 
 #[tokio::test]
+async fn applet_transaction_requires_signature_before_typed_body_validation() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let app = service(state);
+    let mut response = TestClient::post("http://server/_arkret/edge/applet/transactions")
+        .add_header("Authorization", "Bearer bearer-only", true)
+        .add_header("Idempotency-Key", "missing-signature-order", true)
+        .json(&json!({
+            "source_service_id": "not-a-did",
+            "events": "not-an-array"
+        }))
+        .send(&app)
+        .await;
+
+    assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
+    let error: Value = response.take_json().await.unwrap();
+    assert_eq!(error["reason"], json!("http_signature_required"));
+}
+
+#[tokio::test]
 async fn applet_install_package_registers_bot_projection_smoke() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

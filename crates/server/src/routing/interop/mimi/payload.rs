@@ -356,10 +356,6 @@ pub(super) fn map_mimi_message_content(
         ensure_content_object(&mut content);
         let object = content.as_object_mut().expect("content object");
         object.insert(
-            "ak.morph.e2ee_downgrade".to_owned(),
-            Value::String("mimi_bridge".to_owned()),
-        );
-        object.insert(
             "e2ee_downgrade".to_owned(),
             Value::String("mimi_bridge".to_owned()),
         );
@@ -376,10 +372,6 @@ pub(super) fn map_mimi_message_content(
             ensure_content_object(&mut content);
             let object = content.as_object_mut().expect("content object");
             object.insert("transcript_binding".to_owned(), binding.clone());
-            object.insert(
-                "ak.morph.e2ee_boundary".to_owned(),
-                Value::String("transcript_bound".to_owned()),
-            );
             policy = json!({
                 "profile": "ak.profile.mimi_interop.v1",
                 "e2ee_boundary": "transcript_bound",
@@ -409,9 +401,9 @@ pub(super) fn map_mimi_message_content(
             "raw_payload_hash": arkret_sdk::canonical::sha256_digest(content.to_string().as_bytes()),
         });
         let content = json!({
-            "kind": "ak.content.unsupported",
+            "kind": "ak.content.text",
             "body": "unsupported content from MIMI",
-            "ak.morph.unknown_content_kind": kind,
+            "unknown_content_kind": kind,
             "quarantine": quarantine.clone(),
         });
         let mut policy = policy;
@@ -526,10 +518,7 @@ pub(super) fn mimi_transcript_binding<'a>(
 }
 
 pub(super) fn mimi_explicit_downgrade(body: &Value, content: &Value) -> bool {
-    downgrade_marker(body.get("e2ee_downgrade"))
-        || downgrade_marker(body.get("ak.morph.e2ee_downgrade"))
-        || downgrade_marker(content.get("e2ee_downgrade"))
-        || downgrade_marker(content.get("ak.morph.e2ee_downgrade"))
+    downgrade_marker(body.get("e2ee_downgrade")) || downgrade_marker(content.get("e2ee_downgrade"))
 }
 
 pub(super) fn downgrade_marker(value: Option<&Value>) -> bool {
