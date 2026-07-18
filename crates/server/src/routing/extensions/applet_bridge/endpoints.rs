@@ -32,7 +32,9 @@ use super::record::{
     accountability_chain, applet_display_name, applet_id_param, applet_record, applet_records,
     ensure_not_revoked, idempotency_key, persist_applet_record, query_value,
 };
-use super::signature::verify_inbound_transaction_signature;
+use super::signature::{
+    VerifiedInboundTransactionSignature, require_inbound_transaction_signature,
+};
 use super::transaction::process_verified_transaction;
 use super::types::{
     AppletGhostIngressOutcome, AppletGhostIngressRequestBody, AppletInstallPaths,
@@ -63,7 +65,11 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
                 Router::with_path("applet")
                     .push(Router::with_path("ping").get(protocol_ping_endpoint))
                     .push(Router::with_path("describe").get(protocol_describe_endpoint))
-                    .push(Router::with_path("transactions").post(transaction_endpoint))
+                    .push(
+                        Router::with_path("transactions")
+                            .hoop(require_inbound_transaction_signature)
+                            .post(transaction_endpoint),
+                    )
                     .push(Router::with_path("actors/{actor_id}").get(resolve_actor_endpoint))
                     .push(
                         Router::with_path("realms/{realm_id_or_alias}").get(resolve_realm_endpoint),
@@ -625,7 +631,10 @@ async fn transaction_endpoint(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AppletTransactionOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
+    let state = depot
+        .get_typed::<AppState>()
+        .expect("state injected")
+        .clone();
     let idempotency_key = idempotency_key(req)
         .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
     if idempotency_key.len() > 128 {
@@ -639,17 +648,14 @@ async fn transaction_endpoint(
             "events must contain at least one event",
         ));
     }
-    // COT-03-001 / applet-integration.md Â§7.3.1: the app/bridge â†’ arkret edge
-    // inbound direction MUST carry a per-delivery RFC 9421 source signature and
-    // the receiver MUST verify it before processing any event / side effect.
-    // Plain `Authorization: Bearer` (no `Signature`) MUST be rejected. The
-    // signing key anchor is the Applet registration `source_service_id`'s
-    // current active verification method, and that service DID MUST hit an
-    // active effective install (Â§4b.1).
-    let verified =
-        verify_inbound_transaction_signature(state, req, &transaction, &idempotency_key).await?;
+    // The route hoop verifies the per-delivery RFC 9421 source signature
+    // against the raw canonical body before this typed extractor or any event
+    // processing runs. A successful verification is consumed exactly once.
+    let verified = depot
+        .remove_typed::<VerifiedInboundTransactionSignature>()
+        .map_err(|_| AppError::internal("verified applet transaction signature is unavailable"))?;
     let outcome =
-        process_verified_transaction(state, transaction, &idempotency_key, verified).await?;
+        process_verified_transaction(&state, transaction, &idempotency_key, verified).await?;
     json_ok(outcome)
 }
 
