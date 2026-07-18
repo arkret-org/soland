@@ -8,8 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_sdk::{
-    Operation, ReadCursorPosition as ReadCursorPositionWire, ReadCursorScope as ReadScopeWire,
-    StrandTrackConfig,
+    ChildScopePolicy, Operation, ReadCursorPosition as ReadCursorPositionWire,
+    ReadCursorScope as ReadScopeWire, StrandTrackConfig,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -514,22 +514,6 @@ pub struct SpaceContainerProjection {
     /// strand inside the policy window. Spec `realm-and-space.md`
     /// §2.5.1 ¶6. Defaults to `false`.
     pub parent_ref_locked: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ChildScopePolicy {
-    pub kind: String,
-    pub scope_circle_id: Option<String>,
-}
-
-impl ChildScopePolicy {
-    pub fn from_parts(kind: Option<String>, scope_circle_id: Option<String>) -> Option<Self> {
-        let kind = kind?;
-        Some(Self {
-            kind,
-            scope_circle_id,
-        })
-    }
 }
 
 pub(crate) fn space_container_id_from_payload(payload: &Value) -> Option<String> {

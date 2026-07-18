@@ -248,7 +248,14 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         // The complete canonical typed shape is required; validating only
         // observed_dots would allow malformed identifiers.
         arkret_sdk::events::EventKind::CONSENT_REVOKE => {
-            validate_consent_revoke_payload(&operation.payload)
+            let mut wire_payload = projection_context_stripped_payload(&operation.payload);
+            // Event-to-projection conversion adds actor_seq so the consent
+            // reducer can derive its OR-set dot. It is projection context,
+            // not part of the closed consent-revoke wire payload.
+            if let Some(object) = wire_payload.as_object_mut() {
+                object.remove("actor_seq");
+            }
+            validate_consent_revoke_payload(&wire_payload)
                 .map(|_| ())
                 .map_err(|_| "ak.consent.revoke payload violates its canonical typed shape")
         }

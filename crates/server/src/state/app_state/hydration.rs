@@ -1,5 +1,24 @@
 use super::*;
 
+pub(super) fn parse_child_scope_policy(
+    kind: Option<&str>,
+    scope_circle_id: Option<&str>,
+) -> Result<Option<arkret_sdk::ChildScopePolicy>, &'static str> {
+    let policy = match (kind, scope_circle_id) {
+        (None, None) => return Ok(None),
+        (Some("allow_any"), None) => arkret_sdk::ChildScopePolicy::AllowAny {},
+        (Some("require_e2ee"), None) => arkret_sdk::ChildScopePolicy::RequireE2ee {},
+        (Some("require_same_scope"), None) => arkret_sdk::ChildScopePolicy::RequireSameScope {},
+        (Some("require_scope_circle_id"), Some(scope_circle_id)) => {
+            let scope_circle_id = arkret_sdk::CircleId::new(scope_circle_id.to_owned())
+                .map_err(|_| "invalid_scope_circle_id")?;
+            arkret_sdk::ChildScopePolicy::RequireScopeCircleId { scope_circle_id }
+        }
+        _ => return Err("invalid_child_scope_policy"),
+    };
+    Ok(Some(policy))
+}
+
 pub(super) async fn hydrate_cross_signing_from_persistence(
     persistence: &dyn soland_storage::PersistenceStore,
 ) -> soland_storage::PersistenceResult<arkret_sdk::DeviceManager> {
@@ -59,8 +78,8 @@ pub(super) async fn hydrate_projections_from_persistence(
     authz: &SolandAuthzEngine,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
-        AppletProjection, ChildScopePolicy, KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey,
-        MlsKeyPackage, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
+        AppletProjection, KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
+        MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
         SpaceContainerProjection, StrandProjection,
     };
 
@@ -128,7 +147,6 @@ pub(super) async fn hydrate_projections_from_persistence(
             _ => None,
         }
     }
-
     // Realm metadata is the durable mirror used by the regular Realm index.
     // Restore the reducer-side Realm cache from the same source as well: the
     // capability reducer reads `realm_states.owner` when checking a root
@@ -175,6 +193,20 @@ pub(super) async fn hydrate_projections_from_persistence(
                 );
                 continue;
             };
+            let child_scope_policy = match parse_child_scope_policy(
+                record.child_scope_policy.as_deref(),
+                record.child_scope_policy_scope_circle_id.as_deref(),
+            ) {
+                Ok(policy) => policy,
+                Err(reason) => {
+                    tracing::warn!(
+                        container_space_id = %record.container_space_id,
+                        reason,
+                        "skipping space-container projection row with invalid child scope policy during hydrate"
+                    );
+                    continue;
+                }
+            };
             proj.space_containers.insert(
                 record.container_space_id.clone(),
                 SpaceContainerProjection {
@@ -184,10 +216,7 @@ pub(super) async fn hydrate_projections_from_persistence(
                     title: record.title,
                     fields: record.fields,
                     scope_circle_id: record.scope_circle_id,
-                    child_scope_policy: ChildScopePolicy::from_parts(
-                        record.child_scope_policy,
-                        record.child_scope_policy_scope_circle_id,
-                    ),
+                    child_scope_policy,
                     parent_ref: record.parent_ref,
                     rank: record.rank,
                     state,

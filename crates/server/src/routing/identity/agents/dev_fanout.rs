@@ -225,7 +225,9 @@ pub(super) async fn fanout_provision_subevents(
         || accountability_payload.subject.as_str() != agent_id
         || !matches!(
             &accountability_payload.accountability_scope,
-            arkret_sdk::AccountabilityScope::Single(scope) if scope == "agent_operator"
+            arkret_sdk::AccountabilityScope::Single(
+                arkret_sdk::AccountabilityScopeKind::AgentOperator
+            )
         )
         || !matches!(
             accountability_payload.grant_status,

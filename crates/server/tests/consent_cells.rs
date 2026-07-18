@@ -224,60 +224,74 @@ async fn revoke_cell(
     .unwrap()
 }
 
-fn event_canonical_digest(event: &Value) -> String {
-    let mut canonical = event.clone();
-    if let Value::Object(object) = &mut canonical {
-        object.remove("proofs");
-        object.remove("unsigned");
-        object.remove("canonical_digest");
-        object.remove("canonical_hash");
-    }
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(&canonical).unwrap();
-    arkret_sdk::canonical::sha256_digest(&bytes)
-}
-
 fn iso_now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+    arkret_sdk::canonical::format_timestamp_canonical(Utc::now())
 }
 
-fn signed_event(actor: &str, realm_id: &str, kind: &str, actor_seq: u64, payload: Value) -> Value {
-    let now = Utc::now();
-    let created_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let mut event = serde_json::json!({
-        "event_id": ids::generate_event_id(),
-        "kind": kind,
-        "realm_id": realm_id,
-        "actor_id": actor,
-        "actor_seq": actor_seq,
-        "created_at": created_at,
-        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
-        "prev_refs": [],
-        "refs": [],
-        "payload": payload,
-        "proofs": []
-    });
-    let event_digest = event_canonical_digest(&event);
-    event["proofs"] = serde_json::json!([{
-        "kind": "detached_jws",
-        "alg": "EdDSA",
-        "verification_method": format!("{actor}#device"),
-        "event_digest": event_digest,
-        "created_at": created_at,
-        "jws": "dev-mode-fixture"
-    }]);
-    event
+fn signing_actor(seed: [u8; 32]) -> String {
+    let key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    format!(
+        "did:key:{}",
+        arkret_sdk::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+    )
 }
 
-async fn submit_event(
-    app: &salvo::Service,
-    token: &str,
+fn signed_event(
+    seed: [u8; 32],
     actor: &str,
     realm_id: &str,
     kind: &str,
     actor_seq: u64,
     payload: Value,
 ) -> Value {
-    let event = signed_event(actor, realm_id, kind, actor_seq, payload);
+    let now = Utc::now();
+    assert_eq!(actor, signing_actor(seed));
+    let actor_id = arkret_sdk::Did::new(actor.to_owned()).expect("fixture actor DID");
+    let key = actor
+        .strip_prefix("did:key:")
+        .expect("fixture did:key actor");
+    let verification_method = format!("{actor}#{key}");
+    let mut event = arkret_sdk::Event::new_with_id_at(
+        arkret_sdk::EventId::new(ids::generate_event_id()).expect("fixture Event id"),
+        kind,
+        arkret_sdk::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        actor_id.clone(),
+        actor_seq,
+        arkret_sdk::Hlc::new(format!(
+            "{:012x}-0000-00000000",
+            now.timestamp_millis().max(0) as u64
+        ))
+        .expect("fixture HLC"),
+        payload,
+        now,
+    )
+    .expect("SDK Event builder accepts consent fixture");
+    let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
+        seed,
+        actor_id,
+        verification_method.clone(),
+    );
+    arkret_sdk::signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_sdk::signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .expect("SDK Event signer accepts consent fixture");
+    serde_json::to_value(event).expect("SDK Event serializes")
+}
+
+async fn submit_event(
+    app: &salvo::Service,
+    token: &str,
+    seed: [u8; 32],
+    actor: &str,
+    realm_id: &str,
+    kind: &str,
+    actor_seq: u64,
+    payload: Value,
+) -> Value {
+    let event = signed_event(seed, actor, realm_id, kind, actor_seq, payload);
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -292,12 +306,13 @@ async fn submit_event(
     serde_json::from_str(&body).unwrap()
 }
 
-async fn create_realm(app: &salvo::Service, token: &str, actor: &str) -> String {
+async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: &str) -> String {
     let realm_id = ids::generate_realm_id();
     let created_at = iso_now();
     submit_event(
         app,
         token,
+        seed,
         actor,
         &realm_id,
         "ak.realm.create",
@@ -372,13 +387,14 @@ async fn consent_grant_revoke_regrant_does_not_implicitly_accept_contact_request
 async fn consent_events_project_cells_without_implicitly_accepting_contact_request() {
     let state = AppState::new(test_config(), Db { pool: None });
     let app = service(state);
-    let alice = "did:web:event-consent-alice.example";
+    let alice_seed = [31_u8; 32];
+    let alice = signing_actor(alice_seed);
     let bob = "did:web:event-consent-bob.example";
-    let alice_token = dev_token(&app, alice).await;
+    let alice_token = dev_token(&app, &alice).await;
     let bob_token = dev_token(&app, bob).await;
-    let realm_id = create_realm(&app, &alice_token, alice).await;
+    let realm_id = create_realm(&app, &alice_token, alice_seed, &alice).await;
 
-    let pending_contact = request_contact(&app, &bob_token, alice, "message").await;
+    let pending_contact = request_contact(&app, &bob_token, &alice, "message").await;
     assert_eq!(pending_contact["status"], "pending");
 
     let consent_id = ids::generate("consent");
@@ -386,7 +402,8 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
     let grant_response = submit_event(
         &app,
         &alice_token,
-        alice,
+        alice_seed,
+        &alice,
         &realm_id,
         "ak.consent.grant",
         grant_seq,
@@ -401,7 +418,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
     let grant_event_id = grant_response["accepted"][0].as_str().unwrap();
     let grant_dot = format!("{grant_event_id}:{grant_seq}");
 
-    let granted = get_cell(&app, &alice_token, alice, bob, "message").await;
+    let granted = get_cell(&app, &alice_token, &alice, bob, "message").await;
     assert_eq!(granted["state"], "active");
     assert_eq!(
         granted["cell_id"],
@@ -414,25 +431,36 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
             .iter()
             .any(|dot| dot.as_str() == Some(&grant_dot))
     );
-    let repeated_contact = request_contact(&app, &bob_token, alice, "message").await;
+    let repeated_contact = request_contact(&app, &bob_token, &alice, "message").await;
     assert_eq!(repeated_contact["status"], "pending");
 
+    let revoke_payload = serde_json::json!({
+        "consent_id": consent_id,
+        "observed_dots": [grant_dot],
+        "revoked_at": (Utc::now() + Duration::seconds(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+    });
+    let typed_revoke: arkret_sdk::ConsentRevokePayload =
+        serde_json::from_value(revoke_payload.clone()).unwrap_or_else(|error| {
+            panic!(
+                "canonical consent revoke fixture must decode: {error}; payload={revoke_payload}"
+            )
+        });
+    typed_revoke
+        .validate_minimal()
+        .expect("canonical consent revoke fixture must validate");
     submit_event(
         &app,
         &alice_token,
-        alice,
+        alice_seed,
+        &alice,
         &realm_id,
         "ak.consent.revoke",
         3,
-        serde_json::json!({
-            "consent_id": consent_id,
-            "observed_dots": [grant_dot],
-            "revoked_at": (Utc::now() + Duration::seconds(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
-        }),
+        revoke_payload,
     )
     .await;
 
-    let revoked = get_cell(&app, &alice_token, alice, bob, "message").await;
+    let revoked = get_cell(&app, &alice_token, &alice, bob, "message").await;
     assert_eq!(revoked["state"], "revoked");
     assert!(
         revoked["revoked_dots"]
@@ -441,7 +469,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
             .iter()
             .any(|dot| dot.as_str() == Some(&grant_dot))
     );
-    let blocked_contact = request_contact(&app, &bob_token, alice, "message").await;
+    let blocked_contact = request_contact(&app, &bob_token, &alice, "message").await;
     assert_eq!(blocked_contact["status"], "pending");
 }
 
@@ -508,21 +536,23 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
     let state = AppState::new(test_config(), Db { pool: None });
     let app = service(state);
     let alice = "did:web:icgr-alice.example";
-    let bob = "did:web:icgr-bob.example";
+    let bob_seed = [32_u8; 32];
+    let bob = signing_actor(bob_seed);
     let alice_token = dev_token(&app, alice).await;
-    let bob_token = dev_token(&app, bob).await;
+    let bob_token = dev_token(&app, &bob).await;
     // bob (the consent-cell holder) grants alice (peer) an `invite` scope.
-    let realm_id = create_realm(&app, &bob_token, bob).await;
+    let realm_id = create_realm(&app, &bob_token, bob_seed, &bob).await;
 
     // Open the contact relationship so a row exists for alice's list.
-    request_contact(&app, &alice_token, bob, "invite").await;
+    request_contact(&app, &alice_token, &bob, "invite").await;
 
     let consent_id = ids::generate("consent");
     let grant_seq = 2_u64;
     let grant_response = submit_event(
         &app,
         &bob_token,
-        bob,
+        bob_seed,
+        &bob,
         &realm_id,
         "ak.consent.grant",
         grant_seq,

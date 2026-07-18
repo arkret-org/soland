@@ -4388,6 +4388,28 @@ mod membership_hydration_tests {
         assert_eq!(epoch.policy_root, "sha256:locked-root");
     }
 
+    #[test]
+    fn child_scope_policy_hydration_uses_the_sdk_wire_type_and_fails_closed() {
+        let circle_id = "ak:circle:0196419b-0000-7000-8000-000000000003";
+        assert_eq!(
+            hydration::parse_child_scope_policy(None, None).unwrap(),
+            None
+        );
+        assert_eq!(
+            hydration::parse_child_scope_policy(Some("require_scope_circle_id"), Some(circle_id))
+                .unwrap(),
+            Some(arkret_sdk::ChildScopePolicy::RequireScopeCircleId {
+                scope_circle_id: arkret_sdk::CircleId::new(circle_id.to_owned()).unwrap(),
+            })
+        );
+        assert!(hydration::parse_child_scope_policy(Some("allow_any"), Some(circle_id)).is_err());
+        assert!(
+            hydration::parse_child_scope_policy(Some("require_scope_circle_id"), None).is_err()
+        );
+        assert!(hydration::parse_child_scope_policy(Some("legacy_policy"), None).is_err());
+        assert!(hydration::parse_child_scope_policy(None, Some(circle_id)).is_err());
+    }
+
     #[tokio::test]
     async fn key_backup_active_series_rehydrates_from_projection_events() {
         use soland_storage::{ProjectionEventAppendOutcome, ProjectionEventRecord};

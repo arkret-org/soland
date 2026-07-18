@@ -6,8 +6,6 @@ use super::*;
 fn consent_revoke_empty_observed_dots_rejected() {
     let err = validate_consent_revoke_payload(&json!({
         "consent_id": "ak:consent:01904100-0000-7000-8000-000000000001",
-        "peer": "did:web:bob.example",
-        "scope": "invite",
         "observed_dots": [],
     }))
     .unwrap_err();
@@ -18,10 +16,8 @@ fn consent_revoke_empty_observed_dots_rejected() {
 fn consent_revoke_accepts_non_empty_observed_dots() {
     validate_consent_revoke_payload(&json!({
         "consent_id": "ak:consent:01904100-0000-7000-8000-000000000001",
-        "peer": "did:web:bob.example",
-        "scope": "invite",
         "observed_dots": [
-            {"actor_id": "did:web:alice.example", "actor_seq": 1}
+            "ak:event:01904100-0000-7000-8000-000000000002:1"
         ],
     }))
     .unwrap();
@@ -31,10 +27,8 @@ fn consent_revoke_accepts_non_empty_observed_dots() {
 fn consent_revoke_rejects_untyped_consent_id() {
     let err = validate_consent_revoke_payload(&json!({
         "consent_id": "cid",
-        "peer": "did:web:bob.example",
-        "scope": "invite",
         "observed_dots": [
-            {"actor_id": "did:web:alice.example", "actor_seq": 1}
+            "ak:event:01904100-0000-7000-8000-000000000002:1"
         ],
     }))
     .unwrap_err();

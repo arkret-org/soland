@@ -46,6 +46,8 @@ fn grant_op(grant_id: &str) -> Operation {
 }
 
 fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> Operation {
+    let registry_digest = arkret_sdk::current_capability_action_registry_digest()
+        .expect("embedded capability action registry");
     op(
         arkret_sdk::events::EventKind::CAPABILITY_GRANT,
         REALM,
@@ -58,6 +60,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
                 "issuer": ISSUER,
                 "subject": SUBJECT,
                 "actions": actions,
+                "capability_action_registry_digest": registry_digest,
                 "resources": resources,
             }
         }),

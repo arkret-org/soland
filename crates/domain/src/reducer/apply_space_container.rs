@@ -109,11 +109,11 @@ impl ProjectionState {
                 };
             }
         };
-        if let Some(policy_scope) = child_scope_policy
-            .as_ref()
-            .and_then(|policy| policy.scope_circle_id.as_deref())
+        if let Some(arkret_sdk::ChildScopePolicy::RequireScopeCircleId {
+            scope_circle_id: policy_scope,
+        }) = child_scope_policy.as_ref()
             && let Err(reason) =
-                self.validate_scope_circle_id(policy_scope, operation.realm_id.as_ref())
+                self.validate_scope_circle_id(policy_scope.as_str(), operation.realm_id.as_ref())
         {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
@@ -665,30 +665,29 @@ impl ProjectionState {
         let Some(policy) = parent.child_scope_policy.as_ref() else {
             return Ok(());
         };
-        match policy.kind.as_str() {
-            "allow_any" => Ok(()),
-            "require_same_scope" => {
+        match policy {
+            arkret_sdk::ChildScopePolicy::AllowAny {} => Ok(()),
+            arkret_sdk::ChildScopePolicy::RequireSameScope {} => {
                 if parent.scope_circle_id.as_deref() == child_scope_circle_id {
                     Ok(())
                 } else {
                     Err(arkret_sdk::ErrorCode::POLICY_VIOLATION)
                 }
             }
-            "require_scope_circle_id" => {
-                if policy.scope_circle_id.as_deref() == child_scope_circle_id {
+            arkret_sdk::ChildScopePolicy::RequireScopeCircleId { scope_circle_id } => {
+                if Some(scope_circle_id.as_str()) == child_scope_circle_id {
                     Ok(())
                 } else {
                     Err(arkret_sdk::ErrorCode::POLICY_VIOLATION)
                 }
             }
-            "require_e2ee" => {
+            arkret_sdk::ChildScopePolicy::RequireE2ee {} => {
                 if self.child_scope_is_e2ee(child_scope_circle_id, child_realm_id) {
                     Ok(())
                 } else {
                     Err(arkret_sdk::ErrorCode::POLICY_VIOLATION)
                 }
             }
-            _ => Err(arkret_sdk::ErrorCode::POLICY_VIOLATION),
         }
     }
 
@@ -733,39 +732,13 @@ impl ProjectionState {
 
 fn child_scope_policy_from_object(
     object: &serde_json::Map<String, Value>,
-) -> Result<Option<ChildScopePolicy>, &'static str> {
+) -> Result<Option<arkret_sdk::ChildScopePolicy>, &'static str> {
     let Some(policy) = object.get("child_scope_policy") else {
         return Ok(None);
     };
-    let Some(policy) = policy.as_object() else {
-        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
-    };
-    let Some(kind) = policy.get("kind").and_then(Value::as_str) else {
-        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
-    };
-    if !matches!(
-        kind,
-        "allow_any" | "require_e2ee" | "require_same_scope" | "require_scope_circle_id"
-    ) {
-        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
-    }
-    let scope_circle_id = policy
-        .get("scope_circle_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned);
-    if kind == "require_scope_circle_id" && scope_circle_id.is_none() {
-        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
-    }
-    if policy.keys().any(|key| {
-        key != "kind" && !(kind == "require_scope_circle_id" && key == "scope_circle_id")
-    }) {
-        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
-    }
-    Ok(Some(ChildScopePolicy {
-        kind: kind.to_owned(),
-        scope_circle_id,
-    }))
+    serde_json::from_value(policy.clone())
+        .map(Some)
+        .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
 }
 
 fn validate_space_wip_policy(

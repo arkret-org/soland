@@ -77,15 +77,15 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
     serde_json::from_str(body.lines().next().unwrap()).unwrap()
 }
 
-async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> String {
+async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> String {
     let realm_id = arkret_sdk::new_prefixed_uuid7("ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
-    let owner = Did::new("did:web:alice.example".to_owned()).unwrap();
+    let owner = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
 
     let mut entry = RealmDirectoryEntry::new(typed_realm_id, title);
     entry.description = Some("G3.S6 account-private sync fixture".to_owned());
-    entry.members.insert(owner);
+    entry.members.insert(owner.clone());
     state.test_realms().lock().upsert(entry);
     state
         .test_persistence()
@@ -93,7 +93,7 @@ async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> S
         .put(
             &realm_id,
             &RealmMetaRecord {
-                owner: "did:web:alice.example".to_owned(),
+                owner: owner.as_str().to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
                 history_visibility: "joined".to_owned(),
@@ -276,16 +276,17 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 #[tokio::test]
 async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
     let state = AppState::new(test_config(), Db { pool: None });
+    let alice_actor = test_event_signer_did();
     let alice_desktop = dev_token(
         state.clone(),
-        "did:web:alice.example",
+        &alice_actor,
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "Alice Desktop",
     )
     .await;
     let alice_phone = dev_token(
         state.clone(),
-        "did:web:alice.example",
+        &alice_actor,
         "ak:device:01904100-0000-7000-8000-a11ce0000002",
         "Alice Phone",
     )
@@ -297,7 +298,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         "Bob",
     )
     .await;
-    let realm_id = create_plaintext_realm(state.clone(), &alice_desktop, "Blocklist Fixture").await;
+    let realm_id = create_plaintext_realm(state.clone(), &alice_actor, "Blocklist Fixture").await;
     add_realm_member(
         state.clone(),
         &alice_desktop,
@@ -321,13 +322,13 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     let put = submit_actor_private_event(
         state.clone(),
         &alice_desktop,
-        "did:web:alice.example",
+        &alice_actor,
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
         "ak.account_data.set",
         json!({
             "key": "ak.account.blocklist",
-            "owner": "did:web:alice.example",
+            "owner": alice_actor,
             "body": plaintext_blocklist,
             "updated_at": "2026-05-21T00:00:00Z",
         }),
@@ -338,21 +339,18 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         "plaintext blocklist must be rejected: {put}"
     );
 
-    let encrypted_blocklist = encrypted_account_data_value(
-        "did:web:alice.example",
-        "ak.account.blocklist",
-        &plaintext_blocklist,
-    );
+    let encrypted_blocklist =
+        encrypted_account_data_value(&alice_actor, "ak.account.blocklist", &plaintext_blocklist);
     let put = submit_actor_private_event(
         state.clone(),
         &alice_desktop,
-        "did:web:alice.example",
+        &alice_actor,
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
         "ak.account_data.set",
         json!({
             "key": "ak.account.blocklist",
-            "owner": "did:web:alice.example",
+            "owner": alice_actor,
             "body": encrypted_blocklist.clone(),
             "updated_at": "2026-05-21T00:00:00Z",
         }),
@@ -365,7 +363,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     let stored_account_data = state
         .test_persistence()
         .account_data()
-        .list_for_actor("did:web:alice.example")
+        .list_for_actor(&alice_actor)
         .await
         .unwrap();
     assert!(
@@ -438,10 +436,8 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         "Bob",
     )
     .await;
-    let realm_a = create_plaintext_realm(state.clone(), &alice_desktop, "Parent Realm").await;
-    let realm_b = create_plaintext_realm(state.clone(), &alice_desktop, "Discussion Realm").await;
-    add_realm_member(state.clone(), &alice_desktop, &realm_a, &alice_actor).await;
-    add_realm_member(state.clone(), &alice_desktop, &realm_b, &alice_actor).await;
+    let realm_a = create_plaintext_realm(state.clone(), &alice_actor, "Parent Realm").await;
+    let realm_b = create_plaintext_realm(state.clone(), &alice_actor, "Discussion Realm").await;
     let event_a = "ak:event:01904100-0000-7000-8000-0000000000aa";
     let event_b = "ak:event:01904100-0000-7000-8000-0000000000bb";
 

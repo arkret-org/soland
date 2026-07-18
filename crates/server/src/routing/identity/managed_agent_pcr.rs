@@ -763,6 +763,12 @@ pub(crate) async fn validate_delegated_agent_envelope(
     envelope: &serde_json::Map<String, Value>,
     controller_id: &str,
 ) -> Result<(), AppError> {
+    if managed_agent_envelope_uses_root_anchor(envelope) {
+        return Err(failed_precondition(
+            "managed Agent Events cannot use self-principal root anchors",
+            "managed_agent_root_anchor_forbidden",
+        ));
+    }
     let agent_id = envelope
         .get("actor_id")
         .and_then(Value::as_str)
@@ -821,6 +827,21 @@ pub(crate) async fn validate_delegated_agent_envelope(
         validate_agent_pcr_genesis_effect(envelope, &realm_id)?;
     }
     validate_agent_controller_binding(state, &record, Utc::now()).await
+}
+
+fn managed_agent_envelope_uses_root_anchor(envelope: &serde_json::Map<String, Value>) -> bool {
+    envelope
+        .get("refs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|reference| reference.get("role").and_then(Value::as_str))
+        .any(|role| {
+            matches!(
+                role,
+                "did_inception" | "did_recovery_anchor" | "bootstrap_binding"
+            )
+        })
 }
 
 fn validate_agent_pcr_genesis_effect(
@@ -1452,6 +1473,25 @@ mod tests {
             &agreement,
             &format!("{CONTROLLER}#recovery-proof-1"),
             now
+        ));
+    }
+
+    #[test]
+    fn managed_agent_envelope_rejects_self_principal_root_anchor_roles() {
+        for role in ["did_inception", "did_recovery_anchor", "bootstrap_binding"] {
+            let envelope = serde_json::json!({
+                "refs": [{
+                    "event_id": "ak:event:01904100-0000-7000-8000-000000000001",
+                    "role": role,
+                    "critical": true
+                }]
+            });
+            assert!(managed_agent_envelope_uses_root_anchor(
+                envelope.as_object().unwrap()
+            ));
+        }
+        assert!(!managed_agent_envelope_uses_root_anchor(
+            serde_json::json!({"refs": []}).as_object().unwrap()
         ));
     }
 }
