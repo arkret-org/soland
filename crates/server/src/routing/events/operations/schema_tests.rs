@@ -190,6 +190,32 @@ mod key_backup_active_series_schema_tests {
             operation_schema_for_kind(arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
                 .expect("active-series projection schema");
         assert!(validate_operation_schema(&operation, schema).is_ok());
+
+        let state = crate::state::AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let mut successor = operation.clone();
+        successor.operation_id = arkret_sdk::OperationId::new(
+            "ak:operation:01904100-0000-7000-8000-0000000007a2".to_owned(),
+        )
+        .unwrap();
+        successor.payload["series_pointer_version"] = json!(2);
+        assert!(
+            validate_operation_semantics(&state, &[operation.clone(), successor]).is_ok(),
+            "the precommit semantics pass must accept a contiguous in-batch chain"
+        );
+
+        let mut gap = operation.clone();
+        gap.operation_id = arkret_sdk::OperationId::new(
+            "ak:operation:01904100-0000-7000-8000-0000000007a3".to_owned(),
+        )
+        .unwrap();
+        gap.payload["series_pointer_version"] = json!(3);
+        assert_eq!(
+            validate_operation_semantics(&state, &[operation, gap]),
+            Err("key_backup_active_series_pointer_version_gap")
+        );
     }
 }
 

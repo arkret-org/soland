@@ -957,29 +957,40 @@ async fn top_level_effective_scope_is_reducer_managed() {
 
 #[test]
 fn event_canonical_bytes_use_sdk_canonical_json() {
-    let envelope = json!({
-        "z": 1,
-        "a": {"b": 2, "a": 1},
-        "unsigned": {"age_ms": 10},
-        "proofs": [{"type": "dev-proof"}],
-        "effective_scope": {
-            "kind": "realm",
-            "realm_id": "ak:realm:01904100-0000-7000-8000-a11ce0000001"
-        },
-        "actor_kind": "native",
-        "canonical_digest": "sha256:old"
-    });
+    let mut event = arkret_sdk::Event::new(
+        "ak.test.canonical",
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001").unwrap(),
+        arkret_sdk::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
+        7,
+        arkret_sdk::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+        json!({"z": 1, "a": {"b": 2, "a": 1}}),
+    )
+    .unwrap();
+    event.unsigned.insert("age_ms".to_owned(), json!(10));
+    let expected =
+        arkret_sdk::canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    let mut envelope = serde_json::to_value(&event).unwrap();
+    envelope["canonical_digest"] = json!("sha256:old");
     let bytes = event_canonical_bytes(&envelope).unwrap();
     let text = String::from_utf8(bytes).unwrap();
-    assert_eq!(text, r#"{"a":{"a":1,"b":2},"z":1}"#);
+    assert_eq!(text.as_bytes(), expected);
+    assert!(text.contains(r#""payload":{"a":{"a":1,"b":2},"z":1}"#));
+    assert!(!text.contains("unsigned"));
+    assert!(!text.contains("canonical_digest"));
 }
 
 #[test]
 fn event_canonical_bytes_reject_non_canonical_numbers() {
-    let envelope = json!({
-        "payload": {"rank": 1.5},
-        "proofs": [{"type": "dev-proof"}]
-    });
+    let event = arkret_sdk::Event::new(
+        "ak.test.canonical",
+        arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001").unwrap(),
+        arkret_sdk::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
+        7,
+        arkret_sdk::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+        json!({"rank": 1.5}),
+    )
+    .unwrap();
+    let envelope = serde_json::to_value(event).unwrap();
     let err = event_canonical_bytes(&envelope).expect_err("floats are not canonical JSON");
     assert_eq!(err.code, "invalid_event_envelope");
 }

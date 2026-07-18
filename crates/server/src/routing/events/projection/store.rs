@@ -236,6 +236,11 @@ pub async fn ingest_federation_operations(
             accepted.push(operation_id);
             continue;
         }
+        let _active_series_guards =
+            crate::routing::events::operations::lock_active_series_operations(
+                std::slice::from_ref(&operation),
+            )
+            .await;
         if operation.validate_payload_object().is_err() {
             rejected.push(federation_rejection(&operation_id, "invalid_payload", None));
             continue;
@@ -343,6 +348,8 @@ pub async fn accept_local_operations(
     actor: &str,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
+    let _active_series_guards =
+        crate::routing::events::operations::lock_active_series_operations(operations).await;
     validate_operation_semantics(state, operations)?;
     validate_content_encryption_floor(state, operations).await?;
     validate_operation_policy(state, operations).await?;
@@ -355,6 +362,10 @@ pub async fn accept_trusted_sidecar_member_operation(
     controller: &str,
     operation: &Operation,
 ) -> Result<(), &'static str> {
+    let _active_series_guards = crate::routing::events::operations::lock_active_series_operations(
+        std::slice::from_ref(operation),
+    )
+    .await;
     validate_operation_semantics(state, std::slice::from_ref(operation))?;
     validate_content_encryption_floor(state, std::slice::from_ref(operation)).await?;
     crate::routing::events::operations::validate_trusted_sidecar_member_operation(

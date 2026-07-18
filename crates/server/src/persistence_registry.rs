@@ -17,6 +17,7 @@ pub struct PgPersistenceStore {
     account_data: PgAccountDataStore,
     contacts: PgContactStore,
     invite_receive_policies: PgInviteReceivePolicyStore,
+    invite_locators: PgInviteLocatorStore,
     consent_cells: PgConsentCellStore,
     direct_conversation_bindings: PgDirectConversationBindingStore,
     blobs: PgBlobStore,
@@ -78,6 +79,7 @@ impl PgPersistenceStore {
             account_data: PgAccountDataStore { pool: pool.clone() },
             contacts: PgContactStore { pool: pool.clone() },
             invite_receive_policies: PgInviteReceivePolicyStore { pool: pool.clone() },
+            invite_locators: PgInviteLocatorStore { pool: pool.clone() },
             consent_cells: PgConsentCellStore { pool: pool.clone() },
             direct_conversation_bindings: PgDirectConversationBindingStore { pool: pool.clone() },
             blobs: PgBlobStore { pool: pool.clone() },
@@ -167,6 +169,10 @@ impl IdentityStoreRegistry for PgPersistenceStore {
 
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore {
         &self.invite_receive_policies
+    }
+
+    fn invite_locators(&self) -> &dyn InviteLocatorStore {
+        &self.invite_locators
     }
 
     fn consent_cells(&self) -> &dyn ConsentCellStore {

@@ -172,6 +172,7 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
                 // self/realms/{realm_id}/links* + effective-policy
                 // (ak.self.realm_link.*).
                 .push(realms::router())
+                .push(invites::self_router())
                 // self/realms/{realm_id}/policy-server (ak.self.realm_policy_server.*).
                 .push(realm_policy::router())
                 // self/realms/{realm_id}/organizations (ak.self.realm_organization.query.list).

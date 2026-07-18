@@ -816,6 +816,24 @@ impl ProjectionEventStore for PgProjectionEventStore {
         .map_err(PersistenceError::database)
     }
 
+    async fn snapshot_kind(
+        &self,
+        event_kind: &str,
+    ) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events WHERE event_kind = $1 ORDER BY id",
+        )
+        .bind::<Text, _>(event_kind)
+        .load::<ProjectionEventRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+
     async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await

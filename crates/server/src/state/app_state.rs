@@ -1244,13 +1244,21 @@ impl AppState {
             }
         }
 
+        // A-model active-series signatures are bound to the current accepted
+        // SSK generation. Rebuild the DeviceManager before restoring those
+        // pointers; otherwise a restart makes every correctly hydrated
+        // pointer appear stale because the generation cache is empty.
+        let cross_signing =
+            hydrate_cross_signing_from_persistence(self.persistence.as_ref()).await?;
+        *self.cross_signing.lock() = cross_signing;
+
         let mut proj_updates = ProjectionState::new();
         hydrate_projections_from_persistence(
             self.persistence.as_ref(),
             &mut proj_updates,
             &self.authz,
         )
-        .await;
+        .await?;
         {
             let mut proj = self.projection.lock();
             proj.realm_states.extend(proj_updates.realm_states);
@@ -1260,6 +1268,8 @@ impl AppState {
             proj.mls_key_packages.extend(proj_updates.mls_key_packages);
             proj.mls_commit_epochs
                 .extend(proj_updates.mls_commit_epochs);
+            proj.key_backup_active_series
+                .extend(proj_updates.key_backup_active_series);
             proj.replay_resolved_pending(&self.hlc);
         }
 
@@ -1849,6 +1859,10 @@ impl AppState {
 }
 
 impl AppState {
+    pub(crate) fn invite_locator_store(&self) -> &dyn soland_storage::InviteLocatorStore {
+        self.persistence.invite_locators()
+    }
+
     #[doc(hidden)]
     pub fn test_set_service_id(&mut self, service_id: String) {
         self.service_id = service_id;
@@ -4156,7 +4170,9 @@ pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
 #[cfg(test)]
 mod membership_hydration_tests {
     use arkret_sdk::{Did, RealmId};
-    use soland_storage::{IdentityStoreRegistry, MlsAgentStoreRegistry};
+    use soland_storage::{
+        EventProjectionStoreRegistry, IdentityStoreRegistry, MlsAgentStoreRegistry,
+    };
 
     use super::*;
 
@@ -4331,7 +4347,9 @@ mod membership_hydration_tests {
 
         let mut proj = ProjectionState::new();
         let authz = SolandAuthzEngine::new();
-        hydrate_projections_from_persistence(&store, &mut proj, &authz).await;
+        hydrate_projections_from_persistence(&store, &mut proj, &authz)
+            .await
+            .expect("hydrate projections");
 
         // KeyPackage projection is rebuilt → the claim selector can find it.
         let kp = proj
@@ -4354,6 +4372,123 @@ mod membership_hydration_tests {
             .expect("commit epoch rehydrated");
         assert_eq!(epoch.epoch, 0);
         assert_eq!(epoch.policy_root, "sha256:locked-root");
+    }
+
+    #[tokio::test]
+    async fn key_backup_active_series_rehydrates_from_projection_events() {
+        use soland_storage::{ProjectionEventAppendOutcome, ProjectionEventRecord};
+
+        let store = SolandMemoryPersistenceStore::new();
+        let actor = "did:web:alice.example";
+        let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
+        let series_id = "ak:backup_series:019f0dd3-081c-7f03-b388-e0399e775901";
+        let now = chrono::Utc::now();
+        let appended = store
+            .projection_events()
+            .append(ProjectionEventRecord {
+                event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775902".to_owned(),
+                realm_id: realm_id.to_owned(),
+                event_kind: arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
+                operation_type: "event".to_owned(),
+                operation_id: Some(
+                    "ak:operation:019f0dd3-081c-7f03-b388-e0399e775903".to_owned(),
+                ),
+                sender: Some(actor.to_owned()),
+                payload: serde_json::json!({
+                    "schema": "ak.schema.key_backup_active_series.v1",
+                    "actor_id": actor,
+                    "backup_class": "mls_history",
+                    "active_series_id": series_id,
+                    "series_pointer_version": 1,
+                    "previous_series_ids": [],
+                    "frontier_ref": {
+                        "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "seal_ref": "ak:seal:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "ssk_generation": 1
+                    },
+                    "issued_at": "2026-07-18T00:00:00Z",
+                    "auth_data": {
+                        "verification_method": "did:web:alice.example#device-key",
+                        "signature_algorithm": "Ed25519",
+                        "signature": "AA",
+                        "signed_fields": [
+                            "schema",
+                            "actor_id",
+                            "backup_class",
+                            "active_series_id",
+                            "series_pointer_version",
+                            "previous_series_ids",
+                            "frontier_ref",
+                            "issued_at"
+                        ],
+                        "ssk_generation": 1
+                    }
+                }),
+                created_at: now,
+                received_at: now,
+            })
+            .await
+            .expect("append active-series projection event");
+        assert_eq!(appended, ProjectionEventAppendOutcome::Inserted);
+
+        let mut proj = ProjectionState::new();
+        hydrate_projections_from_persistence(&store, &mut proj, &SolandAuthzEngine::new())
+            .await
+            .expect("hydrate active-series projection");
+
+        let pointer = proj
+            .key_backup_active_series(actor, "mls_history")
+            .expect("active-series pointer rehydrated");
+        assert_eq!(pointer.active_series_id, series_id);
+        assert_eq!(pointer.series_pointer_version, 1);
+
+        store
+            .projection_events()
+            .append(ProjectionEventRecord {
+                event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775904".to_owned(),
+                realm_id: realm_id.to_owned(),
+                event_kind: arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
+                operation_type: "event".to_owned(),
+                operation_id: Some(
+                    "ak:operation:019f0dd3-081c-7f03-b388-e0399e775905".to_owned(),
+                ),
+                sender: Some(actor.to_owned()),
+                payload: serde_json::json!({
+                    "schema": "ak.schema.key_backup_active_series.v1",
+                    "actor_id": actor,
+                    "backup_class": "mls_history",
+                    "active_series_id": series_id,
+                    "series_pointer_version": 3,
+                    "previous_series_ids": [],
+                    "frontier_ref": {
+                        "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "ssk_generation": 1
+                    },
+                    "issued_at": "2026-07-18T00:01:00Z",
+                    "auth_data": {
+                        "verification_method": "did:web:alice.example#device-key",
+                        "signature_algorithm": "Ed25519",
+                        "signature": "AA",
+                        "signed_fields": [
+                            "schema", "actor_id", "backup_class", "active_series_id",
+                            "series_pointer_version", "previous_series_ids", "frontier_ref",
+                            "issued_at"
+                        ],
+                        "ssk_generation": 1
+                    }
+                }),
+                created_at: now,
+                received_at: now,
+            })
+            .await
+            .expect("append invalid gap projection event");
+        let mut poisoned = ProjectionState::new();
+        assert!(
+            hydrate_projections_from_persistence(&store, &mut poisoned, &SolandAuthzEngine::new(),)
+                .await
+                .is_err(),
+            "hydration must fail closed on a durable active-series gap"
+        );
     }
 
     #[tokio::test]
@@ -4391,7 +4526,9 @@ mod membership_hydration_tests {
             .expect("put realm metadata");
 
         let mut proj = ProjectionState::new();
-        hydrate_projections_from_persistence(&store, &mut proj, &SolandAuthzEngine::new()).await;
+        hydrate_projections_from_persistence(&store, &mut proj, &SolandAuthzEngine::new())
+            .await
+            .expect("hydrate projections");
 
         let hydrated = proj.realm_states.get(realm_id).expect("realm rehydrated");
         assert_eq!(hydrated.owner.as_deref(), Some(owner));

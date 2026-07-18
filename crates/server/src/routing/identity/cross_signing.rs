@@ -598,6 +598,46 @@ pub(crate) fn current_accepted_ssk_generation(state: &AppState, principal_id: &s
         .map(|publish| publish.generation.get())
 }
 
+pub(crate) fn persisted_device_is_anchored_to_ssk_generation(
+    state: &AppState,
+    principal_id: &str,
+    device_id: &str,
+    device_public_key: &str,
+    payload: &Value,
+    expected_generation: u64,
+) -> bool {
+    let Some(binding) = payload
+        .get("cross_signing_binding")
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    if binding.get("ssk_generation").and_then(Value::as_u64) != Some(expected_generation) {
+        return false;
+    }
+    let Some(hpke_key) = payload.get("hpke_key").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(algorithms) = payload.get("algorithms").and_then(Value::as_array) else {
+        return false;
+    };
+    let algorithms = algorithms
+        .iter()
+        .map(|value| value.as_str().map(ToOwned::to_owned))
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default();
+    check_device_cross_signing_binding(
+        state,
+        principal_id,
+        device_id,
+        device_public_key,
+        hpke_key,
+        &algorithms,
+        binding,
+    )
+    .is_ok()
+}
+
 /// Map a `check_device_cross_signing_binding` wire reason to a typed HTTP error,
 /// preserving the recovery `/complete` status semantics.
 fn device_binding_reason_to_app_error(reason: &'static str) -> AppError {

@@ -36,6 +36,7 @@ mod governance;
 mod idempotency;
 #[doc(hidden)]
 pub mod ids;
+mod invite_locators;
 mod key_backup;
 mod mls;
 mod moderation;
@@ -65,6 +66,7 @@ pub use events::*;
 pub use federation::*;
 pub use governance::*;
 pub use idempotency::*;
+pub use invite_locators::*;
 pub use key_backup::*;
 pub use mls::*;
 pub use moderation::*;
@@ -120,6 +122,7 @@ pub trait IdentityStoreRegistry: Send + Sync {
     fn account_data(&self) -> &dyn AccountDataStore;
     fn contacts(&self) -> &dyn ContactStore;
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore;
+    fn invite_locators(&self) -> &dyn InviteLocatorStore;
     fn consent_cells(&self) -> &dyn ConsentCellStore;
     fn direct_conversation_bindings(&self) -> &dyn DirectConversationBindingStore;
     fn realm_meta(&self) -> &dyn RealmMetaStore;

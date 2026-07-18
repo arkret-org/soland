@@ -1547,7 +1547,52 @@ mod tests {
         assert!(validate_self_principal_pcr_bootstrap_context(&envelopes).is_err());
     }
 
+    fn sdk_test_envelope(envelope: &Value, actor_seq: u64) -> Value {
+        let actor = arkret_sdk::Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
+        let mut event = arkret_sdk::Event::new(
+            envelope["kind"].as_str().unwrap(),
+            arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000010").unwrap(),
+            actor.clone(),
+            actor_seq,
+            arkret_sdk::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),
+            envelope
+                .get("payload")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        )
+        .unwrap();
+        event.event_id = arkret_sdk::EventId::new(envelope["event_id"].as_str().unwrap()).unwrap();
+        event.created_at = "2026-06-03T12:34:56Z".parse().unwrap();
+        event.prev_refs = envelope
+            .get("prev_refs")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|value| arkret_sdk::EventId::new(value.as_str().unwrap()).unwrap())
+            .collect();
+        if let Some(jws) = envelope
+            .get("proofs")
+            .and_then(Value::as_array)
+            .and_then(|proofs| proofs.first())
+            .and_then(|proof| proof.get("jws"))
+            .and_then(Value::as_str)
+        {
+            event.proofs.push(arkret_sdk::Proof {
+                kind: "detached_jws".to_owned(),
+                alg: "EdDSA".to_owned(),
+                verification_method: format!("{actor}#key-1"),
+                event_digest: arkret_sdk::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+                created_at: event.created_at,
+                domain: None,
+                audience: None,
+                jws: jws.to_owned(),
+            });
+        }
+        serde_json::to_value(event).unwrap()
+    }
+
     fn stored_record(envelope: &Value, actor_seq: u64) -> CanonicalEventRecord {
+        let envelope = sdk_test_envelope(envelope, actor_seq);
         CanonicalEventRecord {
             event_id: envelope["event_id"].as_str().unwrap().to_owned(),
             actor_id: "did:webvh:z6mkfixture:alice.example".to_owned(),
@@ -1563,8 +1608,8 @@ mod tests {
                     .take(64)
                     .collect::<String>()
             ),
-            canonical_bytes: event_canonical_bytes(envelope).unwrap(),
-            envelope: envelope.clone(),
+            canonical_bytes: event_canonical_bytes(&envelope).unwrap(),
+            envelope,
             received_at: chrono::Utc::now(),
         }
     }
@@ -1653,16 +1698,22 @@ mod tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let reanchor = json!({
-            "event_id": event_id("000000000001"),
-            "kind": "ak.device.reanchor",
-            "proofs": [{"jws": "first-transport-proof"}]
-        });
-        let authorize = json!({
-            "event_id": event_id("000000000002"),
-            "kind": "ak.device.authorize",
-            "proofs": [{"jws": "first-authority-proof"}]
-        });
+        let reanchor = sdk_test_envelope(
+            &json!({
+                "event_id": event_id("000000000001"),
+                "kind": "ak.device.reanchor",
+                "proofs": [{"jws": "first-transport-proof"}]
+            }),
+            10,
+        );
+        let authorize = sdk_test_envelope(
+            &json!({
+                "event_id": event_id("000000000002"),
+                "kind": "ak.device.authorize",
+                "proofs": [{"jws": "first-authority-proof"}]
+            }),
+            11,
+        );
         state
             .events_store()
             .put(stored_record(&reanchor, 10))
@@ -1673,10 +1724,13 @@ mod tests {
             .put(stored_record(&authorize, 11))
             .await
             .unwrap();
-        let later = json!({
-            "event_id": event_id("000000000003"),
-            "kind": "ak.profile.update"
-        });
+        let later = sdk_test_envelope(
+            &json!({
+                "event_id": event_id("000000000003"),
+                "kind": "ak.profile.update"
+            }),
+            12,
+        );
         state
             .events_store()
             .put(stored_record(&later, 12))
@@ -1684,9 +1738,9 @@ mod tests {
             .unwrap();
 
         let mut retried_reanchor = reanchor;
-        retried_reanchor["proofs"] = json!([{"jws": "retried-transport-proof"}]);
+        retried_reanchor["proofs"][0]["jws"] = json!("retried-transport-proof");
         let mut retried_authorize = authorize;
-        retried_authorize["proofs"] = json!([{"jws": "retried-authority-proof"}]);
+        retried_authorize["proofs"][0]["jws"] = json!("retried-authority-proof");
         let outcome = identical_historical_retry(&state, &[retried_reanchor, retried_authorize])
             .await
             .unwrap()

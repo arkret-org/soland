@@ -74,7 +74,11 @@ fn key_backup_active_series_projects_pointer_and_cell() {
     assert_eq!(projected.active_series_id, ACTIVE_SERIES);
     assert_eq!(projected.series_pointer_version, 1);
     assert_eq!(projected.previous_series_ids, vec![PREVIOUS_SERIES]);
-    assert_eq!(projected.ssk_generation, 2);
+    assert!(matches!(
+        projected.auth_data.trust_binding,
+        arkret_sdk::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation)
+            if generation.get() == 2
+    ));
 
     let subject = arkret_sdk::composite_subject(&[ACTOR, "secret_storage"])
         .expect("active series composite subject");
@@ -163,7 +167,7 @@ fn key_backup_active_series_rejects_frontier_ssk_mismatch() {
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { ref reason }
-            if reason == "key_backup_active_series_ssk_generation_mismatch"
+            if reason == "key_backup_active_series_generation_binding_mismatch"
     ));
 }
 
@@ -201,7 +205,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
         ProjectionEffect::KeyBackupActiveSeriesProjected { .. }
     ));
 
-    let rollback = state.apply(
+    let duplicate = state.apply(
         &make_operation(
             arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
@@ -209,9 +213,21 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
         ),
         &hlc,
     );
+    assert!(matches!(duplicate, ProjectionEffect::Ignored));
+
+    let mut fork = active_series_payload();
+    fork["issued_at"] = json!("2026-07-18T00:00:01Z");
+    let fork = state.apply(
+        &make_operation(
+            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            REALM,
+            fork,
+        ),
+        &hlc,
+    );
     assert!(matches!(
-        rollback,
+        fork,
         ProjectionEffect::Rejected { ref reason }
-            if reason == "key_backup_active_series_pointer_version_rollback"
+            if reason == "key_backup_active_series_pointer_version_fork"
     ));
 }

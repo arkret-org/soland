@@ -6,7 +6,10 @@ use arkret_sdk::{
     RealmSealFrontierView, RecoveryHpkeSuite, RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse,
     RecoveryPolicy, agent_requested_scope_digest,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
+use ed25519_dalek::{Signature, Verifier as _};
 use serde_json::{Value, json};
 use soland_application::identity::{
     AgentPairingState as AgentPrincipalRecord, DidDocumentState, DidLogEvent,
@@ -286,14 +289,18 @@ pub(crate) async fn project_agent_pcr_recovery(
         managed_frontier_ref: latest_frontier.clone(),
     };
 
-    let active_series_id = state
+    let active_pointer = state
         .projection
         .lock()
         .key_backup_active_series(controller_id, "mls_history")
-        .map(|pointer| pointer.active_series_id.clone());
-    let Some(active_series_id) = active_series_id else {
+        .cloned();
+    let Some(active_pointer) = active_pointer else {
         return Ok(stale());
     };
+    if !active_series_pointer_is_current(state, controller_id, &active_pointer).await? {
+        return Ok(stale());
+    }
+    let active_series_id = active_pointer.active_series_id;
     let active_tail = mls_backups
         .iter()
         .filter(|backup| backup.series_id.as_str() == active_series_id)
@@ -348,6 +355,304 @@ pub(crate) async fn project_agent_pcr_recovery(
         series_seq: tail.series_seq,
         managed_frontier_ref: tail_frontier.clone(),
     })
+}
+
+pub(crate) async fn active_series_pointer_is_current(
+    state: &AppState,
+    controller_id: &str,
+    pointer: &soland_domain::reducer::SolandKeyBackupActiveSeries,
+) -> Result<bool, AppError> {
+    let controller_realm = RealmId::new(soland_domain::identity::principal_control_realm_for_did(
+        controller_id,
+    ))
+    .map_err(|error| AppError::internal(format!("controller PCR id invalid: {error}")))?;
+    let leaves = state
+        .seal_store
+        .list_leaves(&controller_realm)
+        .map_err(|error| {
+            AppError::internal(format!("controller Seal frontier lookup failed: {error}"))
+        })?;
+    let mut pending = leaves;
+    let mut visited = BTreeSet::new();
+    let mut frontier_is_reachable = false;
+    while let Some(seal_id) = pending.pop() {
+        if !visited.insert(seal_id.clone()) {
+            continue;
+        }
+        if visited.len() > 10_000 {
+            return Ok(false);
+        }
+        let seal = arkret_sdk::state::SealStore::get(state.seal_store.as_ref(), &seal_id)
+            .map_err(|error| {
+                AppError::internal(format!("controller Seal ancestry lookup failed: {error}"))
+            })?
+            .ok_or_else(|| AppError::internal("controller Seal ancestry is incomplete"))?;
+        let seal_ref_matches = pointer
+            .frontier_ref
+            .seal_ref
+            .as_ref()
+            .is_none_or(|expected| expected == &seal.id);
+        if seal_ref_matches && seal.control_event_set_root == pointer.frontier_ref.frontier_digest {
+            frontier_is_reachable = true;
+            break;
+        }
+        pending.extend(seal.predecessor_refs);
+    }
+    if !frontier_is_reachable {
+        return Ok(false);
+    }
+    if !active_series_signature_is_valid(state, controller_id, pointer).await? {
+        return Ok(false);
+    }
+
+    match (
+        &pointer.auth_data.trust_binding,
+        &pointer.frontier_ref.generation,
+    ) {
+        (
+            arkret_sdk::KeyBackupActiveSeriesTrustBinding::SskGeneration(auth),
+            arkret_sdk::KeyBackupActiveSeriesFrontierGeneration::SskGeneration(frontier),
+        ) => Ok(auth == frontier
+            && crate::routing::identity::cross_signing::current_accepted_ssk_generation(
+                state,
+                controller_id,
+            ) == Some(auth.get())),
+        (
+            arkret_sdk::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id),
+            arkret_sdk::KeyBackupActiveSeriesFrontierGeneration::DeviceGenerationRef(frontier),
+        ) => {
+            let current = crate::routing::identity::device_generation::current_device_generation(
+                state,
+                controller_id,
+            )
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "controller device generation lookup failed: {error}"
+                ))
+            })?;
+            let Some(current) = current else {
+                return Ok(false);
+            };
+            if current.status != arkret_sdk::DeviceGenerationStatus::Active
+                || current.current_ref != frontier.as_str()
+            {
+                return Ok(false);
+            }
+            let Some(authorize) =
+                state
+                    .events_store()
+                    .get(event_id.as_str())
+                    .await
+                    .map_err(|error| {
+                        AppError::internal(format!("device authorize Event lookup failed: {error}"))
+                    })?
+            else {
+                return Ok(false);
+            };
+            if authorize.actor_id != controller_id
+                || authorize.kind != arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
+            {
+                return Ok(false);
+            }
+            Ok(
+                crate::routing::identity::device_generation::authorized_generation_for_event(
+                    state, &authorize,
+                )
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!(
+                        "device authorize generation resolution failed: {error}"
+                    ))
+                })?
+                .as_deref()
+                    == Some(current.current_ref.as_str()),
+            )
+        }
+        _ => Ok(false),
+    }
+}
+
+pub(crate) async fn validate_active_series_operation_authority(
+    state: &AppState,
+    operation: &arkret_sdk::Operation,
+) -> Result<(), &'static str> {
+    if soland_domain::kinds::canonical_kind_for_operation(operation)
+        != Some(arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+    {
+        return Ok(());
+    }
+    let record = serde_json::from_value::<arkret_sdk::KeyBackupActiveSeries>(
+        crate::routing::events::projection_context_stripped_payload(&operation.payload),
+    )
+    .map_err(|_| "key_backup_active_series_schema_violation")?;
+    if arkret_sdk::principal_control_realm_id(&record.actor_id) != operation.realm_id.as_str() {
+        return Err("key_backup_active_series_wrong_control_realm");
+    }
+    let backup_class = record.backup_class.as_str().to_owned();
+    let series_exists = state
+        .key_backup_application()
+        .backups_for_actor(record.actor_id.as_str())
+        .await
+        .map_err(|_| "key_backup_active_series_authority_unavailable")?
+        .iter()
+        .any(|backup| {
+            backup.get("actor_id").and_then(Value::as_str) == Some(record.actor_id.as_str())
+                && backup.get("backup_class").and_then(Value::as_str) == Some(backup_class.as_str())
+                && backup.get("series_id").and_then(Value::as_str)
+                    == Some(record.active_series_id.as_str())
+                && backup.get("series_seq").and_then(Value::as_u64) == Some(0)
+        });
+    if !series_exists {
+        return Err("key_backup_active_series_target_missing");
+    }
+    let record_digest = arkret_sdk::key_backup_active_series_head(&record)
+        .map_err(|_| "key_backup_active_series_schema_violation")?
+        .record_digest;
+    let pointer = soland_domain::reducer::SolandKeyBackupActiveSeries {
+        actor_id: record.actor_id.as_str().to_owned(),
+        backup_class,
+        active_series_id: record.active_series_id.as_str().to_owned(),
+        series_pointer_version: record.series_pointer_version,
+        previous_series_ids: record
+            .previous_series_ids
+            .iter()
+            .map(|series_id| series_id.as_str().to_owned())
+            .collect(),
+        record_digest,
+        frontier_ref: record.frontier_ref,
+        issued_at: record.issued_at,
+        auth_data: record.auth_data,
+        extra: record.extra,
+        event_id: operation.operation_id.to_string(),
+    };
+    match active_series_pointer_is_current(state, pointer.actor_id.as_str(), &pointer).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("backup_frontier_stale"),
+        Err(_) => Err("key_backup_active_series_authority_unavailable"),
+    }
+}
+
+async fn active_series_signature_is_valid(
+    state: &AppState,
+    controller_id: &str,
+    pointer: &soland_domain::reducer::SolandKeyBackupActiveSeries,
+) -> Result<bool, AppError> {
+    if pointer.auth_data.signature_algorithm != arkret_sdk::KeyBackupSignatureAlgorithm::Ed25519 {
+        return Ok(false);
+    }
+    let record = arkret_sdk::KeyBackupActiveSeries {
+        schema: "ak.schema.key_backup_active_series.v1".to_owned(),
+        actor_id: Did::new(pointer.actor_id.clone())
+            .map_err(|error| AppError::internal(format!("active-series actor invalid: {error}")))?,
+        backup_class: arkret_sdk::BackupClass::try_from(pointer.backup_class.as_str())
+            .map_err(|error| AppError::internal(format!("active-series class invalid: {error}")))?,
+        active_series_id: arkret_sdk::BackupSeriesId::new(pointer.active_series_id.clone())
+            .map_err(|error| AppError::internal(format!("active-series id invalid: {error}")))?,
+        series_pointer_version: pointer.series_pointer_version,
+        previous_series_ids: pointer
+            .previous_series_ids
+            .iter()
+            .cloned()
+            .map(arkret_sdk::BackupSeriesId::new)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                AppError::internal(format!("active-series predecessor invalid: {error}"))
+            })?,
+        frontier_ref: pointer.frontier_ref.clone(),
+        issued_at: pointer.issued_at,
+        auth_data: pointer.auth_data.clone(),
+        extra: pointer.extra.clone(),
+    };
+    let mut unsigned = serde_json::to_value(&record).map_err(|error| {
+        AppError::internal(format!(
+            "active-series record serialization failed: {error}"
+        ))
+    })?;
+    unsigned["auth_data"]
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("active-series auth_data is not an object"))?
+        .remove("signature");
+    let message = arkret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+        AppError::internal(format!("active-series canonicalization failed: {error}"))
+    })?;
+    let signature = URL_SAFE_NO_PAD
+        .decode(pointer.auth_data.signature.as_str())
+        .ok()
+        .and_then(|raw| Signature::from_slice(&raw).ok());
+    let Some(signature) = signature else {
+        return Ok(false);
+    };
+    let devices = state
+        .identity_application()
+        .devices_for_actor(controller_id)
+        .await
+        .map_err(|error| AppError::internal(format!("controller device lookup failed: {error}")))?;
+    for device in devices {
+        if device.revoked_at.is_some() || device.verification_state != "verified" {
+            continue;
+        }
+        let Some(public_key) = device
+            .payload
+            .get("device_public_key")
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        if !active_series_verification_method_matches(
+            controller_id,
+            &device.device_id,
+            public_key,
+            pointer.auth_data.verification_method.as_str(),
+        ) {
+            continue;
+        }
+        let anchored = match &pointer.auth_data.trust_binding {
+            arkret_sdk::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation) => {
+                crate::routing::identity::cross_signing::persisted_device_is_anchored_to_ssk_generation(
+                    state,
+                    controller_id,
+                    &device.device_id,
+                    public_key,
+                    &device.payload,
+                    generation.get(),
+                )
+            }
+            arkret_sdk::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id) => {
+                device
+                    .payload
+                    .get("device_authorize_event_id")
+                    .and_then(Value::as_str)
+                    == Some(event_id.as_str())
+            }
+        };
+        if !anchored {
+            continue;
+        }
+        let verifying_key = match crate::routing::identity::cross_signing::decode_ed25519_key(
+            public_key,
+            "multibase",
+        ) {
+            Ok(key) => key,
+            Err(_) => continue,
+        };
+        if verifying_key.verify(&message, &signature).is_ok() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn active_series_verification_method_matches(
+    principal_id: &str,
+    device_id: &str,
+    public_key: &str,
+    verification_method: &str,
+) -> bool {
+    verification_method == format!("{principal_id}#{device_id}")
+        || verification_method == format!("did:key:{public_key}#{public_key}")
+        || verification_method == format!("did:key:{public_key}#device")
+        || verification_method == format!("did:key:{public_key}")
 }
 
 pub(crate) async fn resolve_agent_pcr_for_principal(

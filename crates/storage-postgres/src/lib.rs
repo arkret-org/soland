@@ -25,12 +25,13 @@ pub(crate) use soland_storage::{
     FederationOutboxRecord, FederationOutboxStore, FederationTransactionRecord,
     FederationTransactionStore, HandleReleaseStore, IdempotencyRecord, IdempotencyStore,
     IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
-    InviteReceivePolicyStore, KeyBackupStore, MlsCommitEpochRecord, MlsCommitStore,
-    MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore,
-    MorphProjectionRecord, MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore,
-    NotificationStore, OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord,
-    OrganizationStore, OutboundPushBridgeCacheRecord, PeerEventsPageQuery, PersistenceError,
-    PersistenceResult, PolicyDocumentRecord, PolicyDocumentStore, PresenceRecord, PresenceStore,
+    InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorStore, InviteReceivePolicyStore,
+    KeyBackupStore, MlsCommitEpochRecord, MlsCommitStore, MlsKeyPackageRow, MlsKeyPackageStore,
+    MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
+    MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
+    OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord, OrganizationStore,
+    OutboundPushBridgeCacheRecord, PeerEventsPageQuery, PersistenceError, PersistenceResult,
+    PolicyDocumentRecord, PolicyDocumentStore, PresenceRecord, PresenceStore,
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore,
     PushBridgeCacheStore, PushDeviceStore, READ_RECEIPT_RELAY_MAX_PER_REALM,
     ReadReceiptRelayRecord, ReadReceiptRelayStore, RealmEventStats, RealmInviteRecord,
@@ -76,6 +77,7 @@ mod events;
 mod federation;
 mod governance;
 mod idempotency;
+mod invite_locators;
 mod key_backup;
 mod mls;
 mod moderation;
@@ -108,6 +110,7 @@ pub use events::*;
 pub use federation::*;
 pub use governance::*;
 pub use idempotency::*;
+pub use invite_locators::*;
 pub use key_backup::*;
 pub use mls::*;
 pub use moderation::*;

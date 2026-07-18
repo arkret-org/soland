@@ -1566,7 +1566,10 @@ mod tests {
         .expect("first provisioning with bundle");
         let key = registration_key(&config).unwrap();
         let mut forged = bundle_backend.load(&key).unwrap().unwrap();
-        forged.identity.registration_receipt.proof.proof_value = format!("z{}", "1".repeat(88));
+        let proof_value = &mut forged.identity.registration_receipt.proof.proof_value;
+        let replacement = if proof_value.ends_with('1') { '2' } else { '1' };
+        proof_value.pop();
+        proof_value.push(replacement);
         forged.receipt_chain[0] = forged.identity.registration_receipt.clone();
         bundle_backend.store(&forged).unwrap();
 

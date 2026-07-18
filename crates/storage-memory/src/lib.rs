@@ -21,8 +21,9 @@ pub(crate) use soland_storage::{
     FederationOutboxDeadLetterRecord, FederationOutboxRecord, FederationOutboxStore,
     FederationTransactionRecord, FederationTransactionStore, HandleReleaseStore, IdempotencyRecord,
     IdempotencyStore, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, InviteReceivePolicyStore, KeyBackupStore, MessageRecord,
-    MessageStore, MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitStore, MlsKeyPackageRow,
+    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
+    InviteLocatorStore, InviteReceivePolicyStore, KeyBackupStore, MessageRecord, MessageStore,
+    MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitStore, MlsKeyPackageRow,
     MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
     MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
     OneTimeKeyStore, OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord,
@@ -62,6 +63,7 @@ mod events;
 mod federation;
 mod governance;
 mod idempotency;
+mod invite_locators;
 mod key_backup;
 mod mls;
 mod moderation;
@@ -108,6 +110,7 @@ pub(crate) use governance::{
     MemoryRealmOrganizationStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
 };
 pub(crate) use idempotency::MemoryIdempotencyStore;
+pub(crate) use invite_locators::MemoryInviteLocatorStore;
 pub(crate) use key_backup::MemoryKeyBackupStore;
 pub(crate) use mls::{MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore};
 pub(crate) use moderation::MemoryModerationStore;

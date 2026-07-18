@@ -198,6 +198,10 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
             )
             .await?;
         }
+        crate::routing::identity::managed_agent_pcr::validate_active_series_operation_authority(
+            state, operation,
+        )
+        .await?;
         // 3a — verify the cross_signing_binding on ANY ak.device.authorize at
         // ingest (recovery /complete, or a future client-submitted control event).
         if kinds::canonical_kind_string(operation) == "ak.device.authorize" {

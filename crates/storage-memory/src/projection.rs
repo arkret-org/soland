@@ -213,6 +213,19 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
         Ok(self.data.lock().clone())
     }
 
+    async fn snapshot_kind(
+        &self,
+        event_kind: &str,
+    ) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .iter()
+            .filter(|event| event.event_kind == event_kind)
+            .cloned()
+            .collect())
+    }
+
     async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         Ok(self.data.lock().iter().take(limit).cloned().collect())
     }

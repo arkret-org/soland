@@ -139,9 +139,11 @@ pub struct SolandKeyBackupActiveSeries {
     pub active_series_id: String,
     pub series_pointer_version: u64,
     pub previous_series_ids: Vec<String>,
+    pub record_digest: String,
     pub frontier_ref: arkret_sdk::KeyBackupActiveSeriesFrontierRef,
     pub issued_at: chrono::DateTime<chrono::Utc>,
-    pub ssk_generation: u64,
+    pub auth_data: arkret_sdk::KeyBackupActiveSeriesAuthData,
+    pub extra: BTreeMap<String, Value>,
     pub event_id: String,
 }
 

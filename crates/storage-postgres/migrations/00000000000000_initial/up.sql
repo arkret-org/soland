@@ -526,6 +526,19 @@ CREATE TABLE public.invite_receive_policies (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE public.invite_locators (
+    locator_id text PRIMARY KEY,
+    token_digest text NOT NULL UNIQUE,
+    subject_id text NOT NULL,
+    recipient_service_id text NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    one_time_use boolean DEFAULT false NOT NULL,
+    record_payload jsonb NOT NULL,
+    revoked_at timestamp with time zone,
+    consumed_at timestamp with time zone
+);
+
 -- Deployment-wide dynamic operational settings (rate limits, admin
 -- allowlist, federation peers, feature toggles). One row PER setting key:
 -- `value` is the JSON for that key only. This is an OVERLAY — env/boot config
@@ -1846,6 +1859,8 @@ CREATE INDEX sync_cursor_handles_stream_idx ON public.sync_cursor_handles USING 
 CREATE INDEX sync_cursor_revocations_expiry_idx ON public.sync_cursor_revocations USING btree (expires_at);
 
 CREATE INDEX idempotency_keys_expiry_idx ON public.idempotency_keys USING btree (expires_at);
+
+CREATE INDEX invite_locators_subject_active_idx ON public.invite_locators USING btree (subject_id, expires_at) WHERE revoked_at IS NULL AND consumed_at IS NULL;
 
 CREATE INDEX webrtc_sessions_expires_idx ON public.webrtc_sessions USING btree (expires_at);
 

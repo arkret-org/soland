@@ -655,6 +655,20 @@ async fn project_accepted_operations_inner(
                 None
             };
         if let Some(effect) = reducer_effect {
+            if kinds::canonical_kind_string(operation)
+                == arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES
+                && let soland_domain::reducer::ProjectionEffect::Rejected { reason } = &effect
+            {
+                tracing::error!(
+                    operation_id = %operation.operation_id,
+                    %reason,
+                    "invariant violation: durably accepted active-series Event was rejected by the live reducer"
+                );
+                debug_assert!(
+                    false,
+                    "durably accepted active-series Event rejected by live reducer: {reason}"
+                );
+            }
             if matches!(
                 &effect,
                 soland_domain::reducer::ProjectionEffect::RealmKeyShareProjected { .. }

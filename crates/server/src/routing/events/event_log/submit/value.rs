@@ -35,6 +35,55 @@ pub(super) fn typed_event_to_canonical_value(envelope: Event) -> Result<Value, S
     })
 }
 
+async fn validate_active_series_authority_before_commit(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    operation: &Operation,
+) -> Result<(), SubmitOneError> {
+    if parsed.kind != arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
+        return Ok(());
+    }
+    let record: arkret_sdk::KeyBackupActiveSeries = serde_json::from_value(
+        crate::routing::events::projection_context_stripped_payload(&operation.payload),
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("active-series payload is invalid: {error}"),
+        )
+    })?;
+    if record.actor_id.as_str() != parsed.actor_id {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "active-series actor_id must equal the Event actor_id",
+        ));
+    }
+    crate::routing::identity::managed_agent_pcr::validate_active_series_operation_authority(
+        state, operation,
+    )
+    .await
+    .map_err(|reason| {
+        let (status, code) = if reason == "backup_frontier_stale" {
+            (StatusCode::PRECONDITION_FAILED, "backup_frontier_stale")
+        } else if reason == "key_backup_active_series_authority_unavailable" {
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+        } else {
+            (StatusCode::BAD_REQUEST, "schema_violation")
+        };
+        SubmitOneError::new(
+            status,
+            code,
+            if reason == "backup_frontier_stale" {
+                "active-series signature, generation, or control-stream frontier is not current"
+            } else {
+                reason
+            },
+        )
+    })
+}
+
 pub(in crate::routing) async fn submit_event_value(
     state: &AppState,
     session: &SessionRecord,
@@ -200,6 +249,18 @@ pub(super) async fn submit_event_value_with_context(
     enforce_sibling_fork_limit(state, session, &parsed, &existing_records).await?;
 
     let mut projection_operation = projection_operation_from_event(&parsed, &envelope);
+    // Active-series pointer versions are a per-(actor,class) CAS. Keep the
+    // semantic preflight, canonical Event+projection commit, and live reducer
+    // application in one admission lane so two concurrent vN successors
+    // cannot both pass against vN-1 and leave durable state forked.
+    let _active_series_guards = if let Some(operation) = projection_operation.as_ref() {
+        crate::routing::events::operations::lock_active_series_operations(std::slice::from_ref(
+            operation,
+        ))
+        .await
+    } else {
+        Vec::new()
+    };
     tracing::debug!(
         event_id = %parsed.event_id,
         kind = %parsed.kind,
@@ -216,6 +277,7 @@ pub(super) async fn submit_event_value_with_context(
                 message,
             ));
         }
+        validate_active_series_authority_before_commit(state, &parsed, operation).await?;
         if let Err(reason) =
             validate_content_encryption_floor(state, std::slice::from_ref(operation)).await
         {

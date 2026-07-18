@@ -723,6 +723,21 @@ diesel::table! {
 }
 
 diesel::table! {
+    invite_locators (locator_id) {
+        locator_id -> Text,
+        token_digest -> Text,
+        subject_id -> Text,
+        recipient_service_id -> Text,
+        issued_at -> Timestamptz,
+        expires_at -> Timestamptz,
+        one_time_use -> Bool,
+        record_payload -> Jsonb,
+        revoked_at -> Nullable<Timestamptz>,
+        consumed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     server_settings (key) {
         key -> Text,
         value -> Jsonb,
@@ -782,5 +797,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     consent_cells,
     direct_conversation_bindings,
     invite_receive_policies,
+    invite_locators,
     server_settings,
 );

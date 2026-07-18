@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use arkret_sdk::Operation;
 use arkret_sdk::schema::event_payload_validator_catalog;
 use serde::de::DeserializeOwned;
@@ -25,6 +27,8 @@ pub fn validate_operation_semantics(
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     validate_cross_signing_reset_replay_batch(operations)?;
+    let mut active_series_heads =
+        BTreeMap::<(String, String), arkret_sdk::KeyBackupActiveSeriesHead>::new();
     for operation in operations {
         operation
             .validate_payload_object()
@@ -49,8 +53,57 @@ pub fn validate_operation_semantics(
         validate_operation_patch_semantics(operation)?;
         validate_reaction_target_kind(kind, operation)?;
         validate_operation_payload_schema(kind, operation)?;
+        if kind == arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
+            validate_key_backup_active_series_transition(
+                state,
+                operation,
+                &mut active_series_heads,
+            )?;
+        }
     }
     Ok(())
+}
+
+fn validate_key_backup_active_series_transition(
+    state: &AppState,
+    operation: &Operation,
+    heads: &mut BTreeMap<(String, String), arkret_sdk::KeyBackupActiveSeriesHead>,
+) -> Result<(), &'static str> {
+    let record: arkret_sdk::KeyBackupActiveSeries =
+        serde_json::from_value(projection_context_stripped_payload(&operation.payload))
+            .map_err(|_| "key_backup_active_series_schema_violation")?;
+    let key = (
+        record.actor_id.as_str().to_owned(),
+        record.backup_class.as_str().to_owned(),
+    );
+    let current = heads.get(&key).cloned().or_else(|| {
+        state
+            .projection
+            .lock()
+            .key_backup_active_series_head(&key.0, &key.1)
+    });
+    let next = arkret_sdk::validate_key_backup_active_series_transition(current.as_ref(), &record)
+        .map_err(active_series_transition_reason)?;
+    heads.insert(key, next);
+    Ok(())
+}
+
+fn active_series_transition_reason(
+    error: arkret_sdk::KeyBackupActiveSeriesTransitionError,
+) -> &'static str {
+    use arkret_sdk::KeyBackupActiveSeriesTransitionError as Error;
+    match error {
+        Error::SchemaMismatch => "key_backup_active_series_schema_mismatch",
+        Error::SignedFieldsDuplicate => "key_backup_active_series_signed_fields_duplicate",
+        Error::SignedFieldsIncomplete => "key_backup_active_series_signed_fields_incomplete",
+        Error::ActiveInPrevious => "key_backup_active_series_active_in_previous",
+        Error::PreviousSeriesDuplicate => "key_backup_active_series_previous_series_duplicate",
+        Error::GenerationBindingMismatch => "key_backup_active_series_generation_binding_mismatch",
+        Error::ActorOrClassMismatch => "key_backup_active_series_actor_or_class_mismatch",
+        Error::PointerVersionRollback => "key_backup_active_series_pointer_version_rollback",
+        Error::PointerVersionGap => "key_backup_active_series_pointer_version_gap",
+        Error::PointerVersionFork => "key_backup_active_series_pointer_version_fork",
+    }
 }
 
 /// strand-and-message.md §9.8.2 — v1 core reactions may only target a

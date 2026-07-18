@@ -133,6 +133,13 @@ pub trait ProjectionEventStore: Send + Sync {
         record: ProjectionEventRecord,
     ) -> PersistenceResult<ProjectionEventAppendOutcome>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>>;
+    /// Return one event kind in durable acceptance order. Security-critical
+    /// reducers use this during startup so hydration does not need to load the
+    /// unrelated global projection log.
+    async fn snapshot_kind(
+        &self,
+        event_kind: &str,
+    ) -> PersistenceResult<Vec<ProjectionEventRecord>>;
     /// SOL-SEC-04 — bounded variant of [`snapshot_all`] that pushes a `LIMIT`
     /// into the query so a single (federation-reachable) request cannot load
     /// the entire `projection_events` table into memory. Returns at most
