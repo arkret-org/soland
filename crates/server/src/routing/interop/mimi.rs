@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 
 use arkret_sdk::{
-    Base64UrlString, Did, EventId, Hash, MimiDelivery, MimiDeliveryStatus, MimiGroupInfo,
+    Audience, Base64UrlString, Did, EventId, Hash, MimiDelivery, MimiDeliveryStatus, MimiGroupInfo,
     MimiGroupInfoOutcome, MimiIdentifierMatch, MimiIdentifierQueryOutcome,
     MimiIdentifierQueryRequestBody, MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody,
     MimiNotifyOutcome, MimiNotifyRequestBody, MimiProxyDownloadOutcome,
@@ -39,7 +39,7 @@ use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_http::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 use soland_http::result::{JsonResult, json_ok};
-use soland_storage::ProjectionEventRecord;
+use soland_storage::{IdempotencyRecord, ProjectionEventRecord};
 
 use super::moderation::{
     moderation_request_source_ip_hash, moderation_request_source_service,
