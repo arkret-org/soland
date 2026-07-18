@@ -12,6 +12,7 @@
 
 use arkret_sdk::{
     AccountDataDeleteOutcome, AccountDataEntry, AccountDataList, AccountDataReplaceRequestBody,
+    Did, Event, EventId, Hlc, RealmId,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -22,9 +23,6 @@ use soland_application::identity::{
 };
 use soland_http::error::AppError;
 
-use super::device_messages::{
-    ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, fanout_actor_private_update,
-};
 use super::{AuthArgs, now};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
@@ -177,14 +175,6 @@ fn entry_from(record: AccountDataState) -> AccountDataEntry {
     }
 }
 
-fn account_data_update_type(data_type: &str) -> &'static str {
-    if data_type == "ak.account.blocklist" {
-        BLOCKLIST_UPDATE_TYPE
-    } else {
-        ACCOUNT_DATA_UPDATE_TYPE
-    }
-}
-
 async fn session_actor_is_agent_runtime(
     identity: &IdentityApplicationService,
     actor: &str,
@@ -196,6 +186,99 @@ async fn session_actor_is_agent_runtime(
         .await
         .map(|controller| controller.is_some())
         .map_err(|error| AppError::internal(format!("agent principal lookup failed: {error}")))
+}
+
+async fn persist_account_data_event(
+    state: &AppState,
+    session: &soland_storage::SessionRecord,
+    data_type: &str,
+    content: Option<Value>,
+) -> Result<(), AppError> {
+    let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
+    let _service_event_guard = service_event_lock.lock().await;
+    let service_actor = state.service_id.as_str();
+    let records = state.events_store().snapshot_all().await.map_err(|error| {
+        AppError::internal(format!("account_data frontier lookup failed: {error}"))
+    })?;
+    let previous = records
+        .iter()
+        .filter(|record| record.actor_id == service_actor)
+        .max_by_key(|record| record.actor_seq);
+    let actor_seq = previous.map_or(1, |record| record.actor_seq.saturating_add(1));
+    let created_at = now();
+    let mut payload = json!({
+        "owner": session.actor,
+        "key": data_type,
+        "updated_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    });
+    if let Some(content) = content {
+        payload["body"] = content;
+    } else {
+        payload["tombstone"] = Value::Bool(true);
+    }
+    let service_did = Did::new(state.service_id.clone())
+        .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
+    let realm_id = RealmId::new(soland_domain::identity::principal_control_realm_for_did(
+        &session.actor,
+    ))
+    .map_err(|error| AppError::internal(format!("account_data realm invalid: {error}")))?;
+    let mut event = Event::new_with_id_at(
+        EventId::new(arkret_sdk::new_prefixed_uuid7("ak:event:")).map_err(|error| {
+            AppError::internal(format!("account_data Event id invalid: {error}"))
+        })?,
+        arkret_sdk::events::EventKind::ACCOUNT_DATA_SET,
+        realm_id.clone(),
+        service_did.clone(),
+        actor_seq,
+        Hlc::new(state.hlc.now())
+            .map_err(|error| AppError::internal(format!("account_data HLC invalid: {error}")))?,
+        payload,
+        created_at,
+    )
+    .map_err(|error| AppError::internal(format!("account_data Event build failed: {error}")))?;
+    if let Some(previous) = previous {
+        event
+            .prev_refs
+            .push(EventId::new(previous.event_id.clone()).map_err(|error| {
+                AppError::internal(format!("account_data predecessor invalid: {error}"))
+            })?);
+    }
+    let verification_method = format!("{}#notary-key", state.service_id);
+    let signer = arkret_sdk::Ed25519MoveSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        service_did,
+        verification_method.clone(),
+    );
+    arkret_sdk::signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_sdk::signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .map_err(|error| AppError::internal(format!("account_data Event signing failed: {error}")))?;
+    let mut service_session = session.clone();
+    service_session.actor = state.service_id.clone();
+    let envelope = serde_json::to_value(event).map_err(|error| {
+        AppError::internal(format!("account_data Event serialize failed: {error}"))
+    })?;
+    crate::routing::events::event_log::submit_account_data_event_value(
+        state,
+        &service_session,
+        envelope,
+        realm_id.as_str(),
+        &session.actor,
+        data_type,
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(
+            soland_http::error::ErrorCode::InvalidParam,
+            format!("account_data Event admission failed: {}", error.message),
+        )
+        .with_status(error.status)
+        .with_wire_code(error.code)
+    })?;
+    Ok(())
 }
 
 #[endpoint(
@@ -254,17 +337,13 @@ async fn put_account_data(
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
 
-    let record = AccountDataState {
-        actor_id: session.actor.clone(),
-        data_type: data_type.clone(),
-        payload: body.content,
-        updated_at: now(),
-    };
-    state
+    persist_account_data_event(state, &session, &data_type, Some(body.content)).await?;
+    let record = state
         .account_data_application()
-        .save_entry(record.clone())
+        .entry(&session.actor, &data_type)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::internal("account_data Event projection is missing"))?;
 
     super::append_audit_log(
         state,
@@ -272,19 +351,6 @@ async fn put_account_data(
         "account_data.set",
         serde_json::json!({"data_type": data_type}),
         "accepted",
-    )
-    .await;
-    fanout_actor_private_update(
-        state,
-        &session.actor,
-        &session.device_id,
-        account_data_update_type(&data_type),
-        json!({
-            "operation": "put",
-            "data_type": data_type,
-            "content": record.payload.clone(),
-            "updated_at": record.updated_at,
-        }),
     )
     .await;
     if !existed {
@@ -364,11 +430,7 @@ async fn delete_account_data(
     validate_data_type(&data_type)?;
     validate_registered_account_data_key(&data_type)?;
 
-    state
-        .account_data_application()
-        .delete_entry(&session.actor, &data_type)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
+    persist_account_data_event(state, &session, &data_type, None).await?;
 
     super::append_audit_log(
         state,
@@ -378,19 +440,6 @@ async fn delete_account_data(
         "accepted",
     )
     .await;
-    fanout_actor_private_update(
-        state,
-        &session.actor,
-        &session.device_id,
-        account_data_update_type(&data_type),
-        json!({
-            "operation": "delete",
-            "data_type": data_type,
-            "deleted_at": now(),
-        }),
-    )
-    .await;
-
     json_ok(AccountDataDeleteOutcome {
         ok: true,
         data_type,
