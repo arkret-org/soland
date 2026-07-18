@@ -222,7 +222,7 @@ pub(super) async fn provision_agent(
         &controller_realm,
         &agent_id,
         &agent_slug,
-        provision_events.expect("commit phase carries provision_events"),
+        *provision_events.expect("commit phase carries provision_events"),
     )
     .await?;
     let provision_event_refs = json!({
