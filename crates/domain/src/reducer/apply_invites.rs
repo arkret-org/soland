@@ -403,15 +403,12 @@ fn validate_binding_proof(
     invite_expires_at: chrono::DateTime<chrono::Utc>,
     realm_policy_components: Option<&Value>,
 ) -> Result<(), &'static str> {
-    let Some(object) = binding_proof.as_object() else {
-        return Err("binding_proof_not_object");
-    };
-    let Some(service_id) = proof_string(object, "verification_service_id") else {
-        return Err("binding_proof_service_id_required");
-    };
-    if arkret_sdk::Did::new(service_id.clone()).is_err() {
-        return Err("binding_proof_service_id_invalid");
-    }
+    let binding_proof: arkret_sdk::InviteClaimBindingProof =
+        serde_json::from_value(binding_proof.clone()).map_err(|_| "binding_proof_invalid")?;
+    binding_proof
+        .validate()
+        .map_err(|_| "binding_proof_invalid")?;
+    let service_id = binding_proof.verification_service_id.as_str();
     let expected_service_id = third_party_id
         .get("verification_service_id")
         .and_then(Value::as_str)
@@ -419,44 +416,27 @@ fn validate_binding_proof(
     if service_id != expected_service_id {
         return Err("verification_service_not_authorized");
     }
-    if !realm_policy_components.is_some_and(|value| value_allowlists_service(value, &service_id)) {
+    if !realm_policy_components.is_some_and(|value| value_allowlists_service(value, service_id)) {
         return Err("verification_service_not_authorized");
     }
-    let Some(proof_subject) = proof_string(object, "subject_id") else {
-        return Err("binding_proof_subject_required");
-    };
-    if proof_subject != subject_id {
+    if binding_proof.subject_id.as_str() != subject_id {
         return Err("binding_proof_subject_mismatch");
     }
-    let Some(proof_realm) = proof_string(object, "realm_id") else {
-        return Err("binding_proof_realm_required");
-    };
-    if proof_realm != invite_realm_id {
+    if binding_proof.realm_id.as_str() != invite_realm_id {
         return Err("binding_proof_realm_mismatch");
     }
-    let Some(audience) = proof_string(object, "audience") else {
-        return Err("binding_proof_audience_required");
-    };
-    if audience != arkret_sdk::INVITE_CLAIM_AUDIENCE {
+    if binding_proof.audience != arkret_sdk::INVITE_CLAIM_AUDIENCE {
         return Err("binding_proof_audience_mismatch");
     }
-    let Some(proof_nonce) = proof_string(object, "claim_nonce") else {
-        return Err("binding_proof_nonce_required");
-    };
-    if proof_nonce != claim_nonce {
+    if binding_proof.claim_nonce != claim_nonce {
         return Err("binding_proof_nonce_mismatch");
     }
-    let Some(expires_at) =
-        proof_string(object, "expires_at").and_then(|value| parse_timestamp(&value))
-    else {
-        return Err("binding_proof_expires_at_invalid");
-    };
+    let expires_at =
+        parse_timestamp(&binding_proof.expires_at).ok_or("binding_proof_expires_at_invalid")?;
     if expires_at <= now || expires_at > invite_expires_at {
         return Err("binding_proof_expired");
     }
-    let Some(method) = proof_string(object, "verification_method") else {
-        return Err("binding_proof_method_required");
-    };
+    let method = binding_proof.verification_method.as_str();
     if let Some(expected_method) = third_party_id
         .get("verification_public_key")
         .and_then(Value::as_str)
@@ -465,9 +445,6 @@ fn validate_binding_proof(
         && method != expected_method
     {
         return Err("binding_proof_method_mismatch");
-    }
-    if proof_string(object, "signature").is_none() && proof_string(object, "sig").is_none() {
-        return Err("binding_proof_signature_required");
     }
     Ok(())
 }
@@ -499,9 +476,11 @@ fn validate_subject_proof(
     subject_proof
         .validate()
         .map_err(|_| "subject_proof_invalid")?;
-    let Some(binding_digest) = arkret_sdk::canonical::canonical_sha256(binding_proof).ok() else {
-        return Err("binding_proof_digest_invalid");
-    };
+    let binding_proof: arkret_sdk::InviteClaimBindingProof =
+        serde_json::from_value(binding_proof.clone()).map_err(|_| "binding_proof_invalid")?;
+    let binding_digest = binding_proof
+        .canonical_digest()
+        .map_err(|_| "binding_proof_digest_invalid")?;
     let expected_digest = arkret_sdk::invite_subject_proof_transcript_digest(
         subject_id,
         invite_id,
@@ -519,15 +498,6 @@ fn validate_subject_proof(
         return Err("subject_proof_transcript_mismatch");
     }
     Ok(())
-}
-
-fn proof_string(object: &serde_json::Map<String, Value>, field: &str) -> Option<String> {
-    object
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn value_allowlists_service(value: &Value, service_id: &str) -> bool {

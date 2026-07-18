@@ -29,7 +29,8 @@ use arkret_sdk::models::{
 };
 use arkret_sdk::{
     AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, BlobRef,
-    DeliveryBindingHint, DeliveryMode, Did, DirectoryActorSearchOutcome,
+    CursorAuthority, CursorAuthorityError, CursorBindingContext, CursorBindingRecord,
+    CursorPurpose, DeliveryBindingHint, DeliveryMode, Did, DirectoryActorSearchOutcome,
     DirectoryAgentSelectorResolutionOutcome, DirectoryAnnounceOutcome,
     DirectoryAnnounceRequestBody, DirectoryHandleResolutionOutcome, DirectoryIntent,
     DirectoryListHandlesForSubjectRequestBody, DirectoryOrganizationResolutionOutcome,

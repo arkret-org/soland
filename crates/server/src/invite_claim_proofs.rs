@@ -1,8 +1,9 @@
 #[cfg(test)]
 use arkret_sdk::identity::DidResolver;
 use arkret_sdk::{
-    Did, INVITE_CLAIM_AUDIENCE, INVITE_SUBJECT_PROOF_ALG, InviteSubjectProof,
-    InviteSubjectProofBody, Operation, canonical,
+    Did, INVITE_CLAIM_AUDIENCE, INVITE_SUBJECT_PROOF_ALG, InviteClaimBindingProof,
+    InviteSubjectProof, InviteSubjectProofBody, Operation, canonical,
+    invite_binding_proof_transcript_bytes,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -12,8 +13,6 @@ use serde_json::{Value, json};
 use soland_domain::reducer::{InviteProjection, ProjectionState};
 
 use crate::state::AppState;
-
-const BINDING_PROOF_TRANSCRIPT_DOMAIN: &str = "ak.invite.claim.binding_proof.v1\n";
 
 #[derive(Clone, Debug)]
 pub(crate) struct InviteClaimProofContext {
@@ -121,7 +120,7 @@ pub(crate) fn verify_invite_claim_proofs(
     verification: &InviteClaimProofVerification<'_>,
 ) -> Result<(), &'static str> {
     let binding_service_id = verify_binding_proof_signature(resolver, verification)?;
-    verify_subject_proof_signature(resolver, verification, binding_service_id)
+    verify_subject_proof_signature(resolver, verification, &binding_service_id)
 }
 
 async fn verify_invite_claim_proofs_for_state(
@@ -129,37 +128,32 @@ async fn verify_invite_claim_proofs_for_state(
     verification: &InviteClaimProofVerification<'_>,
 ) -> Result<(), &'static str> {
     let binding_service_id = verify_binding_proof_signature_for_state(state, verification).await?;
-    verify_subject_proof_signature_for_state(state, verification, binding_service_id).await
+    verify_subject_proof_signature_for_state(state, verification, &binding_service_id).await
 }
 
 #[cfg(test)]
-fn verify_binding_proof_signature<'a>(
+fn verify_binding_proof_signature(
     resolver: &dyn DidResolver,
-    verification: &'a InviteClaimProofVerification<'a>,
-) -> Result<&'a str, &'static str> {
-    let object = verification
-        .binding_proof
-        .as_object()
-        .ok_or("binding_proof_not_object")?;
-    let service_id = proof_string(object, "verification_service_id")
-        .ok_or("binding_proof_service_id_required")?;
+    verification: &InviteClaimProofVerification<'_>,
+) -> Result<String, &'static str> {
+    let binding_proof = parse_binding_proof(verification.binding_proof)?;
+    let service_id = binding_proof.verification_service_id.as_str();
     if service_id != verification.expected_verification_service_id {
         return Err("verification_service_not_authorized");
     }
-    let method =
-        proof_string(object, "verification_method").ok_or("binding_proof_method_required")?;
+    let method = binding_proof.verification_method.as_str();
     crate::jws_verify::validate_verification_method_controller(service_id, method)
         .map_err(|_| "binding_proof_method_invalid")?;
-    if proof_string(object, "subject_id") != Some(verification.subject_id) {
+    if binding_proof.subject_id.as_str() != verification.subject_id {
         return Err("binding_proof_subject_mismatch");
     }
-    if proof_string(object, "realm_id") != Some(verification.realm_id) {
+    if binding_proof.realm_id.as_str() != verification.realm_id {
         return Err("binding_proof_realm_mismatch");
     }
-    if proof_string(object, "audience") != Some(INVITE_CLAIM_AUDIENCE) {
+    if binding_proof.audience != INVITE_CLAIM_AUDIENCE {
         return Err("binding_proof_audience_mismatch");
     }
-    if proof_string(object, "claim_nonce") != Some(verification.claim_nonce) {
+    if binding_proof.claim_nonce != verification.claim_nonce {
         return Err("binding_proof_nonce_mismatch");
     }
 
@@ -177,44 +171,43 @@ fn verify_binding_proof_signature<'a>(
             .map_err(|_| "binding_proof_public_key_invalid")?
     };
 
-    let signature =
-        decode_signature(proof_string(object, "signature").or_else(|| proof_string(object, "sig")))
-            .map_err(|_| "binding_proof_signature_invalid")?;
-    let transcript = binding_proof_transcript_bytes(verification)
-        .map_err(|_| "binding_proof_transcript_invalid")?;
+    let signature = decode_signature(Some(binding_proof.signature.as_str()))
+        .map_err(|_| "binding_proof_signature_invalid")?;
+    let transcript = invite_binding_proof_transcript_bytes(
+        &binding_proof,
+        verification.invite_id,
+        verification.token_commitment,
+        verification.invite_digest,
+    )
+    .map_err(|_| "binding_proof_transcript_invalid")?;
     public_key
         .verify_strict(&transcript, &signature)
         .map_err(|_| "binding_proof_signature_invalid")?;
-    Ok(service_id)
+    Ok(service_id.to_owned())
 }
 
-async fn verify_binding_proof_signature_for_state<'a>(
+async fn verify_binding_proof_signature_for_state(
     state: &AppState,
-    verification: &'a InviteClaimProofVerification<'a>,
-) -> Result<&'a str, &'static str> {
-    let object = verification
-        .binding_proof
-        .as_object()
-        .ok_or("binding_proof_not_object")?;
-    let service_id = proof_string(object, "verification_service_id")
-        .ok_or("binding_proof_service_id_required")?;
+    verification: &InviteClaimProofVerification<'_>,
+) -> Result<String, &'static str> {
+    let binding_proof = parse_binding_proof(verification.binding_proof)?;
+    let service_id = binding_proof.verification_service_id.as_str();
     if service_id != verification.expected_verification_service_id {
         return Err("verification_service_not_authorized");
     }
-    let method =
-        proof_string(object, "verification_method").ok_or("binding_proof_method_required")?;
+    let method = binding_proof.verification_method.as_str();
     crate::jws_verify::validate_verification_method_controller(service_id, method)
         .map_err(|_| "binding_proof_method_invalid")?;
-    if proof_string(object, "subject_id") != Some(verification.subject_id) {
+    if binding_proof.subject_id.as_str() != verification.subject_id {
         return Err("binding_proof_subject_mismatch");
     }
-    if proof_string(object, "realm_id") != Some(verification.realm_id) {
+    if binding_proof.realm_id.as_str() != verification.realm_id {
         return Err("binding_proof_realm_mismatch");
     }
-    if proof_string(object, "audience") != Some(INVITE_CLAIM_AUDIENCE) {
+    if binding_proof.audience != INVITE_CLAIM_AUDIENCE {
         return Err("binding_proof_audience_mismatch");
     }
-    if proof_string(object, "claim_nonce") != Some(verification.claim_nonce) {
+    if binding_proof.claim_nonce != verification.claim_nonce {
         return Err("binding_proof_nonce_mismatch");
     }
 
@@ -233,15 +226,19 @@ async fn verify_binding_proof_signature_for_state<'a>(
             .map_err(|_| "binding_proof_public_key_invalid")?
     };
 
-    let signature =
-        decode_signature(proof_string(object, "signature").or_else(|| proof_string(object, "sig")))
-            .map_err(|_| "binding_proof_signature_invalid")?;
-    let transcript = binding_proof_transcript_bytes(verification)
-        .map_err(|_| "binding_proof_transcript_invalid")?;
+    let signature = decode_signature(Some(binding_proof.signature.as_str()))
+        .map_err(|_| "binding_proof_signature_invalid")?;
+    let transcript = invite_binding_proof_transcript_bytes(
+        &binding_proof,
+        verification.invite_id,
+        verification.token_commitment,
+        verification.invite_digest,
+    )
+    .map_err(|_| "binding_proof_transcript_invalid")?;
     public_key
         .verify_strict(&transcript, &signature)
         .map_err(|_| "binding_proof_signature_invalid")?;
-    Ok(service_id)
+    Ok(service_id.to_owned())
 }
 
 #[cfg(test)]
@@ -265,7 +262,8 @@ fn verify_subject_proof_signature(
     subject_proof
         .validate()
         .map_err(|_| "subject_proof_invalid")?;
-    let binding_digest = canonical::canonical_sha256(verification.binding_proof)
+    let binding_digest = parse_binding_proof(verification.binding_proof)?
+        .canonical_digest()
         .map_err(|_| "binding_proof_digest_invalid")?;
     let transcript_body = InviteSubjectProofBody::from_wire_parts(
         verification.subject_id,
@@ -320,7 +318,8 @@ async fn verify_subject_proof_signature_for_state(
     subject_proof
         .validate()
         .map_err(|_| "subject_proof_invalid")?;
-    let binding_digest = canonical::canonical_sha256(verification.binding_proof)
+    let binding_digest = parse_binding_proof(verification.binding_proof)?
+        .canonical_digest()
         .map_err(|_| "binding_proof_digest_invalid")?;
     let transcript_body = InviteSubjectProofBody::from_wire_parts(
         verification.subject_id,
@@ -356,44 +355,11 @@ async fn verify_subject_proof_signature_for_state(
         .map_err(|_| "subject_proof_signature_invalid")
 }
 
-fn binding_proof_transcript_bytes(
-    verification: &InviteClaimProofVerification<'_>,
-) -> Result<Vec<u8>, String> {
-    let binding_proof = unsigned_binding_proof(verification.binding_proof)?;
-    let transcript = json!({
-        "audience": INVITE_CLAIM_AUDIENCE,
-        "binding_proof": binding_proof,
-        "claim_nonce": verification.claim_nonce,
-        "invite_digest": verification.invite_digest,
-        "invite_id": verification.invite_id,
-        "realm_id": verification.realm_id,
-        "subject_id": verification.subject_id,
-        "token_commitment": verification.token_commitment,
-        "verification_service_id": verification.expected_verification_service_id,
-    });
-    transcript_bytes(BINDING_PROOF_TRANSCRIPT_DOMAIN, &transcript)
-}
-
-fn unsigned_binding_proof(binding_proof: &Value) -> Result<Value, String> {
-    let Some(object) = binding_proof.as_object() else {
-        return Err("binding_proof_not_object".to_owned());
-    };
-    let mut unsigned = object.clone();
-    unsigned.remove("signature");
-    unsigned.remove("sig");
-    if unsigned.len() == object.len() {
-        return Err("binding_proof_signature_required".to_owned());
-    }
-    Ok(Value::Object(unsigned))
-}
-
-fn transcript_bytes(domain: &str, transcript: &Value) -> Result<Vec<u8>, String> {
-    let mut bytes = domain.as_bytes().to_vec();
-    bytes.extend(
-        canonical::canonical_json_bytes(transcript)
-            .map_err(|error| format!("canonical transcript failed: {error}"))?,
-    );
-    Ok(bytes)
+fn parse_binding_proof(value: &Value) -> Result<InviteClaimBindingProof, &'static str> {
+    let proof: InviteClaimBindingProof =
+        serde_json::from_value(value.clone()).map_err(|_| "binding_proof_invalid")?;
+    proof.validate().map_err(|_| "binding_proof_invalid")?;
+    Ok(proof)
 }
 
 fn invite_record_digest(
@@ -456,10 +422,6 @@ fn decode_signature(value: Option<&str>) -> Result<Signature, String> {
     let signature =
         Signature::from_slice(&bytes).map_err(|_| "signature must be 64 bytes".to_owned())?;
     Ok(signature)
-}
-
-fn proof_string<'a>(object: &'a serde_json::Map<String, Value>, field: &str) -> Option<&'a str> {
-    trimmed_string(object.get(field))
 }
 
 fn trimmed_string(value: Option<&Value>) -> Option<&str> {
@@ -568,20 +530,14 @@ mod tests {
             "expires_at": "2099-01-01T00:00:00Z",
             "signature": "placeholder"
         });
-        let subject_placeholder = json!({"signature": "placeholder"});
-        let verification = InviteClaimProofVerification {
+        let typed_binding_proof = parse_binding_proof(&binding_proof).unwrap();
+        let transcript = invite_binding_proof_transcript_bytes(
+            &typed_binding_proof,
             invite_id,
-            realm_id: REALM,
-            subject_id: SUBJECT,
             token_commitment,
-            claim_nonce: NONCE,
-            binding_proof: &binding_proof,
-            subject_proof: &subject_placeholder,
-            expected_verification_public_key: SERVICE_METHOD,
-            expected_verification_service_id: SERVICE,
             invite_digest,
-        };
-        let transcript = binding_proof_transcript_bytes(&verification).unwrap();
+        )
+        .unwrap();
         binding_proof["signature"] = json!(sign_b64(signing_key, &transcript));
         binding_proof
     }
@@ -593,7 +549,10 @@ mod tests {
         token_commitment: &str,
         invite_id: &str,
     ) -> Value {
-        let binding_digest = canonical::canonical_sha256(binding_proof).unwrap();
+        let binding_digest = parse_binding_proof(binding_proof)
+            .unwrap()
+            .canonical_digest()
+            .unwrap();
         let transcript_body = InviteSubjectProofBody::from_wire_parts(
             SUBJECT,
             invite_id,

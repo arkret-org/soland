@@ -209,57 +209,38 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
     }
     let claim_nonce =
         payload_string(payload, "claim_nonce").ok_or("ak.invite.claim requires claim_nonce")?;
-    let binding = payload
-        .get("binding_proof")
-        .and_then(Value::as_object)
-        .ok_or("ak.invite.claim binding_proof must be an object")?;
-    let binding_subject = binding
-        .get("subject_id")
-        .and_then(Value::as_str)
-        .ok_or("binding_proof.subject_id is required")?;
-    if binding_subject != subject_id {
+    let binding: arkret_sdk::InviteClaimBindingProof = serde_json::from_value(
+        payload
+            .get("binding_proof")
+            .cloned()
+            .ok_or("ak.invite.claim binding_proof is required")?,
+    )
+    .map_err(|_| "ak.invite.claim binding_proof is invalid")?;
+    binding
+        .validate()
+        .map_err(|_| "ak.invite.claim binding_proof is invalid")?;
+    if binding.subject_id.as_str() != subject_id {
         return Err("binding_proof.subject_id must match subject_id");
     }
-    if binding.get("realm_id").and_then(Value::as_str) != Some(operation.realm_id.as_str()) {
+    if binding.realm_id != operation.realm_id {
         return Err("binding_proof.realm_id must match envelope realm_id");
     }
-    if binding.get("audience").and_then(Value::as_str) != Some("arkret.invite.claim") {
+    if binding.audience != arkret_sdk::INVITE_CLAIM_AUDIENCE {
         return Err("binding_proof.audience must be arkret.invite.claim");
     }
-    if binding.get("claim_nonce").and_then(Value::as_str) != Some(claim_nonce.as_str()) {
+    if binding.claim_nonce != claim_nonce {
         return Err("binding_proof.claim_nonce must match claim_nonce");
     }
-    let service_id = binding
-        .get("verification_service_id")
-        .and_then(Value::as_str)
-        .ok_or("binding_proof.verification_service_id is required")?;
-    if arkret_sdk::Did::new(service_id.to_owned()).is_err() {
-        return Err("binding_proof.verification_service_id must be a DID");
-    }
-    if binding
-        .get("verification_method")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
-    {
-        return Err("binding_proof.verification_method is required");
-    }
-    let expires_at = binding
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .ok_or("binding_proof.expires_at is required")?;
-    if arkret_sdk::canonical::validate_timestamp_canonical(expires_at).is_err() {
-        return Err("binding_proof.expires_at must be a canonical timestamp");
-    }
-    if binding.get("signature").is_none() && binding.get("sig").is_none() {
-        return Err("binding_proof.signature is required");
-    }
-    if payload
-        .get("subject_proof")
-        .and_then(Value::as_object)
-        .is_none()
-    {
-        return Err("ak.invite.claim subject_proof must be an object");
-    }
+    let subject_proof: arkret_sdk::InviteSubjectProof = serde_json::from_value(
+        payload
+            .get("subject_proof")
+            .cloned()
+            .ok_or("ak.invite.claim subject_proof is required")?,
+    )
+    .map_err(|_| "ak.invite.claim subject_proof is invalid")?;
+    subject_proof
+        .validate()
+        .map_err(|_| "ak.invite.claim subject_proof is invalid")?;
     Ok(())
 }
 

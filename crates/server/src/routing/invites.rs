@@ -9,16 +9,13 @@
 // invite-addressing variant via its `model` module path to disambiguate.
 use arkret_sdk::models::{DisclosurePolicy, HandleClaim};
 use arkret_sdk::{
-    CandidateIntent, CandidateValidationContext, ContactIntroductionEvidence, DetachedPayloadProof,
-    Did, DirectoryIntent, DisclosedOutcome, DisclosureLevel, Handle, HandleBindingState, Hash,
-    IntroductionEvidence, InviteDeliveryOutcome, InviteDeliveryOutcomeStatus,
-    InviteDeliveryRequest, InviteLocatorResolveRequestBody, InviteReceiveAction,
-    InviteReceivePolicy, MemberDeliveryBindingCandidate, PrincipalLocator,
-    PrincipalLocatorDisplayHint, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
-    ReceivePolicyConstraints, ReceivePolicySurface, UnknownInviteAction, canonical,
+    CandidateIntent, CandidateValidationContext, ContactIntroductionEvidence, Did, DirectoryIntent,
+    DisclosedOutcome, DisclosureLevel, Handle, HandleBindingState, IntroductionEvidence,
+    InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequest,
+    InviteLocatorResolveRequestBody, InviteReceiveAction, InviteReceivePolicy,
+    MemberDeliveryBindingCandidate, PrincipalLocator, ReceivePolicyConstraints,
+    ReceivePolicySurface, UnknownInviteAction, canonical,
 };
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -38,7 +35,6 @@ const HEADER_CONTENT_DIGEST: &str = "content-digest";
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
-const DEFAULT_LOCATOR_TTL_MINUTES: i64 = 15;
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
 const MAX_INVITE_QUARANTINE_ENTRIES: usize = 200;
 const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:invite_quarantine";
@@ -231,7 +227,7 @@ async fn peer_invites_submit(
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.open.invite_locator.query.resolve"))]
 async fn resolve_invite_locator(
-    depot: &mut Depot,
+    _depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<PrincipalLocator> {
     if locator_token_appears_in_url(req) {
@@ -241,103 +237,13 @@ async fn resolve_invite_locator(
         .with_status(StatusCode::BAD_REQUEST)
         .with_wire_code("schema_violation"));
     }
-    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = req
         .parse_json::<InviteLocatorResolveRequestBody>()
         .await
         .map_err(|_| AppError::bad_json("invalid invite locator resolve request body"))?;
     body.validate_minimal()
         .map_err(|_| invite_locator_not_found())?;
-    let locator_token = body.locator_token.trim();
-    let locator_ref = decode_locator_token(locator_token).ok_or_else(invite_locator_not_found)?;
-    let subject_id = locator_ref
-        .get("subject_id")
-        .and_then(Value::as_str)
-        .filter(|value| Did::new((*value).to_owned()).is_ok())
-        .ok_or_else(invite_locator_not_found)?;
-    let subject_id = Did::new(subject_id.to_owned()).map_err(|_| invite_locator_not_found())?;
-    if locator_ref
-        .get("nonce")
-        .and_then(Value::as_str)
-        .filter(|value| is_locator_token_shape(value))
-        .is_none()
-    {
-        return Err(invite_locator_not_found());
-    }
-    if let Some(expires_at) = locator_ref
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc))
-        && expires_at <= now()
-    {
-        return Err(invite_locator_not_found());
-    }
-
-    let issued_at = now();
-    let expires_at = locator_ref
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|| issued_at + Duration::minutes(DEFAULT_LOCATOR_TTL_MINUTES));
-    let locator_ref_digest = Hash::new(canonical::sha256_digest(locator_token.as_bytes()))
-        .map_err(|error| AppError::internal(format!("locator_ref_digest invalid: {error}")))?;
-    let display_hint = locator_ref
-        .get("display_hint")
-        .cloned()
-        .map(serde_json::from_value::<PrincipalLocatorDisplayHint>)
-        .transpose()
-        .map_err(|_| invite_locator_not_found())?;
-    let recipient_service_id = Did::new(state.service_id.clone()).map_err(|error| {
-        AppError::internal(format!(
-            "configured service DID invalid for principal locator: {error}"
-        ))
-    })?;
-    let mut locator = PrincipalLocator {
-        schema: arkret_sdk::PRINCIPAL_LOCATOR_SCHEMA.to_owned(),
-        subject_id,
-        recipient_service_id,
-        recipient_service_type: None,
-        issued_at,
-        expires_at,
-        locator_ref_digest,
-        delivery_modes: Vec::new(),
-        display_hint,
-        proofs: Vec::new(),
-    };
-    let mut unsigned_locator = serde_json::to_value(&locator).map_err(|error| {
-        AppError::internal(format!("principal locator unsigned serialize: {error}"))
-    })?;
-    if let Value::Object(object) = &mut unsigned_locator {
-        object.remove("proofs");
-    }
-    let canonical_bytes = canonical::canonical_json_bytes(&unsigned_locator)
-        .map_err(|error| AppError::internal(format!("principal locator canonicalize: {error}")))?;
-    let payload_digest =
-        Hash::new(canonical::sha256_digest(&canonical_bytes)).map_err(|error| {
-            AppError::internal(format!("principal locator digest invalid: {error}"))
-        })?;
-    let jws =
-        arkret_sdk::jws::sign_jws_ed25519(&canonical_bytes, state.notary_signing_key().as_ref())
-            .map_err(|error| AppError::internal(format!("principal locator sign: {error}")))?;
-    locator.proofs = vec![PrincipalLocatorProof {
-        proof_purpose: PrincipalLocatorProofPurpose::RecipientServiceAcceptance,
-        proof: DetachedPayloadProof {
-            kind: "detached_jws".to_owned(),
-            verification_method: format!("{}#server-key-1", state.service_id),
-            alg: "EdDSA".to_owned(),
-            payload_digest,
-            created_at: issued_at,
-            domain: None,
-            audience: None,
-            jws,
-        },
-    }];
-    locator.validate_minimal().map_err(|error| {
-        AppError::internal(format!("principal locator validation failed: {error}"))
-    })?;
-    json_ok(locator)
+    Err(invite_locator_not_found())
 }
 
 /// Spec invite-addressing.md §2 — introduction-evidence trust tiers.
@@ -1437,18 +1343,6 @@ fn locator_token_appears_in_url(req: &Request) -> bool {
     req.uri()
         .query()
         .is_some_and(|query| query.contains("locator_token=") || query.contains("token="))
-}
-
-fn is_locator_token_shape(value: &str) -> bool {
-    (22..=512).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-fn decode_locator_token(locator_token: &str) -> Option<Value> {
-    let bytes = URL_SAFE_NO_PAD.decode(locator_token.as_bytes()).ok()?;
-    serde_json::from_slice::<Value>(&bytes).ok()
 }
 
 fn invite_locator_not_found() -> AppError {

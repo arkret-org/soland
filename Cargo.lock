@@ -125,6 +125,7 @@ dependencies = [
  "arkret-ffi",
  "arkret-http-client",
  "arkret-keystore",
+ "arkret-network-policy",
  "arkret-server",
  "arkret-signatures",
  "arkret-state",
@@ -277,6 +278,14 @@ dependencies = [
  "sha2 0.11.0",
  "windows",
  "zeroize",
+]
+
+[[package]]
+name = "arkret-network-policy"
+version = "0.3.0"
+dependencies = [
+ "thiserror",
+ "url",
 ]
 
 [[package]]

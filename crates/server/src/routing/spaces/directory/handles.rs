@@ -747,7 +747,21 @@ pub(super) async fn list_handles_for_subject(
     }
 
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
-    let start = list_handles_cursor_start(body.cursor.as_deref())?;
+    let filter_digest = arkret_sdk::cursor_filter_digest(&json!({
+        "operation": "ak.find.directory.query.list_handles_for_subject",
+        "realm_id": body.realm_id.as_ref(),
+        "intent": body.intent.as_deref(),
+        "requester": body.requester.as_ref(),
+        "as_of": body.as_of,
+    }))
+    .map_err(|error| AppError::internal(format!("cursor filter digest failed: {error}")))?;
+    let cursor_context = CursorBindingContext::new(
+        subject.as_str(),
+        None,
+        state.service_id.clone(),
+        filter_digest,
+    );
+    let start = list_handles_cursor_start(state, body.cursor.as_deref(), &cursor_context).await?;
     let requested_as_of = body.as_of;
     let session = authenticated_session(state, req).await.ok();
 
@@ -830,7 +844,11 @@ pub(super) async fn list_handles_for_subject(
     let page: Vec<Value> = claims.into_iter().skip(start).take(limit).collect();
     let consumed = start.saturating_add(page.len());
     let has_more = consumed < total;
-    let next_cursor = has_more.then(|| consumed.to_string());
+    let next_cursor = if has_more {
+        Some(mint_list_handles_cursor(state, cursor_context, consumed).await?)
+    } else {
+        None
+    };
     let primary_handle = primary_handle_from_subject_claims(&page);
     let claims = page
         .into_iter()
@@ -859,13 +877,104 @@ pub(super) async fn list_handles_for_subject(
     json_ok(response)
 }
 
-pub(super) fn list_handles_cursor_start(cursor: Option<&str>) -> Result<usize, AppError> {
-    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+async fn list_handles_cursor_start(
+    state: &AppState,
+    cursor: Option<&str>,
+    context: &CursorBindingContext,
+) -> Result<usize, AppError> {
+    let Some(cursor) = cursor else {
         return Ok(0);
     };
-    cursor
-        .parse::<usize>()
-        .map_err(|_| AppError::invalid_param("cursor must be an unsigned integer offset"))
+    let cursor = CursorAuthority::decode_stream(cursor.trim()).map_err(cursor_app_error)?;
+    let stored = state
+        .sync_application()
+        .cursor(&cursor.h)
+        .await
+        .map_err(|error| AppError::internal(format!("cursor binding lookup failed: {error}")))?;
+    let record = stored
+        .map(cursor_binding_record)
+        .transpose()
+        .map_err(cursor_app_error)?;
+    let positions = CursorAuthority::resolve_stream(&cursor, context, record.as_ref())
+        .map_err(cursor_app_error)?;
+    positions
+        .get("offset")
+        .and_then(Value::as_u64)
+        .and_then(|offset| usize::try_from(offset).ok())
+        .ok_or_else(|| cursor_app_error(CursorAuthorityError::IntegrityInvalid))
+}
+
+async fn mint_list_handles_cursor(
+    state: &AppState,
+    context: CursorBindingContext,
+    offset: usize,
+) -> Result<String, AppError> {
+    let (token, record) =
+        CursorAuthority::mint_stream(context, json!({ "offset": offset }), 60 * 60 * 1000)
+            .map_err(cursor_app_error)?;
+    state
+        .sync_application()
+        .upsert_cursor(&soland_application::sync::CursorState {
+            handle: record.handle,
+            principal_id: Some(record.context.principal_id),
+            device_id: record.context.device_id,
+            service_id: record.context.service_id,
+            filter_digest: Some(record.context.filter_digest),
+            purpose: "stream".to_owned(),
+            positions: Some(record.positions),
+            target: None,
+            issued_at_ms: record.issued_at_ms,
+            expires_at_ms: record.expires_at_ms,
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("cursor binding persistence failed: {error}"))
+        })?;
+    Ok(token)
+}
+
+fn cursor_binding_record(
+    record: soland_application::sync::CursorState,
+) -> Result<CursorBindingRecord, CursorAuthorityError> {
+    let purpose = match record.purpose.as_str() {
+        "stream" => CursorPurpose::Stream,
+        "barrier" => CursorPurpose::Barrier,
+        _ => return Err(CursorAuthorityError::IntegrityInvalid),
+    };
+    Ok(CursorBindingRecord {
+        handle: record.handle,
+        context: CursorBindingContext::new(
+            record
+                .principal_id
+                .ok_or(CursorAuthorityError::IntegrityInvalid)?,
+            record.device_id,
+            record.service_id,
+            record
+                .filter_digest
+                .ok_or(CursorAuthorityError::IntegrityInvalid)?,
+        ),
+        purpose,
+        positions: record
+            .positions
+            .ok_or(CursorAuthorityError::IntegrityInvalid)?,
+        issued_at_ms: record.issued_at_ms,
+        expires_at_ms: record.expires_at_ms,
+    })
+}
+
+fn cursor_app_error(error: CursorAuthorityError) -> AppError {
+    match error {
+        CursorAuthorityError::InvalidParam(message) => AppError::invalid_param(message)
+            .with_reason_code(arkret_sdk::ReasonCode::INVALID_CURSOR),
+        CursorAuthorityError::Expired => AppError::new(
+            soland_http::error::ErrorCode::CursorExpired,
+            "cursor has expired",
+        ),
+        CursorAuthorityError::IntegrityInvalid => AppError::new(
+            soland_http::error::ErrorCode::CursorIntegrityInvalid,
+            "cursor integrity check failed",
+        ),
+    }
 }
 
 pub(super) fn push_visible_subject_handle_claim(
