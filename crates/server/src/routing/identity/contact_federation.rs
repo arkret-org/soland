@@ -20,8 +20,6 @@ use arkret_sdk::{
     InviteReceiveAction, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
     Proof, RealmId, canonical, proof_kind,
 };
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use chrono::SecondsFormat;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -836,10 +834,7 @@ fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> 
             "request body is not canonical-hashable: {error}"
         ))
     })?;
-    let expected = format!(
-        "sha-256=:{}:",
-        STANDARD.encode(Sha256::digest(&canonical_bytes))
-    );
+    let expected = crate::routing::federation::rfc9530_content_digest(&canonical_bytes);
     if header != expected {
         crate::metrics::record_digest_mismatch("peer_contacts_content_digest");
         return Err(super::super::events::peer::cross_domain_replay(

@@ -150,19 +150,14 @@ async fn mesh_policy_broadcasts_to_every_peer() {
         "ak.federation.outbound_fanout.transcript.v1"
     );
     assert_eq!(transcript.response["signing"]["status"], "intent_signed");
-    assert_eq!(
-        transcript.response["signing"]["http_message_signatures"]["status"],
-        "emitted"
+    assert!(
+        transcript.response["signing"]
+            .get("http_message_signatures")
+            .is_none()
     );
     assert_eq!(
         transcript.response["dispatch_attempt"]["status"],
-        "signed_request_prepared"
-    );
-    assert!(
-        transcript.response["signing"]["http_message_signatures"]["headers"]["signature"]
-            .as_str()
-            .unwrap()
-            .starts_with("sig1=:")
+        "dispatch_not_recorded"
     );
     assert!(
         transcript.response["signing"]["payload_digest"]

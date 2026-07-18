@@ -108,7 +108,7 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
         })?
         .to_vec();
 
-    let method = req.method().as_str().to_ascii_uppercase();
+    let method = req.method().as_str().to_owned();
     let target_uri = signature_target_uri(req, state);
     let authority = signature_authority(req, state);
     let path = req.uri().path().to_owned();

@@ -197,7 +197,7 @@ fn verify_inbound_federation_http_signature_inner(
     let authority = signature_authority(req, state);
     let endpoint_digest =
         validate_destination_authority(state, req, &authority, &destination_service_id)?;
-    let method = req.method().as_str().to_ascii_uppercase();
+    let method = req.method().as_str().to_owned();
     let outer_params = signature_params(req, "signature-input")?;
     validate_signature_params(&outer_params, &source_service_id, "outer")?;
     let outer_base = federation_http_signature_base(
@@ -336,7 +336,7 @@ fn verify_inbound_peer_http_signature_inner(
     let authority = signature_authority(req, state);
     let endpoint_digest =
         validate_destination_authority(state, req, &authority, &destination_service_id)?;
-    let method = req.method().as_str().to_ascii_uppercase();
+    let method = req.method().as_str().to_owned();
     let outer_params = signature_params(req, "signature-input")?;
     validate_signature_params(&outer_params, &source_service_id, "outer")?;
     let outer_base = peer_http_signature_base(

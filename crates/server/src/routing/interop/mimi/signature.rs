@@ -66,7 +66,7 @@ pub(super) fn verify_mimi_write_service_proof(
     let signature_params = mimi_signature_params(req)?;
     let verification_method =
         mimi_validate_signature_params(&signature_params, &source_service_id, room_uri.is_some())?;
-    let method = req.method().as_str().to_ascii_uppercase();
+    let method = req.method().as_str().to_owned();
     let target_uri = crate::routing::federation::signature_target_uri(req, state);
     let authority = crate::routing::federation::signature_authority(req, state);
     let signature_base = mimi_http_signature_base(
