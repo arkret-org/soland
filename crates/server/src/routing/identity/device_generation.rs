@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
+pub use arkret_sdk::DeviceGenerationStatus;
 use arkret_sdk::{MoveId, RealmId, SealId};
 use serde_json::Value;
 use soland_storage::{CanonicalEventRecord, PersistenceError};
@@ -22,12 +23,6 @@ pub fn device_generation_admission_lock(scope_id: &str) -> Arc<tokio::sync::Mute
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     scope_id.hash(&mut hasher);
     locks[(hasher.finish() as usize) % DEVICE_GENERATION_ADMISSION_LOCK_SHARDS].clone()
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DeviceGenerationStatus {
-    Active,
-    Conflicted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
