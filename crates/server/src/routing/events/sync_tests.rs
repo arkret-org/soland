@@ -829,7 +829,7 @@ fn insert_member_identity_subject(state: &AppState) {
         .member_identity
         .lock()
         .insert(MemberIdentityEventRecord {
-            event_id: "ak:operation:roster-identity-1".to_owned(),
+            event_id: "ak:event:01904100-0000-7000-8000-0000000000d1".to_owned(),
             subject: MemberIdentitySubjectKey {
                 realm_id: ROSTER_REALM.to_owned(),
                 actor_id: ROSTER_ACTOR.to_owned(),
@@ -838,7 +838,7 @@ fn insert_member_identity_subject(state: &AppState) {
             payload_digest,
             replaces: Vec::new(),
             raw_event: json!({
-                "operation_id": "ak:operation:roster-identity-1",
+                "event_id": "ak:event:01904100-0000-7000-8000-0000000000d1",
                 "event_kind": arkret_sdk::events::EventKind::MEMBER_IDENTITY_UPDATE,
                 "realm_id": ROSTER_REALM,
                 "created_at": now(),
