@@ -1,7 +1,3 @@
-pub use arkret_sdk::models::product::{
-    AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
-    DeviceSigningKeyDirectoryQueryRequestBody,
-};
 pub use arkret_sdk::ops::HardeningStatus;
 use arkret_sdk::{
     AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
@@ -24,6 +20,10 @@ pub use arkret_sdk::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+pub use soland_contracts::admin::{
+    AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
+    DeviceSigningKeyDirectoryQueryRequestBody,
+};
 use soland_domain::artifacts;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]

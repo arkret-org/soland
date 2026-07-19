@@ -1,4 +1,4 @@
-use arkret_sdk::Operation;
+use arkret_sdk::{InviteCreatePayloadWireExt as _, Operation};
 use serde_json::Value;
 
 use super::*;

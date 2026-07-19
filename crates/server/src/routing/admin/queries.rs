@@ -11,7 +11,7 @@
 //! These replace the dev-only `admin/{resource}` snapshot collection for
 //! those resources (the collection keeps serving the surfaces that have not
 //! been productionised yet). Wire contract lives in
-//! `arkret_sdk::models::admin` — see that module for the frozen rules.
+//! `soland_contracts::admin` — see that module for the frozen rules.
 //!
 //! Pagination: rows are sorted by a stable key (actors: DID; capabilities:
 //! grant id; devices: device id; audit: newest first, audit id as tiebreak).
@@ -28,14 +28,14 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::models::product::{
-    AdminActor, AdminActorList, AdminAuditEntry, AdminAuditList, AdminCapabilityList, AdminDevice,
-    AdminDeviceList, CapabilityGrantState, CapabilitySummary,
-};
 use arkret_sdk::{AccountStatus, Did};
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_contracts::admin::{
+    AdminActor, AdminActorList, AdminAuditEntry, AdminAuditList, AdminCapabilityList, AdminDevice,
+    AdminDeviceList, CapabilityGrantState, CapabilitySummary,
+};
 use soland_http::error::{AppError, ErrorCode};
 use util::query_param;
 

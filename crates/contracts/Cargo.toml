@@ -11,7 +11,7 @@ description = "Shared deployment-local contracts for Soland integrations."
 
 [features]
 default = []
-salvo = ["dep:salvo"]
+salvo = ["dep:salvo", "arkret-core/salvo"]
 
 [dependencies]
 arkret-core = {workspace = true,default-features = false}

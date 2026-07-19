@@ -452,8 +452,8 @@ pub(super) async fn provision_agent(
 ///
 /// - Bootstrap re-open (`pending_runtime_key` / `pairing_expired`): status returns to
 ///   `pending_runtime_key` without changing Realm grants.
-/// - Runtime replacement (`paused`): Agent status, existing keys, sessions,
-///   and grants all stay untouched; completing the new pairing supersedes every old active key
+/// - Runtime replacement (`paused`): Agent status, existing keys, sessions, and grants all stay
+///   untouched; completing the new pairing supersedes every old active key
 ///   (reason=`superseded_by_repairing`) in the pair transaction. The controller resumes explicitly.
 ///
 /// `active` must transition to `paused` first; `deactivated` is terminal.
