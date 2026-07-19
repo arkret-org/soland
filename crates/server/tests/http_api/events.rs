@@ -1354,6 +1354,50 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
 }
 
 #[tokio::test]
+async fn account_subscribe_realms_filter_excludes_out_of_scope_realms() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+    let included = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Included Realm",
+        None,
+        "listed",
+        &[],
+        &[],
+    )
+    .await;
+    let excluded = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Excluded Realm",
+        None,
+        "listed",
+        &[],
+        &[],
+    )
+    .await;
+    let included_id = included["realm_id"].as_str().unwrap();
+    let excluded_id = excluded["realm_id"].as_str().unwrap();
+    let encoded_included_id = included_id.replace(':', "%3A");
+    let frame = account_subscribe_frame(
+        state,
+        Some(&alice),
+        &format!("catchup=true&filter=%7B%22realms%22%3A%5B%22{encoded_included_id}%22%5D%7D"),
+    )
+    .await;
+
+    assert!(
+        frame["realms"][included_id].is_object(),
+        "requested Realm must be present: {frame}"
+    );
+    assert!(
+        frame["realms"].get(excluded_id).is_none(),
+        "out-of-scope Realm must be absent: {frame}"
+    );
+}
+
+#[tokio::test]
 async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     let state = AppState::new(test_config(), Db { pool: None });
     let actor = test_event_signer_did();

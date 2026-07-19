@@ -29,9 +29,26 @@ pub(crate) async fn build_sync_snapshot(
             .cloned()
             .collect()
     };
+    let requested_realms = body
+        .filter
+        .as_ref()
+        .map(|filter| {
+            filter
+                .realms
+                .iter()
+                .map(|realm_id| realm_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .filter(|realms| !realms.is_empty());
     let mut visible_realms: Vec<(String, String, Option<String>, _, Option<String>, _)> =
         Vec::new();
     for realm_entry in &candidate_realms {
+        if requested_realms
+            .as_ref()
+            .is_some_and(|realms| !realms.contains(realm_entry.realm_id.as_str()))
+        {
+            continue;
+        }
         if realm_visible_to(state, realm_entry, session).await {
             let members = roster_members_for_realm(state, realm_entry, session, body);
             visible_realms.push((
