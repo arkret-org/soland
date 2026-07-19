@@ -18,6 +18,7 @@ fn stream_cursor_handle_binding(
         realms_positions,
         account_realms_positions,
         device_list_positions,
+        &BTreeMap::new(),
         to_device_position,
         0,
     )
@@ -363,6 +364,56 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
         "presence-triggered incremental sync carries current presence: {:?}",
         presence_incremental.presence
     );
+}
+
+#[tokio::test]
+async fn typing_state_is_emitted_once_per_cursor_revision() {
+    let state = test_state();
+    let session = roster_session(&state, ROSTER_ACTOR);
+    state.realms.lock().upsert(roster_realm(false, true));
+    let updated_at = now();
+    let mut envelope = test_presence_envelope(
+        ROSTER_ACTOR,
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        "online",
+        updated_at,
+    );
+    envelope.kind = "ak.typing".to_owned();
+    envelope.realm_id = arkret_sdk::RealmId::new(ROSTER_REALM.to_owned()).unwrap();
+    envelope.payload = BTreeMap::from([
+        ("typing".to_owned(), json!(true)),
+        (
+            "strand_id".to_owned(),
+            json!(crate::routing::events::strand::strand_id_from_realm_id(
+                ROSTER_REALM
+            )),
+        ),
+    ]);
+    state
+        .typing_store()
+        .put(soland_storage::TypingRecord {
+            actor: ROSTER_ACTOR.to_owned(),
+            realm_id: ROSTER_REALM.to_owned(),
+            scope_id: None,
+            position: 0,
+            expires_at: updated_at + ChronoDuration::seconds(60),
+            envelope,
+        })
+        .await
+        .expect("typing stored");
+
+    let (first, first_position) =
+        typing_envelopes_for_subscriber(&state, ROSTER_REALM, Some(&session), 0).await;
+    assert_eq!(first.len(), 1, "fresh typing revision must be delivered");
+    assert!(first_position > 0);
+
+    let (replayed, replayed_position) =
+        typing_envelopes_for_subscriber(&state, ROSTER_REALM, Some(&session), first_position).await;
+    assert!(
+        replayed.is_empty(),
+        "the same live typing row must not make every resumed subscribe non-empty"
+    );
+    assert_eq!(replayed_position, first_position);
 }
 
 fn test_config() -> crate::config::AppConfig {

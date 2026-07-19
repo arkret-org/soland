@@ -44,9 +44,7 @@ pub(crate) use soland_storage::{
 pub(crate) use tokio::sync::broadcast::error::RecvError;
 
 use super::super::identity::device_messages::prune_device_messages_for_limits;
-use super::read_receipts::{
-    deliver_read_receipt_envelopes_for_subscriber, has_pending_read_receipts_for_subscriber,
-};
+use super::read_receipts::deliver_read_receipt_envelopes_for_subscriber;
 #[cfg(test)]
 pub(crate) use super::strand::strand_id_from_realm_id;
 use super::{

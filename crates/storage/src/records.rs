@@ -746,8 +746,11 @@ pub struct TypingRecord {
     pub actor: String,
     pub realm_id: String,
     pub scope_id: Option<String>,
+    /// Strictly monotonic per-Realm revision assigned by `TypingStore::put`.
+    /// Producer code leaves this at `0`; storage replaces it before the row
+    /// becomes visible. TTL timestamps are lifecycle data, not ordering data.
+    pub position: i64,
     pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Original proof-bearing broadcast envelope delivered to subscribers.
     pub envelope: arkret_sdk::EphemeralEnvelope,
 }

@@ -39,6 +39,10 @@ impl PresenceStore for MemoryPresenceStore {
 #[derive(Default)]
 pub(crate) struct MemoryTypingStore {
     data: Mutex<BTreeMap<(String, String), TypingRecord>>,
+    /// Per-Realm sequence that never resets when all active rows expire.
+    /// Reusing a revision would make a valid account cursor suppress a later
+    /// typing transition.
+    next_position: Mutex<BTreeMap<String, i64>>,
 }
 impl MemoryTypingStore {
     pub(crate) fn new() -> Self {
@@ -47,7 +51,19 @@ impl MemoryTypingStore {
 }
 #[async_trait]
 impl TypingStore for MemoryTypingStore {
-    async fn put(&self, typing: TypingRecord) -> PersistenceResult<()> {
+    async fn put(&self, mut typing: TypingRecord) -> PersistenceResult<()> {
+        let position = {
+            let mut positions = self.next_position.lock();
+            let position = positions.entry(typing.realm_id.clone()).or_default();
+            // The wall-clock seed keeps fresh revisions above cursors issued
+            // before a normal process restart; the local +1 keeps multiple
+            // writes in the same microsecond strictly ordered.
+            *position = (*position)
+                .saturating_add(1)
+                .max(Utc::now().timestamp_micros());
+            *position
+        };
+        typing.position = position;
         let key = (typing.actor.clone(), typing.realm_id.clone());
         self.data.lock().insert(key, typing);
         Ok(())

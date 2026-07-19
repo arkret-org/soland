@@ -146,17 +146,6 @@ fn require_string_field(
     Ok(())
 }
 
-pub(crate) async fn has_pending_read_receipts_for_subscriber(
-    state: &AppState,
-    realm_id: &str,
-    session: Option<&SessionRecord>,
-    full_sync: bool,
-) -> bool {
-    !pending_read_receipt_records_for_subscriber(state, realm_id, session, full_sync)
-        .await
-        .is_empty()
-}
-
 pub(crate) async fn deliver_read_receipt_envelopes_for_subscriber(
     state: &AppState,
     realm_id: &str,

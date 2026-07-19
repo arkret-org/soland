@@ -914,6 +914,29 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
         }),
         "incremental typing delta must include Alice typing: {delta}"
     );
+    let realm_delta = &delta["realms"][DEMO_REALM_ID];
+    assert!(realm_delta.get("timeline").is_none());
+    assert!(realm_delta.get("state").is_none());
+    assert!(realm_delta.get("summary").is_none());
+    assert!(realm_delta.get("members").is_none());
+
+    let delta_cursor = delta["cursor"]
+        .as_str()
+        .expect("typing delta sync cursor")
+        .to_owned();
+    let replay = tokio::time::timeout(
+        Duration::from_millis(500),
+        account_subscribe_frame(
+            state.clone(),
+            Some(&bob_token),
+            &format!("catchup=true&after={delta_cursor}"),
+        ),
+    )
+    .await;
+    assert!(
+        replay.is_err(),
+        "the same active typing revision must not immediately replay: {replay:?}"
+    );
 }
 
 #[tokio::test]
@@ -1092,8 +1115,8 @@ async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
             actor: "did:web:alice.example".to_owned(),
             realm_id: DEMO_REALM_ID.to_owned(),
             scope_id: Some(strand_id.to_owned()),
+            position: 0,
             expires_at: now + chrono::Duration::seconds(30),
-            updated_at: now,
             envelope: serde_json::from_value(broadcast_ephemeral_envelope(
                 "ak.typing",
                 serde_json::json!({"strand_id": strand_id, "typing": true}),

@@ -243,14 +243,38 @@ async fn persist_ephemeral_typing(
                 actor: actor.to_owned(),
                 realm_id: realm_id.to_owned(),
                 scope_id: Some(strand_id),
+                position: 0,
                 expires_at: envelope.expires_at,
-                updated_at: chrono::Utc::now(),
                 envelope: envelope.clone(),
             })
             .await
             .map_err(|error| {
                 tracing::error!(%error, "failed to persist ephemeral typing");
                 ephemeral_channel_unavailable("persist typing state")
+            })?;
+    } else if let Some(strand_id) = envelope
+        .payload
+        .get("strand_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        // Keep the stop transition as a short-lived revision. Removing the
+        // active row outright would force receivers to wait for TTL expiry
+        // because an empty snapshot cannot communicate `typing=false`.
+        state
+            .typing_store()
+            .put(TypingRecord {
+                actor: actor.to_owned(),
+                realm_id: realm_id.to_owned(),
+                scope_id: Some(strand_id.to_owned()),
+                position: 0,
+                expires_at: envelope.expires_at,
+                envelope: envelope.clone(),
+            })
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "failed to persist ephemeral typing stop");
+                ephemeral_channel_unavailable("persist typing stop state")
             })?;
     } else {
         state

@@ -241,7 +241,6 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                             &state,
                             &notification,
                             Some(&session),
-                            &current_cursor,
                         ).await {
                             continue;
                         }
@@ -391,7 +390,6 @@ async fn account_subscribe_notification_should_wake(
     state: &AppState,
     notification: &crate::state::EventNotification,
     session: Option<&SessionRecord>,
-    after_cursor: &SyncCursor,
 ) -> bool {
     if let crate::state::EventNotificationKind::Account {
         account_id,
@@ -415,7 +413,6 @@ async fn account_subscribe_notification_should_wake(
     if realm_id_accessible(state, &notification.realm_id, session).await {
         return true;
     }
-    let _ = after_cursor;
     false
 }
 

@@ -10,7 +10,10 @@ pub trait PresenceStore: Send + Sync {
     /// policy flips to `nobody`).
     async fn delete(&self, actor: &str) -> PersistenceResult<()>;
 }
-/// Typing indicators per (actor, Realm). Auto-prunes expired entries.
+/// Latest typing transition per (actor, Realm). `put` assigns a strictly
+/// increasing per-Realm `position`; both `typing=true` and `typing=false`
+/// transitions remain visible until TTL expiry so account cursors can deliver
+/// each revision once. Auto-prunes expired entries.
 #[async_trait]
 pub trait TypingStore: Send + Sync {
     async fn put(&self, typing: TypingRecord) -> PersistenceResult<()>;
