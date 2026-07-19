@@ -54,7 +54,7 @@ impl DidResolver for SharedDidResolver {
         self.inner.supports(did)
     }
 
-    fn resolve_did(&self, did: &Did) -> arkret_sdk::Result<DidDocument> {
+    fn resolve_did(&self, did: &Did) -> arkret_sdk::identity::Result<DidDocument> {
         self.inner.resolve_did(did)
     }
 }

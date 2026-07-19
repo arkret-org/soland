@@ -431,11 +431,11 @@ impl DidResolver for ResolvedDidDocumentResolver<'_> {
         &self.document.id == did
     }
 
-    fn resolve_did(&self, did: &Did) -> arkret_sdk::Result<DidDocument> {
+    fn resolve_did(&self, did: &Did) -> arkret_sdk::identity::Result<DidDocument> {
         if self.supports(did) {
             return Ok(self.document.clone());
         }
-        Err(arkret_sdk::Error::Protocol(
+        Err(arkret_sdk::identity::IdentityError::Protocol(
             "resolved DID document does not match requested DID".to_owned(),
         ))
     }

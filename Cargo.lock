@@ -119,14 +119,18 @@ name = "arkret"
 version = "0.3.0"
 dependencies = [
  "argon2",
+ "arkret-auth",
  "arkret-canonical",
  "arkret-core",
  "arkret-crypto",
  "arkret-egress-policy",
  "arkret-ffi",
  "arkret-http-client",
+ "arkret-identity",
  "arkret-keystore",
+ "arkret-mls",
  "arkret-models-crypto",
+ "arkret-policy",
  "arkret-server",
  "arkret-signatures",
  "arkret-state",
@@ -139,9 +143,6 @@ dependencies = [
  "hex",
  "hkdf 0.13.0",
  "hmac 0.13.0",
- "openmls",
- "openmls_basic_credential",
- "openmls_rust_crypto",
  "parking_lot",
  "regex",
  "reqwest",
@@ -151,11 +152,30 @@ dependencies = [
  "sha2 0.11.0",
  "subtle",
  "thiserror",
- "tls_codec",
  "tokio",
  "uuid",
  "x25519-dalek",
  "zeroize",
+]
+
+[[package]]
+name = "arkret-auth"
+version = "0.3.0"
+dependencies = [
+ "argon2",
+ "arkret-canonical",
+ "arkret-identifiers",
+ "arkret-models-identity",
+ "arkret-signatures",
+ "arkret-wire",
+ "base64",
+ "chrono",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -178,12 +198,15 @@ dependencies = [
 name = "arkret-core"
 version = "0.3.0"
 dependencies = [
+ "arkret-auth",
  "arkret-canonical",
  "arkret-crypto",
  "arkret-event-draft",
  "arkret-hlc",
  "arkret-identifiers",
+ "arkret-identity",
  "arkret-keystore",
+ "arkret-mls",
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-models-discovery",
@@ -316,6 +339,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "arkret-identity"
+version = "0.3.0"
+dependencies = [
+ "arkret-canonical",
+ "arkret-egress-policy",
+ "arkret-identifiers",
+ "arkret-models-identity",
+ "arkret-signatures",
+ "arkret-wire",
+ "base64",
+ "chrono",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror",
+]
+
+[[package]]
 name = "arkret-keystore"
 version = "0.3.0"
 dependencies = [
@@ -328,6 +370,32 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror",
  "windows",
+ "zeroize",
+]
+
+[[package]]
+name = "arkret-mls"
+version = "0.3.0"
+dependencies = [
+ "arkret-canonical",
+ "arkret-crypto",
+ "arkret-identifiers",
+ "arkret-models-crypto",
+ "arkret-models-identity",
+ "arkret-signatures",
+ "arkret-wire",
+ "chacha20poly1305",
+ "chrono",
+ "hkdf 0.13.0",
+ "openmls",
+ "openmls_basic_credential",
+ "openmls_rust_crypto",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror",
+ "tls_codec",
+ "uuid",
  "zeroize",
 ]
 
@@ -412,6 +480,8 @@ dependencies = [
 name = "arkret-policy"
 version = "0.3.0"
 dependencies = [
+ "arkret-canonical",
+ "arkret-models-collaboration",
  "arkret-models-integration",
  "arkret-schema",
  "arkret-wire",
@@ -481,6 +551,8 @@ name = "arkret-state"
 version = "0.3.0"
 dependencies = [
  "arkret-canonical",
+ "arkret-identifiers",
+ "arkret-models-collaboration",
  "arkret-wire",
  "chrono",
  "hex",

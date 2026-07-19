@@ -485,9 +485,11 @@ mod tests {
             self.docs.contains_key(did.as_str())
         }
 
-        fn resolve_did(&self, did: &Did) -> arkret_sdk::Result<DidDocument> {
+        fn resolve_did(&self, did: &Did) -> arkret_sdk::identity::Result<DidDocument> {
             self.docs.get(did.as_str()).cloned().ok_or_else(|| {
-                arkret_sdk::Error::Protocol(format!("stub resolver does not handle {did}"))
+                arkret_sdk::identity::IdentityError::Protocol(format!(
+                    "stub resolver does not handle {did}"
+                ))
             })
         }
     }

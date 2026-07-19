@@ -192,7 +192,7 @@ impl SolandDidResolver {
         {
             return self.document_from_record(did, record);
         }
-        self.fallback.resolve_did(did)
+        self.fallback.resolve_did(did).map_err(Into::into)
     }
 }
 
@@ -201,7 +201,7 @@ impl DidResolver for SolandDidResolver {
         self.cached_document(did).is_some() || self.fallback.supports(did)
     }
 
-    fn resolve_did(&self, did: &Did) -> Result<DidDocument, Error> {
+    fn resolve_did(&self, did: &Did) -> arkret_sdk::identity::Result<DidDocument> {
         if let Some(document) = self.cached_document(did) {
             return Ok(document);
         }
