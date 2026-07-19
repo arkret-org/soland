@@ -244,15 +244,7 @@ fn signed_event(
     actor_seq: u64,
     payload: Value,
 ) -> Value {
-    signed_event_with_prev_refs(
-        seed,
-        actor,
-        realm_id,
-        kind,
-        actor_seq,
-        payload,
-        Vec::new(),
-    )
+    signed_event_with_prev_refs(seed, actor, realm_id, kind, actor_seq, payload, Vec::new())
 }
 
 fn signed_event_with_prev_refs(

@@ -254,8 +254,13 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     }))
     .send(&app)
     .await;
-    assert_eq!(response.status_code.unwrap(), StatusCode::CREATED);
+    let status = response.status_code.unwrap();
     let provision: Value = response.take_json().await.unwrap();
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "provision response: {provision}"
+    );
     assert_eq!(provision["ghost_actor_id"], json!(ghost_actor_id));
     assert_eq!(provision["display_name"], json!("Alice on Slack"));
     let profile_event_ref = provision["profile_event_ref"].as_str().unwrap();
@@ -684,8 +689,13 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     }))
     .send(&app)
     .await;
-    assert_eq!(provision_response.status_code.unwrap(), StatusCode::CREATED);
+    let provision_status = provision_response.status_code.unwrap();
     let provision: Value = provision_response.take_json().await.unwrap();
+    assert_eq!(
+        provision_status,
+        StatusCode::CREATED,
+        "provision response: {provision}"
+    );
     assert_eq!(provision["ghost_actor_id"], json!(ghost_actor_id));
 
     let transaction = post_signed_applet_message_transaction(
@@ -950,13 +960,14 @@ async fn install_applet_package_with_approved_actions(
     approve_actions: Vec<String>,
 ) -> Value {
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
+    let applet_package = applet_package_wire_with_epoch_evidence(package);
     let allow_ghost_actors = approve_actions
         .iter()
         .any(|action| action == "ak.applet.ghost.provision");
     let preview: Value = TestClient::post("http://server/_arkret/self/applets/install/preview")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
-            "applet_package": package,
+            "applet_package": applet_package,
             "effective_scope": effective_scope,
             "approval_request": {
                 "approve_actions": approve_actions,
@@ -982,7 +993,7 @@ async fn install_applet_package_with_approved_actions(
         .add_header("Idempotency-Key", idempotency_key.to_owned(), true)
         .json(&json!({
             "plan_digest": preview["plan_digest"].clone(),
-            "applet_package": package,
+            "applet_package": applet_package,
             "effective_scope": {"kind": "realm", "realm_id": realm_id},
             "approved_scopes": preview["approved_scopes"].clone(),
             "actor_policy": {
@@ -999,6 +1010,23 @@ async fn install_applet_package_with_approved_actions(
         .unwrap();
     assert_eq!(commit["ok"], json!(true), "install commit: {commit}");
     commit
+}
+
+fn applet_package_wire_with_epoch_evidence(package: &AppletPackage) -> Value {
+    let mut wire = serde_json::to_value(package).expect("Applet package serializes");
+    wire.as_object_mut()
+        .expect("Applet package wire value is an object")
+        .insert(
+            "registration_epoch_evidence".to_owned(),
+            serde_json::to_value(
+                package
+                    .registration_epoch_evidence
+                    .as_ref()
+                    .expect("Applet package fixture has registration epoch evidence"),
+            )
+            .expect("registration epoch evidence serializes"),
+        );
+    wire
 }
 
 fn safe_did_token(value: &str) -> String {
