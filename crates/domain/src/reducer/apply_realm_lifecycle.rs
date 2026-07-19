@@ -351,7 +351,7 @@ impl ProjectionState {
                     membership_event_ref: membership_frontier.first().cloned(),
                     updated_at: now,
                     reason: Some(
-                        arkret_wire_base::error_codes::ReasonCode::CONTROLLER_MEMBERSHIP_ENDED
+                        arkret_wire::error_codes::ReasonCode::CONTROLLER_MEMBERSHIP_ENDED
                             .to_owned(),
                     ),
                     ..previous

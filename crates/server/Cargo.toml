@@ -53,7 +53,7 @@ bs58 = {workspace = true}
 bytes = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}
 arkret-sdk = {workspace = true,features = ["full-surface", "client", "device-runtime", "applet-runtime", "mls", "salvo", "signer", "keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"]}
-arkret-wire-base = {workspace = true}
+arkret-wire = {workspace = true}
 dotenvy = {workspace = true}
 ed25519-dalek = {workspace = true}
 futures-util = {workspace = true}
