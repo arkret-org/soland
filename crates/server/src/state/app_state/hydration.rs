@@ -669,6 +669,14 @@ pub(super) async fn hydrate_realm_create_event(
         .and_then(|object| object.get("encryption_profile"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let realm_class = payload_object
+        .and_then(|object| object.get("realm_class"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let default_join_rule = payload_object
+        .and_then(|object| object.get("default_join_rule"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     let history_sharing_policy = payload_object
         .and_then(|object| object.get("history_sharing_policy"))
         .cloned();
@@ -718,6 +726,8 @@ pub(super) async fn hydrate_realm_create_event(
 
     let mut entry = RealmDirectoryEntry::new(realm_id.clone(), title);
     entry.description = summary.clone();
+    entry.realm_class = realm_class;
+    entry.default_join_rule = default_join_rule;
     entry.public = discoverability == "public";
     entry.members.insert(actor);
     entry.as_of = record.received_at;

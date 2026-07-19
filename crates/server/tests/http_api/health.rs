@@ -394,7 +394,7 @@ async fn describe_separates_claim_levels() {
         .expect("verified_profiles array present");
     assert!(
         verified.is_empty(),
-        "dev mode must not advertise any cotest_verified profile, got {verified:?}"
+        "dev mode must not advertise any conformance_verified profile, got {verified:?}"
     );
 
     let claimed = describe["claimed_profiles"]

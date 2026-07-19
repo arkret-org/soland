@@ -95,18 +95,7 @@ pub struct MemberIdentityReplacementEdge {
     pub payload_digest: String,
 }
 
-/// One entry of the effective `(event_id, segment, payload_digest)` set,
-/// surfaced from [`MemberIdentitySnapshot`] so callers (the reducer's
-/// `expected_state_digest` guard and the sync roster's
-/// `member_display_state_digest`) can recompute the R3.2 digests via the
-/// SDK helpers `member_identity_effective_set_digest` /
-/// `member_display_state_digest`.
-#[derive(Clone, Debug)]
-pub struct EffectiveIdentityEntry {
-    pub event_id: String,
-    pub segment: String,
-    pub payload_digest: String,
-}
+pub type EffectiveIdentityEntry = arkret_sdk::EffectiveIdentityEntry;
 
 /// Per-`(realm_id, actor_id)` snapshot derived on demand by
 /// [`MemberIdentityRegistry::snapshot_for_actor`]. Drives the sync
@@ -328,12 +317,14 @@ impl MemberIdentityRegistry {
 
         let effective_entries: Vec<EffectiveIdentityEntry> = effective
             .iter()
-            .map(|r| EffectiveIdentityEntry {
-                event_id: r.event_id.clone(),
-                segment: r.subject.segment.clone(),
-                payload_digest: r.payload_digest.clone(),
+            .map(|r| {
+                Some(EffectiveIdentityEntry {
+                    event_id: arkret_sdk::EventId::new(r.event_id.clone()).ok()?,
+                    segment: arkret_sdk::MemberIdentitySegment::MemberIdentity,
+                    payload_digest: arkret_sdk::Hash::new(r.payload_digest.clone()).ok()?,
+                })
             })
-            .collect();
+            .collect::<Option<Vec<_>>>()?;
 
         // ROST-SOL-2 (R3.2) — read the disclosed `subject_id` from the
         // first effective plaintext `MemberIdentity` carrier. Encrypted
@@ -389,31 +380,6 @@ fn handle_claim_envelopes_in_identity_payload(identity_payload: &Value) -> Vec<&
     out
 }
 
-/// JCS-sorted `effective_events` array shared by both R3.2 digest formulas.
-/// Each entry is `{event_id, segment, payload_digest}`; the array is sorted
-/// by `(segment, event_id)` exactly as the SDK helpers do. Kept as raw JSON
-/// (rather than the SDK newtypes) because soland stores `ak:operation:`
-/// event ids, which the strict `EventId` `ak:event:` validator would reject —
-/// the on-the-wire JCS bytes are identical either way.
-fn effective_events_projection(entries: &[EffectiveIdentityEntry]) -> Vec<Value> {
-    let mut sorted: Vec<&EffectiveIdentityEntry> = entries.iter().collect();
-    sorted.sort_by(|a, b| {
-        a.segment
-            .cmp(&b.segment)
-            .then_with(|| a.event_id.cmp(&b.event_id))
-    });
-    sorted
-        .into_iter()
-        .map(|entry| {
-            serde_json::json!({
-                "event_id": entry.event_id,
-                "segment": entry.segment,
-                "payload_digest": entry.payload_digest,
-            })
-        })
-        .collect()
-}
-
 /// MIU-SOL-3 (R3.2) — `expected_state_digest` writer-observed effective-set
 /// digest. SHA-256 over RFC 8785 JCS canonical JSON of
 /// `{realm_id, actor_id, segment, effective_events:[{event_id, segment,
@@ -425,13 +391,15 @@ fn effective_set_digest(
     actor_id: &str,
     entries: &[EffectiveIdentityEntry],
 ) -> Option<String> {
-    let projection = serde_json::json!({
-        "realm_id": realm_id,
-        "actor_id": actor_id,
-        "segment": "member_identity",
-        "effective_events": effective_events_projection(entries),
-    });
-    canonical_digest(&projection, realm_id, actor_id, "expected_state_digest")
+    let realm_id = arkret_sdk::RealmId::new(realm_id.to_owned()).ok()?;
+    let actor_id = arkret_sdk::Did::new(actor_id.to_owned()).ok()?;
+    arkret_sdk::member_identity_effective_set_digest(
+        &realm_id,
+        &actor_id,
+        arkret_sdk::MemberIdentitySegment::MemberIdentity,
+        entries,
+    )
+    .ok()
 }
 
 /// ROST-SOL-1 (R3.2) — roster `member_display_state_digest`. SHA-256 over RFC
@@ -447,41 +415,27 @@ pub(crate) fn display_state_digest(
     entries: &[EffectiveIdentityEntry],
     handle_claims: &[HandleClaimDigestInput],
 ) -> Option<String> {
-    let mut handle_claims: Vec<Value> = handle_claims
+    let handle_claims: Vec<arkret_sdk::RosterHandleClaimDigestEntry> = handle_claims
         .iter()
         .map(|claim| {
-            let mut value = serde_json::Map::new();
-            value.insert(
-                "claim_digest".to_owned(),
-                serde_json::json!(claim.claim_digest),
-            );
-            value.insert(
-                "binding_state".to_owned(),
-                serde_json::json!(claim.binding_state),
-            );
-            if let Some(expires_at) = &claim.expires_at {
-                value.insert("expires_at".to_owned(), serde_json::json!(expires_at));
-            }
-            Value::Object(value)
+            Some(arkret_sdk::RosterHandleClaimDigestEntry {
+                claim_digest: arkret_sdk::Hash::new(claim.claim_digest.clone()).ok()?,
+                binding_state: serde_json::from_value(Value::String(claim.binding_state.clone()))
+                    .ok()?,
+                expires_at: match claim.expires_at.as_deref() {
+                    Some(value) => Some(
+                        chrono::DateTime::parse_from_rfc3339(value)
+                            .ok()?
+                            .with_timezone(&chrono::Utc),
+                    ),
+                    None => None,
+                },
+            })
         })
-        .collect();
-    handle_claims.sort_by(|a, b| {
-        a.get("claim_digest")
-            .and_then(Value::as_str)
-            .cmp(&b.get("claim_digest").and_then(Value::as_str))
-    });
-    let projection = serde_json::json!({
-        "realm_id": realm_id,
-        "actor_id": actor_id,
-        "effective_events": effective_events_projection(entries),
-        "handle_claims": handle_claims,
-    });
-    canonical_digest(
-        &projection,
-        realm_id,
-        actor_id,
-        "member_display_state_digest",
-    )
+        .collect::<Option<Vec<_>>>()?;
+    let realm_id = arkret_sdk::RealmId::new(realm_id.to_owned()).ok()?;
+    let actor_id = arkret_sdk::Did::new(actor_id.to_owned()).ok()?;
+    arkret_sdk::member_display_state_digest(&realm_id, &actor_id, entries, &handle_claims).ok()
 }
 
 fn canonical_digest(

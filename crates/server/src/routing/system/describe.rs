@@ -557,10 +557,10 @@ pub(crate) fn apply_claim_level_partition(
                 Some(arkret_sdk::VerifiedProfileEntry {
                     profile_id: entry.profile_id.clone(),
                     claim_kind: arkret_sdk::ConformanceVerifiedKind::ConformanceVerified,
-                    verification_run_id: entry.cotest_run_id.clone(),
+                    verification_run_id: entry.verification_run_id.clone(),
                     artifact_digest: entry.artifact_digest.clone(),
                     artifact_ref: entry.artifact_ref.clone(),
-                    verifier_did: entry.cotest_issuer_did.clone(),
+                    verifier_did: entry.verifier_did.clone(),
                     signature: entry.signature.clone(),
                     timestamp: entry.timestamp,
                     expires_at: entry.expires_at,

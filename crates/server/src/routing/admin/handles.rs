@@ -27,8 +27,11 @@ use std::collections::BTreeMap;
 
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_contracts::admin::handles::{
+    AdminHandleAuditEvent, AdminHandleAuditListOutcome, AdminHandleListOutcome,
+    AdminHandleReassignBody, AdminHandleRecord, AdminHandleRevokeBody,
+};
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
@@ -36,58 +39,6 @@ use crate::state::{AppState, HandleClaimEvidenceRecord};
 
 const DESTRUCTIVE_REASON_MAX_CHARS: usize = 512;
 use crate::{JsonResult, json_ok};
-
-/// One handle row. Mirrors sodmin's `HandleRecord` DTO.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminHandleRecord {
-    pub id: String,
-    pub canonical_uri: String,
-    pub aliases: Vec<String>,
-    pub issuer_did: Option<String>,
-    pub subject_id: Option<String>,
-    pub assigned_at: Option<String>,
-    pub expires_at: Option<String>,
-    pub last_reassignment_at: Option<String>,
-    pub status: Option<String>,
-}
-
-/// One audit event for a handle. Mirrors sodmin's `HandleAuditEvent` DTO.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminHandleAuditEvent {
-    pub id: String,
-    pub action: String,
-    pub actor_id: Option<String>,
-    pub timestamp: Option<String>,
-    pub reason: Option<String>,
-    pub previous_subject_id: Option<String>,
-    pub new_subject_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminHandleListOutcome {
-    pub data: Vec<AdminHandleRecord>,
-    pub total: u64,
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminHandleAuditListOutcome {
-    pub data: Vec<AdminHandleAuditEvent>,
-    pub total: u64,
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminHandleReassignBody {
-    pub new_subject_id: String,
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminHandleRevokeBody {
-    #[serde(default)]
-    pub reason: Option<String>,
-}
 
 fn validate_destructive_reason(reason: &str) -> Result<String, AppError> {
     let reason = reason.trim();

@@ -18,7 +18,9 @@
 //!         "spec_file": "...",
 //!         "artifact_digest": "sha256:<hex>",
 //!         "artifact_ref": "file:///.../verified-profiles.json",
-//!         "cotest_issuer_did": "did:...",
+//!         "claim_kind": "conformance_verified",
+//!         "verification_run_id": "...",
+//!         "verifier_did": "did:...",
 //!         "signature": "<detached signature>",
 //!         "expires_at": "<RFC3339>"
 //!       }
@@ -70,14 +72,16 @@ struct VerifiedProfilesArtifact {
     #[serde(default)]
     run_id: Option<String>,
     #[serde(default)]
-    generated_at: Option<DateTime<Utc>>,
-    #[serde(default)]
     verified: Vec<RawVerifiedEntry>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawVerifiedEntry {
     profile_id: String,
+    #[serde(default)]
+    claim_kind: Option<String>,
+    #[serde(default)]
+    verification_run_id: Option<String>,
     #[serde(default)]
     service_role: Option<String>,
     #[serde(default)]
@@ -89,9 +93,11 @@ struct RawVerifiedEntry {
     #[serde(default)]
     artifact_ref: Option<String>,
     #[serde(default)]
-    cotest_issuer_did: Option<String>,
+    verifier_did: Option<String>,
     #[serde(default)]
     signature: Option<String>,
+    #[serde(default)]
+    timestamp: Option<DateTime<Utc>>,
     #[serde(default)]
     expires_at: Option<DateTime<Utc>>,
 }
@@ -103,10 +109,10 @@ struct RawVerifiedEntry {
 pub struct VerifiedProfileDescriptor {
     pub profile_id: String,
     pub service_role: String,
-    pub cotest_run_id: String,
+    pub verification_run_id: String,
     pub artifact_digest: String,
     pub artifact_ref: String,
-    pub cotest_issuer_did: arkret_sdk::Did,
+    pub verifier_did: arkret_sdk::Did,
     pub signature: String,
     pub timestamp: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
@@ -170,7 +176,6 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
     };
 
     let run_id = parsed.run_id.unwrap_or_default();
-    let generated_at = parsed.generated_at.unwrap_or_else(Utc::now);
     let mut out = Vec::with_capacity(parsed.verified.len());
     let total_input = parsed.verified.len();
     for entry in parsed.verified {
@@ -192,6 +197,21 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
         if role != SOLAND_SERVICE_ROLE {
             continue;
         }
+        if entry.claim_kind.as_deref() != Some("conformance_verified") {
+            tracing::warn!(
+                target: "verified_profiles",
+                profile_id = %entry.profile_id,
+                "dropping verified-profile entry: claim_kind must be conformance_verified"
+            );
+            continue;
+        }
+        let Some(verification_run_id) = required_non_empty(
+            entry.verification_run_id,
+            "verification_run_id",
+            &entry.profile_id,
+        ) else {
+            continue;
+        };
         let Some(artifact_digest) = valid_artifact_digest(entry.artifact_digest, &entry.profile_id)
         else {
             continue;
@@ -201,21 +221,19 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
         else {
             continue;
         };
-        let Some(cotest_issuer_did_raw) = required_non_empty(
-            entry.cotest_issuer_did,
-            "cotest_issuer_did",
-            &entry.profile_id,
-        ) else {
+        let Some(verifier_did_raw) =
+            required_non_empty(entry.verifier_did, "verifier_did", &entry.profile_id)
+        else {
             continue;
         };
-        let cotest_issuer_did = match arkret_sdk::Did::new(cotest_issuer_did_raw) {
+        let verifier_did = match arkret_sdk::Did::new(verifier_did_raw) {
             Ok(did) => did,
             Err(error) => {
                 tracing::warn!(
                     target: "verified_profiles",
                     profile_id = %entry.profile_id,
                     %error,
-                    "dropping verified-profile entry: invalid cotest_issuer_did"
+                    "dropping verified-profile entry: invalid verifier_did"
                 );
                 continue;
             }
@@ -224,15 +242,23 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
         else {
             continue;
         };
+        let Some(timestamp) = entry.timestamp else {
+            tracing::warn!(
+                target: "verified_profiles",
+                profile_id = %entry.profile_id,
+                "dropping verified-profile entry: missing timestamp"
+            );
+            continue;
+        };
         out.push(VerifiedProfileDescriptor {
             profile_id: entry.profile_id,
             service_role: role.to_owned(),
-            cotest_run_id: run_id.clone(),
+            verification_run_id,
             artifact_digest,
             artifact_ref,
-            cotest_issuer_did,
+            verifier_did,
             signature,
-            timestamp: generated_at,
+            timestamp,
             expires_at: entry.expires_at,
             test_count: entry.test_count.unwrap_or(0),
             spec_file: entry.spec_file,
@@ -329,24 +355,30 @@ mod tests {
             "verified": [
                  {
                      "profile_id": "ak.profile.principal_server.v1",
+                     "claim_kind": "conformance_verified",
+                     "verification_run_id": "test-run",
                      "service_role": "principal_server",
                      "test_count": 3,
                      "spec_file": "cotest/e2e/tests/conformance/profile-gates.spec.ts",
                      "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                      "artifact_ref": "file:///tmp/verified-profiles.json",
-                     "cotest_issuer_did": "did:web:cotest.example",
+                     "verifier_did": "did:web:cotest.example",
                      "signature": "eddsa-jcs-b64url:test-principal-signature",
+                     "timestamp": "2026-05-20T00:00:00Z",
                      "expires_at": "2026-06-20T00:00:00Z"
                  },
                  {
                      "profile_id": "ak.profile.auth_server.v1",
+                     "claim_kind": "conformance_verified",
+                     "verification_run_id": "test-run",
                      "service_role": "auth_server",
                      "test_count": 1,
                      "spec_file": "cotest/e2e/tests/sync/service-surface-contract.spec.ts",
                      "artifact_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                      "artifact_ref": "file:///tmp/verified-profiles.json",
-                     "cotest_issuer_did": "did:web:cotest.example",
-                     "signature": "eddsa-jcs-b64url:test-auth-signature"
+                     "verifier_did": "did:web:cotest.example",
+                     "signature": "eddsa-jcs-b64url:test-auth-signature",
+                     "timestamp": "2026-05-20T00:00:00Z"
                  }
             ]
         }"#;
@@ -355,13 +387,13 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].profile_id, "ak.profile.principal_server.v1");
         assert_eq!(v[0].service_role, "principal_server");
-        assert_eq!(v[0].cotest_run_id, "test-run");
+        assert_eq!(v[0].verification_run_id, "test-run");
         assert_eq!(
             v[0].artifact_digest,
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(v[0].artifact_ref, "file:///tmp/verified-profiles.json");
-        assert_eq!(v[0].cotest_issuer_did.as_str(), "did:web:cotest.example");
+        assert_eq!(v[0].verifier_did.as_str(), "did:web:cotest.example");
         assert_eq!(v[0].signature, "eddsa-jcs-b64url:test-principal-signature");
         assert_eq!(
             v[0].expires_at.unwrap().to_rfc3339(),

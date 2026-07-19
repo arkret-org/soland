@@ -40,6 +40,9 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             let title = operation_realm_title(operation).unwrap_or_else(|| realm_id.as_str());
             let mut entry = RealmDirectoryEntry::new(realm_id.clone(), title);
             entry.description = operation_realm_summary(operation).map(ToOwned::to_owned);
+            entry.realm_class = operation_realm_class(operation).map(ToOwned::to_owned);
+            entry.default_join_rule =
+                operation_realm_default_join_rule(operation).map(ToOwned::to_owned);
             // Realm alias (object-addressing.md §3.3): normalize the create-time
             // input under this deployment's authority domain, then reject if the
             // canonical alias is already taken by a different realm (first writer

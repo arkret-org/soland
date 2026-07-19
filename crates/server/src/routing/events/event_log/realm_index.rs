@@ -347,6 +347,14 @@ pub(super) async fn bootstrap_realm_member_index(
         payload_object.is_some_and(soland_domain::kinds::payload_declares_minimal_metadata_realm);
     let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed.clone(), title);
     entry.description = summary.clone();
+    entry.realm_class = payload_object
+        .and_then(|object| object.get("realm_class"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    entry.default_join_rule = payload_object
+        .and_then(|object| object.get("default_join_rule"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     entry.public = discoverability == "public";
     entry.members.insert(actor_typed);
     {
