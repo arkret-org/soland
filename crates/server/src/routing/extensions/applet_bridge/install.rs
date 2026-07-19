@@ -7,8 +7,8 @@ use arkret_sdk::{
     AppletApprovalRequest, AppletGhostActorMode, AppletId, AppletInstallAppletId,
     AppletInstallEffectiveStatus, AppletInstallOutcome, AppletInstallPlan,
     AppletInstallRequestBody, AppletPackage, AppletRejectedItem, AppletWireNamespaces,
-    CapabilityConstraint, DeniedScope, Did, E2eeEffect, E2eePolicy, EffectiveScope, EventId,
-    EventSubmission, GrantId, NamespaceConflict, RealmId, ScopeGrant, WidgetEffect,
+    CapabilityConstraint, DeniedScope, Did, DidDocument, E2eeEffect, E2eePolicy, EffectiveScope,
+    EventId, EventSubmission, GrantId, NamespaceConflict, RealmId, ScopeGrant, WidgetEffect,
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -808,11 +808,12 @@ pub(super) fn validate_applet_package(
     state: &AppState,
     package: &mut AppletPackage,
 ) -> Result<(), AppError> {
-    let evidence = registration_epoch_evidence_from_resolved_document(state, package)?;
+    let evidence = validated_registration_epoch_evidence(state, package)?;
     package.registration_epoch_evidence = Some(evidence);
-    package
-        .validate()
-        .map_err(|error| AppError::invalid_param(format!("applet package invalid: {error}")))?;
+    package.validate().map_err(|error| {
+        AppError::invalid_param(format!("applet package invalid: {error}"))
+            .with_wire_code("schema_violation")
+    })?;
     if let Some(expires_at) = package.expires_at
         && expires_at <= chrono::Utc::now()
     {
@@ -920,7 +921,7 @@ fn validate_controller_proof(
     })
 }
 
-fn registration_epoch_evidence_from_resolved_document(
+fn validated_registration_epoch_evidence(
     state: &AppState,
     package: &AppletPackage,
 ) -> Result<arkret_sdk::AppletRegistrationEpochEvidence, AppError> {
@@ -930,22 +931,17 @@ fn registration_epoch_evidence_from_resolved_document(
                 .with_wire_code("applet_registration_epoch_evidence_mismatch")
                 .with_reason_detail(reason)
         })?;
-    let method_evidence = arkret_sdk::AppletDidMethodVersionEvidence::unversioned(format!(
-        "did:{}",
-        package.service_id.method()
-    ))
-    .map_err(|reason| {
-        AppError::invalid_param("applet service DID method evidence is invalid")
+    validate_registration_epoch_evidence_for_document(package, &document)
+}
+
+fn validate_registration_epoch_evidence_for_document(
+    package: &AppletPackage,
+    document: &DidDocument,
+) -> Result<arkret_sdk::AppletRegistrationEpochEvidence, AppError> {
+    let evidence = package.registration_epoch_evidence.clone().ok_or_else(|| {
+        AppError::invalid_param("applet package registration_epoch evidence is required")
             .with_wire_code("applet_registration_epoch_evidence_mismatch")
-            .with_reason_detail(reason.to_string())
     })?;
-    let evidence =
-        arkret_sdk::AppletRegistrationEpochEvidence::from_did_document(&document, method_evidence)
-            .map_err(|reason| {
-                AppError::invalid_param("applet registration_epoch evidence could not be derived")
-                    .with_wire_code("applet_registration_epoch_evidence_mismatch")
-                    .with_reason_detail(reason.to_string())
-            })?;
     evidence
         .validate_against_did_document(&document)
         .map_err(|reason| {
@@ -1688,6 +1684,46 @@ mod tests {
             restored.registration_epoch_evidence,
             package.registration_epoch_evidence
         );
+    }
+
+    #[test]
+    fn registration_epoch_validation_preserves_supplied_version_evidence() {
+        let mut package = sample_package();
+        let document = DidDocument::new(
+            package.service_id.clone(),
+            package.webhook_auth.key_ref.clone(),
+            r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
+        );
+        let version_time = chrono::DateTime::parse_from_rfc3339("2026-07-18T00:00:00.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let evidence = arkret_sdk::AppletRegistrationEpochEvidence::from_did_document(
+            &document,
+            arkret_sdk::AppletDidMethodVersionEvidence::versioned(
+                "did:web",
+                None,
+                Some(version_time),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        package.registration_epoch_evidence = Some(evidence.clone());
+
+        let validated =
+            validate_registration_epoch_evidence_for_document(&package, &document).unwrap();
+        assert_eq!(validated, evidence);
+    }
+
+    #[test]
+    fn registration_epoch_validation_rejects_missing_supplied_evidence() {
+        let package = sample_package();
+        let document = DidDocument::new(
+            package.service_id.clone(),
+            package.webhook_auth.key_ref.clone(),
+            r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
+        );
+
+        assert!(validate_registration_epoch_evidence_for_document(&package, &document).is_err());
     }
 
     #[test]

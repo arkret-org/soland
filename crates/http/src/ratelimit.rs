@@ -35,11 +35,10 @@
 //! Directly exposed deployments keep the default fail-closed behaviour and
 //! bucket on the TCP peer address.
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use parking_lot::Mutex;
+use arkret_sdk::server::{FixedWindowConfig, MemoryFixedWindowRateLimiter};
 use salvo::prelude::*;
 
 /// Canonical paths whose [`EndpointClass`] is pinned. Shared by
@@ -246,7 +245,7 @@ impl EndpointClass {
 #[derive(Clone)]
 pub struct RateLimiter {
     config: RateLimiterConfig,
-    state: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
+    state: Arc<MemoryFixedWindowRateLimiter<String>>,
 }
 
 const RATE_LIMIT_MAX_ENTRIES: usize = 100_000;
@@ -254,8 +253,12 @@ const RATE_LIMIT_MAX_ENTRIES: usize = 100_000;
 impl RateLimiter {
     pub fn new(config: RateLimiterConfig) -> Self {
         Self {
+            state: Arc::new(MemoryFixedWindowRateLimiter::new(FixedWindowConfig::new(
+                u64::from(config.max_requests),
+                config.window,
+                RATE_LIMIT_MAX_ENTRIES,
+            ))),
             config,
-            state: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -263,9 +266,10 @@ impl RateLimiter {
     /// Returns true if allowed, false if rate limited.
     pub fn check(&self, key: &str) -> bool {
         self.check_with_ceiling(key, self.config.max_requests)
+            .is_ok()
     }
 
-    fn check_with_ceiling(&self, key: &str, ceiling: u32) -> bool {
+    fn check_with_ceiling(&self, key: &str, ceiling: u32) -> Result<(), Duration> {
         self.check_with_ceiling_window(key, ceiling, self.config.window)
     }
 
@@ -273,61 +277,18 @@ impl RateLimiter {
     /// rate-limiter middleware passes the live (hot-swappable) window/ceiling
     /// from `RuntimeSettings` here so quota changes take effect immediately;
     /// the shared counter map is unaffected by the source of the window.
-    fn check_with_ceiling_window(&self, key: &str, ceiling: u32, window: Duration) -> bool {
-        let mut state = self.state.lock();
-        let now = Instant::now();
-
-        if let Some((count, window_start)) = state.get_mut(key)
-            && now.duration_since(*window_start) < window
-        {
-            if *count >= ceiling {
-                return false;
-            }
-            *count += 1;
-            return true;
-        }
-
-        // Bound attacker-controlled peer/class cardinality. Expired entries
-        // are discarded first; if every entry is live, evict the oldest
-        // window before admitting a new key.
-        if !state.contains_key(key) && state.len() >= RATE_LIMIT_MAX_ENTRIES {
-            state.retain(|_, (_, window_start)| now.duration_since(*window_start) < window);
-            if state.len() >= RATE_LIMIT_MAX_ENTRIES
-                && let Some(oldest_key) = state
-                    .iter()
-                    .min_by_key(|(_, (_, window_start))| *window_start)
-                    .map(|(key, _)| key.clone())
-            {
-                state.remove(&oldest_key);
-            }
-        }
-
-        // New window or expired.
-        state.insert(key.to_owned(), (1, now));
-        true
-    }
-
-    /// Remaining time in the current window for a key.
-    pub fn retry_after(&self, key: &str) -> Duration {
-        self.retry_after_window(key, self.config.window)
-    }
-
-    /// [`Self::retry_after`] against an explicit window (the live window from
-    /// `RuntimeSettings`).
-    fn retry_after_window(&self, key: &str, window: Duration) -> Duration {
-        let state = self.state.lock();
-        let now = Instant::now();
-        state
-            .get(key)
-            .and_then(|(_, window_start)| window.checked_sub(now.duration_since(*window_start)))
-            .unwrap_or(window)
-    }
-
-    /// Clean up expired entries.
-    pub fn cleanup(&self) {
-        let mut state = self.state.lock();
-        let now = Instant::now();
-        state.retain(|_, (_, window_start)| now.duration_since(*window_start) < self.config.window);
+    fn check_with_ceiling_window(
+        &self,
+        key: &str,
+        ceiling: u32,
+        window: Duration,
+    ) -> Result<(), Duration> {
+        self.state
+            .check_with_config(
+                key.to_owned(),
+                FixedWindowConfig::new(u64::from(ceiling), window, RATE_LIMIT_MAX_ENTRIES),
+            )
+            .map_err(|rejection| rejection.retry_after)
     }
 }
 
@@ -419,11 +380,10 @@ impl Handler for RateLimiterMiddleware {
             .unwrap_or_else(|| self.limiter.config.clone());
         let ceiling = effective.ceiling_for(class);
 
-        if !self
-            .limiter
-            .check_with_ceiling_window(&key, ceiling, effective.window)
+        if let Err(retry_after) =
+            self.limiter
+                .check_with_ceiling_window(&key, ceiling, effective.window)
         {
-            let retry_after = self.limiter.retry_after_window(&key, effective.window);
             let retry_after_ms = retry_after.as_millis().try_into().unwrap_or(u64::MAX);
             let retry_after_seconds = retry_after_ms.div_ceil(1000).max(1);
             let request_id = arkret_sdk::new_prefixed_uuid7("ak:request:");
@@ -462,7 +422,9 @@ mod tests {
         assert!(limiter.check("client"));
         assert!(!limiter.check("client"));
 
-        let retry_after = limiter.retry_after("client");
+        let retry_after = limiter
+            .check_with_ceiling("client", 1)
+            .expect_err("client remains limited");
         assert!(retry_after > Duration::from_secs(0));
         assert!(retry_after <= Duration::from_secs(60));
     }

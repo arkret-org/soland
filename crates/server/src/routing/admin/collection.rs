@@ -59,6 +59,8 @@ pub(super) struct AdminRealmItem {
     title: String,
     topic: Option<String>,
     category: Option<String>,
+    realm_class: Option<String>,
+    default_join_rule: Option<String>,
     tags: Vec<String>,
     public: bool,
     member_count: usize,
@@ -86,27 +88,6 @@ pub(super) struct AdminRealmMemberItem {
     membership: String,
     role: String,
     joined_at: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminInviteTokenItem {
-    kind: String,
-    id: String,
-    invite_id: String,
-    token: String,
-    realm_id: String,
-    inviter: String,
-    created_by: String,
-    invitee: Option<String>,
-    invite_delivery_target: Option<Value>,
-    introduction_evidence_digest: Option<String>,
-    token_hash: String,
-    status: String,
-    uses_allowed: u64,
-    uses_completed: u64,
-    uses_pending: u64,
-    expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[endpoint(
@@ -486,6 +467,8 @@ async fn admin_realm_item_value(
         title: realm.title,
         topic: realm.description,
         category: realm.category,
+        realm_class: realm.realm_class,
+        default_join_rule: realm.default_join_rule,
         tags: realm.tags.into_iter().collect(),
         public: realm.public,
         member_count: realm.members.len(),
@@ -593,7 +576,9 @@ fn admin_applet_items(state: &AppState) -> Vec<Value> {
         .collect()
 }
 
-pub(super) async fn admin_invite_items(state: &AppState) -> Vec<AdminInviteTokenItem> {
+pub(super) async fn admin_invite_items(
+    state: &AppState,
+) -> Vec<soland_contracts::admin::invite_tokens::AdminInviteTokenItem> {
     state
         .realm_invite_application()
         .snapshot_all()
@@ -604,8 +589,10 @@ pub(super) async fn admin_invite_items(state: &AppState) -> Vec<AdminInviteToken
         .collect()
 }
 
-pub(super) fn admin_invite_item(invite: &RealmInviteRecord) -> AdminInviteTokenItem {
-    AdminInviteTokenItem {
+pub(super) fn admin_invite_item(
+    invite: &RealmInviteRecord,
+) -> soland_contracts::admin::invite_tokens::AdminInviteTokenItem {
+    soland_contracts::admin::invite_tokens::AdminInviteTokenItem {
         kind: "invite_token".to_owned(),
         id: invite.invite_id.clone(),
         invite_id: invite.invite_id.clone(),

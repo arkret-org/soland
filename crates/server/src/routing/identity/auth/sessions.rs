@@ -26,19 +26,17 @@ pub async fn authenticated_session(
     state: &AppState,
     req: &Request,
 ) -> Result<SessionRecord, (StatusCode, &'static str, &'static str)> {
-    if let Some(query) = req.uri().query()
-        && (query.contains("access_token=") || query.contains("auth=") || query.contains("token="))
+    if req
+        .uri()
+        .query()
+        .is_some_and(arkret_sdk::contains_query_auth_material)
     {
         // Spec: A.3 — auth material MUST NOT appear in query strings.
         // We log a truncated preview of the offending token so on-call
         // can correlate without persisting the full bearer in tracing
         // backends. The preview is at most 8 chars of the matched
         // `<param>=<token>` value; we never log the full token.
-        let preview = query_string_token_preview(query);
-        tracing::warn!(
-            token_preview = %preview,
-            "auth material in query strings rejected (token preview only, full value redacted)"
-        );
+        tracing::warn!("auth material in query strings rejected");
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
@@ -179,28 +177,6 @@ fn token_type_claim(payload: &serde_json::Value) -> Option<&str> {
         .get("type")
         .and_then(serde_json::Value::as_str)
         .or_else(|| payload.get("kind").and_then(serde_json::Value::as_str))
-}
-
-/// Extract a short, redaction-safe preview of any auth-material parameter
-/// (`access_token=`, `auth=`, or `token=`) found in `query`. Returns at most
-/// the first 8 characters of the parameter value, followed by `…` if the
-/// value was longer. Used by the query-string rejection path so tracing
-/// backends can correlate an offending request without persisting the
-/// full token.
-fn query_string_token_preview(query: &str) -> String {
-    const PREFIXES: &[&str] = &["access_token=", "auth=", "token="];
-    for pair in query.split('&') {
-        for prefix in PREFIXES {
-            if let Some(value) = pair.strip_prefix(prefix) {
-                let preview: String = value.chars().take(8).collect();
-                if value.chars().nth(8).is_some() {
-                    return format!("{preview}…");
-                }
-                return preview;
-            }
-        }
-    }
-    String::new()
 }
 
 #[cfg(test)]

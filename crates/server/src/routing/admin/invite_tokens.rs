@@ -7,8 +7,8 @@ use arkret_sdk::RealmId;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
+use soland_contracts::admin::invite_tokens::{AdminInviteTokenItem, CreateInviteTokenRequest};
 use soland_http::error::AppError;
 use soland_storage::RealmInviteRecord;
 
@@ -22,22 +22,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("{invite_id}").delete(revoke_invite_token))
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateInviteTokenRequest {
-    #[serde(default)]
-    pub realm_id: Option<String>,
-    #[serde(default)]
-    pub invitee: Option<String>,
-    #[serde(default)]
-    pub invite_delivery_target: Option<Value>,
-    #[serde(default)]
-    pub introduction_evidence_digest: Option<String>,
-    #[serde(default)]
-    pub uses_allowed: Option<u64>,
-    #[serde(default)]
-    pub expires_at: Option<String>,
-}
-
 #[endpoint(
     operation_id = "org.arkret.soland.admin.invite_tokens.create",
     tags("soland-admin", "invite_tokens"),
@@ -49,7 +33,7 @@ async fn create_invite_token(
     body: JsonBody<CreateInviteTokenRequest>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<super::collection::AdminInviteTokenItem> {
+) -> JsonResult<AdminInviteTokenItem> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -124,7 +108,7 @@ async fn revoke_invite_token(
     invite_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<super::collection::AdminInviteTokenItem> {
+) -> JsonResult<AdminInviteTokenItem> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;

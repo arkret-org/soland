@@ -27,12 +27,10 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::{Duration as StdDuration, Instant};
 
-use arkret_sdk::http_signature::{Ed25519PublicKey, public_key_from_bytes};
 use arkret_sdk::{DeviceId, Did, FreshnessState, SessionGrantProofKind};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use ed25519_dalek::{Signature, Verifier};
 use parking_lot::Mutex;
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
@@ -351,121 +349,6 @@ pub(crate) fn dpop_header(req: &Request) -> Option<String> {
         .map(str::to_owned)
 }
 
-struct DpopClaims {
-    htm: String,
-    htu: String,
-    ath: String,
-    jti: String,
-    iat: i64,
-    jwk_thumbprint: String,
-}
-
-/// Parse + cryptographically verify a DPoP proof JWT (RFC 9449). Verifies the
-/// EdDSA (Ed25519) signature against the embedded JWK and returns the decoded
-/// claims plus the JWK's RFC 7638 thumbprint. The thumbprint MUST later be
-/// matched against the grant's `cnf.jkt`.
-fn verify_dpop_proof(dpop: &str) -> Result<DpopClaims, AuthError> {
-    let mut parts = dpop.split('.');
-    let (header_b64, payload_b64, signature_b64) =
-        match (parts.next(), parts.next(), parts.next(), parts.next()) {
-            (Some(header), Some(payload), Some(signature), None) => (header, payload, signature),
-            _ => return Err(unauthenticated("DPoP proof is not a compact JWS")),
-        };
-
-    let header: Value = decode_json_segment(header_b64)
-        .ok_or_else(|| unauthenticated("DPoP proof header is not valid base64url JSON"))?;
-    if header.get("typ").and_then(Value::as_str) != Some("dpop+jwt") {
-        return Err(unauthenticated("DPoP proof typ is not dpop+jwt"));
-    }
-    if header.get("alg").and_then(Value::as_str) != Some("EdDSA") {
-        // soland session keys are Ed25519 OKP; only EdDSA DPoP is accepted.
-        return Err(unauthenticated("DPoP proof alg is not EdDSA"));
-    }
-    let jwk = header
-        .get("jwk")
-        .ok_or_else(|| unauthenticated("DPoP proof header is missing the jwk"))?;
-    let (public_key, thumbprint) = parse_dpop_jwk(jwk)?;
-
-    // Verify the signature over `base64url(header) "." base64url(payload)`.
-    let signing_input = format!("{header_b64}.{payload_b64}");
-    let signature_bytes = URL_SAFE_NO_PAD
-        .decode(signature_b64.as_bytes())
-        .map_err(|_| unauthenticated("DPoP proof signature is not base64url"))?;
-    let signature_array: [u8; 64] = signature_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| unauthenticated("DPoP proof signature is not 64 bytes"))?;
-    let signature = Signature::from_bytes(&signature_array);
-    public_key
-        .verify(signing_input.as_bytes(), &signature)
-        .map_err(|_| unauthenticated("DPoP proof signature is invalid"))?;
-
-    let payload: Value = decode_json_segment(payload_b64)
-        .ok_or_else(|| unauthenticated("DPoP proof payload is not valid base64url JSON"))?;
-    let htm = string_claim(&payload, "htm")
-        .ok_or_else(|| unauthenticated("DPoP proof is missing htm"))?;
-    let htu = string_claim(&payload, "htu")
-        .ok_or_else(|| unauthenticated("DPoP proof is missing htu"))?;
-    let ath = string_claim(&payload, "ath")
-        .ok_or_else(|| unauthenticated("DPoP proof is missing ath"))?;
-    let jti = string_claim(&payload, "jti")
-        .ok_or_else(|| unauthenticated("DPoP proof is missing jti"))?;
-    let iat = payload
-        .get("iat")
-        .and_then(Value::as_i64)
-        .ok_or_else(|| unauthenticated("DPoP proof is missing iat"))?;
-
-    Ok(DpopClaims {
-        htm,
-        htu,
-        ath,
-        jti,
-        iat,
-        jwk_thumbprint: thumbprint,
-    })
-}
-
-/// Parse a DPoP JWK header into its Ed25519 public key and RFC 7638 thumbprint.
-fn parse_dpop_jwk(jwk: &Value) -> Result<(Ed25519PublicKey, String), AuthError> {
-    let kty = jwk.get("kty").and_then(Value::as_str).unwrap_or_default();
-    let crv = jwk.get("crv").and_then(Value::as_str).unwrap_or_default();
-    if kty != "OKP" || crv != "Ed25519" {
-        return Err(unauthenticated("DPoP proof jwk is not an Ed25519 OKP key"));
-    }
-    let x = jwk
-        .get("x")
-        .and_then(Value::as_str)
-        .filter(|x| !x.is_empty())
-        .ok_or_else(|| unauthenticated("DPoP proof jwk is missing x"))?;
-    let bytes = URL_SAFE_NO_PAD
-        .decode(x.as_bytes())
-        .map_err(|_| unauthenticated("DPoP proof jwk x is not base64url"))?;
-    let public_key = public_key_from_bytes(&bytes)
-        .map_err(|_| unauthenticated("DPoP proof jwk x is not a valid Ed25519 key"))?;
-    Ok((public_key, jwk_thumbprint_ed25519(x)))
-}
-
-/// RFC 7638 JWK thumbprint for an Ed25519 OKP key (base64url `x`). The members
-/// are serialized in lexicographic order with no whitespace, per RFC 7638 §3.
-fn jwk_thumbprint_ed25519(x: &str) -> String {
-    let canonical = format!("{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{x}\"}}");
-    URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()))
-}
-
-fn decode_json_segment(segment: &str) -> Option<Value> {
-    let bytes = URL_SAFE_NO_PAD.decode(segment.as_bytes()).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-fn string_claim(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 // ── Orchestration ────────────────────────────────────────────────────────────
 
 /// Whether a `ak.session.grant` + DPoP credential is being presented: the
@@ -600,6 +483,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
 }
 
 pub(crate) fn verify_grant_dpop_request(
+    state: &AppState,
     req: &Request,
     grant_jwt: &str,
     cnf_jkt: Option<&str>,
@@ -608,42 +492,33 @@ pub(crate) fn verify_grant_dpop_request(
     let cnf_jkt = cnf_jkt.filter(|jkt| !jkt.is_empty()).ok_or_else(|| {
         unauthenticated("session grant introspection omitted cnf_jkt; cannot bind DPoP")
     })?;
-    let claims = verify_dpop_proof(&dpop)?;
-    if claims.jwk_thumbprint != cnf_jkt {
+    let expected_htu = format!(
+        "{}{}",
+        state.config.public_base_url.trim_end_matches('/'),
+        req.uri().path()
+    );
+    let now = crate::wire::now();
+    let verified =
+        arkret_sdk::dpop::verify_dpop_proof(&arkret_sdk::dpop::DpopVerificationRequest {
+            proof_jwt: &dpop,
+            method: req.method().as_str(),
+            htu: &expected_htu,
+            access_token: Some(grant_jwt),
+            now,
+            max_age: Duration::seconds(DPOP_MAX_AGE_SECONDS),
+            max_future_skew: Duration::seconds(DPOP_MAX_FUTURE_SKEW_SECONDS),
+        })
+        .map_err(|_| unauthenticated("DPoP proof validation failed"))?;
+    if verified.jkt != cnf_jkt {
         return Err(unauthenticated(
             "DPoP proof key thumbprint does not match the grant's cnf.jkt",
         ));
     }
 
-    let method = req.method().as_str();
-    if !claims.htm.eq_ignore_ascii_case(method) {
-        return Err(unauthenticated(
-            "DPoP htm does not match the request method",
-        ));
-    }
-    if !htu_matches(&claims.htu, req) {
-        return Err(unauthenticated("DPoP htu does not match the request URL"));
-    }
-    let expected_ath = URL_SAFE_NO_PAD.encode(Sha256::digest(grant_jwt.as_bytes()));
-    if claims.ath != expected_ath {
-        return Err(unauthenticated(
-            "DPoP ath does not match the presented session grant",
-        ));
-    }
-
-    let now = crate::wire::now();
-    let iat = DateTime::<Utc>::from_timestamp(claims.iat, 0)
-        .ok_or_else(|| unauthenticated("DPoP iat is not a valid timestamp"))?;
-    if iat > now + Duration::seconds(DPOP_MAX_FUTURE_SKEW_SECONDS) {
-        return Err(unauthenticated("DPoP proof iat is in the future"));
-    }
-    if now - iat > Duration::seconds(DPOP_MAX_AGE_SECONDS) {
-        return Err(unauthenticated(
-            "DPoP proof iat is outside the freshness window",
-        ));
-    }
+    let iat = DateTime::<Utc>::from_timestamp(verified.claims.iat, 0)
+        .expect("SDK verifier accepts only representable DPoP timestamps");
     let jti_expiry = iat + Duration::seconds(DPOP_MAX_AGE_SECONDS + DPOP_MAX_FUTURE_SKEW_SECONDS);
-    match register_dpop_jti(&claims.jti, jti_expiry) {
+    match register_dpop_jti(&verified.claims.jti, jti_expiry) {
         DpopReplayRegistration::Accepted => {}
         DpopReplayRegistration::Replay => {
             return Err(unauthenticated(
@@ -697,7 +572,7 @@ pub(crate) async fn grant_dpop_session(
     }
 
     // 2. DPoP signature valid against the grant's cnf.jkt.
-    verify_grant_dpop_request(req, grant_jwt, grant.cnf_jkt.as_deref())?;
+    verify_grant_dpop_request(state, req, grant_jwt, grant.cnf_jkt.as_deref())?;
 
     // Synthesize the request-scoped session. `token_hash` carries a stable,
     // grant-derived value so downstream code that keys on it (e.g. self-path
@@ -718,116 +593,11 @@ pub(crate) async fn grant_dpop_session(
     })
 }
 
-/// Compare the DPoP `htu` to the request URL. RFC 9449 §4.3 normalizes away the
-/// query and fragment before comparison, so we compare scheme + authority +
-/// path. The request authority comes from the `Host` header (the
-/// client-visible gate origin behind the deployment front).
-fn htu_matches(htu: &str, req: &Request) -> bool {
-    let Some(htu_normalized) = normalize_htu(htu) else {
-        return false;
-    };
-    let path = req.uri().path();
-    // The scheme/authority as the client saw them are not reliably reconstructable
-    // server-side behind a TLS-terminating front, so bind on authority + path:
-    // match when the htu ends with `<authority><path>` and its path component
-    // equals the request path.
-    match request_authority(req) {
-        Some(authority) => {
-            let want = format!("{authority}{path}");
-            htu_normalized.ends_with(&want) && htu_path(&htu_normalized) == path
-        }
-        // No authority header: fall back to a path-only binding so a same-origin
-        // deployment still validates.
-        None => htu_path(&htu_normalized) == path,
-    }
-}
-
-/// The client-visible authority (`host[:port]`) of the request. Behind the
-/// deployment gateway the upstream `Host` header is frequently rewritten to the
-/// internal origin (`soland:8080`), which would never equal the gate origin the
-/// client signed into the DPoP `htu`. So prefer `X-Forwarded-Host` (the first /
-/// client-facing hop the gateway records) and fall back to `Host` for a
-/// same-origin deployment with no proxy in front.
-fn request_authority(req: &Request) -> Option<&str> {
-    let forwarded = req
-        .headers()
-        .get("x-forwarded-host")
-        .and_then(|value| value.to_str().ok());
-    let host = req
-        .headers()
-        .get("host")
-        .and_then(|value| value.to_str().ok());
-    select_authority(forwarded, host)
-}
-
-/// Choose the client-visible authority from the (`X-Forwarded-Host`, `Host`)
-/// pair: prefer the first `X-Forwarded-Host` hop, fall back to `Host`. Whitespace
-/// is trimmed and empty values are ignored.
-fn select_authority<'a>(forwarded: Option<&'a str>, host: Option<&'a str>) -> Option<&'a str> {
-    let forwarded = forwarded
-        .map(|value| value.split(',').next().unwrap_or(value).trim())
-        .filter(|value| !value.is_empty());
-    if forwarded.is_some() {
-        return forwarded;
-    }
-    host.map(str::trim).filter(|value| !value.is_empty())
-}
-
-/// Strip the query and fragment from an htu (RFC 9449 §4.3 normalization).
-fn normalize_htu(htu: &str) -> Option<String> {
-    let trimmed = htu.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let without_fragment = trimmed.split('#').next().unwrap_or(trimmed);
-    let without_query = without_fragment
-        .split('?')
-        .next()
-        .unwrap_or(without_fragment);
-    Some(without_query.to_owned())
-}
-
-/// Extract the path component of a normalized htu (everything from the first `/`
-/// after the scheme://authority).
-fn htu_path(htu: &str) -> &str {
-    let after_scheme = htu.split_once("://").map(|(_, rest)| rest).unwrap_or(htu);
-    match after_scheme.find('/') {
-        Some(index) => &after_scheme[index..],
-        None => "/",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use arkret_sdk::{GrantId, RealmId};
 
     use super::*;
-
-    const RFC8037_X: &str = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
-    const RFC8037_THUMBPRINT: &str = "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k";
-
-    #[test]
-    fn jwk_thumbprint_matches_rfc8037() {
-        assert_eq!(jwk_thumbprint_ed25519(RFC8037_X), RFC8037_THUMBPRINT);
-    }
-
-    #[test]
-    fn htu_path_strips_scheme_authority() {
-        assert_eq!(
-            htu_path("https://account.example/_arkret/self/events"),
-            "/_arkret/self/events"
-        );
-        assert_eq!(htu_path("/_arkret/self/events"), "/_arkret/self/events");
-        assert_eq!(htu_path("https://account.example"), "/");
-    }
-
-    #[test]
-    fn normalize_htu_drops_query_and_fragment() {
-        assert_eq!(
-            normalize_htu("https://h/p?a=b#frag").as_deref(),
-            Some("https://h/p"),
-        );
-    }
 
     #[test]
     fn jti_replay_is_rejected_within_window() {
@@ -867,32 +637,6 @@ mod tests {
             DpopReplayRegistration::Full
         );
         assert!(!seen.contains_key("capacity-overflow"));
-    }
-
-    #[test]
-    fn select_authority_prefers_forwarded_host() {
-        // Gateway records the client-facing host in X-Forwarded-Host while the
-        // upstream Host is the internal origin: the forwarded value wins.
-        assert_eq!(
-            select_authority(Some("account.example"), Some("soland:8080")),
-            Some("account.example")
-        );
-        // Multi-hop X-Forwarded-Host: only the first (client-facing) hop is used.
-        assert_eq!(
-            select_authority(Some("account.example, gw.internal"), Some("soland:8080")),
-            Some("account.example")
-        );
-        // No forwarded header: fall back to Host.
-        assert_eq!(
-            select_authority(None, Some("account.example")),
-            Some("account.example")
-        );
-        // Empty/whitespace forwarded value is ignored, not treated as authority.
-        assert_eq!(
-            select_authority(Some("  "), Some("account.example")),
-            Some("account.example")
-        );
-        assert_eq!(select_authority(None, None), None);
     }
 
     #[test]

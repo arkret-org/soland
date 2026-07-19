@@ -15,6 +15,7 @@ salvo = ["dep:salvo"]
 
 [dependencies]
 arkret-core = {workspace = true,default-features = false}
+chrono = {workspace = true,features = ["serde"]}
 salvo = {workspace = true,optional = true,features = ["oapi"]}
 serde = {workspace = true,features = ["derive"]}
 serde_json = {workspace = true}

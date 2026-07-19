@@ -958,7 +958,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
         snapshot
             .effective_entries
             .iter()
-            .all(|entry| entry.event_id.starts_with("ak:event:")),
+            .all(|entry| entry.event_id.as_str().starts_with("ak:event:")),
         "effective entries must live in the ak:event: id space"
     );
 }
@@ -1742,6 +1742,9 @@ fn auth_material_present_separates_anonymous_from_bad_credential() {
     assert!(auth_material_present(None, Some("access_token=x")));
     assert!(auth_material_present(None, Some("foo=1&auth=y")));
     assert!(auth_material_present(None, Some("token=z")));
+    assert!(auth_material_present(None, Some("Signature=z")));
+    assert!(auth_material_present(None, Some("sign%61ture=z")));
+    assert!(!auth_material_present(None, Some("tokenized=true")));
 
     // A non-bearer Authorization scheme is not bearer material on its own.
     assert!(!auth_material_present(Some("Basic dXNlcjpwYXNz"), None));

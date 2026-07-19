@@ -56,6 +56,7 @@ pub(super) async fn logout(
 
     let grant = introspect_session_grant_for_logout(state, &grant_jwt).await?;
     super::super::auth_grant_dpop::verify_grant_dpop_request(
+        state,
         req,
         &grant_jwt,
         grant.cnf_jkt.as_deref(),

@@ -36,9 +36,7 @@ const SUBSCRIBE_REBUILD_DEBOUNCE_MS: u64 = 150;
 pub(crate) fn auth_material_present(authorization: Option<&str>, query: Option<&str>) -> bool {
     let header_bearer = authorization
         .is_some_and(|value| value.starts_with("Bearer ") || value.starts_with("bearer "));
-    let query_token = query.is_some_and(|query| {
-        query.contains("access_token=") || query.contains("auth=") || query.contains("token=")
-    });
+    let query_token = query.is_some_and(arkret_sdk::contains_query_auth_material);
     header_bearer || query_token
 }
 
