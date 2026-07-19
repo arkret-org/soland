@@ -1,8 +1,8 @@
 use super::{
     AsyncConnection, BigInt, Bool, InviteLocatorInsertOutcome, InviteLocatorRecord,
-    InviteLocatorStore, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
-    PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Timestamptz, Utc, Value,
-    async_trait, pg_conn, sql_query,
+    InviteLocatorRotateMutation, InviteLocatorStore, Jsonb, Nullable, OptionalExtension,
+    PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
+    Text, Timestamptz, Utc, Value, async_trait, pg_conn, sql_query,
 };
 
 pub struct PgInviteLocatorStore {
@@ -110,7 +110,7 @@ impl InviteLocatorStore for PgInviteLocatorStore {
         &self,
         subject_id: &str,
         old_locator_id: &str,
-        replacement: &InviteLocatorRecord,
+        mutation: &InviteLocatorRotateMutation,
         now: chrono::DateTime<Utc>,
     ) -> PersistenceResult<Option<InviteLocatorRecord>> {
         let mut conn = pg_conn(&self.pool)
@@ -118,12 +118,13 @@ impl InviteLocatorStore for PgInviteLocatorStore {
             .map_err(PersistenceError::database)?;
         let subject_id = subject_id.to_owned();
         let old_locator_id = old_locator_id.to_owned();
-        let replacement = replacement.clone();
+        let mutation = mutation.clone();
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let old = sql_query("SELECT record_payload, one_time_use, revoked_at, consumed_at FROM invite_locators WHERE locator_id = $1 AND subject_id = $2 AND expires_at > $3 AND revoked_at IS NULL AND consumed_at IS NULL FOR UPDATE")
                 .bind::<Text, _>(&old_locator_id).bind::<Text, _>(&subject_id).bind::<Timestamptz, _>(now)
                 .get_result::<LocatorRow>(conn).await.optional()?;
-            if old.is_none() { return Ok(None); }
+            let Some(old) = old.map(decode).transpose()? else { return Ok(None); };
+            let replacement = mutation.apply_to(&old);
             sql_query("UPDATE invite_locators SET revoked_at = $2 WHERE locator_id = $1")
                 .bind::<Text, _>(&old_locator_id).bind::<Timestamptz, _>(now).execute(conn).await?;
             let replacement_payload = payload(&replacement)?;

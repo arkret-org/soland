@@ -22,14 +22,14 @@ use arkret_sdk::{
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
-use salvo::http::StatusCode;
+use salvo::http::{HeaderValue, StatusCode};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::sha256_hex;
-use soland_storage::{AccountDataRecord, SessionRecord};
+use soland_storage::{AccountDataRecord, InviteLocatorRotateMutation, SessionRecord};
 
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
@@ -43,6 +43,7 @@ const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
 const ACTIVE_LOCATOR_LIMIT: usize = 16;
+const INVITE_LOCATOR_CACHE_CONTROL: &str = "private, no-store";
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
 const MAX_INVITE_QUARANTINE_ENTRIES: usize = 200;
 const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:invite_quarantine";
@@ -72,10 +73,10 @@ fn new_invite_locator(
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(i64::from(options.effective_ttl_seconds()));
-    let token = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 24]>());
+    let (token, token_digest) = new_invite_locator_secret();
     let record = soland_storage::InviteLocatorRecord {
         locator_id: format!("ak:invite_locator:{}", uuid::Uuid::now_v7()),
-        token_digest: format!("sha256:{}", sha256_hex(token.as_bytes())),
+        token_digest,
         subject_id: subject_id.to_owned(),
         recipient_service_id: recipient_service_id.to_owned(),
         issued_at,
@@ -86,6 +87,19 @@ fn new_invite_locator(
         consumed_at: None,
     };
     Ok((record, token))
+}
+
+fn new_invite_locator_secret() -> (String, String) {
+    let token = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 24]>());
+    let token_digest = format!("sha256:{}", sha256_hex(token.as_bytes()));
+    (token, token_digest)
+}
+
+fn set_invite_locator_secret_response_headers(res: &mut Response) {
+    res.headers_mut().insert(
+        "cache-control",
+        HeaderValue::from_static(INVITE_LOCATOR_CACHE_CONTROL),
+    );
 }
 
 fn locator_issue_outcome(
@@ -105,6 +119,7 @@ async fn issue_invite_locator(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
+    res: &mut Response,
     body: JsonBody<InviteLocatorIssueRequestBody>,
 ) -> JsonResult<InviteLocatorIssueOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -117,6 +132,7 @@ async fn issue_invite_locator(
         .map_err(|error| AppError::internal(format!("invite locator insert: {error}")))?
     {
         soland_storage::InviteLocatorInsertOutcome::Inserted => {
+            set_invite_locator_secret_response_headers(res);
             json_ok(locator_issue_outcome(&record, token))
         }
         soland_storage::InviteLocatorInsertOutcome::ActiveLimitReached => Err(AppError::new(
@@ -132,6 +148,7 @@ async fn rotate_invite_locator(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
+    res: &mut Response,
     body: JsonBody<InviteLocatorRotateRequestBody>,
 ) -> JsonResult<InviteLocatorIssueOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -139,16 +156,24 @@ async fn rotate_invite_locator(
     let body = body.into_inner();
     body.validate_minimal()
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    let (replacement, token) =
-        new_invite_locator(&session.actor, &state.service_id, body.issue_options())?;
+    let (token, token_digest) = new_invite_locator_secret();
+    let mutation = InviteLocatorRotateMutation {
+        locator_id: format!("ak:invite_locator:{}", uuid::Uuid::now_v7()),
+        token_digest,
+        issued_at: now(),
+        ttl_seconds: body.ttl_seconds,
+        one_time_use: body.one_time_use,
+        display_hint: body.display_hint,
+    };
     let Some(record) = state
         .invite_locator_store()
-        .rotate(&session.actor, &body.locator_id, &replacement, now())
+        .rotate(&session.actor, &body.locator_id, &mutation, now())
         .await
         .map_err(|error| AppError::internal(format!("invite locator rotate: {error}")))?
     else {
         return Err(invite_locator_not_found());
     };
+    set_invite_locator_secret_response_headers(res);
     json_ok(locator_issue_outcome(&record, token))
 }
 
@@ -387,9 +412,9 @@ async fn resolve_invite_locator(
         .ok_or_else(invite_locator_not_found)?;
     let subject_id =
         Did::new(locator_ref.subject_id.clone()).map_err(|_| invite_locator_not_found())?;
-    let issued_at = now();
+    let issued_at = locator_ref.issued_at;
     let expires_at = locator_ref.expires_at;
-    let locator_ref_digest = Hash::new(canonical::sha256_digest(locator_token.as_bytes()))
+    let locator_ref_digest = Hash::new(locator_ref.token_digest.clone())
         .map_err(|error| AppError::internal(format!("locator_ref_digest invalid: {error}")))?;
     let display_hint = locator_ref.display_hint;
     let recipient_service_id = Did::new(locator_ref.recipient_service_id).map_err(|error| {
@@ -428,10 +453,10 @@ async fn resolve_invite_locator(
         proof_purpose: PrincipalLocatorProofPurpose::RecipientServiceAcceptance,
         proof: DetachedPayloadProof {
             kind: "detached_jws".to_owned(),
-            verification_method: format!("{}#server-key-1", state.service_id),
+            verification_method: format!("{}#notary-key", state.service_id),
             alg: "EdDSA".to_owned(),
             payload_digest,
-            created_at: issued_at,
+            created_at: now(),
             domain: None,
             audience: None,
             jws,
@@ -1537,11 +1562,29 @@ fn required_header(req: &Request, name: &'static str) -> Result<String, AppError
 }
 
 fn locator_token_appears_in_url(req: &Request) -> bool {
-    req.uri()
-        .query()
-        .is_some_and(|query| query.contains("locator_token=") || query.contains("token="))
+    req.uri().query().is_some()
 }
 
 fn invite_locator_not_found() -> AppError {
     AppError::not_found("invite locator not found")
+}
+
+#[cfg(test)]
+mod invite_locator_security_tests {
+    use super::*;
+
+    #[test]
+    fn issued_secret_is_192_bit_opaque_and_never_enters_the_durable_record() {
+        let (record, token) = new_invite_locator(
+            "did:webvh:z6mkfixture:alice.example",
+            "did:webvh:z6mkfixture:ps.example",
+            InviteLocatorIssueRequestBody::default(),
+        )
+        .unwrap();
+        assert_eq!(URL_SAFE_NO_PAD.decode(&token).unwrap().len(), 24);
+        assert!(serde_json::from_slice::<Value>(&URL_SAFE_NO_PAD.decode(&token).unwrap()).is_err());
+        let durable = serde_json::to_string(&record).unwrap();
+        assert!(!durable.contains(&token));
+        assert!(durable.contains(&format!("sha256:{}", sha256_hex(token.as_bytes()))));
+    }
 }

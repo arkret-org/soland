@@ -1,6 +1,6 @@
 use super::{
-    BTreeMap, InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorStore, Mutex,
-    PersistenceResult, Utc, async_trait,
+    BTreeMap, InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorRotateMutation,
+    InviteLocatorStore, Mutex, PersistenceResult, Utc, async_trait,
 };
 
 pub(crate) struct MemoryInviteLocatorStore {
@@ -73,10 +73,18 @@ impl InviteLocatorStore for MemoryInviteLocatorStore {
         &self,
         subject_id: &str,
         old_locator_id: &str,
-        replacement: &InviteLocatorRecord,
+        mutation: &InviteLocatorRotateMutation,
         now: chrono::DateTime<Utc>,
     ) -> PersistenceResult<Option<InviteLocatorRecord>> {
         let mut rows = self.by_id.lock();
+        if rows
+            .values()
+            .any(|row| row.token_digest == mutation.token_digest)
+        {
+            return Err(soland_storage::PersistenceError::Conflict(
+                "invite locator token digest collision".to_owned(),
+            ));
+        }
         let Some(old) = rows.get_mut(old_locator_id) else {
             return Ok(None);
         };
@@ -87,9 +95,10 @@ impl InviteLocatorStore for MemoryInviteLocatorStore {
         {
             return Ok(None);
         }
+        let replacement = mutation.apply_to(old);
         old.revoked_at = Some(now);
         rows.insert(replacement.locator_id.clone(), replacement.clone());
-        Ok(Some(replacement.clone()))
+        Ok(Some(replacement))
     }
 
     async fn revoke(
@@ -169,15 +178,18 @@ mod tests {
             "sha256:old",
             false,
         );
-        let replacement = record(
-            "ak:invite_locator:0196419b-0000-7000-8000-000000000001",
-            "sha256:new",
-            false,
-        );
         let now = Utc::now();
+        let mutation = InviteLocatorRotateMutation {
+            locator_id: "ak:invite_locator:0196419b-0000-7000-8000-000000000001".to_owned(),
+            token_digest: "sha256:new".to_owned(),
+            issued_at: now,
+            ttl_seconds: None,
+            one_time_use: None,
+            display_hint: None,
+        };
         store.insert(&old, 16, now).await.unwrap();
         store
-            .rotate(&old.subject_id, &old.locator_id, &replacement, now)
+            .rotate(&old.subject_id, &old.locator_id, &mutation, now)
             .await
             .unwrap()
             .unwrap();
@@ -195,5 +207,93 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn rotate_preserves_lifetime_policy_and_hint_unless_overridden() {
+        let store = MemoryInviteLocatorStore::new();
+        let mut old = record(
+            "ak:invite_locator:0196419b-0000-7000-8000-000000000000",
+            "sha256:old",
+            true,
+        );
+        old.display_hint = Some(arkret_sdk::PrincipalLocatorDisplayHint {
+            display_name_hint: Some("Alice".to_owned()),
+            avatar_blob_ref: None,
+        });
+        let now = old.issued_at + Duration::seconds(30);
+        store.insert(&old, 16, old.issued_at).await.unwrap();
+        let preserved = store
+            .rotate(
+                &old.subject_id,
+                &old.locator_id,
+                &InviteLocatorRotateMutation {
+                    locator_id: "ak:invite_locator:0196419b-0000-7000-8000-000000000001".to_owned(),
+                    token_digest: "sha256:new".to_owned(),
+                    issued_at: now,
+                    ttl_seconds: None,
+                    one_time_use: None,
+                    display_hint: None,
+                },
+                now,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            preserved.expires_at - preserved.issued_at,
+            Duration::minutes(15)
+        );
+        assert!(preserved.one_time_use);
+        assert_eq!(preserved.display_hint, old.display_hint);
+
+        let cleared = store
+            .rotate(
+                &old.subject_id,
+                &preserved.locator_id,
+                &InviteLocatorRotateMutation {
+                    locator_id: "ak:invite_locator:0196419b-0000-7000-8000-000000000002".to_owned(),
+                    token_digest: "sha256:newer".to_owned(),
+                    issued_at: now + Duration::seconds(1),
+                    ttl_seconds: Some(60),
+                    one_time_use: Some(false),
+                    display_hint: Some(None),
+                },
+                now + Duration::seconds(1),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cleared.expires_at - cleared.issued_at,
+            Duration::seconds(60)
+        );
+        assert!(!cleared.one_time_use);
+        assert_eq!(cleared.display_hint, None);
+    }
+
+    #[tokio::test]
+    async fn revoke_is_idempotent_and_keeps_the_first_timestamp() {
+        let store = MemoryInviteLocatorStore::new();
+        let row = record(
+            "ak:invite_locator:0196419b-0000-7000-8000-000000000000",
+            "sha256:one",
+            false,
+        );
+        let first = row.issued_at + Duration::seconds(1);
+        let retry = first + Duration::seconds(1);
+        store.insert(&row, 16, row.issued_at).await.unwrap();
+        let initial = store
+            .revoke(&row.subject_id, &row.locator_id, first)
+            .await
+            .unwrap()
+            .unwrap();
+        let repeated = store
+            .revoke(&row.subject_id, &row.locator_id, retry)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(initial.revoked_at, Some(first));
+        assert_eq!(repeated.revoked_at, Some(first));
     }
 }
