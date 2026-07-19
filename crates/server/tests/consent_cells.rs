@@ -244,6 +244,26 @@ fn signed_event(
     actor_seq: u64,
     payload: Value,
 ) -> Value {
+    signed_event_with_prev_refs(
+        seed,
+        actor,
+        realm_id,
+        kind,
+        actor_seq,
+        payload,
+        Vec::new(),
+    )
+}
+
+fn signed_event_with_prev_refs(
+    seed: [u8; 32],
+    actor: &str,
+    realm_id: &str,
+    kind: &str,
+    actor_seq: u64,
+    payload: Value,
+    prev_refs: Vec<arkret_sdk::EventId>,
+) -> Value {
     let now = Utc::now();
     assert_eq!(actor, signing_actor(seed));
     let actor_id = arkret_sdk::Did::new(actor.to_owned()).expect("fixture actor DID");
@@ -266,6 +286,7 @@ fn signed_event(
         now,
     )
     .expect("SDK Event builder accepts consent fixture");
+    event.prev_refs = prev_refs;
     let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
         seed,
         actor_id,
@@ -309,9 +330,7 @@ async fn submit_event(
 async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: &str) -> String {
     let realm_id = ids::generate_realm_id();
     let created_at = iso_now();
-    submit_event(
-        app,
-        token,
+    let create = signed_event(
         seed,
         actor,
         &realm_id,
@@ -345,8 +364,71 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
                 "created_at": created_at
             }
         }),
+    );
+    let create_event_id = arkret_sdk::EventId::new(
+        create["event_id"]
+            .as_str()
+            .expect("Realm create fixture has an Event id")
+            .to_owned(),
     )
-    .await;
+    .expect("Realm create fixture Event id is canonical");
+    let grant_id = ids::generate_grant_id();
+    let grant_proof = serde_json::to_value(arkret_sdk::PayloadProof {
+        kind: arkret_sdk::proof_kind::DETACHED_JWS.to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method: format!("{actor}#founding-grant"),
+        payload_digest: arkret_sdk::Hash::new(format!("sha256:{}", "0".repeat(64)))
+            .expect("fixture payload digest"),
+        created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+            .expect("fixture created_at")
+            .with_timezone(&Utc),
+        domain: None,
+        audience: None,
+        proof_purpose: Some(arkret_sdk::PayloadProofPurpose::IssuerAttestation),
+        jws: "eyJhbGciOiJFZERTQSJ9..c2lnbmF0dXJl".to_owned(),
+    })
+    .expect("founding grant proof serializes");
+    let founding = signed_event_with_prev_refs(
+        seed,
+        actor,
+        &realm_id,
+        arkret_sdk::events::EventKind::CAPABILITY_GRANT,
+        2,
+        serde_json::json!({
+            "grant_id": grant_id,
+            "grant": {
+                "id": grant_id,
+                "schema": "ak.schema.capability.v1",
+                "realm_id": realm_id,
+                "issuer": actor,
+                "subject": actor,
+                "actions": [
+                    "ak.realm.admin",
+                    "ak.capability.grant",
+                    "ak.capability.revoke"
+                ],
+                "resources": [{
+                    "kind": "realm",
+                    "realm_id": realm_id,
+                    "match_scope": "realm_wide"
+                }],
+                "issued_at": created_at,
+                "proofs": [grant_proof]
+            }
+        }),
+        vec![create_event_id],
+    );
+    let mut response = TestClient::post("http://server/_arkret/self/events")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"events": [create, founding]}))
+        .send(app)
+        .await;
+    let status = response.status_code.expect("Realm bootstrap status");
+    let body = response.take_string().await.unwrap_or_default();
+    assert!(
+        matches!(status, StatusCode::OK | StatusCode::CREATED),
+        "Realm bootstrap failed with {status}: {body}"
+    );
     realm_id
 }
 
@@ -398,7 +480,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
     assert_eq!(pending_contact["status"], "pending");
 
     let consent_id = ids::generate("consent");
-    let grant_seq = 2_u64;
+    let grant_seq = 3_u64;
     let grant_response = submit_event(
         &app,
         &alice_token,
@@ -455,7 +537,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
         &alice,
         &realm_id,
         "ak.consent.revoke",
-        3,
+        4,
         revoke_payload,
     )
     .await;
@@ -547,7 +629,7 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
     request_contact(&app, &alice_token, &bob, "invite").await;
 
     let consent_id = ids::generate("consent");
-    let grant_seq = 2_u64;
+    let grant_seq = 3_u64;
     let grant_response = submit_event(
         &app,
         &bob_token,
