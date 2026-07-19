@@ -89,6 +89,15 @@ pub(in crate::routing) async fn submit_event_value(
     session: &SessionRecord,
     envelope: Value,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    if event_string_field_from_value(&envelope, "kind").as_deref()
+        == Some(arkret_sdk::events::EventKind::REALM_CREATE)
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            "realm_founding_grant_missing",
+        ));
+    }
     if batch_contains_identity_anchor(std::slice::from_ref(&envelope)) {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
@@ -135,6 +144,15 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
     envelope: Value,
     idempotency: EventCommitIdempotency,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    if event_string_field_from_value(&envelope, "kind").as_deref()
+        == Some(arkret_sdk::events::EventKind::REALM_CREATE)
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            "realm_founding_grant_missing",
+        ));
+    }
     if batch_contains_identity_anchor(std::slice::from_ref(&envelope)) {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,

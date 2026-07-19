@@ -252,6 +252,12 @@ pub(crate) async fn validate_event_envelope_with_context(
         && realm_bootstrap_contexts
             .iter()
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id);
+    let is_realm_founding_grant = kind == arkret_sdk::events::EventKind::CAPABILITY_GRANT
+        && realm_bootstrap_contexts.iter().any(|context| {
+            context.ordinary_realm_bootstrap
+                && context.realm_id == realm_id
+                && context.actor_id == actor_id
+        });
     let is_identity_anchor_authorize = kind == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id
@@ -282,6 +288,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         && !managed_agent_delegation
         && !is_member_self_knock
         && !is_realm_bootstrap_followup
+        && !is_realm_founding_grant
         && !is_identity_anchor_authorize
         && !is_authorized_internal_adapter
         && !realm_has_member(state, &realm_id, &session.actor).await
@@ -313,7 +320,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     validate_cba_effect_planes(object)?;
     validate_control_move_seal_basis(
         object,
-        is_realm_bootstrap_followup || is_identity_anchor_authorize,
+        is_realm_bootstrap_followup || is_realm_founding_grant || is_identity_anchor_authorize,
     )?;
     if kind == arkret_sdk::events::EventKind::MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))

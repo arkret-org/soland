@@ -665,6 +665,30 @@ pub(crate) fn reseal_canonical_event(event: &mut Value) {
     event["proofs"][0]["created_at"] = created_at;
 }
 
+pub(crate) fn resign_canonical_event(event: &mut Value) {
+    let verification_method = event["proofs"][0]["verification_method"]
+        .as_str()
+        .expect("fixture verification method")
+        .to_owned();
+    let mut typed: arkret_sdk::Event =
+        serde_json::from_value(event.clone()).expect("fixture Event roundtrip");
+    typed.proofs.clear();
+    let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
+        [21_u8; 32],
+        typed.actor_id.clone(),
+        verification_method.clone(),
+    );
+    let created_at = typed.created_at;
+    arkret_sdk::signatures::sign_event(
+        &mut typed,
+        &signer,
+        &verification_method,
+        arkret_sdk::signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .expect("SDK Event signer re-signs mutated HTTP fixture");
+    *event = serde_json::to_value(typed).expect("re-signed fixture serializes");
+}
+
 pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
     let payload = serde_json::json!({
         "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",

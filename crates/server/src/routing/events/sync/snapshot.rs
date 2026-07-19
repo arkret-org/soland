@@ -40,8 +40,15 @@ pub(crate) async fn build_sync_snapshot(
                 .collect::<BTreeSet<_>>()
         })
         .filter(|realms| !realms.is_empty());
-    let mut visible_realms: Vec<(String, String, Option<String>, _, Option<String>, _)> =
-        Vec::new();
+    let mut visible_realms: Vec<(
+        String,
+        String,
+        Option<String>,
+        _,
+        Option<String>,
+        Option<String>,
+        _,
+    )> = Vec::new();
     for realm_entry in &candidate_realms {
         if requested_realms
             .as_ref()
@@ -57,12 +64,13 @@ pub(crate) async fn build_sync_snapshot(
                 realm_entry.description.clone(),
                 realm_entry.tags.clone(),
                 realm_entry.category.clone(),
+                realm_entry.default_join_rule.clone(),
                 members,
             ));
         }
     }
     let mut visible_actors = BTreeSet::new();
-    for (_, _, _, _, _, members) in &visible_realms {
+    for (_, _, _, _, _, _, members) in &visible_realms {
         for member in members {
             if let Some(actor) = roster_member_actor_id(member) {
                 visible_actors.insert(actor);
@@ -97,7 +105,7 @@ pub(crate) async fn build_sync_snapshot(
     let is_incremental = body.after.is_some();
     let (account_notifications, notification_position) =
         account_notification_delta(state, session, after_cursor, is_incremental).await;
-    for (realm_id, _title, _summary, _tags, _category, members) in visible_realms {
+    for (realm_id, title, summary, _tags, _category, join_rule, members) in visible_realms {
         let meta = state.realm_meta_store().get(&realm_id).await.ok().flatten();
         let known_timeline_to_cursor = after_cursor.positions.contains_key(&realm_id);
         let known_account_to_cursor = after_cursor.account_positions.contains_key(&realm_id);
@@ -169,7 +177,9 @@ pub(crate) async fn build_sync_snapshot(
         // or (b) the client issues a full sync (no `after`). This is a known
         // limitation — see follow-up TODO to add per-realm activity tracking
         // off `event_broadcast`.
-        if is_incremental && known_timeline_to_cursor && !durable_projection_changed
+        if is_incremental
+            && known_timeline_to_cursor
+            && !durable_projection_changed
             && ephemeral_events.is_empty()
         {
             continue;
@@ -186,27 +196,40 @@ pub(crate) async fn build_sync_snapshot(
                 .map(|member| member.actor_id.clone())
                 .collect::<Vec<_>>();
             entry.timeline = Some(arkret_sdk::Timeline {
-                    events: timeline_events,
-                    limited: false,
-                    prev_cursor: None,
-                    preview_only: None,
-                    extra: BTreeMap::new(),
-                });
+                events: timeline_events,
+                limited: false,
+                prev_cursor: None,
+                preview_only: None,
+                extra: BTreeMap::new(),
+            });
             entry.state = Some(arkret_sdk::EventContainer {
-                    events: state_events,
-                    extra: BTreeMap::new(),
-                });
+                events: state_events,
+                extra: BTreeMap::new(),
+            });
+            // Realm display metadata has a canonical account-sync carrier:
+            // `state_at_window_start.realm_metadata`. Do not discard the
+            // directory title/summary after visibility filtering and force
+            // clients to fall back to the opaque Realm id.
+            entry.state_at_window_start = Some(arkret_sdk::StateAtWindowStart {
+                actor_profiles: BTreeMap::new(),
+                realm_metadata: arkret_sdk::WindowStartRealmMetadata {
+                    title: (!title.trim().is_empty()).then_some(title),
+                    summary,
+                    join_rule,
+                },
+                e2ee_epoch: arkret_sdk::WindowStartNullableE2eeEpoch::Null(()),
+            });
             entry.summary = Some(arkret_sdk::AccountSubscribeRealmSummary {
-                    joined_member_count: Some(roster.len() as u64),
-                    invited_member_count: None,
-                    heroes: (!heroes.is_empty()).then_some(heroes),
-                });
+                joined_member_count: Some(roster.len() as u64),
+                invited_member_count: None,
+                heroes: (!heroes.is_empty()).then_some(heroes),
+            });
             entry.members = Some(roster);
             entry.members_limited = Some(false);
             entry.unread_notifications = Some(arkret_sdk::AccountSubscribeUnreadCounts {
-                    notification_count: Some(0),
-                    highlight_count: Some(0),
-                });
+                notification_count: Some(0),
+                highlight_count: Some(0),
+            });
         }
         if full_sync || !ephemeral_events.is_empty() {
             entry.ephemeral = Some(arkret_sdk::EphemeralEventContainer {

@@ -177,20 +177,7 @@ fn cba_cell_family_plane(family: &str) -> Result<CbaEffectPlane, EventValidation
 }
 
 pub(super) fn is_realm_bootstrap_followup_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        arkret_sdk::events::EventKind::MEMBER_STATE
-            | arkret_sdk::events::EventKind::REALM_HISTORY_VISIBILITY
-            // `restricted` history_visibility bootstraps MUST carry a
-            // ak.realm.history_sharing_policy in the same ordered batch
-            // (payload_shape.rs `history_sharing_policy_missing`); it is a
-            // genesis-time policy Control Move exactly like the siblings here.
-            | arkret_sdk::events::EventKind::REALM_HISTORY_SHARING_POLICY
-            | arkret_sdk::events::EventKind::REALM_POLICY_COMPONENTS
-            | arkret_sdk::events::EventKind::REALM_DISCOVERY
-            | arkret_sdk::events::EventKind::REALM_JOIN_RULE
-            | arkret_sdk::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
-    )
+    arkret_sdk::realm::bootstrap::is_realm_bootstrap_followup_kind(kind)
 }
 
 pub(super) async fn reject_revoked_actor_device_signature(

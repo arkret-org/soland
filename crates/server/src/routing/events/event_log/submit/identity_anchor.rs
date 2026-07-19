@@ -80,6 +80,7 @@ pub(super) async fn submit_identity_anchor_batch(
             actor_id: first.actor_id.clone(),
             identity_anchor_event_id: Some(first.event_id.clone()),
             self_principal_pcr_bootstrap: false,
+            ordinary_realm_bootstrap: false,
         });
     if identity_anchor_context.realm_id != first.realm_id
         || identity_anchor_context.actor_id != first.actor_id
@@ -402,10 +403,11 @@ fn validate_self_principal_pcr_bootstrap_context(
         actor_id: create.actor_id.to_string(),
         identity_anchor_event_id: Some(create.event_id.to_string()),
         self_principal_pcr_bootstrap: true,
+        ordinary_realm_bootstrap: false,
     })
 }
 
-async fn identical_historical_retry(
+pub(super) async fn identical_historical_retry(
     state: &AppState,
     envelopes: &[Value],
 ) -> Result<Option<EventsSubmitOutcome>, SubmitOneError> {
@@ -1016,7 +1018,7 @@ fn typed_device_authorize_payload(
     )
 }
 
-fn canonical_record(
+pub(super) fn canonical_record(
     parsed: &ValidatedEventEnvelope,
     envelope: Value,
     received_at: DateTime<Utc>,

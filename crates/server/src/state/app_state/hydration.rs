@@ -66,8 +66,50 @@ pub(super) async fn hydrate_cross_signing_from_persistence(
     Ok(manager)
 }
 
-/// Read Space-container / Strand / Morph projection rows from durable
-/// persistence into the supplied `ProjectionState`. Called at
+fn replay_projection_event(
+    proj: &mut ProjectionState,
+    event: soland_storage::ProjectionEventRecord,
+    hydration_hlc: &soland_domain::hlc::ServerHlc,
+    projection_name: &str,
+) -> soland_storage::PersistenceResult<()> {
+    let operation_id = event.operation_id.as_deref().ok_or_else(|| {
+        soland_storage::PersistenceError::Internal(format!(
+            "{projection_name} projection event {} has no operation_id",
+            event.event_id
+        ))
+    })?;
+    let operation_id = arkret_sdk::OperationId::new(operation_id.to_owned()).map_err(|_| {
+        soland_storage::PersistenceError::Internal(format!(
+            "{projection_name} projection event {} has an invalid operation_id",
+            event.event_id
+        ))
+    })?;
+    let realm_id = arkret_sdk::RealmId::new(event.realm_id.clone()).map_err(|_| {
+        soland_storage::PersistenceError::Internal(format!(
+            "{projection_name} projection event {} has an invalid realm_id",
+            event.event_id
+        ))
+    })?;
+    let mut operation = arkret_sdk::Operation::create(
+        operation_id,
+        realm_id,
+        event.event_kind.clone(),
+        event.payload,
+    );
+    operation.created_at = event.created_at;
+    if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
+        proj.apply(&operation, hydration_hlc)
+    {
+        return Err(soland_storage::PersistenceError::Internal(format!(
+            "{projection_name} projection event {} failed deterministic hydration: {reason}",
+            event.event_id
+        )));
+    }
+    Ok(())
+}
+
+/// Read event-backed and mirror-table projections from durable persistence
+/// into the supplied `ProjectionState`. Called at
 /// `AppState::new` so restart picks up the lifecycle state the
 /// write-through path stamped down on the way in. Unknown state
 /// strings or invalid rows are silently skipped (logged at warn) —
@@ -83,52 +125,23 @@ pub(super) async fn hydrate_projections_from_persistence(
         SpaceContainerProjection, StrandProjection,
     };
 
-    // `ak.key_backup.active_series` is the canonical selector for every
-    // backup class. Unlike the larger object projections below it has no
-    // dedicated mirror table, so replay its durable projection events in
-    // acceptance order. Without this replay a server restart forgets the
-    // pointer, marks every managed Agent PCR backup stale, and then rejects
-    // the client's next pointer as a version gap inside the reducer even
-    // though the Event endpoint already returned `accepted`.
-    let events = persistence
-        .projection_events()
-        .snapshot_kind(arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
-        .await?;
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
+
+    // Agent key authorization is consulted by sidecar eligibility, while
+    // `ak.key_backup.active_series` is the canonical selector for every
+    // backup class. Neither projection has active mirror-table integration,
+    // so restore them from the durable event stream. Agent authorize/revoke
+    // transitions must be replayed in global acceptance order; querying each
+    // kind independently would lose their relative ordering.
+    let events = persistence.projection_events().snapshot_all().await?;
     for event in events {
-        let operation_id = event.operation_id.as_deref().ok_or_else(|| {
-            soland_storage::PersistenceError::Internal(format!(
-                "active-series projection event {} has no operation_id",
-                event.event_id
-            ))
-        })?;
-        let operation_id = arkret_sdk::OperationId::new(operation_id.to_owned()).map_err(|_| {
-            soland_storage::PersistenceError::Internal(format!(
-                "active-series projection event {} has an invalid operation_id",
-                event.event_id
-            ))
-        })?;
-        let realm_id = arkret_sdk::RealmId::new(event.realm_id.clone()).map_err(|_| {
-            soland_storage::PersistenceError::Internal(format!(
-                "active-series projection event {} has an invalid realm_id",
-                event.event_id
-            ))
-        })?;
-        let mut operation = arkret_sdk::Operation::create(
-            operation_id,
-            realm_id,
-            event.event_kind.clone(),
-            event.payload,
-        );
-        operation.created_at = event.created_at;
-        if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
-            proj.apply(&operation, &hydration_hlc)
-        {
-            return Err(soland_storage::PersistenceError::Internal(format!(
-                "active-series projection event {} failed deterministic hydration: {reason}",
-                event.event_id
-            )));
-        }
+        let projection_name = match event.event_kind.as_str() {
+            arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE
+            | arkret_sdk::events::EventKind::AGENT_KEY_REVOKE => "agent-key",
+            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES => "active-series",
+            _ => continue,
+        };
+        replay_projection_event(proj, event, &hydration_hlc, projection_name)?;
     }
 
     fn parse_space_container_state(value: &str) -> Option<SpaceContainerLifecycleState> {

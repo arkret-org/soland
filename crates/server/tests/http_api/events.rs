@@ -638,7 +638,14 @@ async fn events_describe_and_single_event_submit_work() {
 #[tokio::test]
 async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let token = dev_token(state.clone()).await;
+    let actor = test_event_signer_did().to_owned();
+    let token = dev_token_for_device(
+        state.clone(),
+        &actor,
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        "Realm Founder",
+    )
+    .await;
     let realm_id = new_prefixed_uuid7("ak:realm:");
     let created_at = "2026-05-17T00:00:00Z";
     let payload = serde_json::json!({
@@ -647,7 +654,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             "schema": "ak.schema.realm.v1",
             "title": "Bootstrap effects realm",
             "summary": "Realm create carries its genesis cell write",
-            "created_by": "did:web:alice.example",
+            "created_by": actor,
             "trust_domain": "ak:trust_domain:soland.local",
             "schema_refs": ["ak.schema.realm.v1"],
             "default_discoverability": "listed",
@@ -661,7 +668,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             "digest_algorithm": "sha256",
             "notary": {
                 "type": "single_did",
-                "did": "did:web:alice.example",
+                "did": actor,
                 "recovery_members": ["did:web:recovery.soland.local"],
                 "controller_organization": "did:web:organization.primary.soland.local",
                 "recovery_controller_organizations": ["did:web:organization.recovery.soland.local"]
@@ -673,7 +680,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     let mut event = signed_canonical_event(
         "ak:event:01904100-0000-7000-8000-c7ea7e000001",
         "ak.realm.create",
-        "did:web:alice.example",
+        &actor,
         "01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
         1,
@@ -682,23 +689,79 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     );
     event["preconditions"] = serde_json::json!([{
         "cell": cell.clone(),
-        "predicate": {
-            "op": "head_eq",
-            "value": null
-        }
+        "predicate": {"op": "head_eq", "value": null}
     }]);
     event["effects"] = serde_json::json!([{
         "cell": cell,
-        "op": {
-            "kind": "set",
-            "value": payload["object"].clone()
-        }
+        "op": {"kind": "set", "value": payload["object"].clone()}
     }]);
-    reseal_canonical_event(&mut event);
+    resign_canonical_event(&mut event);
+    // A create cannot be committed on its own: the founding grant is the
+    // second member of the same atomic protocol unit.
+    let mut missing_grant = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state.clone()))
+        .await;
+    let missing_status = missing_grant.status_code.expect("missing grant status");
+    let missing_body: Value = missing_grant.take_json().await.expect("missing grant body");
+    assert_eq!(
+        missing_status,
+        StatusCode::PRECONDITION_FAILED,
+        "unexpected single-create response: {missing_body}"
+    );
+    assert_eq!(missing_body["reason"], "realm_founding_grant_missing");
+
+    let grant_id = new_prefixed_uuid7("ak:grant:");
+    let grant_proof = serde_json::to_value(arkret_sdk::PayloadProof {
+        kind: arkret_sdk::proof_kind::DETACHED_JWS.to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method: format!("{actor}#device"),
+        payload_digest: arkret_sdk::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+        created_at: chrono::DateTime::parse_from_rfc3339(created_at)
+            .unwrap()
+            .with_timezone(&chrono::Utc),
+        domain: None,
+        audience: None,
+        proof_purpose: Some(arkret_sdk::PayloadProofPurpose::IssuerAttestation),
+        jws: "eyJhbGciOiJFZERTQSJ9..c2lnbmF0dXJl".to_owned(),
+    })
+    .unwrap();
+    let founding = signed_canonical_event(
+        "ak:event:01904100-0000-7000-8000-c7ea7e000002",
+        arkret_sdk::events::EventKind::CAPABILITY_GRANT,
+        &actor,
+        "01904100-0000-7000-8000-a11ce0000001",
+        &realm_id,
+        2,
+        vec![event["event_id"].as_str().unwrap()],
+        serde_json::json!({
+            "grant_id": grant_id,
+            "grant": {
+                "id": grant_id,
+                "schema": "ak.schema.capability.v1",
+                "realm_id": realm_id,
+                "issuer": actor,
+                "subject": actor,
+                "actions": [
+                    "ak.realm.admin",
+                    "ak.capability.grant",
+                    "ak.capability.revoke"
+                ],
+                "resources": [{
+                    "kind": "realm",
+                    "realm_id": realm_id,
+                    "match_scope": "realm_wide"
+                }],
+                "issued_at": created_at,
+                "proofs": [grant_proof]
+            }
+        }),
+    );
 
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&event)
+        .json(&serde_json::json!({"events": [event.clone(), founding.clone()]}))
         .send(&app_from_state(state.clone()))
         .await;
     let status = response.status_code.expect("submit status");
@@ -710,12 +773,24 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     );
     assert_eq!(body["status"], "accepted");
     assert_eq!(body["accepted"][0], event["event_id"]);
+    assert_eq!(body["accepted"][1], founding["event_id"]);
     assert!(
         state
             .test_projection()
             .lock()
-            .member(&realm_id, "did:web:alice.example")
+            .member(&realm_id, &actor)
             .is_some_and(|member| member.state == "join")
+    );
+
+    let sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
+    assert_eq!(
+        sync["realms"][&realm_id]["state_at_window_start"]["realm_metadata"]["title"],
+        "Bootstrap effects realm",
+        "account sync must carry the Realm title in its canonical metadata slot: {sync}"
+    );
+    assert_eq!(
+        sync["realms"][&realm_id]["state_at_window_start"]["realm_metadata"]["summary"],
+        "Realm create carries its genesis cell write"
     );
 
     let mut resolve_response =

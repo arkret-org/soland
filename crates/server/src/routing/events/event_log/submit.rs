@@ -24,6 +24,8 @@ static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = Onc
 
 mod identity_anchor;
 use identity_anchor::{batch_contains_identity_anchor, submit_identity_anchor_batch};
+mod realm_bootstrap;
+use realm_bootstrap::{batch_begins_realm_create, submit_realm_bootstrap_batch};
 
 fn actor_submit_lock(actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = ACTOR_SUBMIT_LOCKS.get_or_init(|| {
@@ -114,6 +116,7 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) actor_id: String,
     pub(in crate::routing) identity_anchor_event_id: Option<String>,
     pub(in crate::routing) self_principal_pcr_bootstrap: bool,
+    pub(in crate::routing) ordinary_realm_bootstrap: bool,
 }
 
 /// Closed authorization context for trusted internal protocol adapters. This
@@ -371,6 +374,9 @@ pub(super) async fn submit_event_batch_outcome(
     if batch_contains_identity_anchor(&envelopes) {
         return submit_identity_anchor_batch(state, session, envelopes).await;
     }
+    if batch_begins_realm_create(&envelopes) {
+        return submit_realm_bootstrap_batch(state, session, envelopes).await;
+    }
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
@@ -407,6 +413,7 @@ pub(super) async fn submit_event_batch_outcome(
                         actor_id,
                         identity_anchor_event_id: None,
                         self_principal_pcr_bootstrap: false,
+                        ordinary_realm_bootstrap: false,
                     });
                 }
             }

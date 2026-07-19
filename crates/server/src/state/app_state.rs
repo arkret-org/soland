@@ -4528,6 +4528,90 @@ mod membership_hydration_tests {
     }
 
     #[tokio::test]
+    async fn agent_key_authorization_rehydrates_from_projection_events() {
+        use soland_storage::{ProjectionEventAppendOutcome, ProjectionEventRecord};
+
+        let store = SolandMemoryPersistenceStore::new();
+        let agent_id =
+            "did:webvh:z6mkfixture:example.test:webvh:agent:019f0dd3-081c-7f03-b388-e0399e775901";
+        let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e775902";
+        let event_id = "ak:event:019f0dd3-081c-7f03-b388-e0399e775903";
+        let key_id = format!("{agent_id}#runtime-1");
+        let replacement_event_id = "ak:event:019f0dd3-081c-7f03-b388-e0399e775907";
+        let replacement_key_id = format!("{agent_id}#runtime-2");
+        let now = chrono::Utc::now();
+        let appended = store
+            .projection_events()
+            .append(ProjectionEventRecord {
+                event_id: event_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                event_kind: arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                operation_type: "event".to_owned(),
+                operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775904".to_owned()),
+                sender: Some(agent_id.to_owned()),
+                payload: serde_json::json!({
+                    "agent_id": agent_id,
+                    "key_id": key_id,
+                    "accepted_event_id": event_id
+                }),
+                created_at: now,
+                received_at: now,
+            })
+            .await
+            .expect("append agent-key authorization projection event");
+        assert_eq!(appended, ProjectionEventAppendOutcome::Inserted);
+        store
+            .projection_events()
+            .append(ProjectionEventRecord {
+                event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775905".to_owned(),
+                realm_id: realm_id.to_owned(),
+                event_kind: arkret_sdk::events::EventKind::AGENT_KEY_REVOKE.to_owned(),
+                operation_type: "event".to_owned(),
+                operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775906".to_owned()),
+                sender: Some(agent_id.to_owned()),
+                payload: serde_json::json!({
+                    "agent_id": agent_id,
+                    "key_id": key_id
+                }),
+                created_at: now,
+                received_at: now,
+            })
+            .await
+            .expect("append agent-key revocation projection event");
+        store
+            .projection_events()
+            .append(ProjectionEventRecord {
+                event_id: replacement_event_id.to_owned(),
+                realm_id: realm_id.to_owned(),
+                event_kind: arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                operation_type: "event".to_owned(),
+                operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775908".to_owned()),
+                sender: Some(agent_id.to_owned()),
+                payload: serde_json::json!({
+                    "agent_id": agent_id,
+                    "key_id": replacement_key_id,
+                    "accepted_event_id": replacement_event_id
+                }),
+                created_at: now,
+                received_at: now,
+            })
+            .await
+            .expect("append replacement agent-key authorization projection event");
+
+        let mut proj = ProjectionState::new();
+        assert!(!proj.agent_has_authorized_key(agent_id));
+        hydrate_projections_from_persistence(&store, &mut proj, &SolandAuthzEngine::new())
+            .await
+            .expect("hydrate agent-key authorization");
+
+        assert!(proj.agent_has_authorized_key(agent_id));
+        assert_eq!(
+            proj.active_agent_key_authorizations(agent_id),
+            vec![(replacement_key_id, replacement_event_id.to_owned())]
+        );
+    }
+
+    #[tokio::test]
     async fn realm_owner_rehydrates_for_capability_upper_bound_checks() {
         use soland_storage_memory::SolandMemoryPersistenceStore;
 

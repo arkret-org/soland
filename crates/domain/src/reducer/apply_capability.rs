@@ -757,6 +757,50 @@ impl ProjectionState {
         ProjectionEffect::CapabilityGrantProjected { grant_id, realm_id }
     }
 
+    /// Apply the one ordinary-Realm founding grant after the server has
+    /// validated the complete `create -> founding grant` protocol unit.
+    /// Genesis cannot use the ordinary issuer-upper-bound check because this
+    /// grant establishes that very first bound.
+    pub fn apply_validated_realm_founding_grant(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(grant_id) = operation
+            .payload
+            .get("grant_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_grant_id_missing".to_owned(),
+            };
+        };
+        if grant_issuer(&operation.payload).is_none() {
+            return ProjectionEffect::Rejected {
+                reason: "capability_grant_issuer_missing".to_owned(),
+            };
+        }
+        let Some(cell_ref) = Self::capability_grant_cell_ref(&grant_id) else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_grant_cell_ref_invalid".to_owned(),
+            };
+        };
+        let mut items = self.capability_cell_items(&cell_ref);
+        let terminal_revoked = Self::capability_cell_has_revoked_item(&items);
+        let value = grant_item_value(operation, &grant_id, terminal_revoked, now);
+        items.push(serde_json::json!({
+            "tag": capability_add_dot(operation),
+            "value": value,
+        }));
+        self.cells
+            .insert(cell_ref, CellState::Value(Value::Array(items)));
+        ProjectionEffect::CapabilityGrantProjected {
+            grant_id,
+            realm_id: operation.realm_id.to_string(),
+        }
+    }
+
     /// P1 — project `ak.capability.revoke` as an or_set observed-remove on the
     /// target grant cell. The revoke locates the cell by the top-level
     /// `grant_id` (capabilities.md §12 — payload carries the grant_id, no
