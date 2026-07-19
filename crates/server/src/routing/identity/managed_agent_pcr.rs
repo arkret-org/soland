@@ -4,7 +4,7 @@ use arkret_sdk::{
     AgentKeyScope, AgentPcrRecoveryState, BackupClass, Did, Hash, KeyBackup,
     KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding, RealmId,
     RealmSealFrontierView, RecoveryHpkeSuite, RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse,
-    RecoveryPolicy, agent_requested_scope_digest,
+    RecoveryPolicy, Seal, agent_requested_scope_digest,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -698,6 +698,21 @@ pub(crate) async fn managed_agent_event_frontier(
     state: &AppState,
     pcr_id: &str,
 ) -> Result<Option<RealmSealFrontierView>, AppError> {
+    Ok(managed_agent_event_seal_head(state, pcr_id)
+        .await?
+        .map(|seal| RealmSealFrontierView {
+            realm_id: seal.realm_id,
+            seal_id: seal.id,
+            control_event_set_root: seal.control_event_set_root,
+            state_root: seal.state_root,
+            hlc: Some(seal.hlc),
+        }))
+}
+
+pub(crate) async fn managed_agent_event_seal_head(
+    state: &AppState,
+    pcr_id: &str,
+) -> Result<Option<Seal>, AppError> {
     let realm_id = RealmId::new(pcr_id.to_owned())
         .map_err(|error| AppError::internal(format!("stored Agent PCR id invalid: {error}")))?;
     let events = state
@@ -725,13 +740,7 @@ pub(crate) async fn managed_agent_event_frontier(
     else {
         return Ok(None);
     };
-    Ok(Some(RealmSealFrontierView {
-        realm_id,
-        seal_id: seal.id,
-        control_event_set_root: seal.control_event_set_root,
-        state_root: seal.state_root,
-        hlc: Some(seal.hlc),
-    }))
+    Ok(Some(seal))
 }
 
 pub(crate) async fn validate_agent_controller_binding(

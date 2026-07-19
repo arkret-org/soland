@@ -1126,10 +1126,114 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         StatusCode::OK,
         "managed Agent PCR frontier failed: {frontier_body}"
     );
-    let trusted_anchor_seal_id = frontier_body["frontier"]["seal_id"]
-        .as_str()
-        .expect("managed PCR frontier Seal id")
-        .to_owned();
+    let returned_head: arkret_sdk::Seal =
+        serde_json::from_value(frontier_body["receipts"][0]["seal"].clone())
+            .expect("managed PCR frontier signed-head receipt");
+    assert_eq!(returned_head.id, seal.id);
+    assert_eq!(
+        returned_head.control_event_set_root,
+        seal.control_event_set_root
+    );
+    assert_eq!(returned_head.state_root, seal.state_root);
+    assert_eq!(
+        returned_head.covered_event_digests,
+        seal.covered_event_digests
+    );
+
+    // Accepted Events may advance before the controller submits the next
+    // device-signed Seal. Frontier must keep returning the accepted signed
+    // predecessor (including its full receipt) so the controller can author
+    // that successor; it must not ask the service notary to synthesize one.
+    let mut pending = arkret_sdk::Event::new(
+        arkret_sdk::events::EventKind::MLS_GENESIS,
+        RealmId::new(realm_id.clone()).unwrap(),
+        Did::new(agent_id.clone()).unwrap(),
+        2,
+        arkret_sdk::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
+        serde_json::json!({}),
+    )
+    .unwrap();
+    pending.created_at = created_at;
+    pending.executed_by = Some(Did::new(controller_id).unwrap());
+    pending.authorization_ref = Some(agent_record.controller_authorization_ref.clone());
+    arkret_sdk::signatures::sign_event(
+        &mut pending,
+        &signer,
+        &event_verification_method,
+        arkret_sdk::signatures::SignEventOptions {
+            domain: None,
+            audience: None,
+            created_at: Some(created_at),
+        },
+    )
+    .unwrap();
+    let pending_digest = pending.event_digest().unwrap();
+    state
+        .test_persistence()
+        .events()
+        .put(soland_storage::CanonicalEventRecord {
+            event_id: pending.event_id.to_string(),
+            actor_id: pending.actor_id.to_string(),
+            actor_seq: pending.actor_seq,
+            realm_id: Some(realm_id.clone()),
+            kind: pending.kind.as_str().to_owned(),
+            schema_id: "ak.schema.event_envelope.v1".to_owned(),
+            canonical_digest: pending_digest,
+            canonical_bytes: arkret_sdk::canonical::canonical_json_bytes(&pending).unwrap(),
+            envelope: serde_json::to_value(&pending).unwrap(),
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let mut lagging_frontier = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(lagging_frontier.status_code, Some(StatusCode::OK));
+    let lagging_body: Value = lagging_frontier.take_json().await.unwrap();
+    assert_eq!(lagging_body["frontier"]["seal_id"], seal.id.as_str());
+    let lagging_head: arkret_sdk::Seal =
+        serde_json::from_value(lagging_body["receipts"][0]["seal"].clone()).unwrap();
+    assert_eq!(lagging_head.id, seal.id);
+    assert_eq!(
+        lagging_head.control_event_set_root,
+        seal.control_event_set_root
+    );
+    assert_eq!(lagging_head.state_root, seal.state_root);
+    assert_eq!(
+        lagging_head.covered_event_digests,
+        seal.covered_event_digests
+    );
+
+    let records = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(&realm_id)
+        .await
+        .unwrap();
+    let events = records
+        .into_iter()
+        .map(|record| serde_json::from_value::<arkret_sdk::Event>(record.envelope).unwrap())
+        .collect::<Vec<_>>();
+    let successor = arkret_sdk::identity::build_managed_agent_pcr_event_seal(
+        &events,
+        Some(&lagging_head),
+        arkret_sdk::Hlc::new("01980b44cc00-0000-aabbcce3").unwrap(),
+        &signer,
+    )
+    .unwrap();
+    let mut successor_response = TestClient::post("http://server/_arkret/self/events/seals")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&successor)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(successor_response.status_code, Some(StatusCode::OK));
+    let successor_body: Value = successor_response.take_json().await.unwrap();
+    assert_eq!(successor_body["seal_id"], successor.id.as_str());
+    let trusted_anchor_seal_id = successor.id.to_string();
 
     let proof_request = serde_json::json!({
         "realm_id": realm_id,

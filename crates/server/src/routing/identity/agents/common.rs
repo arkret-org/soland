@@ -678,6 +678,15 @@ pub(super) fn agent_key_state_from_record(
             .map_err(|error| {
                 AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
             })?;
+    let pairing_is_open = matches!(record.state.as_str(), "pending_runtime_key" | "paused")
+        && agent_pairing_handle_is_open(record)
+        && record
+            .pairing_expires_at
+            .is_some_and(|expires_at| expires_at > chrono::Utc::now());
+    let pairing_mode = pairing_is_open.then(|| match record.state.as_str() {
+        "paused" => AgentPairingMode::Replacement,
+        _ => AgentPairingMode::Bootstrap,
+    });
     Ok(KeyState {
         agent_id,
         controller_id,
@@ -690,23 +699,42 @@ pub(super) fn agent_key_state_from_record(
         pcr_recovery,
         requested_scope,
         requested_scope_digest,
-        pairing_request_id: record.pairing_request_id.clone(),
-        pairing_code: record.pairing_code.clone(),
-        pairing_expires_at: record.pairing_expires_at,
-        approval_request_id: record
-            .runtime_key_request
-            .as_ref()
-            .and_then(Value::as_object)
-            .and(record.approval_request_id.clone()),
-        pending_runtime_key_request: record
-            .runtime_key_request
-            .clone()
-            .and_then(|value| serde_json::from_value(value).ok()),
-        approval_requested_at: record
-            .runtime_key_request
-            .as_ref()
-            .filter(|value| value.is_object())
-            .and(record.approval_requested_at),
+        pairing_request_id: pairing_is_open
+            .then(|| record.pairing_request_id.clone())
+            .flatten(),
+        pairing_mode,
+        pairing_code: pairing_is_open
+            .then(|| record.pairing_code.clone())
+            .flatten(),
+        pairing_expires_at: pairing_is_open
+            .then_some(record.pairing_expires_at)
+            .flatten(),
+        approval_request_id: pairing_is_open
+            .then(|| {
+                record
+                    .runtime_key_request
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .and(record.approval_request_id.clone())
+            })
+            .flatten(),
+        pending_runtime_key_request: pairing_is_open
+            .then(|| {
+                record
+                    .runtime_key_request
+                    .clone()
+                    .and_then(|value| serde_json::from_value(value).ok())
+            })
+            .flatten(),
+        approval_requested_at: pairing_is_open
+            .then(|| {
+                record
+                    .runtime_key_request
+                    .as_ref()
+                    .filter(|value| value.is_object())
+                    .and(record.approval_requested_at)
+            })
+            .flatten(),
         authorized_event_ref,
         active_authorizations,
     })

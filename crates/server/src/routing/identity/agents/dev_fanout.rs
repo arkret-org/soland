@@ -5,7 +5,9 @@
 //! signed Event fail closed instead of asking Soland to impersonate a
 //! controller or writing a development-only proof shape into durable history.
 
-use arkret_sdk::{AccountabilityGrantPayload, AgentProvisionEvents, AgentSelectorClaim};
+use arkret_sdk::{
+    AccountabilityGrantPayload, AgentProvisionEvents, AgentSelectorClaim, Event, LatticeOpType,
+};
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
@@ -476,45 +478,69 @@ pub(super) async fn submit_durable_agent_lifecycle(
     previous_status: &str,
     reason: Option<&str>,
     sidecar_exposure_ack: Option<&Value>,
+    event: Event,
 ) -> Result<String, AppError> {
-    let status_changed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let transition = match event_kind {
-        "ak.self.agent.pause" => "pause",
-        "ak.self.agent.resume" => "resume",
-        "ak.self.agent.deactivate" => "deactivate",
-        other => other,
+    let (transition, next_status) = match event_kind {
+        "ak.self.agent.pause" => ("pause", "paused"),
+        "ak.self.agent.resume" => ("resume", "active"),
+        "ak.self.agent.deactivate" => ("deactivate", "deactivated"),
+        _ => {
+            return Err(AppError::invalid_param(
+                "unsupported Agent lifecycle Event kind",
+            ));
+        }
     };
-    let mut payload = json!({
-        "agent_id": agent_id,
-        "controller_id": session.actor.clone(),
-        "transition": transition,
-        "previous_status": previous_status,
-        "status_changed_at": status_changed_at,
-    });
-    if let Some(reason) = reason {
-        payload
-            .as_object_mut()
-            .expect("payload object")
-            .insert("reason".to_owned(), Value::String(reason.to_owned()));
-    }
-    if event_kind == "ak.self.agent.resume"
-        && let Some(ack) = sidecar_exposure_ack
+    if event.kind.as_str() != event_kind
+        || event.realm_id.as_str() != realm_id
+        || event.actor_id.as_str() != agent_id
+        || event.executed_by.as_ref().map(arkret_sdk::Did::as_str) != Some(session.actor.as_str())
+        || event.authorization_ref.as_deref() != Some(authorization_ref)
     {
-        payload
-            .as_object_mut()
-            .expect("payload object")
-            .insert("sidecar_exposure_ack".to_owned(), ack.clone());
+        return Err(AppError::capability_denied(
+            "lifecycle_event does not match the managed Agent controller binding",
+        ));
     }
-    submit_managed_agent_control_event(
-        state,
-        session,
-        realm_id,
-        agent_id,
-        authorization_ref,
-        event_kind,
-        payload,
-    )
-    .await
+    if event.proofs.is_empty() {
+        return Err(
+            AppError::invalid_param("lifecycle_event must carry a controller proof")
+                .with_wire_code("controller_signed_event_required"),
+        );
+    }
+    let payload_reason = event.payload.get("reason").and_then(Value::as_str);
+    let payload_ack = event.payload.get("sidecar_exposure_ack");
+    if event.payload.get("agent_id").and_then(Value::as_str) != Some(agent_id)
+        || event.payload.get("controller_id").and_then(Value::as_str)
+            != Some(session.actor.as_str())
+        || event.payload.get("transition").and_then(Value::as_str) != Some(transition)
+        || event.payload.get("previous_status").and_then(Value::as_str) != Some(previous_status)
+        || payload_reason != reason
+        || payload_ack != sidecar_exposure_ack
+    {
+        return Err(AppError::invalid_param(
+            "lifecycle_event payload does not match the requested transition",
+        ));
+    }
+    let expected_cell = format!("ak:cell:ak.component.agent.status.v1:{agent_id}");
+    let effect = event.effects.first().filter(|_| event.effects.len() == 1);
+    if effect.is_none_or(|effect| {
+        effect.cell.as_str() != expected_cell
+            || effect.op.op_type != LatticeOpType::Transition
+            || effect.op.from.as_ref().and_then(Value::as_str) != Some(previous_status)
+            || effect.op.to.as_ref().and_then(Value::as_str) != Some(next_status)
+            || effect.op.reason.as_deref() != reason
+    }) {
+        return Err(AppError::invalid_param(
+            "lifecycle_event must carry the exact Agent status transition effect",
+        ));
+    }
+    let envelope = serde_json::to_value(&event)
+        .map_err(|error| AppError::invalid_param(format!("lifecycle_event invalid: {error}")))?;
+    submit_event_value(state, session, envelope)
+        .await
+        .map_err(|error| {
+            agent_fanout_submit_error(event_kind, error.status, error.code, error.message)
+        })?;
+    Ok(event.event_id.to_string())
 }
 
 /// AKP-0008 §4.11 — fan-out `ak.agent.key.revoke` for the agent's authorized

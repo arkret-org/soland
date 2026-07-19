@@ -1138,11 +1138,10 @@ pub(super) fn ensure_pairing_request_open(
         "pairing_expired" => {
             return Err(pairing_failed_precondition("pairing request has expired"));
         }
-        "active" | "paused" => {
-            // Runtime replacement re-pairing (key-management.md §3.6.1): an
-            // agent that already holds an authorized key MAY re-open pairing
-            // in place (status unchanged, zero downtime); completing the fresh
-            // handle supersedes every old active key. renew_pairing rotates
+        "paused" => {
+            // Runtime replacement re-pairing (key-management.md §3.6.1): a
+            // paused agent may complete the fresh handle and atomically
+            // supersede every old active key. renew_pairing rotates
             // `pairing_request_id` while leaving the last consumed handle in
             // `paired_pairing_request_id`, so a live replacement handle exists
             // iff the current handle has not yet been consumed. Without one,
@@ -1152,6 +1151,12 @@ pub(super) fn ensure_pairing_request_open(
                     "agent runtime key is already active",
                 ));
             }
+        }
+        "active" => {
+            return Err(pairing_failed_precondition(
+                "pause the agent before completing runtime replacement pairing",
+            )
+            .with_reason_detail("agent_pause_required"));
         }
         "deactivated" => {
             return Err(pairing_failed_precondition(
@@ -1180,6 +1185,23 @@ pub(super) fn agent_pairing_handle_is_open(agent_record: &AgentPrincipalRecord) 
     let current = agent_record.pairing_request_id.as_deref();
     let consumed = agent_record.paired_pairing_request_id.as_deref();
     current.is_some() && current != consumed
+}
+
+pub(super) fn ensure_agent_resume_pairing_closed(
+    agent_record: &AgentPrincipalRecord,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AppError> {
+    if agent_pairing_handle_is_open(agent_record)
+        && agent_record
+            .pairing_expires_at
+            .is_some_and(|expires_at| expires_at > now)
+    {
+        return Err(pairing_failed_precondition(
+            "complete or let the open runtime replacement pairing expire before resuming the agent",
+        )
+        .with_reason_detail("agent_replacement_pairing_open"));
+    }
+    Ok(())
 }
 
 pub(super) fn agent_record_reserves_selector_slug(
@@ -1638,5 +1660,27 @@ mod requested_scope_tests {
             context.controller_account_id,
             "ak:account:019f6131-3dc4-76f1-ade6-00f4225a8529"
         );
+    }
+
+    #[test]
+    fn replacement_pair_commit_requires_paused_and_resume_requires_closed_handle() {
+        let now = chrono::Utc::now();
+        let mut record = agent_record(None);
+        record.pairing_request_id = Some("agent_pairing_request:open".to_owned());
+        record.pairing_expires_at = Some(now + chrono::Duration::minutes(5));
+
+        record.state = "active".to_owned();
+        assert!(ensure_pairing_request_open(&record).is_err());
+
+        record.state = "paused".to_owned();
+        assert!(ensure_pairing_request_open(&record).is_ok());
+        assert!(ensure_agent_resume_pairing_closed(&record, now).is_err());
+
+        record.paired_pairing_request_id = record.pairing_request_id.clone();
+        assert!(ensure_agent_resume_pairing_closed(&record, now).is_ok());
+
+        record.paired_pairing_request_id = None;
+        record.pairing_expires_at = Some(now - chrono::Duration::seconds(1));
+        assert!(ensure_agent_resume_pairing_closed(&record, now).is_ok());
     }
 }

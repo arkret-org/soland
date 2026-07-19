@@ -444,23 +444,23 @@ pub(super) async fn provision_agent(
     })
 }
 
-/// `ak.self.agent.command.renew_pairing` — re-open pairing in place on any
-/// non-terminal agent (key-management.md §3.6.1). Two branches share the
+/// `ak.self.agent.command.renew_pairing` — re-open pairing for bootstrap or
+/// for an explicitly paused agent (key-management.md §3.6.1). Two branches share the
 /// one-time-handle invariant (the fresh `pairing_request_id` + `pairing_code`
 /// replace the old tuple, which becomes permanently unresolvable through the
 /// same anti-enumeration lookup; the PRINCIPAL is not one-time):
 ///
 /// - Bootstrap re-open (`pending_runtime_key` / `pairing_expired`): status returns to
 ///   `pending_runtime_key` without changing Realm grants.
-/// - Runtime replacement (`active` / `paused`): zero-downtime key replacement. Agent status,
-///   existing keys, sessions, and grants all stay untouched; completing the new pairing supersedes
-///   every old active key (reason=`superseded_by_repairing`) in the pair transaction.
+/// - Runtime replacement (`paused`): Agent status, existing keys, sessions,
+///   and grants all stay untouched; completing the new pairing supersedes every old active key
+///   (reason=`superseded_by_repairing`) in the pair transaction. The controller resumes explicitly.
 ///
-/// Only `deactivated` rejects (deactivation is terminal).
+/// `active` must transition to `paused` first; `deactivated` is terminal.
 #[endpoint(
     operation_id = "ak.self.agent.command.renew_pairing",
     tags("agents"),
-    summary = "Re-open pairing on a non-terminal personal agent",
+    summary = "Re-open bootstrap pairing or replace a paused personal-agent runtime",
     status_codes(200, 400, 401, 403, 404, 412, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.renew_pairing"))]
@@ -487,7 +487,13 @@ pub(super) async fn renew_agent_pairing(
     .await?;
     let bootstrap_reopen = match record.state.as_str() {
         "pending_runtime_key" | "pairing_expired" => true,
-        "active" | "paused" => false,
+        "paused" => false,
+        "active" => {
+            return Err(pairing_failed_precondition(
+                "pause the agent before replacing its runtime",
+            )
+            .with_reason_detail("agent_pause_required"));
+        }
         "deactivated" => {
             return Err(pairing_failed_precondition(
                 "agent is deactivated; deactivation is terminal",
@@ -542,8 +548,8 @@ pub(super) async fn renew_agent_pairing(
         record.state = "pending_runtime_key".to_owned();
         record.state_changed_at = Some(now_utc);
     }
-    // Runtime replacement is not a state transition: active/paused stay
-    // as-is while the fresh handle is open.
+    // Runtime replacement is not a state transition: the Agent stays paused
+    // while the fresh handle is open and after it is consumed.
     record.pairing_request_id = Some(pairing_request_id.clone());
     record.pairing_code = Some(pairing_code.clone());
     record.pairing_expires_at = Some(expires_at);
@@ -767,6 +773,7 @@ pub(super) async fn lifecycle_transition(
     event_kind: &str,
     reason: Option<String>,
     sidecar_exposure_ack: Option<Value>,
+    lifecycle_event: Option<arkret_sdk::Event>,
 ) -> Result<AgentLifecycleOutcome, AppError> {
     let session = aa.authenticated_session(state, req).await?;
     let record = require_agent_controller(state, &session, &agent_id).await?;
@@ -775,21 +782,28 @@ pub(super) async fn lifecycle_transition(
         .flatten();
     let sidecar_exposure_ack =
         normalize_sidecar_exposure_ack(sidecar_exposure_ack, &session.actor)?;
-    // AKP-0008 D1: the durable lifecycle event and its fan-out only exist on
-    // the development fan-out path. Production MUST fail closed instead of
-    // mutating the read-side row without a durable transition (a deactivate
-    // that flips the projection but revokes nothing is worse than an error).
-    if !state.config.development_mode {
+    // Never synthesize an Agent-authored control Event from a session request.
+    // Pause/resume carry the exact SDK-authored envelope. Deactivate remains
+    // fail-closed until its request can carry the complete lifecycle + key +
+    // grant revocation Event bundle atomically.
+    let Some(lifecycle_event) = lifecycle_event else {
+        if state.config.development_mode {
+            return Err(AppError::unsupported_feature(
+                "operation requires a controller-signed delegated SDK Event",
+            )
+            .with_wire_code("controller_signed_event_required"));
+        }
         return Err(AppError::unsupported_feature(
             "production agent lifecycle transitions require protocol-valid delegated fan-out",
         )
         .with_wire_code("agent_lifecycle_fanout_unavailable"));
-    }
+    };
     // Resume re-disclosure (key-management.md §3.6.1): sidecar circles the
     // controller created while the agent was paused re-enter the agent's
     // eligibility set on resume, so the controller MUST explicitly
     // re-acknowledge them; silent resume is forbidden.
     if event_kind == "ak.self.agent.resume" {
+        ensure_agent_resume_pairing_closed(&record, chrono::Utc::now())?;
         let paused_at = Some(record.updated_at);
         let new_sidecar_ids = controller_sidecar_circles_since(state, &session.actor, paused_at);
         if !new_sidecar_ids.is_empty() {
@@ -842,6 +856,7 @@ pub(super) async fn lifecycle_transition(
         &previous_status,
         reason.as_deref(),
         sidecar_exposure_ack.as_ref(),
+        lifecycle_event,
     )
     .await?;
     if event_kind == "ak.self.agent.deactivate" {
@@ -871,6 +886,24 @@ pub(super) async fn lifecycle_transition(
     updated_record.state = new_state.as_wire_str().to_owned();
     updated_record.state_changed_at = Some(status_changed_at);
     updated_record.updated_at = status_changed_at;
+    if event_kind == "ak.self.agent.pause"
+        && previous_status == "active"
+        && agent_pairing_handle_is_open(&updated_record)
+    {
+        // Invalidate any legacy replacement handle that was issued while the
+        // Agent was active by an older deployment. The compliant flow pauses
+        // first and only then calls renew_pairing, so a handle present at the
+        // pause transition can never be part of the new flow.
+        updated_record.paired_pairing_request_id = updated_record.pairing_request_id.clone();
+        updated_record.pairing_code = None;
+        updated_record.runtime_key_request = None;
+        updated_record.approval_request_id = None;
+        updated_record.approval_requested_at = None;
+        updated_record.runtime_key_binding_digest = None;
+        updated_record.runtime_public_key_digest = None;
+        updated_record.runtime_attestation_digest = None;
+        updated_record.approval_notification_id = None;
+    }
     if event_kind == "ak.self.agent.deactivate" {
         updated_record.approval_request_id = None;
         updated_record.runtime_key_request = None;
@@ -948,6 +981,7 @@ pub(super) async fn pause_agent(
             "ak.self.agent.pause",
             body.reason,
             None,
+            Some(body.lifecycle_event),
         )
         .await?,
     )
@@ -984,6 +1018,7 @@ pub(super) async fn resume_agent(
                 .map_err(|error| {
                     AppError::invalid_param(format!("sidecar_exposure_ack invalid: {error}"))
                 })?,
+            Some(body.lifecycle_event),
         )
         .await?,
     )
@@ -1014,6 +1049,7 @@ pub(super) async fn deactivate_agent(
             AgentLifecycleState::Deactivated,
             "ak.self.agent.deactivate",
             body.reason,
+            None,
             None,
         )
         .await?,

@@ -730,22 +730,36 @@ async fn events_frontier(
             return Err(AppError::not_found("realm not found"));
         }
         if managed_agent_pcr {
-            let seal =
-                crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
-                    state, &realm_id,
+            // Managed Agent PCR Seals are device-generation artifacts. When
+            // accepted Events are ahead of the accepted Seal, return the
+            // previous signed head so the delegated controller can author the
+            // successor; the service must not try to synthesize that Seal.
+            let Some(seal) =
+                crate::routing::identity::managed_agent_pcr::managed_agent_event_seal_head(
+                    state,
+                    realm_id.as_str(),
                 )
                 .await?
-                .accepted_seal;
+            else {
+                return Err(AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    "managed Agent PCR has no accepted device-signed Seal",
+                )
+                .with_status(StatusCode::SERVICE_UNAVAILABLE));
+            };
             let frontier = RealmSealFrontierView {
                 realm_id,
-                seal_id: seal.id,
-                control_event_set_root: seal.control_event_set_root,
-                state_root: seal.state_root,
-                hlc: Some(seal.hlc),
+                seal_id: seal.id.clone(),
+                control_event_set_root: seal.control_event_set_root.clone(),
+                state_root: seal.state_root.clone(),
+                hlc: Some(seal.hlc.clone()),
             };
             return soland_http::result::json_ok(EventsFrontierAccountClientState {
                 frontier: EventsFrontierView::RealmSealView(frontier),
-                receipts: Vec::new(),
+                receipts: vec![ManagedAgentPcrSealHeadReceipt {
+                    kind: ManagedAgentPcrSealHeadReceiptKind::ManagedAgentPcrSealHeadV1,
+                    seal,
+                }],
             });
         }
         let head = crate::notary::ensure_realm_seal_head(state, &realm_id)
