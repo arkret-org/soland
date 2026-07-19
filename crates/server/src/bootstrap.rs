@@ -531,7 +531,7 @@ fn load_or_create_seed(
 ) -> anyhow::Result<[u8; 32]> {
     match key_store.load(key_ref.as_str()) {
         Ok(bytes) => key_bytes_to_seed(key_ref, bytes.as_slice()),
-        Err(error) if error.is_key_store_not_found() && allow_create => {
+        Err(error) if error.is_not_found() && allow_create => {
             let mut seed = [0u8; 32];
             crate::state::getrandom_seed(&mut seed);
             key_store.store(key_ref.as_str(), &seed).map_err(|error| {
@@ -558,7 +558,7 @@ fn store_or_verify_seed(
             "service_identity_key_mismatch: retained key {} differs from the inception key",
             key_ref.as_str()
         ),
-        Err(error) if error.is_key_store_not_found() && allow_create => key_store
+        Err(error) if error.is_not_found() && allow_create => key_store
             .store(key_ref.as_str(), expected)
             .map_err(|error| anyhow::anyhow!("persisting {} failed: {error}", key_ref.as_str())),
         Err(error) => Err(anyhow::anyhow!(
