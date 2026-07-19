@@ -811,7 +811,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     .unwrap();
     let quarantine_event_id = quarantine_resp["event_ref"]
         .as_str()
-        .expect("quarantine event id")
+        .unwrap_or_else(|| panic!("quarantine event id: {quarantine_resp}"))
         .to_owned();
 
     let events: Value = TestClient::get(format!(
@@ -831,7 +831,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     };
     let downgrade_event = find(&downgrade_event_id);
     assert_eq!(
-        downgrade_event["payload"]["content"]["ak.morph.e2ee_downgrade"],
+        downgrade_event["payload"]["content"]["e2ee_downgrade"],
         "mimi_bridge"
     );
     assert_eq!(
@@ -852,10 +852,10 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     let quarantine_event = find(&quarantine_event_id);
     assert_eq!(
         quarantine_event["payload"]["content"]["kind"],
-        "ak.content.unsupported"
+        "ak.content.text"
     );
     assert_eq!(
-        quarantine_event["payload"]["content"]["ak.morph.unknown_content_kind"],
+        quarantine_event["payload"]["content"]["unknown_content_kind"],
         "m.location.share.live"
     );
     assert_eq!(

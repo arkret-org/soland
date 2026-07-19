@@ -14,8 +14,9 @@
 //!   shape.
 //! - `validate_encrypted_payload_envelope` — `ak.profile.encrypted_envelope.v1` envelope shape (MLS
 //!   sender / scheme / version / `key_ref`).
-//! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields is validated via the SDK
-//!   `arkret_sdk::canonical::validate_timestamp_canonical`.
+//! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields accepts the SDK's ordinary
+//!   whole-second profile and the Event-bound fixed-millisecond profile; kind-specific validators
+//!   enforce narrower field requirements.
 //! - `canonical_json_digest` — sha256 over canonical-JSON bytes.
 //!
 //! Spec items still pending here are tracked in `_todos.md` (notably

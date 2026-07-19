@@ -77,6 +77,27 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
     serde_json::from_str(body.lines().next().unwrap()).unwrap()
 }
 
+async fn put_account_data(
+    state: AppState,
+    token: &str,
+    data_type: &str,
+    content: Value,
+) -> (StatusCode, Value) {
+    let mut response = TestClient::put(format!(
+        "http://server/_arkret/self/account_data/{data_type}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&json!({ "content": content }))
+    .send(&app_from_state(state))
+    .await;
+    let status = response.status_code.expect("account_data PUT status");
+    let body = response
+        .take_json()
+        .await
+        .expect("account_data PUT JSON response");
+    (status, body)
+}
+
 async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> String {
     let realm_id = arkret_sdk::new_prefixed_uuid7("ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
@@ -271,6 +292,109 @@ fn strand_id_for_realm(realm_id: &str) -> String {
         .strip_prefix("ak:realm:")
         .map(|suffix| format!("ak:strand:{suffix}"))
         .unwrap_or_else(|| "ak:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
+}
+
+#[tokio::test]
+async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let actor = test_event_signer_did();
+    let desktop = dev_token(
+        state.clone(),
+        &actor,
+        "ak:device:01904100-0000-7000-8000-a11ce0000011",
+        "Alice Desktop",
+    )
+    .await;
+    let phone = dev_token(
+        state.clone(),
+        &actor,
+        "ak:device:01904100-0000-7000-8000-a11ce0000012",
+        "Alice Phone",
+    )
+    .await;
+    let data_type = "client.complement_probe.scalar";
+
+    let (first_status, first) = put_account_data(
+        state.clone(),
+        &desktop,
+        data_type,
+        json!({ "version": 1, "label": "first" }),
+    )
+    .await;
+    assert_eq!(first_status, StatusCode::CREATED, "first PUT: {first}");
+    assert_eq!(first["content"]["version"], 1);
+
+    let (second_status, second) =
+        put_account_data(state.clone(), &desktop, data_type, json!("second")).await;
+    assert_eq!(second_status, StatusCode::OK, "second PUT: {second}");
+    assert_eq!(second["content"], "second");
+
+    let phone_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
+    let event = account_data_entry(&phone_sync, data_type)
+        .unwrap_or_else(|| panic!("latest account_data Event missing: {phone_sync}"));
+    assert_eq!(
+        event["kind"],
+        arkret_sdk::events::EventKind::ACCOUNT_DATA_SET
+    );
+    assert_eq!(
+        event["actor_id"].as_str(),
+        Some(state.service_id().as_str())
+    );
+    assert_eq!(event["payload"]["owner"], actor);
+    assert_eq!(event["payload"]["body"], "second");
+    assert!(
+        event["proofs"]
+            .as_array()
+            .is_some_and(|proofs| !proofs.is_empty())
+    );
+    assert!(!event.to_string().contains("first"));
+    serde_json::from_value::<arkret_sdk::Event>(event.clone())
+        .expect("sync account_data entry is a typed canonical Event");
+
+    state
+        .test_persistence()
+        .account_data()
+        .delete(&actor, data_type)
+        .await
+        .expect("simulate rebuildable projection loss");
+    let rebuilt_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
+    assert_eq!(
+        account_data_entry(&rebuilt_sync, data_type).map(|entry| &entry["payload"]["body"]),
+        Some(&json!("second")),
+        "initial baseline must come from the durable Event store"
+    );
+
+    let mut delete = TestClient::delete(format!(
+        "http://server/_arkret/self/account_data/{data_type}"
+    ))
+    .add_header("authorization", format!("Bearer {desktop}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(delete.status_code, Some(StatusCode::OK));
+    let delete_body: Value = delete.take_json().await.unwrap();
+    assert_eq!(delete_body["ok"], true);
+
+    let after_delete = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
+    assert!(account_data_entry(&after_delete, data_type).is_none());
+    let latest = state
+        .test_persistence()
+        .events()
+        .snapshot_all()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|record| {
+            record.kind == arkret_sdk::events::EventKind::ACCOUNT_DATA_SET
+                && record
+                    .envelope
+                    .get("payload")
+                    .and_then(|payload| payload.get("key"))
+                    .and_then(Value::as_str)
+                    == Some(data_type)
+        })
+        .max_by_key(|record| record.received_at)
+        .expect("account_data tombstone Event remains durable");
+    assert_eq!(latest.envelope["payload"]["tombstone"], true);
 }
 
 #[tokio::test]

@@ -145,7 +145,7 @@ pub(super) async fn project_account_data_set(
         .get("owner")
         .and_then(Value::as_str)
         .unwrap_or(origin);
-    if owner != origin {
+    if owner != origin && origin != state.service_id {
         tracing::warn!(
             owner,
             origin,

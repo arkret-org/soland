@@ -2,7 +2,7 @@
 //! verification (`applet-integration.md` §7.3.1).
 
 use arkret_sdk::applet::WebhookSignatureAlg;
-use arkret_sdk::{AppletTransactionRequestBody, canonical};
+use arkret_sdk::canonical;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use soland_http::error::AppError;
@@ -19,6 +19,45 @@ pub(super) struct VerifiedInboundTransactionSignature {
     pub(super) source_signature_anchor: String,
 }
 
+#[handler]
+pub(super) async fn require_inbound_transaction_signature(
+    req: &mut Request,
+    depot: &mut Depot,
+    res: &mut Response,
+    ctrl: &mut FlowCtrl,
+) {
+    let verification = async {
+        if !inbound_transaction_signature_present(req) {
+            return Err(applet_signature_error_required(
+                "inbound transaction push MUST carry an RFC 9421 Signature / Signature-Input; \
+                 plain bearer is rejected",
+            ));
+        }
+        let state = depot
+            .get_typed::<AppState>()
+            .expect("state injected")
+            .clone();
+        let idempotency_key = applet_required_header(req, "idempotency-key")?;
+        let payload = req.payload().await.map_err(|error| {
+            AppError::bad_json(format!("unable to read applet transaction body: {error}"))
+        })?;
+        let transaction =
+            serde_json::from_slice::<serde_json::Value>(payload).map_err(|error| {
+                AppError::bad_json(format!("invalid applet transaction JSON: {error}"))
+            })?;
+        verify_inbound_transaction_signature(&state, req, &transaction, &idempotency_key).await
+    }
+    .await;
+
+    match verification {
+        Ok(verified) => {
+            depot.insert_typed(verified);
+            ctrl.call_next(req, depot, res).await;
+        }
+        Err(error) => error.write(req, depot, res).await,
+    }
+}
+
 /// Inbound transaction-push per-delivery source-signature verification
 /// (`applet-integration.md` §7.3.1).
 ///
@@ -33,21 +72,26 @@ pub(super) struct VerifiedInboundTransactionSignature {
 /// - `created` / `expires` outside the freshness window → `signature_window_invalid`
 /// - `Source-Service-ID` with no active effective install / not matching the registration service
 ///   DID → 403 `applet_registration_unauthorized`.
-pub(super) async fn verify_inbound_transaction_signature(
+async fn verify_inbound_transaction_signature(
     state: &AppState,
     req: &Request,
-    transaction: &AppletTransactionRequestBody,
+    transaction: &serde_json::Value,
     idempotency_key: &str,
 ) -> Result<VerifiedInboundTransactionSignature, AppError> {
-    let source_service_id = transaction.source_service_id.as_str();
+    let source_service_id = transaction
+        .get("source_service_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            applet_signature_error_invalid(
+                "signed applet transaction body requires source_service_id",
+            )
+        })?;
 
     // §7.3.1 ordering: a transaction push carrying only `Authorization: Bearer`
     // (no `Signature` / `Signature-Input`) MUST be rejected before any other
     // work. This is the cheapest, highest-priority gate and is what separates a
     // plain-bearer caller from a (mis)signed one.
-    let signature_present =
-        req.headers().get("signature").is_some() && req.headers().get("signature-input").is_some();
-    if !signature_present {
+    if !inbound_transaction_signature_present(req) {
         return Err(applet_signature_error_required(
             "inbound transaction push MUST carry an RFC 9421 Signature / Signature-Input; \
              plain bearer is rejected",
@@ -57,12 +101,7 @@ pub(super) async fn verify_inbound_transaction_signature(
     // §7.3.1 line 456: verify the body hash matches `Content-Digest` before
     // validating the signature transcript. The signed body MUST be the
     // canonical request body.
-    let body_value = serde_json::to_value(transaction).map_err(|error| {
-        AppError::internal(format!(
-            "applet transaction body serialization failed: {error}"
-        ))
-    })?;
-    let body_digests = http_signature::canonical_body_digests(&body_value, |error| {
+    let body_digests = http_signature::canonical_body_digests(transaction, |error| {
         AppError::invalid_param(format!(
             "applet transaction body is not canonical JSON: {error}"
         ))
@@ -163,6 +202,10 @@ pub(super) async fn verify_inbound_transaction_signature(
         request_digest,
         source_signature_anchor,
     })
+}
+
+fn inbound_transaction_signature_present(req: &Request) -> bool {
+    req.headers().get("signature").is_some() && req.headers().get("signature-input").is_some()
 }
 
 /// Find an active (non-revoked) effective install whose registration service

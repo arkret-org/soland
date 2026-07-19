@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use soland_storage::{
-    DeviceInventoryRecord, DeviceMessageRecord, RecoveryPolicyRecord, RecoverySessionRecord,
+    CanonicalEventRecord, DeviceInventoryRecord, DeviceMessageRecord, RecoveryPolicyRecord,
+    RecoverySessionRecord, WebvhLogRecord,
 };
 use soland_storage_memory::SolandMemoryPersistenceStore;
 
@@ -249,6 +250,167 @@ async fn recovery_session_create_and_get_roundtrip() {
     assert_eq!(fetched["recovery_session_id"], session_id);
     assert_eq!(fetched["challenge"], challenge);
     assert_eq!(fetched["state"], "pending");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_session_derives_enrollment_authority_model_and_rejects_a_model_completion() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let principal_id = "did:webvh:z6mkfixture:recovery.example";
+    let authority_id = "did:webvh:z6mkauthority:recovery.example";
+    let inception_version = format!("1-{}", "a".repeat(64));
+    let inception_digest = format!("sha256:{}", "b".repeat(64));
+    let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
+    let create_event_id = "ak:event:01964137-0000-7000-8000-00000000b001";
+    let authorize_event_id = "ak:event:01964137-0000-7000-8000-00000000b002";
+    let now = chrono::Utc::now();
+
+    state
+        .test_persistence()
+        .webvh()
+        .append_log_event(WebvhLogRecord {
+            event_digest: inception_digest.clone(),
+            did: principal_id.to_owned(),
+            seq: 1,
+            operation: serde_json::json!({
+                "versionId": inception_version,
+                "state": {
+                    "id": principal_id,
+                    "service": [{
+                        "id": format!("{principal_id}#device-enrollment-authority"),
+                        "type": "ArkretDeviceEnrollmentAuthority",
+                        "serviceEndpoint": authority_id,
+                    }],
+                },
+            }),
+            created_at: now,
+        })
+        .await
+        .unwrap();
+
+    let mut bootstrap_records = Vec::new();
+    for (event_id, actor_seq, kind, digest_hex, envelope) in [
+        (
+            create_event_id,
+            0,
+            "ak.realm.create",
+            "c",
+            serde_json::json!({
+                "event_id": create_event_id,
+                "kind": "ak.realm.create",
+                "actor_id": principal_id,
+                "actor_seq": 0,
+                "realm_id": realm_id,
+                "prev_refs": [],
+                "refs": [{"role": "did_inception", "critical": true}],
+                "payload": {"object": {"fields": {"purpose": "principal_control"}}},
+            }),
+        ),
+        (
+            authorize_event_id,
+            1,
+            "ak.device.authorize",
+            "d",
+            serde_json::json!({
+                "event_id": authorize_event_id,
+                "kind": "ak.device.authorize",
+                "actor_id": principal_id,
+                "actor_seq": 1,
+                "realm_id": realm_id,
+                "prev_refs": [create_event_id],
+                "refs": [],
+                "payload": {"principal_id": principal_id},
+            }),
+        ),
+    ] {
+        let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
+        bootstrap_records.push(CanonicalEventRecord {
+            event_id: event_id.to_owned(),
+            actor_id: principal_id.to_owned(),
+            actor_seq,
+            realm_id: Some(realm_id.clone()),
+            kind: kind.to_owned(),
+            schema_id: "ak.schema.event_envelope.v1".to_owned(),
+            canonical_digest: format!("sha256:{}", digest_hex.repeat(64)),
+            canonical_bytes,
+            envelope,
+            received_at: now,
+        });
+    }
+    state
+        .test_persistence()
+        .events()
+        .put_identity_anchor_batch_atomic(bootstrap_records, None, None, None, None)
+        .await
+        .unwrap();
+
+    seed_reset_recovery_policy(
+        &state,
+        principal_id,
+        "principal_signing",
+        serde_json::json!({}),
+    )
+    .await;
+    let token = dev_token_for_device(
+        state.clone(),
+        principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery",
+    )
+    .await;
+    let requesting_device_id = "ak:device:01904100-0000-7000-8000-000000000099";
+    let session = post_recovery(
+        state.clone(),
+        &token,
+        "/_arkret/root/identity/recovery-sessions",
+        &serde_json::json!({
+            "principal_id": principal_id,
+            "trust_domain": "ak:trust_domain:soland.local",
+            "requesting_device_id": requesting_device_id,
+        }),
+        StatusCode::CREATED,
+    )
+    .await;
+
+    assert_eq!(session["identity_model"], "enrollment_authority");
+    assert_eq!(
+        session["current_device_generation_ref"],
+        serde_json::json!(inception_version)
+    );
+    assert_eq!(session["device_generation_status"], "active");
+    assert_eq!(session["registry_head"], inception_digest);
+    assert!(session.get("ssk_generation").is_none());
+
+    let session_id = session["recovery_session_id"].as_str().unwrap();
+    let mut stored = state
+        .test_persistence()
+        .recovery_sessions()
+        .get(session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    stored.state = "verified".to_owned();
+    stored.proof_payload = Some(serde_json::json!({
+        "proof": {"kind": "principal_signing"},
+    }));
+    state
+        .test_persistence()
+        .recovery_sessions()
+        .update(stored)
+        .await
+        .unwrap();
+
+    let rejected = post_recovery(
+        state,
+        &token,
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
+        &serde_json::json!({
+            "authorization_event_id": AUTH_EVENT_ID,
+            "device_list_update_event_id": LIST_EVENT_ID,
+        }),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    assert_eq!(rejected["error"]["code"], "failed_precondition");
 }
 
 #[tokio::test(flavor = "multi_thread")]

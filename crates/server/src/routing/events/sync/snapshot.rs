@@ -921,14 +921,20 @@ async fn account_data_events(
         .await
         .unwrap_or_default()
     {
-        if record.actor_id != session.actor
-            || record.kind != arkret_sdk::events::EventKind::ACCOUNT_DATA_SET
-        {
+        if record.kind != arkret_sdk::events::EventKind::ACCOUNT_DATA_SET {
             continue;
         }
         let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record) else {
             continue;
         };
+        let owner = event.payload.get("owner").and_then(Value::as_str);
+        let holder_authored =
+            record.actor_id == session.actor && owner.is_none_or(|owner| owner == session.actor);
+        let local_service_authored =
+            record.actor_id == state.service_id && owner == Some(session.actor.as_str());
+        if !holder_authored && !local_service_authored {
+            continue;
+        }
         let Some(key) = event.payload.get("key").and_then(Value::as_str) else {
             continue;
         };
