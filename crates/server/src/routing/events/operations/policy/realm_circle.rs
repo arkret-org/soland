@@ -405,6 +405,23 @@ pub(super) fn sidecar_circle_object_shape_is_constrained(
     if object.get("history_visibility").and_then(Value::as_str) != Some("joined") {
         return false;
     }
+    // Sidecars are never a plaintext escape hatch. The reserved aggregate is
+    // stricter than an ordinary Circle: both floors and the profile are fixed
+    // to MLS E2EE even when the parent principal-control Realm permits
+    // plaintext. `ensure` may only return after this exact shape is projected,
+    // which lets clients select the encrypted composer without a downgrade.
+    if object
+        .get("content_encryption_floor")
+        .and_then(Value::as_str)
+        != Some("e2ee_required")
+        || object
+            .get("metadata_encryption_floor")
+            .and_then(Value::as_str)
+            != Some("e2ee_required")
+        || object.get("encryption_profile").and_then(Value::as_str) != Some("mls_rfc9420")
+    {
+        return false;
+    }
     let expected_key = arkret_sdk::agent_sidecar_circle_key(realm_id, actor);
     let expected_short_name = arkret_sdk::agent_sidecar_short_name(&expected_key);
     object.get("title").and_then(Value::as_str) == Some(expected_short_name.as_str())

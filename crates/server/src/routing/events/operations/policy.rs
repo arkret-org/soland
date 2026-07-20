@@ -317,6 +317,9 @@ mod tests {
                 "join_rule": "invite",
                 "history_visibility": "joined",
                 "profile_ref": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+                "content_encryption_floor": "e2ee_required",
+                "metadata_encryption_floor": "e2ee_required",
+                "encryption_profile": "mls_rfc9420",
                 "created_by": actor,
             },
         });
@@ -325,6 +328,15 @@ mod tests {
         assert!(sidecar_circle_create_shape_is_constrained(
             &valid_payload,
             &op,
+            actor
+        ));
+
+        let mut plaintext_payload = valid_payload.clone();
+        plaintext_payload["object"]["encryption_profile"] = Value::String("none".to_owned());
+        let plaintext_op = circle_create_with_payload(plaintext_payload.clone());
+        assert!(!sidecar_circle_create_shape_is_constrained(
+            &plaintext_payload,
+            &plaintext_op,
             actor
         ));
 

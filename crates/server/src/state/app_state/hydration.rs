@@ -151,7 +151,7 @@ pub(super) async fn hydrate_sidecar_circle_projections(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
 
-    for event in events {
+    for mut event in events {
         match event.event_kind.as_str() {
             arkret_sdk::events::EventKind::CIRCLE_CREATE
                 if event
@@ -163,20 +163,63 @@ pub(super) async fn hydrate_sidecar_circle_projections(
                 let object = event.payload.get("object").and_then(Value::as_object);
                 let creator = object
                     .and_then(|object| object.get("created_by"))
-                    .and_then(Value::as_str);
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
                 let title = object
                     .and_then(|object| object.get("title"))
-                    .and_then(Value::as_str);
-                let already_restored = creator.zip(title).is_some_and(|(creator, title)| {
-                    proj.circles.values().any(|circle| {
-                        circle.realm_id == event.realm_id
-                            && circle.created_by == creator
-                            && circle.title == title
-                            && circle.profile_ref.as_deref()
-                                == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
-                    })
-                });
-                if !already_restored {
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                // Compatibility repair for Sidecars created before the
+                // reserved profile made MLS + both e2ee floors mandatory.
+                // Hydration applies it to the replay payload and to any Circle
+                // already restored from the projection tables, so restart
+                // cannot reintroduce the plaintext downgrade.
+                if let Some(object) = event
+                    .payload
+                    .get_mut("object")
+                    .and_then(Value::as_object_mut)
+                {
+                    object.insert(
+                        "content_encryption_floor".to_owned(),
+                        Value::String("e2ee_required".to_owned()),
+                    );
+                    object.insert(
+                        "metadata_encryption_floor".to_owned(),
+                        Value::String("e2ee_required".to_owned()),
+                    );
+                    object.insert(
+                        "encryption_profile".to_owned(),
+                        Value::String("mls_rfc9420".to_owned()),
+                    );
+                }
+                let already_restored =
+                    creator
+                        .as_deref()
+                        .zip(title.as_deref())
+                        .is_some_and(|(creator, title)| {
+                            proj.circles.values().any(|circle| {
+                                circle.realm_id == event.realm_id
+                                    && circle.created_by == creator
+                                    && circle.title == title
+                                    && circle.profile_ref.as_deref()
+                                        == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+                            })
+                        });
+                if already_restored {
+                    if let Some((creator, title)) = creator.as_deref().zip(title.as_deref())
+                        && let Some(circle) = proj.circles.values_mut().find(|circle| {
+                            circle.realm_id == event.realm_id
+                                && circle.created_by == creator
+                                && circle.title == title
+                                && circle.profile_ref.as_deref()
+                                    == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+                        })
+                    {
+                        circle.encryption_profile = "mls_rfc9420".to_owned();
+                        circle.content_encryption_floor = Some("e2ee_required".to_owned());
+                        circle.metadata_encryption_floor = Some("e2ee_required".to_owned());
+                    }
+                } else {
                     replay_projection_event(proj, event, hydration_hlc, "sidecar-circle")?;
                 }
             }
