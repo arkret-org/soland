@@ -578,6 +578,25 @@ fn private_tracks_for_context(state: &AppState, context_ref: &AgentSidecarContex
         .unwrap_or_else(|| json!({"synthesis": {}}))
 }
 
+fn private_context_strand_object(
+    strand_id: &StrandId,
+    realm_id: &RealmId,
+    circle_id: &CircleId,
+    controller: &str,
+    tracks: Value,
+    created_at: &str,
+) -> Value {
+    json!({
+        "id": strand_id,
+        "schema": "ak.schema.strand.v1",
+        "realm_id": realm_id,
+        "tracks": tracks,
+        "scope_circle_id": circle_id,
+        "created_by": controller,
+        "created_at": created_at
+    })
+}
+
 async fn create_private_context(
     state: &AppState,
     controller: &str,
@@ -592,19 +611,20 @@ async fn create_private_context(
         .map_err(|error| AppError::internal(format!("stored Circle id: {error}")))?;
     let strand_id = StrandId::new(ids::generate("strand"))
         .map_err(|error| AppError::internal(format!("generated Strand id: {error}")))?;
+    let tracks = private_tracks_for_context(state, context_ref);
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let object = private_context_strand_object(
+        &strand_id,
+        &realm_id,
+        &circle_id,
+        controller,
+        tracks,
+        &created_at,
+    );
     let strand_operation = new_sidecar_operation(
         &realm_id,
         arkret_sdk::events::EventKind::STRAND_CREATE,
-        json!({"object": {
-            "id": strand_id,
-            "schema": "ak.schema.strand.v1",
-            "realm_id": realm_id,
-            "metadata": {"title": "Private Sidecar"},
-            "tracks": private_tracks_for_context(state, context_ref),
-            "scope_circle_id": circle_id,
-            "created_by": controller,
-            "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-        }}),
+        json!({"object": object}),
     )?;
     accept_local_operations(state, controller, std::slice::from_ref(&strand_operation))
         .await
@@ -911,4 +931,38 @@ pub(super) async fn list_sidecars(
         items.push(sidecar_view(state, &record).await?);
     }
     json_ok(AgentSidecarList { items, next_cursor })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_context_strand_preserves_all_tracks_without_plaintext_metadata() {
+        let strand_id =
+            StrandId::new("ak:strand:01964137-0000-7000-8000-000000000031".to_owned()).unwrap();
+        let realm_id =
+            RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030".to_owned()).unwrap();
+        let circle_id =
+            CircleId::new("ak:circle:01964137-0000-7000-8000-000000000032".to_owned()).unwrap();
+        let tracks = json!({
+            "description": {"profile": "document"},
+            "synthesis": {"profile": "document"},
+            "discussion": {"profile": "discussion", "is_primary": true}
+        });
+
+        let object = private_context_strand_object(
+            &strand_id,
+            &realm_id,
+            &circle_id,
+            "did:web:example.com:users:alice",
+            tracks.clone(),
+            "2026-07-20T00:00:00Z",
+        );
+
+        assert_eq!(object.get("tracks"), Some(&tracks));
+        assert!(object.get("metadata").is_none());
+        assert!(object.get("title").is_none());
+        assert!(object.get("summary").is_none());
+    }
 }
