@@ -262,7 +262,7 @@ async fn resolve_external_service_identity(
             )
             .await
         }
-        Err(arkret_sdk::Error::Api { status: 404, .. }) if existing.is_none() => {
+        Err(arkret_sdk::http_client::Error::Api { status: 404, .. }) if existing.is_none() => {
             let operation = material
                 .prepared
                 .service_registration_operation()
@@ -592,11 +592,11 @@ fn service_identity_retry_at() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() + chrono::Duration::seconds(5)
 }
 
-fn provider_unavailable(error: &arkret_sdk::Error) -> bool {
+fn provider_unavailable(error: &arkret_sdk::http_client::Error) -> bool {
     matches!(
         error,
-        arkret_sdk::Error::Http(_)
-            | arkret_sdk::Error::Api {
+        arkret_sdk::http_client::Error::Http(_)
+            | arkret_sdk::http_client::Error::Api {
                 status: 429 | 502 | 503 | 504,
                 ..
             }
