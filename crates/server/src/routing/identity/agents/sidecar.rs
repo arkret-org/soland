@@ -1,10 +1,10 @@
-use arkret_sdk::models::{
+use arkret_core::models::{
     AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
     AgentSidecarEncryptionProfile, AgentSidecarEnsureOutcome, AgentSidecarEnsureRequestBody,
     AgentSidecarList, AgentSidecarSchema, AgentSidecarState, AgentSidecarView,
     PendingSidecarAccessReconciliationItem, PendingSidecarAccessReconciliationStage,
 };
-use arkret_sdk::{NonEmptyString, SidecarId};
+use arkret_core::{NonEmptyString, SidecarId};
 use salvo::oapi::extract::QueryParam;
 use soland_storage::{AgentSidecarContextRecord, AgentSidecarRecord};
 
@@ -35,7 +35,7 @@ async fn lock_sidecar_ensure(realm_id: &str, controller: &str) -> tokio::sync::O
 
 pub(super) fn sidecar_create_denied(message: impl Into<String>) -> AppError {
     AppError::capability_denied(message)
-        .with_wire_code(arkret_sdk::ReasonCode::SIDECAR_CREATE_DENIED)
+        .with_wire_code(arkret_core::ReasonCode::SIDECAR_CREATE_DENIED)
 }
 
 pub(super) fn sidecar_failed_precondition(
@@ -71,7 +71,7 @@ async fn authorize_sidecar_ensure(
     let members = realm_members_for_authz(state, realm_id);
     let verdict = state.authz.check(
         controller,
-        arkret_sdk::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
+        arkret_core::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
         realm_id,
         realm_id,
         owner.as_deref(),
@@ -275,7 +275,7 @@ fn backing_circle_is_compliant(
     controller: &str,
 ) -> bool {
     let expected_short_name =
-        arkret_sdk::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
+        arkret_core::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
     circle.profile_ref.is_none()
         && circle.title == "Agent Sidecar Scope"
         && circle.summary.is_none()
@@ -314,7 +314,7 @@ async fn ensure_backing_circle(
             Err(sidecar_create_denied("Sidecar backing scope conflict"))
         };
     }
-    let short_name = arkret_sdk::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
+    let short_name = arkret_core::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
     let object = json!({
         "id": circle_id,
         "schema": "ak.schema.circle.v1",
@@ -337,7 +337,7 @@ async fn ensure_backing_circle(
     });
     let operation = new_sidecar_operation(
         realm_id,
-        arkret_sdk::events::EventKind::CIRCLE_CREATE,
+        arkret_core::events::EventKind::CIRCLE_CREATE,
         json!({"object": object}),
     )?;
     crate::routing::events::projection::accept_trusted_sidecar_circle_operation(
@@ -400,7 +400,7 @@ async fn ensure_sidecar_aggregate(
     };
     let operation = new_sidecar_operation(
         realm_id,
-        arkret_sdk::events::EventKind::SIDECAR_CREATE,
+        arkret_core::events::EventKind::SIDECAR_CREATE,
         json!({"object": sidecar}),
     )?;
     crate::routing::events::projection::accept_trusted_sidecar_create_operation(
@@ -449,7 +449,7 @@ async fn ensure_sidecar_member(
     }
     let operation = new_sidecar_operation(
         realm_id,
-        arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
         json!({"circle_id": circle_id, "actor_id": actor, "membership": "join"}),
     )?;
     crate::routing::events::projection::accept_trusted_sidecar_member_operation(
@@ -490,7 +490,7 @@ async fn ensure_sidecar_mls_genesis(
             AppError::internal(format!("Sidecar MLS frontier lookup failed: {error}"))
         })?
         .into_iter()
-        .filter(|event| event.event_kind == arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE)
+        .filter(|event| event.event_kind == arkret_core::events::EventKind::CIRCLE_MEMBER_STATE)
         .filter(|event| {
             event.payload.get("circle_id").and_then(Value::as_str) == Some(circle_id.as_str())
                 && event.payload.get("membership").and_then(Value::as_str) == Some("join")
@@ -519,13 +519,13 @@ async fn ensure_sidecar_mls_genesis(
         "previous_epoch": 0,
         "next_epoch": 0,
         "membership_frontier": member_event_refs,
-        "policy_root": arkret_sdk::canonical::sha256_digest(format!("sidecar-policy:{realm_id}:{group_id}")),
+        "policy_root": arkret_core::canonical::sha256_digest(format!("sidecar-policy:{realm_id}:{group_id}")),
         "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
         "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1,
     });
     let operation = new_sidecar_operation(
         realm_id,
-        arkret_sdk::events::EventKind::MLS_GENESIS,
+        arkret_core::events::EventKind::MLS_GENESIS,
         json!({
             "mls_group_id": group_id,
             "effective_scope": effective_scope,
@@ -533,8 +533,8 @@ async fn ensure_sidecar_mls_genesis(
             "creator_principal_id": controller,
             "creator_device_id": controller_device_id,
             "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-            "group_info_digest": arkret_sdk::canonical::sha256_digest(format!("sidecar-group-info:{realm_id}:{group_id}")),
-            "ratchet_tree_digest": arkret_sdk::canonical::sha256_digest(format!("sidecar-ratchet-tree:{realm_id}:{group_id}")),
+            "group_info_digest": arkret_core::canonical::sha256_digest(format!("sidecar-group-info:{realm_id}:{group_id}")),
+            "ratchet_tree_digest": arkret_core::canonical::sha256_digest(format!("sidecar-ratchet-tree:{realm_id}:{group_id}")),
             "covered_seals": member_event_refs,
             "governance_binding": governance_binding,
             "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -623,7 +623,7 @@ async fn create_private_context(
     );
     let strand_operation = new_sidecar_operation(
         &realm_id,
-        arkret_sdk::events::EventKind::STRAND_CREATE,
+        arkret_core::events::EventKind::STRAND_CREATE,
         json!({"object": object}),
     )?;
     accept_local_operations(state, controller, std::slice::from_ref(&strand_operation))
@@ -634,7 +634,7 @@ async fn create_private_context(
         .map_err(|error| AppError::internal(format!("generated Relation id: {error}")))?;
     let relation_operation = new_sidecar_operation(
         &realm_id,
-        arkret_sdk::events::EventKind::RELATION_CREATE,
+        arkret_core::events::EventKind::RELATION_CREATE,
         json!({"relation": {
             "id": relation_id,
             "kind": "agent_sidecar_of",
@@ -804,7 +804,7 @@ async fn ensure_sidecar_impl(
     let addressed_agents = normalize_addressed_agents(controller, &body)?;
     let normalized_context_ref = normalize_sidecar_context_ref(&body.context_ref)?;
     let normalized_context_ref_digest =
-        arkret_sdk::canonical::canonical_sha256(&normalized_context_ref)
+        arkret_core::canonical::canonical_sha256(&normalized_context_ref)
             .map_err(|error| AppError::internal(format!("context_ref digest failed: {error}")))?;
     let eligible_agents =
         eligible_sidecar_agents(state, realm_id.as_str(), controller, &addressed_agents).await?;

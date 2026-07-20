@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::{CellRef, RealmId};
+use arkret_core::{CellRef, RealmId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;

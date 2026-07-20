@@ -3,16 +3,16 @@ use super::*;
 pub(super) fn parse_child_scope_policy(
     kind: Option<&str>,
     scope_circle_id: Option<&str>,
-) -> Result<Option<arkret_sdk::ChildScopePolicy>, &'static str> {
+) -> Result<Option<arkret_core::ChildScopePolicy>, &'static str> {
     let policy = match (kind, scope_circle_id) {
         (None, None) => return Ok(None),
-        (Some("allow_any"), None) => arkret_sdk::ChildScopePolicy::AllowAny {},
-        (Some("require_e2ee"), None) => arkret_sdk::ChildScopePolicy::RequireE2ee {},
-        (Some("require_same_scope"), None) => arkret_sdk::ChildScopePolicy::RequireSameScope {},
+        (Some("allow_any"), None) => arkret_core::ChildScopePolicy::AllowAny {},
+        (Some("require_e2ee"), None) => arkret_core::ChildScopePolicy::RequireE2ee {},
+        (Some("require_same_scope"), None) => arkret_core::ChildScopePolicy::RequireSameScope {},
         (Some("require_scope_circle_id"), Some(scope_circle_id)) => {
-            let scope_circle_id = arkret_sdk::CircleId::new(scope_circle_id.to_owned())
+            let scope_circle_id = arkret_core::CircleId::new(scope_circle_id.to_owned())
                 .map_err(|_| "invalid_scope_circle_id")?;
-            arkret_sdk::ChildScopePolicy::RequireScopeCircleId { scope_circle_id }
+            arkret_core::ChildScopePolicy::RequireScopeCircleId { scope_circle_id }
         }
         _ => return Err("invalid_child_scope_policy"),
     };
@@ -21,19 +21,19 @@ pub(super) fn parse_child_scope_policy(
 
 pub(super) async fn hydrate_cross_signing_from_persistence(
     persistence: &dyn soland_storage::PersistenceStore,
-) -> soland_storage::PersistenceResult<arkret_sdk::DeviceManager> {
-    let mut manager = arkret_sdk::DeviceManager::new();
+) -> soland_storage::PersistenceResult<super::super::CrossSigningRegistry> {
+    let mut manager = super::super::CrossSigningRegistry::new();
     for event in persistence.projection_events().snapshot_all().await? {
         let payload = crate::routing::events::projection_context_stripped_payload(&event.payload);
         match event.event_kind.as_str() {
-            arkret_sdk::events::EventKind::CROSS_SIGNING_PUBLISH => {
-                let publish = serde_json::from_value::<arkret_sdk::CrossSigningPublish>(payload)
+            arkret_core::events::EventKind::CROSS_SIGNING_PUBLISH => {
+                let publish = serde_json::from_value::<arkret_core::CrossSigningPublish>(payload)
                     .map_err(|error| {
-                        soland_storage::PersistenceError::Internal(format!(
-                            "cross-signing publish {} failed hydration decode: {error}",
-                            event.event_id
-                        ))
-                    })?;
+                    soland_storage::PersistenceError::Internal(format!(
+                        "cross-signing publish {} failed hydration decode: {error}",
+                        event.event_id
+                    ))
+                })?;
                 manager
                     .record_cross_signing_publish(publish)
                     .map_err(|error| {
@@ -43,14 +43,15 @@ pub(super) async fn hydrate_cross_signing_from_persistence(
                         ))
                     })?;
             }
-            arkret_sdk::events::EventKind::CROSS_SIGNING_RESET => {
-                let reset = serde_json::from_value::<arkret_sdk::CrossSigningResetPayload>(payload)
-                    .map_err(|error| {
-                        soland_storage::PersistenceError::Internal(format!(
-                            "cross-signing reset {} failed hydration decode: {error}",
-                            event.event_id
-                        ))
-                    })?;
+            arkret_core::events::EventKind::CROSS_SIGNING_RESET => {
+                let reset =
+                    serde_json::from_value::<arkret_core::CrossSigningResetPayload>(payload)
+                        .map_err(|error| {
+                            soland_storage::PersistenceError::Internal(format!(
+                                "cross-signing reset {} failed hydration decode: {error}",
+                                event.event_id
+                            ))
+                        })?;
                 manager
                     .record_cross_signing_reset(&reset)
                     .map_err(|error| {
@@ -69,26 +70,26 @@ pub(super) async fn hydrate_cross_signing_from_persistence(
 fn operation_from_projection_event(
     event: &soland_storage::ProjectionEventRecord,
     projection_name: &str,
-) -> soland_storage::PersistenceResult<arkret_sdk::Operation> {
+) -> soland_storage::PersistenceResult<arkret_core::Operation> {
     let operation_id = event.operation_id.as_deref().ok_or_else(|| {
         soland_storage::PersistenceError::Internal(format!(
             "{projection_name} projection event {} has no operation_id",
             event.event_id
         ))
     })?;
-    let operation_id = arkret_sdk::OperationId::new(operation_id.to_owned()).map_err(|_| {
+    let operation_id = arkret_core::OperationId::new(operation_id.to_owned()).map_err(|_| {
         soland_storage::PersistenceError::Internal(format!(
             "{projection_name} projection event {} has an invalid operation_id",
             event.event_id
         ))
     })?;
-    let realm_id = arkret_sdk::RealmId::new(event.realm_id.clone()).map_err(|_| {
+    let realm_id = arkret_core::RealmId::new(event.realm_id.clone()).map_err(|_| {
         soland_storage::PersistenceError::Internal(format!(
             "{projection_name} projection event {} has an invalid realm_id",
             event.event_id
         ))
     })?;
-    let mut operation = arkret_sdk::Operation::create(
+    let mut operation = arkret_core::Operation::create(
         operation_id,
         realm_id,
         event.event_kind.clone(),
@@ -130,9 +131,9 @@ pub(super) async fn hydrate_sidecar_projections(
         .collect::<std::collections::BTreeSet<_>>();
     for record in records {
         let state = match record.state.as_str() {
-            "active" => arkret_sdk::models::AgentSidecarState::Active,
-            "suspended" => arkret_sdk::models::AgentSidecarState::Suspended,
-            "tombstoned" => arkret_sdk::models::AgentSidecarState::Tombstoned,
+            "active" => arkret_core::models::AgentSidecarState::Active,
+            "suspended" => arkret_core::models::AgentSidecarState::Suspended,
+            "tombstoned" => arkret_core::models::AgentSidecarState::Tombstoned,
             unknown => {
                 tracing::warn!(
                     sidecar_id = %record.sidecar_id,
@@ -149,7 +150,7 @@ pub(super) async fn hydrate_sidecar_projections(
                 realm_id: record.realm_id,
                 controller_id: record.controller_id,
                 backing_circle_id: record.backing_circle_id,
-                encryption_profile: arkret_sdk::models::AgentSidecarEncryptionProfile::MlsRfc9420,
+                encryption_profile: arkret_core::models::AgentSidecarEncryptionProfile::MlsRfc9420,
                 state,
                 state_changed_at: record.state_changed_at,
                 created_at: record.created_at,
@@ -166,10 +167,10 @@ pub(super) async fn hydrate_sidecar_projections(
     });
     for event in events {
         let circle_id = match event.event_kind.as_str() {
-            arkret_sdk::events::EventKind::CIRCLE_CREATE => {
+            arkret_core::events::EventKind::CIRCLE_CREATE => {
                 event.payload.pointer("/object/id").and_then(Value::as_str)
             }
-            arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE => {
+            arkret_core::events::EventKind::CIRCLE_MEMBER_STATE => {
                 event.payload.get("circle_id").and_then(Value::as_str)
             }
             _ => None,
@@ -178,7 +179,7 @@ pub(super) async fn hydrate_sidecar_projections(
             continue;
         }
         let mut operation = operation_from_projection_event(&event, "sidecar-backing-circle")?;
-        if event.event_kind == arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE {
+        if event.event_kind == arkret_core::events::EventKind::CIRCLE_MEMBER_STATE {
             let controller = proj
                 .sidecars
                 .values()
@@ -228,7 +229,7 @@ pub(super) async fn hydrate_sidecar_context_projections(
     });
     for event in events {
         match event.event_kind.as_str() {
-            arkret_sdk::events::EventKind::STRAND_CREATE => {
+            arkret_core::events::EventKind::STRAND_CREATE => {
                 let object = event.payload.get("object").and_then(Value::as_object);
                 let is_sidecar = object
                     .and_then(|object| object.get("scope_circle_id"))
@@ -241,7 +242,7 @@ pub(super) async fn hydrate_sidecar_context_projections(
                     replay_projection_event(proj, event, hydration_hlc, "sidecar-context-strand")?;
                 }
             }
-            arkret_sdk::events::EventKind::RELATION_CREATE => {
+            arkret_core::events::EventKind::RELATION_CREATE => {
                 let relation = event.payload.get("relation").unwrap_or(&event.payload);
                 let is_sidecar = relation
                     .get("scope_circle_id")
@@ -255,8 +256,8 @@ pub(super) async fn hydrate_sidecar_context_projections(
                 }
                 replay_projection_event(proj, event, hydration_hlc, "sidecar-context-relation")?;
             }
-            arkret_sdk::events::EventKind::RELATION_UPDATE
-            | arkret_sdk::events::EventKind::RELATION_TOMBSTONE => {
+            arkret_core::events::EventKind::RELATION_UPDATE
+            | arkret_core::events::EventKind::RELATION_TOMBSTONE => {
                 let relation_id = event
                     .payload
                     .get("relation_id")
@@ -320,7 +321,7 @@ async fn hydrate_canonical_realm_bootstraps(
     for (create_index, create) in records
         .iter()
         .enumerate()
-        .filter(|(_, record)| record.kind == arkret_sdk::events::EventKind::REALM_CREATE)
+        .filter(|(_, record)| record.kind == arkret_core::events::EventKind::REALM_CREATE)
     {
         let mut unit = vec![create];
         let mut previous_event_id = create.event_id.as_str();
@@ -340,9 +341,9 @@ async fn hydrate_canonical_realm_bootstraps(
                 break;
             }
             let expected_kind = if unit.len() == 1 {
-                candidate.kind == arkret_sdk::events::EventKind::CAPABILITY_GRANT
+                candidate.kind == arkret_core::events::EventKind::CAPABILITY_GRANT
             } else {
-                arkret_sdk::realm::bootstrap::is_realm_bootstrap_followup_kind(&candidate.kind)
+                arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(&candidate.kind)
             };
             if !expected_kind {
                 break;
@@ -386,14 +387,14 @@ async fn hydrate_canonical_realm_bootstraps(
 
         let typed_events = unit
             .iter()
-            .map(|record| serde_json::from_value::<arkret_sdk::Event>(record.envelope.clone()))
+            .map(|record| serde_json::from_value::<arkret_core::Event>(record.envelope.clone()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 soland_storage::PersistenceError::Internal(format!(
                     "canonical Realm bootstrap failed SDK Event decode: {error}"
                 ))
             })?;
-        arkret_sdk::realm::bootstrap::validate_realm_bootstrap_unit(&typed_events).map_err(
+        arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&typed_events).map_err(
             |error| {
                 soland_storage::PersistenceError::Internal(format!(
                     "canonical Realm bootstrap failed deterministic validation: {error}"
@@ -469,7 +470,7 @@ pub(super) async fn hydrate_canonical_realm_memberships(
         .snapshot_all()
         .await?
         .into_iter()
-        .filter(|record| record.kind == arkret_sdk::events::EventKind::MEMBER_STATE)
+        .filter(|record| record.kind == arkret_core::events::EventKind::MEMBER_STATE)
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
         left.received_at
@@ -538,9 +539,9 @@ pub(super) async fn hydrate_projections_from_persistence(
     let events = persistence.projection_events().snapshot_all().await?;
     for event in events {
         let projection_name = match event.event_kind.as_str() {
-            arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE
-            | arkret_sdk::events::EventKind::AGENT_KEY_REVOKE => "agent-key",
-            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES => "active-series",
+            arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE
+            | arkret_core::events::EventKind::AGENT_KEY_REVOKE => "agent-key",
+            arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES => "active-series",
             _ => continue,
         };
         replay_projection_event(proj, event, &hydration_hlc, projection_name)?;

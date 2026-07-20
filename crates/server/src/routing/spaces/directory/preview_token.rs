@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) async fn preview_token_matches_policy(
     state: &AppState,
-    parsed: &arkret_sdk::ParsedAddress,
+    parsed: &arkret_core::ParsedAddress,
     realm_id: &str,
     token: &str,
     session: Option<&SessionRecord>,
@@ -60,7 +60,7 @@ pub(super) async fn preview_token_matches_policy(
 
 pub(super) fn optional_structured_token_target_matches(
     token: &str,
-    parsed: &arkret_sdk::ParsedAddress,
+    parsed: &arkret_core::ParsedAddress,
     realm_id: &str,
     effective_link_type: LinkType,
 ) -> bool {
@@ -75,7 +75,7 @@ pub(super) fn optional_structured_token_target_matches(
 
 pub(super) fn token_target_matches_claim(
     claim: &Value,
-    parsed: &arkret_sdk::ParsedAddress,
+    parsed: &arkret_core::ParsedAddress,
     realm_id: &str,
     effective_link_type: LinkType,
 ) -> bool {

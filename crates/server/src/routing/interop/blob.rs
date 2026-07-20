@@ -11,7 +11,7 @@
 //! Blob metadata carries the spec `realm_id` association; plaintext-visibility
 //! is enforced at write time but not at GC.
 
-use arkret_sdk::{
+use arkret_core::{
     BlobPresignAccessScope, BlobPresignDetachedJwsProof, BlobPresignEnvelope, BlobPresignOutcome,
     BlobPresignPayload, BlobPresignRequestBody, BlobRef, BlobUploadOutcome, BlobVisibility, Did,
     Hash, RealmId, SignatureValue, UploadReceipt, canonical,
@@ -798,9 +798,11 @@ fn issue_presign_envelope(
             "blob presign payload canonicalization failed: {error}"
         ))
     })?;
-    let jws =
-        arkret_sdk::jws::sign_jws_ed25519(&canonical_payload, state.notary_signing_key().as_ref())
-            .map_err(|error| AppError::internal(format!("blob presign signing failed: {error}")))?;
+    let jws = arkret_signatures::jws::sign_jws_ed25519(
+        &canonical_payload,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|error| AppError::internal(format!("blob presign signing failed: {error}")))?;
     let envelope = BlobPresignEnvelope {
         payload: payload.clone(),
         proof: BlobPresignDetachedJwsProof {
@@ -872,9 +874,11 @@ fn validate_presign_query(
         return Err(());
     }
     let canonical_payload = canonical::canonical_json_bytes(&payload).map_err(|_| ())?;
-    let expected_jws =
-        arkret_sdk::jws::sign_jws_ed25519(&canonical_payload, state.notary_signing_key().as_ref())
-            .map_err(|_| ())?;
+    let expected_jws = arkret_signatures::jws::sign_jws_ed25519(
+        &canonical_payload,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|_| ())?;
     let expected = expected_jws.as_bytes();
     let actual = envelope.proof.jws.as_bytes();
     if expected.len() != actual.len() || !bool::from(expected.ct_eq(actual)) {
@@ -1164,14 +1168,14 @@ pub(super) fn blob_purpose_requires_encryption(purpose: Option<&str>) -> bool {
 
 pub(super) fn plaintext_blob_data_class(
     purpose: Option<&str>,
-) -> arkret_sdk::PlaintextDataClassKind {
+) -> arkret_core::PlaintextDataClassKind {
     match purpose {
         Some("attachment_preview" | "blob_preview" | "preview") => {
-            arkret_sdk::PlaintextDataClassKind::AttachmentPreview
+            arkret_core::PlaintextDataClassKind::AttachmentPreview
         }
-        Some("thumbnail") => arkret_sdk::PlaintextDataClassKind::Thumbnail,
-        Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => arkret_sdk::PlaintextDataClassKind::FullTextIndex,
-        _ => arkret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
+        Some("thumbnail") => arkret_core::PlaintextDataClassKind::Thumbnail,
+        Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => arkret_core::PlaintextDataClassKind::FullTextIndex,
+        _ => arkret_core::PlaintextDataClassKind::AttachmentPlaintext,
     }
 }
 
@@ -1520,12 +1524,12 @@ impl PresignBlobBlock {
                 ErrorCode::FailedPrecondition,
                 "blob is currently subject to a legal hold; presign refused",
             )
-            .with_wire_code(arkret_sdk::ReasonCode::LEGAL_HOLD_ACTIVE),
+            .with_wire_code(arkret_core::ReasonCode::LEGAL_HOLD_ACTIVE),
             Self::Redacted => AppError::new(
                 ErrorCode::FailedPrecondition,
                 "blob has been redacted; presign refused",
             )
-            .with_wire_code(arkret_sdk::ReasonCode::BLOB_REDACTED),
+            .with_wire_code(arkret_core::ReasonCode::BLOB_REDACTED),
             Self::ActorPrivate => AppError::new(
                 ErrorCode::CapabilityDenied,
                 "blob is actor_private; only the owner may request a presign URL",

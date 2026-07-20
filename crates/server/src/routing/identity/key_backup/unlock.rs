@@ -92,7 +92,33 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
 
     // Resolve the device public key and confirm it is anchored under the actor's
     // current published SSK generation (cross-signing trust root).
-    let device_public_key = {
+    let device_record = state
+        .identity_application()
+        .find_device(soland_application::identity::FindDeviceQuery {
+            actor_id: actor_id.to_owned(),
+            device_id: device_id.to_owned(),
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
+        .ok_or_else(key_backup_untrusted_signature)?;
+    if device_record.revoked_at.is_some() || device_record.verification_state != "verified" {
+        return Err(key_backup_untrusted_signature());
+    }
+    let device_public_key = device_record
+        .payload
+        .get("device_public_key")
+        .and_then(Value::as_str)
+        .ok_or_else(key_backup_untrusted_signature)?
+        .to_owned();
+    let binding: arkret_crypto::DeviceTrustBinding = serde_json::from_value(
+        device_record
+            .payload
+            .get("cross_signing_binding")
+            .cloned()
+            .ok_or_else(key_backup_untrusted_signature)?,
+    )
+    .map_err(|_| key_backup_untrusted_signature())?;
+    {
         let mgr = state.cross_signing.lock();
         if mgr.is_device_revoked(&principal, &device) {
             return Err(key_backup_untrusted_signature());
@@ -101,16 +127,9 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
             .current_cross_signing(&principal)
             .ok_or_else(key_backup_untrusted_signature)?;
         let published_generation = published.generation.get();
-        let record = mgr
-            .device(&principal, &device)
-            .ok_or_else(key_backup_untrusted_signature)?;
         // The device MUST participate in the cross-signed trust chain (a bootstrap
         // binding alone is not a cross-signing anchor) and that binding MUST chain
         // to the *current* published generation.
-        let binding = record
-            .cross_signing_binding
-            .as_ref()
-            .ok_or_else(key_backup_untrusted_signature)?;
         if binding.ssk_generation != published_generation {
             return Err(key_backup_untrusted_signature());
         }
@@ -120,11 +139,7 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
         {
             return Err(key_backup_untrusted_signature());
         }
-        record
-            .device_public_key
-            .clone()
-            .ok_or_else(key_backup_untrusted_signature)?
-    };
+    }
     if !key_backup_verification_method_matches_device_key(
         actor_id,
         device_id,
@@ -148,7 +163,7 @@ fn verify_key_backup_auth_data_signature(
     if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
         auth_data.remove("signature");
     }
-    let canonical = arkret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let canonical = arkret_core::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
         AppError::internal(format!(
             "key backup envelope canonicalization failed: {error}"
         ))
@@ -185,10 +200,10 @@ pub(super) fn key_backup_canonical_digest_without_signature(
     {
         auth_data.remove("signature");
     }
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(&canonical).map_err(|error| {
+    let bytes = arkret_core::canonical::canonical_json_bytes(&canonical).map_err(|error| {
         AppError::internal(format!("key backup canonical digest failed: {error}"))
     })?;
-    Ok(arkret_sdk::canonical::sha256_digest(&bytes))
+    Ok(arkret_core::canonical::sha256_digest(&bytes))
 }
 
 pub(super) fn recovery_session_proof_summary(
@@ -210,10 +225,10 @@ pub(super) fn recovery_session_proof_summary(
         "created_at": record.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "expires_at": record.expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     });
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
+    let bytes = arkret_core::canonical::canonical_json_bytes(&transcript).ok()?;
     Some((
         kind.to_owned(),
-        arkret_sdk::canonical::sha256_digest(&bytes),
+        arkret_core::canonical::sha256_digest(&bytes),
     ))
 }
 
@@ -399,7 +414,7 @@ pub(super) async fn verify_key_backup_unlock_proof_signature(
     if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
         auth_data.remove("signature");
     }
-    let canonical = arkret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let canonical = arkret_core::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
         AppError::internal(format!(
             "key backup unlock proof canonicalization failed: {error}"
         ))

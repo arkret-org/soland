@@ -21,12 +21,12 @@ pub trait WebvhStore: Send + Sync {
     ) -> PersistenceResult<WebvhLogCommitOutcome>;
     async fn get_service_registration(
         &self,
-        key: &arkret_sdk::ServiceRegistrationKey,
-    ) -> PersistenceResult<Option<arkret_sdk::ServiceRegistrationOutcome>>;
+        key: &arkret_core::ServiceRegistrationKey,
+    ) -> PersistenceResult<Option<arkret_core::ServiceRegistrationOutcome>>;
     async fn commit_service_registration(
         &self,
-        key: arkret_sdk::ServiceRegistrationKey,
-        outcome: arkret_sdk::ServiceRegistrationOutcome,
+        key: arkret_core::ServiceRegistrationKey,
+        outcome: arkret_core::ServiceRegistrationOutcome,
         document: WebvhDocumentRecord,
         event: WebvhLogRecord,
     ) -> PersistenceResult<ServiceRegistrationCommitOutcome>;
@@ -39,14 +39,14 @@ pub enum WebvhLogCommitOutcome {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServiceRegistrationCommitOutcome {
-    Created(arkret_sdk::ServiceRegistrationOutcome),
-    Existing(arkret_sdk::ServiceRegistrationOutcome),
+    Created(arkret_core::ServiceRegistrationOutcome),
+    Existing(arkret_core::ServiceRegistrationOutcome),
     Conflict,
 }
 #[doc(hidden)]
 pub fn decode_registration_outcome(
     value: Value,
-) -> PersistenceResult<arkret_sdk::ServiceRegistrationOutcome> {
+) -> PersistenceResult<arkret_core::ServiceRegistrationOutcome> {
     serde_json::from_value(value).map_err(|error| {
         PersistenceError::Internal(format!(
             "stored service registration outcome is invalid: {error}"
@@ -55,15 +55,15 @@ pub fn decode_registration_outcome(
 }
 #[doc(hidden)]
 pub fn registration_as_existing(
-    mut outcome: arkret_sdk::ServiceRegistrationOutcome,
-) -> arkret_sdk::ServiceRegistrationOutcome {
+    mut outcome: arkret_core::ServiceRegistrationOutcome,
+) -> arkret_core::ServiceRegistrationOutcome {
     outcome.created = false;
     outcome
 }
 #[doc(hidden)]
 pub fn registrations_match(
-    left: &arkret_sdk::ServiceRegistrationOutcome,
-    right: &arkret_sdk::ServiceRegistrationOutcome,
+    left: &arkret_core::ServiceRegistrationOutcome,
+    right: &arkret_core::ServiceRegistrationOutcome,
 ) -> bool {
     left.service_id == right.service_id
         && left.version_id == right.version_id
@@ -73,7 +73,7 @@ pub fn registrations_match(
 }
 #[doc(hidden)]
 pub fn valid_new_service_registration_records(
-    outcome: &arkret_sdk::ServiceRegistrationOutcome,
+    outcome: &arkret_core::ServiceRegistrationOutcome,
     document: &WebvhDocumentRecord,
     event: &WebvhLogRecord,
 ) -> bool {
@@ -87,7 +87,7 @@ pub fn valid_new_service_registration_records(
 #[doc(hidden)]
 pub fn document_declares_registration_key(
     document: &Value,
-    key: &arkret_sdk::ServiceRegistrationKey,
+    key: &arkret_core::ServiceRegistrationKey,
 ) -> bool {
     document
         .get("service")

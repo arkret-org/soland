@@ -26,7 +26,7 @@ pub(crate) async fn validate_trusted_sidecar_circle_operation(
     state: &AppState,
     operation: &Operation,
     controller: &str,
-    sidecar_id: &arkret_sdk::SidecarId,
+    sidecar_id: &arkret_core::SidecarId,
 ) -> Result<(), &'static str> {
     if !sidecar_circle_object_shape_is_constrained(operation, controller, sidecar_id.as_str()) {
         return Err("sidecar_create_denied");
@@ -52,10 +52,10 @@ pub(crate) async fn validate_trusted_sidecar_circle_operation(
 pub(crate) fn validate_trusted_sidecar_create_operation(
     operation: &Operation,
     controller: &str,
-    backing_circle_id: &arkret_sdk::CircleId,
+    backing_circle_id: &arkret_core::CircleId,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_sdk::events::EventKind::SIDECAR_CREATE)
+        != Some(arkret_core::events::EventKind::SIDECAR_CREATE)
     {
         return Err("sidecar_create_denied");
     }
@@ -63,7 +63,7 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
         .payload
         .get("object")
         .cloned()
-        .and_then(|value| serde_json::from_value::<arkret_sdk::models::AgentSidecar>(value).ok())
+        .and_then(|value| serde_json::from_value::<arkret_core::models::AgentSidecar>(value).ok())
         .ok_or("sidecar_create_denied")?;
     if sidecar.validate().is_err()
         || sidecar.realm_id != operation.realm_id
@@ -97,7 +97,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "agent_pcr_recovery_not_ready",
         )
-    } else if message == arkret_sdk::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
+    } else if message == arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
         (salvo::http::StatusCode::CONFLICT, "failed_precondition")
     } else if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
@@ -105,14 +105,14 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("direct_conversation_")
         || message.starts_with("cross_signing_reset_")
         || message == "cross_signing_model_mismatch"
-        || message == arkret_sdk::error::ReasonCode::REACTION_SCOPE_MISMATCH
+        || message == arkret_core::error::ReasonCode::REACTION_SCOPE_MISMATCH
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
         )
     } else if message
-        == arkret_sdk::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        == arkret_core::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
@@ -126,20 +126,20 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             "applet_registration_unauthorized",
         )
-    } else if message == arkret_sdk::ReasonCode::TRANSCRIPTION_DENIED {
+    } else if message == arkret_core::ReasonCode::TRANSCRIPTION_DENIED {
         (
             salvo::http::StatusCode::FORBIDDEN,
-            arkret_sdk::ReasonCode::TRANSCRIPTION_DENIED,
+            arkret_core::ReasonCode::TRANSCRIPTION_DENIED,
         )
-    } else if message == arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING {
+    } else if message == arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
-            arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+            arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
         )
-    } else if message == arkret_sdk::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
+    } else if message == arkret_core::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
         (
             salvo::http::StatusCode::UNPROCESSABLE_ENTITY,
-            arkret_sdk::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
+            arkret_core::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
         )
     } else if matches!(
         message,
@@ -172,10 +172,10 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         )
     } else if message == "realm_terminal_state" {
         (salvo::http::StatusCode::FORBIDDEN, "realm_terminal_state")
-    } else if message == arkret_sdk::ErrorCode::REALM_FROZEN {
+    } else if message == arkret_core::ErrorCode::REALM_FROZEN {
         (
             salvo::http::StatusCode::FORBIDDEN,
-            arkret_sdk::ErrorCode::REALM_FROZEN,
+            arkret_core::ErrorCode::REALM_FROZEN,
         )
     } else if matches!(
         message,
@@ -220,7 +220,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
     for operation in operations {
         validate_realm_lifecycle_write_gate(state, operation)?;
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_sdk::events::EventKind::SIDECAR_CREATE)
+            == Some(arkret_core::events::EventKind::SIDECAR_CREATE)
         {
             // Only the authenticated ensure aggregate may construct this
             // reducer-derived event; the generic submit path is closed.
@@ -237,7 +237,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
             );
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE)
+            == Some(arkret_core::events::EventKind::MORPH_SCHEMA_MIGRATE)
         {
             validate_morph_schema_migrate_capability(operation)?;
             validate_morph_schema_migrate_authz(state, operation).await?;
@@ -305,10 +305,10 @@ mod tests {
 
     fn circle_create_with_payload(payload: Value) -> Operation {
         Operation::create(
-            arkret_sdk::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
+            arkret_core::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
                 .unwrap(),
-            arkret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
-            arkret_sdk::events::EventKind::CIRCLE_CREATE,
+            arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+            arkret_core::events::EventKind::CIRCLE_CREATE,
             payload,
         )
     }
@@ -360,7 +360,7 @@ async fn validate_managed_agent_grant_ceiling(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_sdk::events::EventKind::CAPABILITY_GRANT)
+        != Some(arkret_core::events::EventKind::CAPABILITY_GRANT)
     {
         return Ok(());
     }
@@ -394,7 +394,7 @@ async fn validate_managed_agent_grant_ceiling(
     let Some(resources) = grant.get("resources").and_then(Value::as_array) else {
         return Err("agent_grant_exceeds_requested_scope");
     };
-    let resources = serde_json::from_value::<Vec<arkret_sdk::WireResourceSelector>>(Value::Array(
+    let resources = serde_json::from_value::<Vec<arkret_core::WireResourceSelector>>(Value::Array(
         resources.clone(),
     ))
     .map_err(|_| "agent_grant_exceeds_requested_scope")?;
@@ -404,7 +404,7 @@ async fn validate_managed_agent_grant_ceiling(
         .cloned()
         .unwrap_or_default();
     let constraints =
-        serde_json::from_value::<Vec<arkret_sdk::GrantConstraint>>(Value::Array(constraints))
+        serde_json::from_value::<Vec<arkret_core::GrantConstraint>>(Value::Array(constraints))
             .map_err(|_| "agent_grant_exceeds_requested_scope")?;
     if crate::routing::identity::agents::agent_grant_within_requested_scope(
         &record,

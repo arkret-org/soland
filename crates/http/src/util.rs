@@ -10,7 +10,7 @@
 //! in their owning module so they can carry their own invariants. They will
 //! land here only if they outgrow that scope.
 
-use arkret_sdk::{DeviceId, Did, SpaceId};
+use arkret_core::{DeviceId, Did, SpaceId};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use salvo::http::header;
@@ -101,11 +101,11 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
 
 /// Hex-encoded SHA-256 of `bytes` (lowercase, 64 chars).
 ///
-/// Thin re-export of the SDK [`arkret_sdk::canonical::sha256_hex`] so soland
+/// Thin re-export of the SDK [`arkret_core::canonical::sha256_hex`] so soland
 /// shares the single canonical hash primitive instead of a local
 /// reimplementation.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    arkret_sdk::canonical::sha256_hex(bytes)
+    arkret_core::canonical::sha256_hex(bytes)
 }
 
 // ── Token / digest validators ───────────────────────────────────────────────
@@ -156,12 +156,12 @@ pub fn is_valid_sync_token(token: &str) -> bool {
 
 /// `sha256:<64 lowercase hex>` shape.
 pub fn is_valid_sha256_digest(value: &str) -> bool {
-    value.starts_with("sha256:") && arkret_sdk::Hash::new(value.to_owned()).is_ok()
+    value.starts_with("sha256:") && arkret_core::Hash::new(value.to_owned()).is_ok()
 }
 
 /// Active `<digest-suite>:<64 lowercase hex>` hash shape.
 pub fn is_valid_hash_digest(value: &str) -> bool {
-    arkret_sdk::Hash::new(value.to_owned()).is_ok()
+    arkret_core::Hash::new(value.to_owned()).is_ok()
 }
 
 /// 64 lowercase hex characters.

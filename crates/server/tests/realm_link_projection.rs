@@ -6,7 +6,7 @@
 //! - the query API filters by direction + link_kind_allow
 //! - schema validation rejects bad kinds / self-references / bad status
 
-use arkret_sdk::{Operation, RealmLinkDirection};
+use arkret_core::{Operation, RealmLinkDirection};
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
@@ -17,8 +17,8 @@ const REALM_C: &str = "ak:realm:01904100-0000-7000-8000-cccccccccccc";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
-        arkret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        arkret_sdk::RealmId::new(realm_id).unwrap(),
+        arkret_core::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        arkret_core::RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )
@@ -32,7 +32,7 @@ fn link_op(source: &str, target: &str, link_kind: &str, status: Option<&str>) ->
     if let Some(s) = status {
         payload["status"] = json!(s);
     }
-    op(arkret_sdk::events::EventKind::REALM_LINK, source, payload)
+    op(arkret_core::events::EventKind::REALM_LINK, source, payload)
 }
 
 #[test]

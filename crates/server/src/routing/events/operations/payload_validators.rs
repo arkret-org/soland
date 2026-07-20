@@ -1,4 +1,4 @@
-use arkret_sdk::{InviteCreatePayloadWireExt as _, Operation};
+use arkret_core::{InviteCreatePayloadWireExt as _, Operation};
 use serde_json::Value;
 
 use super::*;
@@ -11,7 +11,7 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
         .get("invite_id")
         .and_then(Value::as_str)
         .ok_or("ak.invite.create operation requires invite_id")?;
-    if arkret_sdk::InviteId::new(invite_id.to_owned()).is_err() {
+    if arkret_core::InviteId::new(invite_id.to_owned()).is_err() {
         return Err("ak.invite.create invite_id must be ak:invite:<uuidv7>");
     }
     let target = operation
@@ -23,7 +23,7 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
         .get("recipient_service_id")
         .and_then(Value::as_str)
         .ok_or("invite_delivery_target.recipient_service_id is required")?;
-    if arkret_sdk::Did::new(recipient_service_id.to_owned()).is_err() {
+    if arkret_core::Did::new(recipient_service_id.to_owned()).is_err() {
         return Err("invite_delivery_target.recipient_service_id must be a DID");
     }
     if let Some(service_type) = target.get("recipient_service_type").and_then(Value::as_str)
@@ -36,7 +36,7 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
         .get("introduction_evidence_digest")
         .and_then(Value::as_str)
         .ok_or("introduction_evidence_digest is required")?;
-    if arkret_sdk::Hash::new(digest.to_owned()).is_err() {
+    if arkret_core::Hash::new(digest.to_owned()).is_err() {
         return Err("introduction_evidence_digest must be a hash");
     }
     let expires_at = operation
@@ -44,10 +44,10 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
         .get("expires_at")
         .and_then(Value::as_str)
         .ok_or("expires_at is required")?;
-    if arkret_sdk::canonical::validate_timestamp_canonical(expires_at).is_err() {
+    if arkret_core::canonical::validate_timestamp_canonical(expires_at).is_err() {
         return Err("expires_at must be a canonical timestamp");
     }
-    arkret_sdk::InviteCreatePayload::from_wire_value(&wire_payload)
+    arkret_core::InviteCreatePayload::from_wire_value(&wire_payload)
         .map_err(|_| "operation payload violates SDK artifact schema")?;
     Ok(())
 }
@@ -80,7 +80,7 @@ pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
 pub(crate) fn validate_key_backup_active_series_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    serde_json::from_value::<arkret_sdk::KeyBackupActiveSeries>(
+    serde_json::from_value::<arkret_core::KeyBackupActiveSeries>(
         projection_context_stripped_payload(&operation.payload),
     )
     .map(|_| ())
@@ -132,7 +132,7 @@ pub(crate) fn validate_invite_third_party_payload(
     let invite = payload.get("invite").and_then(Value::as_object);
     let invite_id = invite_field(payload, invite, "invite_id", "id")
         .ok_or("ak.invite.third_party requires invite_id")?;
-    if arkret_sdk::InviteId::new(invite_id).is_err() {
+    if arkret_core::InviteId::new(invite_id).is_err() {
         return Err("ak.invite.third_party invite_id must be ak:invite:<uuidv7>");
     }
     let realm_id = invite_field(payload, invite, "realm_id", "realm_id")
@@ -142,7 +142,7 @@ pub(crate) fn validate_invite_third_party_payload(
     }
     let inviter = invite_field(payload, invite, "inviter", "inviter")
         .ok_or("ak.invite.third_party requires inviter")?;
-    if arkret_sdk::Did::new(inviter).is_err() {
+    if arkret_core::Did::new(inviter).is_err() {
         return Err("ak.invite.third_party inviter must be a DID");
     }
     let third_party_id = invite_value(payload, invite, "third_party_id")
@@ -157,7 +157,7 @@ pub(crate) fn validate_invite_third_party_payload(
         .get("verification_service_id")
         .and_then(Value::as_str)
         .ok_or("third_party_id.verification_service_id is required")?;
-    if arkret_sdk::Did::new(service_id.to_owned()).is_err() {
+    if arkret_core::Did::new(service_id.to_owned()).is_err() {
         return Err("third_party_id.verification_service_id must be a DID");
     }
     if third_party_id
@@ -170,7 +170,7 @@ pub(crate) fn validate_invite_third_party_payload(
     if let Some(token_commitment) = third_party_id
         .get("token_commitment")
         .and_then(Value::as_str)
-        && arkret_sdk::Hash::new(token_commitment.to_owned()).is_err()
+        && arkret_core::Hash::new(token_commitment.to_owned()).is_err()
     {
         return Err("third_party_id.token_commitment must be a hash");
     }
@@ -181,7 +181,7 @@ pub(crate) fn validate_invite_third_party_payload(
     }
     let expires_at = invite_field(payload, invite, "expires_at", "expires_at")
         .ok_or("ak.invite.third_party requires expires_at")?;
-    if arkret_sdk::canonical::validate_timestamp_canonical(&expires_at).is_err() {
+    if arkret_core::canonical::validate_timestamp_canonical(&expires_at).is_err() {
         return Err("ak.invite.third_party expires_at must be a canonical timestamp");
     }
     Ok(())
@@ -194,22 +194,22 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
         .ok_or("ak.invite.claim payload must be an object")?;
     let invite_id =
         payload_string(payload, "invite_id").ok_or("ak.invite.claim requires invite_id")?;
-    if arkret_sdk::InviteId::new(invite_id).is_err() {
+    if arkret_core::InviteId::new(invite_id).is_err() {
         return Err("ak.invite.claim invite_id must be ak:invite:<uuidv7>");
     }
     let subject_id =
         payload_string(payload, "subject_id").ok_or("ak.invite.claim requires subject_id")?;
-    if arkret_sdk::Did::new(subject_id.clone()).is_err() {
+    if arkret_core::Did::new(subject_id.clone()).is_err() {
         return Err("ak.invite.claim subject_id must be a DID");
     }
     let token_commitment = payload_string(payload, "token_commitment")
         .ok_or("ak.invite.claim requires token_commitment")?;
-    if arkret_sdk::Hash::new(token_commitment).is_err() {
+    if arkret_core::Hash::new(token_commitment).is_err() {
         return Err("ak.invite.claim token_commitment must be a hash");
     }
     let claim_nonce =
         payload_string(payload, "claim_nonce").ok_or("ak.invite.claim requires claim_nonce")?;
-    let binding: arkret_sdk::InviteClaimBindingProof = serde_json::from_value(
+    let binding: arkret_core::InviteClaimBindingProof = serde_json::from_value(
         payload
             .get("binding_proof")
             .cloned()
@@ -225,13 +225,13 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
     if binding.realm_id != operation.realm_id {
         return Err("binding_proof.realm_id must match envelope realm_id");
     }
-    if binding.audience != arkret_sdk::INVITE_CLAIM_AUDIENCE {
+    if binding.audience != arkret_core::INVITE_CLAIM_AUDIENCE {
         return Err("binding_proof.audience must be arkret.invite.claim");
     }
     if binding.claim_nonce != claim_nonce {
         return Err("binding_proof.claim_nonce must match claim_nonce");
     }
-    let subject_proof: arkret_sdk::InviteSubjectProof = serde_json::from_value(
+    let subject_proof: arkret_core::InviteSubjectProof = serde_json::from_value(
         payload
             .get("subject_proof")
             .cloned()
@@ -251,7 +251,7 @@ pub(crate) fn validate_invite_ref_payload(operation: &Operation) -> Result<(), &
         .ok_or("invite reference payload must be an object")?;
     let invite_id =
         payload_string(payload, "invite_id").ok_or("invite reference requires invite_id")?;
-    if arkret_sdk::InviteId::new(invite_id).is_err() {
+    if arkret_core::InviteId::new(invite_id).is_err() {
         return Err("invite reference invite_id must be ak:invite:<uuidv7>");
     }
     if let Some(reason) = payload.get("reason")
@@ -447,9 +447,8 @@ pub(crate) fn validate_realm_inheritance_policy_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let wire_payload = projection_context_stripped_payload(&operation.payload);
-    let payload: arkret_sdk::RealmInheritancePolicyPayload =
-        serde_json::from_value(wire_payload)
-            .map_err(|_| "ak.realm.inheritance_policy payload violates SDK artifact schema")?;
+    let payload: arkret_core::RealmInheritancePolicyPayload = serde_json::from_value(wire_payload)
+        .map_err(|_| "ak.realm.inheritance_policy payload violates SDK artifact schema")?;
     if payload.mode != "narrow_only" {
         return Err("ak.realm.inheritance_policy mode must be narrow_only");
     }
@@ -472,7 +471,7 @@ pub(crate) fn validate_realm_inheritance_policy_payload(
         if max_depth == 0 {
             return Err("ak.realm.inheritance_policy max_depth must be >= 1");
         }
-        if max_depth > u64::from(arkret_sdk::RealmInheritancePolicy::MAX_DEPTH_CAP) {
+        if max_depth > u64::from(arkret_core::RealmInheritancePolicy::MAX_DEPTH_CAP) {
             return Err("ak.realm.inheritance_policy max_depth exceeds v1 cap");
         }
     }
@@ -631,7 +630,7 @@ pub(crate) fn validate_conflict_repair_payload(operation: &Operation) -> Result<
         .get("cell_id")
         .and_then(serde_json::Value::as_str)
         .ok_or("conflict repair requires cell_id")?;
-    if arkret_sdk::CellRef::new(cell_id.to_owned()).is_err() {
+    if arkret_core::CellRef::new(cell_id.to_owned()).is_err() {
         return Err(
             "conflict repair cell_id must use canonical ak:cell:ak.component.*.v<n>:<subject> form",
         );
@@ -735,7 +734,7 @@ pub(crate) fn validate_relation_operation_payload(
     let from_ref = ["from_ref", "from"]
         .iter()
         .find_map(|field| operation.payload.get(*field).and_then(Value::as_str));
-    arkret_sdk::validate_relation_direct_write(relation_kind, from_ref)
+    arkret_core::validate_relation_direct_write(relation_kind, from_ref)
 }
 
 pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(), &'static str> {
@@ -840,11 +839,11 @@ pub(crate) fn validate_view_payload(operation: &Operation) -> Result<(), &'stati
     for field in ["object", "definition", "patch"] {
         if let Some(value) = operation.payload.get(field) {
             if contains_retired_field(value) {
-                return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+                return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
             }
             if let Some(state) = value.get("state") {
                 if !matches!(state.as_str(), Some("active" | "tombstoned")) {
-                    return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+                    return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
                 }
             }
         }
@@ -900,8 +899,8 @@ pub(crate) fn validate_morph_schema_migrate_payload(
         .and_then(serde_json::Value::as_str)
     {
         Some("additive") => {
-            let empty_fields = arkret_sdk::MorphSchemaFieldSet::new();
-            arkret_sdk::morph_schema_refs_additive_only(
+            let empty_fields = arkret_core::MorphSchemaFieldSet::new();
+            arkret_core::morph_schema_refs_additive_only(
                 &from_schema_refs,
                 &to_schema_refs,
                 &empty_fields,
@@ -976,7 +975,7 @@ fn collect_nonempty_unique_string_array(
 pub(crate) fn validate_cross_signing_reset_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let reset: arkret_sdk::CrossSigningResetPayload =
+    let reset: arkret_core::CrossSigningResetPayload =
         serde_json::from_value(projection_context_stripped_payload(&operation.payload))
             .map_err(|_| "cross_signing reset payload violates reset profile")?;
     reset
@@ -991,7 +990,7 @@ pub(crate) fn validate_cross_signing_reset_payload(
 }
 
 pub(crate) fn validate_device_authorize_payload(operation: &Operation) -> Result<(), &'static str> {
-    let payload: arkret_sdk::DeviceAuthorizePayload =
+    let payload: arkret_core::DeviceAuthorizePayload =
         serde_json::from_value(device_authorize_wire_payload(&operation.payload))
             .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
     payload.validate_authorization_binding_one_of()
@@ -1007,7 +1006,7 @@ pub(crate) fn validate_cross_signing_reset_replay_batch(
     let mut seen = std::collections::BTreeSet::new();
     for operation in operations {
         if kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::EventKind::CROSS_SIGNING_RESET)
+            != Some(arkret_core::events::EventKind::CROSS_SIGNING_RESET)
         {
             continue;
         }
@@ -1035,14 +1034,14 @@ pub(crate) fn validate_cross_signing_reset_replay_batch(
 pub fn validate_encrypted_payload_envelope(
     content: &serde_json::Value,
 ) -> Result<(), &'static str> {
-    arkret_sdk::mls::parse_and_validate_encrypted_envelope(content.clone())
+    arkret_models_crypto::parse_and_validate_encrypted_envelope(content.clone())
         .map(|_| ())
         .map_err(|_| "encrypted content envelope violates SDK schema")
 }
 
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::Operation;
+    use arkret_core::Operation;
     use serde_json::json;
 
     use super::{
@@ -1052,12 +1051,12 @@ mod tests {
 
     fn message_operation(expiry: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_sdk::OperationId::new(
+            arkret_core::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned(),
             )
             .unwrap(),
-            arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
-            arkret_sdk::events::EventKind::MESSAGE_CREATE,
+            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
+            arkret_core::events::EventKind::MESSAGE_CREATE,
             json!({
                 "content": {"kind": "ak.content.text", "body": "secret"},
                 "expiry": expiry
@@ -1094,12 +1093,12 @@ mod tests {
     #[test]
     fn invite_create_validation_ignores_projection_context() {
         let operation = Operation::create(
-            arkret_sdk::OperationId::new(
+            arkret_core::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-0000000000e2".to_owned(),
             )
             .unwrap(),
-            arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
-            arkret_sdk::events::EventKind::INVITE_CREATE,
+            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
+            arkret_core::events::EventKind::INVITE_CREATE,
             json!({
                 "invite_id": "ak:invite:01904100-0000-7000-8000-0000000000e2",
                 "invitee": "did:web:bob.example",

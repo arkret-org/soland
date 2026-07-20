@@ -332,8 +332,8 @@ impl WebvhStore for PgWebvhStore {
 
     async fn get_service_registration(
         &self,
-        key: &arkret_sdk::ServiceRegistrationKey,
-    ) -> PersistenceResult<Option<arkret_sdk::ServiceRegistrationOutcome>> {
+        key: &arkret_core::ServiceRegistrationKey,
+    ) -> PersistenceResult<Option<arkret_core::ServiceRegistrationOutcome>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -353,8 +353,8 @@ impl WebvhStore for PgWebvhStore {
 
     async fn commit_service_registration(
         &self,
-        key: arkret_sdk::ServiceRegistrationKey,
-        outcome: arkret_sdk::ServiceRegistrationOutcome,
+        key: arkret_core::ServiceRegistrationKey,
+        outcome: arkret_core::ServiceRegistrationOutcome,
         document: WebvhDocumentRecord,
         event: WebvhLogRecord,
     ) -> PersistenceResult<ServiceRegistrationCommitOutcome> {

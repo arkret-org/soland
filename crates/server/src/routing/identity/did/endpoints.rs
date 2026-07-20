@@ -140,7 +140,7 @@ pub(crate) async fn identity_describe(
     ];
 
     json_ok(IdentityRegistryDescription {
-        protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),
+        protocol_version: arkret_core::PROTOCOL_VERSION.to_owned(),
         service_type: "identity_registry".to_owned(),
         service_id,
         trust_domain: state.config.trust_domain.clone(),
@@ -155,9 +155,9 @@ pub(crate) async fn identity_describe(
             "ak.root.identity.log.query.list".to_owned(),
             "ak.root.identity.receipts.query.list".to_owned(),
             "ak.root.identity.command.submit_did_operation".to_owned(),
-            arkret_sdk::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE
+            arkret_core::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE
                 .to_owned(),
-            arkret_sdk::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_RESOURCE_GET
+            arkret_core::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_RESOURCE_GET
                 .to_owned(),
         ],
         supported_bindings: vec![IdentityRegistryBinding {
@@ -170,8 +170,8 @@ pub(crate) async fn identity_describe(
                 "/_arkret/root/identity/log".to_owned(),
                 "/_arkret/root/identity/receipts".to_owned(),
                 "/_arkret/root/identity/submit-did-operation".to_owned(),
-                arkret_sdk::SERVICE_REGISTRATION_ENSURE_PATH.to_owned(),
-                arkret_sdk::SERVICE_REGISTRATION_GET_PATH.to_owned(),
+                arkret_core::SERVICE_REGISTRATION_ENSURE_PATH.to_owned(),
+                arkret_core::SERVICE_REGISTRATION_GET_PATH.to_owned(),
             ],
         }],
         supported_features: supported_features.clone(),
@@ -876,7 +876,7 @@ fn key_log_head_hash(value: Option<String>) -> Result<Option<Hash>, AppError> {
 }
 
 fn did_log_event_digest(operation: &Value) -> Result<String, AppError> {
-    arkret_sdk::canonical::canonical_sha256(operation)
+    arkret_core::canonical::canonical_sha256(operation)
         .map_err(|error| AppError::internal(format!("DID log entry digest failed: {error}")))
 }
 
@@ -960,20 +960,20 @@ pub(crate) async fn identity_log(
             .and_then(Value::as_str)
             .unwrap_or_default();
         let operation = if record.seq == 0 {
-            arkret_sdk::DidKeyLogOperation::Inception
+            arkret_core::DidKeyLogOperation::Inception
         } else if operation_name.contains("deactivate") {
-            arkret_sdk::DidKeyLogOperation::Deactivate
+            arkret_core::DidKeyLogOperation::Deactivate
         } else if operation_name.contains("recover") {
-            arkret_sdk::DidKeyLogOperation::Recover
+            arkret_core::DidKeyLogOperation::Recover
         } else if operation_name.contains("rotate") {
-            arkret_sdk::DidKeyLogOperation::Rotate
+            arkret_core::DidKeyLogOperation::Rotate
         } else {
-            arkret_sdk::DidKeyLogOperation::ServiceUpdate
+            arkret_core::DidKeyLogOperation::ServiceUpdate
         };
         let Some(operation_body) = record.operation.as_object().cloned() else {
             continue;
         };
-        let Ok(mut entry) = arkret_sdk::DidKeyLogEntry::build(
+        let Ok(mut entry) = arkret_core::DidKeyLogEntry::build(
             Did::new(record.did).map_err(|error| AppError::internal(error.to_string()))?,
             record.seq,
             operation,

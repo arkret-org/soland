@@ -221,7 +221,7 @@ enum DrillError {
 
 const SERVICE_IDENTITY_KEYSTORE_APP: &str = "soland.service-identity";
 
-fn open_service_identity_key_store() -> Result<Box<dyn arkret_sdk::KeyStore>, DrillError> {
+fn open_service_identity_key_store() -> Result<Box<dyn arkret_core::KeyStore>, DrillError> {
     soland::config::KeyStoreConfig::from_env()
         .map_err(|error| DrillError::Io(format!("invalid KeyStore configuration: {error}")))?
         .open(SERVICE_IDENTITY_KEYSTORE_APP)
@@ -243,7 +243,7 @@ struct ResolvedServiceIdentity {
 fn load_service_identity(path: &str) -> anyhow::Result<ResolvedServiceIdentity> {
     let bytes = std::fs::read(path)
         .map_err(|error| anyhow::anyhow!("read identity bundle {path}: {error}"))?;
-    let bundle: arkret_sdk::ServiceIdentityBundle = serde_json::from_slice(&bytes)
+    let bundle: arkret_core::ServiceIdentityBundle = serde_json::from_slice(&bytes)
         .map_err(|error| anyhow::anyhow!("parse identity bundle {path}: {error}"))?;
     bundle
         .validate()
@@ -285,7 +285,7 @@ fn validate_seed_binding(
             seed_bytes.len()
         ))
     })?;
-    let actual = arkret_sdk::ed25519_pubkey_to_did_key_multibase(
+    let actual = arkret_core::ed25519_pubkey_to_did_key_multibase(
         SigningKey::from_bytes(&seed).verifying_key().as_bytes(),
     );
     if actual != identity.signing_key_multibase {

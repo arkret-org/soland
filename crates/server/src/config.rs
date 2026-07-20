@@ -249,18 +249,18 @@ impl KeyStoreConfig {
     pub fn open(
         &self,
         application_id: &str,
-    ) -> anyhow::Result<Option<Box<dyn arkret_sdk::KeyStore>>> {
+    ) -> anyhow::Result<Option<Box<dyn arkret_core::KeyStore>>> {
         match self {
             Self::Disabled => Ok(None),
-            Self::Platform => arkret_sdk::durable_platform_keystore(application_id)
+            Self::Platform => arkret_keystore::durable_platform_keystore(application_id)
                 .map(Some)
                 .map_err(|error| anyhow::anyhow!("opening platform KeyStore failed: {error}")),
             Self::EncryptedFile { path, master_key } => {
                 let mut key = **master_key.as_ref();
-                let store = arkret_sdk::EncryptedFileKeyStore::new(path, application_id, key);
+                let store = arkret_keystore::EncryptedFileKeyStore::new(path, application_id, key);
                 key.zeroize();
                 store
-                    .map(|store| Some(Box::new(store) as Box<dyn arkret_sdk::KeyStore>))
+                    .map(|store| Some(Box::new(store) as Box<dyn arkret_core::KeyStore>))
                     .map_err(|error| {
                         anyhow::anyhow!("opening encrypted-file KeyStore failed: {error}")
                     })
@@ -540,7 +540,7 @@ pub struct AppConfig {
     /// Deployment/admin upper bound for invite/contact receive policies.
     /// Constraints can only reduce holder reachability. Loaded from
     /// `SOLAND_RECEIVE_POLICY_*` env vars and advertised on ServiceDescribe.
-    pub receive_policy_constraints: Option<arkret_sdk::ReceivePolicyConstraints>,
+    pub receive_policy_constraints: Option<arkret_core::ReceivePolicyConstraints>,
     /// When true, `AppState::new` seeds a deterministic demo Realm
     /// (`ak:realm:0196419b-...`), demo account (`did:web:alice.example`),
     /// and matching space_meta record on boot. Off by default so
@@ -935,7 +935,7 @@ impl AppConfig {
             );
         }
         if let Some(value) = account_authority_enrollment_did.as_deref() {
-            arkret_sdk::Did::new(value.to_owned()).map_err(|error| {
+            arkret_core::Did::new(value.to_owned()).map_err(|error| {
                 anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID is invalid: {error}")
             })?;
         }
@@ -1127,7 +1127,7 @@ impl AppConfig {
         // derives it from the resolved runtime DID before AppState is built.
         let trust_domain = env_non_empty("SOLAND_TRUST_DOMAIN").unwrap_or_default();
         if !trust_domain.is_empty() {
-            arkret_sdk::TypedTrustDomainId::new(trust_domain.clone()).map_err(|error| {
+            arkret_core::TypedTrustDomainId::new(trust_domain.clone()).map_err(|error| {
                 anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {error}")
             })?;
         }
@@ -1246,9 +1246,9 @@ impl AppConfig {
 
     /// MAL-11 compaction policy assembled from the four env-driven config
     /// fields. Callers use this when evaluating prune candidates via
-    /// [`arkret_sdk::CompactionPolicy::is_eligible`].
-    pub fn compaction_policy(&self) -> arkret_sdk::CompactionPolicy {
-        arkret_sdk::CompactionPolicy {
+    /// [`arkret_state::CompactionPolicy::is_eligible`].
+    pub fn compaction_policy(&self) -> arkret_state::CompactionPolicy {
+        arkret_state::CompactionPolicy {
             min_seal_age_seconds: self.seal_compaction_min_age_seconds,
             min_compaction_witnesses: self.compaction_min_witnesses,
             preserve_genesis: self.compaction_preserve_genesis,
@@ -1547,13 +1547,13 @@ fn load_notary_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
 ///
 /// Order of resolution:
 /// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as `ak:trust_domain:<scope>` per SDK
-///    [`arkret_sdk::TypedTrustDomainId`]).
+///    [`arkret_core::TypedTrustDomainId`]).
 /// 2. Synthesised from the configured `service_id` — strip the DID method prefix and lowercase the
 ///    remainder, then prefix with `ak:trust_domain:`.
 pub fn derive_trust_domain(service_id: &str) -> anyhow::Result<String> {
     if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
         // Validate via SDK typed id — rejects bad shape at boot.
-        arkret_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {
+        arkret_core::TypedTrustDomainId::new(value.clone()).map_err(|e| {
             anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {e}")
         })?;
         return Ok(value);
@@ -1575,7 +1575,7 @@ pub fn derive_trust_domain(service_id: &str) -> anyhow::Result<String> {
     };
     let candidate = format!("ak:trust_domain:{scope}");
     // Final safety check.
-    arkret_sdk::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
+    arkret_core::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
         anyhow::anyhow!(
             "derived trust_domain from service_id {service_id:?} failed validation: {e}"
         )
@@ -1611,15 +1611,15 @@ pub(crate) fn did_host_from_service_id(service_id: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
-fn load_receive_policy_constraints() -> anyhow::Result<Option<arkret_sdk::ReceivePolicyConstraints>>
+fn load_receive_policy_constraints() -> anyhow::Result<Option<arkret_core::ReceivePolicyConstraints>>
 {
     let applies_to = env_csv_cap("SOLAND_RECEIVE_POLICY_APPLIES_TO")
         .map(|values| {
             values
                 .into_iter()
                 .map(|value| match value.as_str() {
-                    "invite_delivery" => Ok(arkret_sdk::ReceivePolicySurface::InviteDelivery),
-                    "contact_request" => Ok(arkret_sdk::ReceivePolicySurface::ContactRequest),
+                    "invite_delivery" => Ok(arkret_core::ReceivePolicySurface::InviteDelivery),
+                    "contact_request" => Ok(arkret_core::ReceivePolicySurface::ContactRequest),
                     other => anyhow::bail!(
                         "SOLAND_RECEIVE_POLICY_APPLIES_TO contains unsupported surface {other}"
                     ),
@@ -1670,7 +1670,7 @@ fn load_receive_policy_constraints() -> anyhow::Result<Option<arkret_sdk::Receiv
         return Ok(None);
     }
 
-    Ok(Some(arkret_sdk::ReceivePolicyConstraints {
+    Ok(Some(arkret_core::ReceivePolicyConstraints {
         policy_version: Some("env".to_owned()),
         applies_to,
         permitted_introduction_kinds,
@@ -1687,25 +1687,25 @@ fn load_receive_policy_constraints() -> anyhow::Result<Option<arkret_sdk::Receiv
     }))
 }
 
-fn env_receive_action(name: &str) -> anyhow::Result<Option<arkret_sdk::InviteReceiveAction>> {
+fn env_receive_action(name: &str) -> anyhow::Result<Option<arkret_core::InviteReceiveAction>> {
     let Some(value) = env_non_empty(name) else {
         return Ok(None);
     };
     match value.as_str() {
-        "drop" => Ok(Some(arkret_sdk::InviteReceiveAction::Drop)),
-        "quarantine" => Ok(Some(arkret_sdk::InviteReceiveAction::Quarantine)),
-        "notify" => Ok(Some(arkret_sdk::InviteReceiveAction::Notify)),
+        "drop" => Ok(Some(arkret_core::InviteReceiveAction::Drop)),
+        "quarantine" => Ok(Some(arkret_core::InviteReceiveAction::Quarantine)),
+        "notify" => Ok(Some(arkret_core::InviteReceiveAction::Notify)),
         other => anyhow::bail!("{name} must be drop, quarantine, or notify; got {other}"),
     }
 }
 
-fn env_unknown_action(name: &str) -> anyhow::Result<Option<arkret_sdk::UnknownInviteAction>> {
+fn env_unknown_action(name: &str) -> anyhow::Result<Option<arkret_core::UnknownInviteAction>> {
     let Some(value) = env_non_empty(name) else {
         return Ok(None);
     };
     match value.as_str() {
-        "drop" => Ok(Some(arkret_sdk::UnknownInviteAction::Drop)),
-        "quarantine" => Ok(Some(arkret_sdk::UnknownInviteAction::Quarantine)),
+        "drop" => Ok(Some(arkret_core::UnknownInviteAction::Drop)),
+        "quarantine" => Ok(Some(arkret_core::UnknownInviteAction::Quarantine)),
         other => anyhow::bail!("{name} must be drop or quarantine; got {other}"),
     }
 }
@@ -1720,14 +1720,14 @@ fn env_csv_cap(name: &str) -> Option<Vec<String>> {
     )
 }
 
-fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<arkret_sdk::Did>>> {
+fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<arkret_core::Did>>> {
     let Some(values) = env_csv_cap(name) else {
         return Ok(None);
     };
     values
         .into_iter()
         .map(|value| {
-            arkret_sdk::Did::new(value.clone())
+            arkret_core::Did::new(value.clone())
                 .map_err(|error| anyhow::anyhow!("{name} contains invalid DID `{value}`: {error}"))
         })
         .collect::<anyhow::Result<Vec<_>>>()

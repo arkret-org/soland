@@ -3,12 +3,12 @@ use super::*;
 impl ProjectionState {
     pub(crate) fn apply_realm_key_share(&mut self, operation: &Operation) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::EventKind::REALM_KEY_SHARE)
+            != Some(arkret_core::events::EventKind::REALM_KEY_SHARE)
         {
             return ProjectionEffect::Ignored;
         }
 
-        let share: arkret_sdk::RealmKeySharePayload =
+        let share: arkret_core::RealmKeySharePayload =
             match serde_json::from_value(realm_key_share_wire_payload(&operation.payload)) {
                 Ok(share) => share,
                 Err(_) => return rejected("realm_key_share_payload_invalid"),

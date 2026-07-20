@@ -5,18 +5,18 @@
 //! `ak.device.authorize` is only trusted when its SSK binding checks out at the
 //! currently accepted generation.
 //!
-//! The state machine itself is the SDK `DeviceManager` (held on `AppState`); we
+//! The accepted-state index is the server `CrossSigningRegistry` (held on `AppState`); we
 //! supply the DID-resolved Ed25519 verification and the control-set check that
 //! the SDK explicitly leaves to the caller.
 
 use std::collections::BTreeSet;
 
-use arkret_sdk::{
+use arkret_core::{
     CrossSigningPublish, CrossSigningResetPayload, CrossSigningResetProof,
-    DeviceEnrollmentAuthorityBinding, DeviceId, DeviceQuorumSignature, DeviceStatus,
-    DeviceTrustBinding, Did, EventId, MlsRequesterTrustBinding, MlsWelcomeClaimEnvelope,
-    SignatureMaterial,
+    DeviceEnrollmentAuthorityBinding, DeviceId, DeviceQuorumSignature, DeviceStatus, Did, EventId,
+    MlsRequesterTrustBinding, MlsWelcomeClaimEnvelope, SignatureMaterial,
 };
+use arkret_crypto::DeviceTrustBinding;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
@@ -116,7 +116,7 @@ pub async fn validate_cross_signing_publish(
     Ok(())
 }
 
-/// Record an accepted `ak.cross_signing.publish` into the `DeviceManager`
+/// Record an accepted `ak.cross_signing.publish` into the `CrossSigningRegistry`
 /// (authoritative CAS bookkeeping). Called from the projector AFTER acceptance.
 /// Validation already ran in `validate_cross_signing_publish`; failures here are
 /// logged (the op was already accepted) but should not occur in practice.
@@ -322,7 +322,7 @@ async fn require_verified_reset_recovery_session(
     Ok(())
 }
 
-/// Record an accepted `ak.cross_signing.reset` into the `DeviceManager` (drops
+/// Record an accepted `ak.cross_signing.reset` into the `CrossSigningRegistry` (drops
 /// the current publish + bumps the generation high-water; marks devices
 /// `needs_reverification`). Validation already ran pre-acceptance.
 pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
@@ -655,7 +655,7 @@ fn device_binding_reason_to_app_error(reason: &'static str) -> AppError {
             "cross_signing_binding signature does not verify against accepted SSK",
         )
         .with_status(salvo::http::StatusCode::UNAUTHORIZED)
-        .with_wire_code(arkret_sdk::ReasonCode::PROOF_INVALID),
+        .with_wire_code(arkret_core::ReasonCode::PROOF_INVALID),
         other
             if other.starts_with("cross_signing_binding_missing")
                 || other.starts_with("device_authorize_") =>
@@ -727,7 +727,7 @@ pub fn validate_device_authorize_binding(
     state: &AppState,
     payload: &Value,
 ) -> Result<(), &'static str> {
-    let payload_shape: arkret_sdk::DeviceAuthorizePayload =
+    let payload_shape: arkret_core::DeviceAuthorizePayload =
         serde_json::from_value(device_authorize_wire_payload(payload))
             .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
     payload_shape.validate_authorization_binding_one_of()?;
@@ -771,7 +771,7 @@ pub fn validate_device_authorize_binding(
 }
 
 fn verify_device_authorize_device_signature(
-    payload: &arkret_sdk::DeviceAuthorizePayload,
+    payload: &arkret_core::DeviceAuthorizePayload,
 ) -> Result<(), &'static str> {
     let Some(signature_material) = &payload.device_signature else {
         if payload.recovery_session_id.is_some() {
@@ -827,7 +827,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     if let Some(alg) = envelope.signature.alg.as_deref()
         && !matches!(alg, "EdDSA" | "Ed25519")
     {
-        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     match &envelope.trust_binding {
         MlsRequesterTrustBinding::SskGeneration(generation) => {
@@ -854,7 +854,7 @@ fn verify_mls_welcome_claim_envelope_ssk_signature(
         let mgr = state.cross_signing.lock();
         let publish = mgr
             .current_cross_signing(&envelope.requester_did)
-            .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+            .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
         (
             publish.generation.get(),
             publish.self_signing_key.kid.clone(),
@@ -865,15 +865,15 @@ fn verify_mls_welcome_claim_envelope_ssk_signature(
     if envelope_generation != accepted_generation
         || envelope.signature.kid.as_str() != ssk_kid.as_str()
     {
-        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let ssk = decode_ed25519_key(ssk_public_key.as_str(), ssk_key_format.as_str())
-        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let signing_bytes = envelope
         .canonical_signing_bytes()
-        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if !ed25519_verify(&ssk, &signing_bytes, &envelope.signature.sig) {
-        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     Ok(())
 }
@@ -887,7 +887,7 @@ async fn verify_mls_welcome_claim_envelope_device_signature(
     if let Some(sender_device_id) = sender_device_id
         && sender_device_id != requester_device_id
     {
-        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let record = state
         .identity_application()
@@ -896,10 +896,10 @@ async fn verify_mls_welcome_claim_envelope_device_signature(
             device_id: requester_device_id.to_owned(),
         })
         .await
-        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
-        .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
+        .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if record.revoked_at.is_some() || record.verification_state != "verified" {
-        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let device_public_key = record
         .payload
@@ -907,21 +907,21 @@ async fn verify_mls_welcome_claim_envelope_device_signature(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if !device_signature_kid_points_to_device_key(
         &envelope.signature.kid,
         envelope.requester_did.as_str(),
         device_public_key,
     ) {
-        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let device_key = decode_ed25519_key(device_public_key, "multibase")
-        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let signing_bytes = envelope
         .canonical_signing_bytes()
-        .map_err(|_| arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if !ed25519_verify(&device_key, &signing_bytes, &envelope.signature.sig) {
-        return Err(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     Ok(())
 }
@@ -995,7 +995,7 @@ pub(crate) struct DeviceSigningDirectoryFacet {
     /// `cross_signing_binding` echoed verbatim for client-side chain
     /// verification. Present only for a verified, non-revoked device that
     /// carries one (inception bootstrap devices have none).
-    pub cross_signing_binding: Option<arkret_sdk::QueryDeviceCrossSigningBinding>,
+    pub cross_signing_binding: Option<arkret_core::QueryDeviceCrossSigningBinding>,
     /// Service-attested trust material echoed from `ak.device.authorize`.
     /// Present only for a verified, non-revoked device that was authorized by a
     /// designated enrollment authority.
@@ -1004,7 +1004,7 @@ pub(crate) struct DeviceSigningDirectoryFacet {
     /// projection. Service-attested clients use this with
     /// `enrollment_authority_binding` as the hot-path trust anchor.
     pub device_authorize_event_id: Option<EventId>,
-    pub authorized_generation_ref: Option<arkret_sdk::NonEmptyString>,
+    pub authorized_generation_ref: Option<arkret_core::NonEmptyString>,
 }
 
 /// Typed view of the fields the device projection
@@ -1023,13 +1023,13 @@ pub(crate) struct ProjectedDevicePayload {
     #[serde(default)]
     pub algorithms: Option<Vec<String>>,
     #[serde(default)]
-    pub cross_signing_binding: Option<arkret_sdk::QueryDeviceCrossSigningBinding>,
+    pub cross_signing_binding: Option<arkret_core::QueryDeviceCrossSigningBinding>,
     #[serde(default)]
     pub enrollment_authority_binding: Option<DeviceEnrollmentAuthorityBinding>,
     #[serde(default)]
     pub device_authorize_event_id: Option<String>,
     #[serde(default)]
-    pub authorized_generation_ref: Option<arkret_sdk::NonEmptyString>,
+    pub authorized_generation_ref: Option<arkret_core::NonEmptyString>,
 }
 
 /// Resolve the `keys/query` signing-key directory facet for `(principal_id,
@@ -1161,12 +1161,12 @@ fn revoked_device_signing_directory_facet() -> DeviceSigningDirectoryFacet {
 /// `ak.cross_signing.publish` payload, rendered as the
 /// `cross-signing-publish.schema.json` counterpart. Returns `None` when no
 /// publish is accepted (e.g. inception-only principals). Reuses the
-/// authoritative `DeviceManager::current_cross_signing` accepted state — the
+/// authoritative `CrossSigningRegistry::current_cross_signing` accepted state — the
 /// same source the publish CAS bookkeeping writes.
 pub(crate) fn resolve_current_cross_signing_publish(
     state: &AppState,
     principal_id: &str,
-) -> Option<arkret_sdk::CrossSigningPublish> {
+) -> Option<arkret_core::CrossSigningPublish> {
     let principal = Did::new(principal_id.to_owned()).ok()?;
     let mgr = state.cross_signing.lock();
     let publish = mgr.current_cross_signing(&principal)?;
@@ -1174,14 +1174,14 @@ pub(crate) fn resolve_current_cross_signing_publish(
     // payload so both crates agree on the wire shape (fields are 1:1).
     serde_json::to_value(publish)
         .ok()
-        .and_then(|value| serde_json::from_value::<arkret_sdk::CrossSigningPublish>(value).ok())
+        .and_then(|value| serde_json::from_value::<arkret_core::CrossSigningPublish>(value).ok())
 }
 
 /// Decode an Ed25519 public key in the declared `key_format`
 /// (`multibase` z-base58btc with the 0xed01 multicodec, or `raw_base64url`).
 pub(crate) fn decode_ed25519_key(material: &str, key_format: &str) -> Result<VerifyingKey, String> {
     let raw: Vec<u8> = match key_format {
-        "multibase" => arkret_sdk::decode_ed25519_multibase(material)
+        "multibase" => arkret_core::decode_ed25519_multibase(material)
             .map(|bytes| bytes.to_vec())
             .map_err(|e| e.to_string())?,
         "raw_base64url" => URL_SAFE_NO_PAD

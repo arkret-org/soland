@@ -3,12 +3,12 @@
 //! Implements the v1 private invite delivery endpoint and the body-only
 //! online locator resolver from `sync/invite-addressing.md`.
 
-// NOTE: `arkret_sdk::DisclosurePolicy` at the crate root resolves to the
+// NOTE: `arkret_core::DisclosurePolicy` at the crate root resolves to the
 // auth/DID-proof type (re-exported explicitly), which shadows the
 // invite-addressing one from the `model::*` glob. Import the
 // invite-addressing variant via its `model` module path to disambiguate.
-use arkret_sdk::models::{DisclosurePolicy, HandleClaim};
-use arkret_sdk::{
+use arkret_core::models::{DisclosurePolicy, HandleClaim};
+use arkret_core::{
     CandidateIntent, CandidateValidationContext, ContactIntroductionEvidence, DetachedPayloadProof,
     Did, DirectoryIntent, DisclosedOutcome, DisclosureLevel, Handle, HandleBindingState, Hash,
     IntroductionEvidence, InviteDeliveryOutcome, InviteDeliveryOutcomeStatus,
@@ -423,7 +423,7 @@ async fn resolve_invite_locator(
         ))
     })?;
     let mut locator = PrincipalLocator {
-        schema: arkret_sdk::PRINCIPAL_LOCATOR_SCHEMA.to_owned(),
+        schema: arkret_core::PRINCIPAL_LOCATOR_SCHEMA.to_owned(),
         subject_id,
         recipient_service_id,
         recipient_service_type: None,
@@ -446,9 +446,11 @@ async fn resolve_invite_locator(
         Hash::new(canonical::sha256_digest(&canonical_bytes)).map_err(|error| {
             AppError::internal(format!("principal locator digest invalid: {error}"))
         })?;
-    let jws =
-        arkret_sdk::jws::sign_jws_ed25519(&canonical_bytes, state.notary_signing_key().as_ref())
-            .map_err(|error| AppError::internal(format!("principal locator sign: {error}")))?;
+    let jws = arkret_signatures::jws::sign_jws_ed25519(
+        &canonical_bytes,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|error| AppError::internal(format!("principal locator sign: {error}")))?;
     locator.proofs = vec![PrincipalLocatorProof {
         proof_purpose: PrincipalLocatorProofPurpose::RecipientServiceAcceptance,
         proof: DetachedPayloadProof {
@@ -684,7 +686,7 @@ pub(crate) struct ReceiveDecision {
 /// `high_trust=outcome / low_trust=opaque`.
 pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolicy {
     InviteReceivePolicy {
-        schema: arkret_sdk::INVITE_RECEIVE_POLICY_SCHEMA.to_owned(),
+        schema: arkret_core::INVITE_RECEIVE_POLICY_SCHEMA.to_owned(),
         subject_id: Did::new(subject.to_owned()).unwrap_or_else(|_| {
             // did:webvh-only red line: placeholder is never a did:web literal.
             Did::new("did:webvh:invalid.invalid".to_owned()).expect("placeholder did")
@@ -1468,7 +1470,7 @@ fn validate_invite_delivery_consistency(
         ));
     }
     if body.pointer("/invite_event/kind").and_then(Value::as_str)
-        != Some(arkret_sdk::events::EventKind::INVITE_CREATE)
+        != Some(arkret_core::events::EventKind::INVITE_CREATE)
     {
         return Err(super::events::peer::schema_violation(
             "invite_event.kind must be ak.invite.create",

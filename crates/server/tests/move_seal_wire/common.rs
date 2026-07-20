@@ -20,13 +20,13 @@
 
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) use arkret_sdk::lattice::CellState;
-pub(crate) use arkret_sdk::signatures::sign_eddsa_detached_jws;
-pub(crate) use arkret_sdk::state::state_root::EMPTY_STATE_ROOT;
-pub(crate) use arkret_sdk::state::{compute_state_root, control_event_set_root};
-pub(crate) use arkret_sdk::{
+pub(crate) use arkret_core::{
     CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId, canonical,
 };
+pub(crate) use arkret_signatures::sign_eddsa_detached_jws;
+pub(crate) use arkret_state::lattice::CellState;
+pub(crate) use arkret_state::state::state_root::EMPTY_STATE_ROOT;
+pub(crate) use arkret_state::state::{compute_state_root, control_event_set_root};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use ed25519_dalek::SigningKey;
@@ -181,7 +181,7 @@ pub(crate) fn build_seal(
             .unwrap()
             .with_timezone(&chrono::Utc),
         hlc: Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
-        kind: arkret_sdk::SealKind::Normal,
+        kind: arkret_core::SealKind::Normal,
     };
     a.id = a.derive_id().unwrap();
     a

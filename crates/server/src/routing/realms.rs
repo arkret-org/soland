@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::{
+use arkret_core::{
     Operation, OperationId,
     REALM_EFFECTIVE_MODERATION_POLICY_FIELD_EFFECTIVE_RULES as FIELD_EFFECTIVE_RULES,
     REALM_EFFECTIVE_MODERATION_POLICY_FIELD_FANOUT as FIELD_FANOUT,
@@ -270,7 +270,7 @@ async fn list_member_applications(
             super::admin::audit::append_audit_log(
                 state,
                 Some(&viewer),
-                arkret_sdk::events::EventKind::AUDIT_ACCESSED,
+                arkret_core::events::EventKind::AUDIT_ACCESSED,
                 json!({
                     "access_kind": "join_application_review",
                     "realm_id": realm_id.as_str(),
@@ -291,7 +291,7 @@ async fn list_member_applications(
 }
 
 /// G3.S5 — POST a new `ak.realm.link` Move. Builds an `Operation` for
-/// `arkret_sdk::events::EventKind::REALM_LINK` and routes through the standard
+/// `arkret_core::events::EventKind::REALM_LINK` and routes through the standard
 /// `accept_local_operations` pipeline so reducer-level validators
 /// (FSM, kind validation, self-reference rejection) all run.
 #[endpoint(
@@ -343,7 +343,7 @@ async fn post_realm_link(
     let operation = Operation::create(
         op_id,
         realm_scope.clone(),
-        arkret_sdk::events::EventKind::REALM_LINK,
+        arkret_core::events::EventKind::REALM_LINK,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
@@ -359,7 +359,7 @@ async fn post_realm_link(
 
 /// Map a reducer rejection reason code into the protocol error family.
 fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
-    let code = if reason == arkret_sdk::ReasonCode::REALM_LINK_SELF_REFERENCE {
+    let code = if reason == arkret_core::ReasonCode::REALM_LINK_SELF_REFERENCE {
         soland_http::error::ErrorCode::SchemaViolation
     } else {
         soland_http::error::ErrorCode::FailedPrecondition
@@ -431,7 +431,7 @@ async fn delete_realm_link(
     let operation = Operation::create(
         op_id,
         realm_id.clone(),
-        arkret_sdk::events::EventKind::REALM_LINK,
+        arkret_core::events::EventKind::REALM_LINK,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))

@@ -16,7 +16,7 @@
 //!   `keys_query` to mask revoked devices and by other auth adjacent paths)
 //! - `session_credential_hash` / `token_for` — credential derivation primitives
 
-use arkret_sdk::{
+use arkret_core::{
     AccountDevicePairOutcome, AccountDevicePairRequestBody, DeviceId, EventId,
     SessionRevokeOutcome, SessionRevokeRequestBody,
 };

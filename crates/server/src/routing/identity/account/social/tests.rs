@@ -14,15 +14,15 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
     let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
     let payload = direct_realm_create_payload(
         &state,
-        arkret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "did:web:alice.example",
         created_at,
     )
     .unwrap();
 
-    arkret_sdk::schema::event_payload_validator_catalog()
+    arkret_core::schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(arkret_sdk::events::EventKind::REALM_CREATE, &payload)
+        .validate_payload(arkret_core::events::EventKind::REALM_CREATE, &payload)
         .unwrap();
     assert!(payload.get("plaintext_visible_services").is_none());
 
@@ -45,14 +45,14 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
 #[test]
 fn direct_member_join_payload_is_sdk_schema_valid() {
     let payload = direct_member_join_payload(
-        arkret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "did:web:bob.example",
     )
     .unwrap();
 
-    arkret_sdk::schema::event_payload_validator_catalog()
+    arkret_core::schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(arkret_sdk::events::EventKind::MEMBER_STATE, &payload)
+        .validate_payload(arkret_core::events::EventKind::MEMBER_STATE, &payload)
         .unwrap();
     assert_eq!(
         payload.get("membership").and_then(Value::as_str),
@@ -77,16 +77,16 @@ fn direct_member_join_payload_is_sdk_schema_valid() {
 fn direct_strand_create_payload_is_sdk_schema_valid() {
     let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
     let payload = direct_strand_create_payload(
-        arkret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "ak:strand:01964137-0000-7000-8000-000000000102",
         "did:web:alice.example",
         created_at,
     )
     .unwrap();
 
-    arkret_sdk::schema::event_payload_validator_catalog()
+    arkret_core::schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(arkret_sdk::events::EventKind::STRAND_CREATE, &payload)
+        .validate_payload(arkret_core::events::EventKind::STRAND_CREATE, &payload)
         .unwrap();
 
     let object = payload
@@ -140,7 +140,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
     }
 
     let message_id = crate::ids::generate("message");
-    let encrypted_content: arkret_sdk::EncryptedEnvelope = serde_json::from_value(json!({
+    let encrypted_content: arkret_core::EncryptedEnvelope = serde_json::from_value(json!({
         "scheme": "mls-rfc9420",
         "version": "1.0",
         "group_id": "mls_test",
@@ -160,18 +160,18 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     }))
     .unwrap();
-    let message_payload = arkret_sdk::models::MessageCreatePayload::with_encrypted_content(
-        arkret_sdk::StrandId::new(main_strand_id.clone()).unwrap(),
+    let message_payload = arkret_core::models::MessageCreatePayload::with_encrypted_content(
+        arkret_core::StrandId::new(main_strand_id.clone()).unwrap(),
         "discussion",
         encrypted_content,
     )
     .with_message_id(message_id.clone())
     .to_value()
     .unwrap();
-    let mut message_op = arkret_sdk::Operation::create(
+    let mut message_op = arkret_core::Operation::create(
         direct_operation_id().unwrap(),
-        arkret_sdk::RealmId::new(realm_id.clone()).unwrap(),
-        arkret_sdk::events::EventKind::MESSAGE_CREATE,
+        arkret_core::RealmId::new(realm_id.clone()).unwrap(),
+        arkret_core::events::EventKind::MESSAGE_CREATE,
         message_payload,
     );
     let event_id = message_op.operation_id.to_string();

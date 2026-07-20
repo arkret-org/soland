@@ -7,12 +7,12 @@ const ITEM_A: &str = "ak:morph:01904100-0000-7000-8000-000000000201";
 const ITEM_B: &str = "ak:morph:01904100-0000-7000-8000-000000000202";
 
 fn cell_digest(value: &Value) -> String {
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(value).unwrap();
-    arkret_sdk::canonical::sha256_digest(bytes)
+    let bytes = arkret_core::canonical::canonical_json_bytes(value).unwrap();
+    arkret_core::canonical::sha256_digest(bytes)
 }
 
 fn position_cell(container_ref: &str, item_ref: &str) -> CellRef {
-    let subject = arkret_sdk::composite_subject(&[container_ref, item_ref]).unwrap();
+    let subject = arkret_core::composite_subject(&[container_ref, item_ref]).unwrap();
     CellRef::new(format!(
         "ak:cell:ak.component.container.position.v1:{subject}"
     ))
@@ -32,7 +32,7 @@ fn container_move_uses_canonical_position_cell_and_enforces_cas() {
     let hlc = ServerHlc::new("test");
     let first = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM,
+            arkret_core::events::EventKind::CONTAINER_MOVE_ITEM,
             REALM_ID,
             serde_json::json!({
                 "item_ref": ITEM_A,
@@ -53,7 +53,7 @@ fn container_move_uses_canonical_position_cell_and_enforces_cas() {
     let current = state.cell_value(&cell_id).cloned().unwrap();
     let rejected = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM,
+            arkret_core::events::EventKind::CONTAINER_MOVE_ITEM,
             REALM_ID,
             serde_json::json!({
                 "item_ref": ITEM_A,
@@ -67,13 +67,13 @@ fn container_move_uses_canonical_position_cell_and_enforces_cas() {
     );
     assert!(matches!(
         rejected,
-        ProjectionEffect::Rejected { reason } if reason == arkret_sdk::ErrorCode::CAS_CONFLICT
+        ProjectionEffect::Rejected { reason } if reason == arkret_core::ErrorCode::CAS_CONFLICT
     ));
     assert_eq!(state.cell_value(&cell_id), Some(&current));
 
     let accepted = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM,
+            arkret_core::events::EventKind::CONTAINER_MOVE_ITEM,
             REALM_ID,
             serde_json::json!({
                 "item_ref": ITEM_A,
@@ -106,7 +106,7 @@ fn container_rebalance_is_atomic_against_order_digest() {
     let initial_digest = cell_digest(&Value::Null);
     let accepted = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::CONTAINER_REBALANCE,
+            arkret_core::events::EventKind::CONTAINER_REBALANCE,
             REALM_ID,
             serde_json::json!({
                 "container_ref": CONTAINER_A,
@@ -132,7 +132,7 @@ fn container_rebalance_is_atomic_against_order_digest() {
 
     let rejected = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::CONTAINER_REBALANCE,
+            arkret_core::events::EventKind::CONTAINER_REBALANCE,
             REALM_ID,
             serde_json::json!({
                 "container_ref": CONTAINER_A,
@@ -145,7 +145,7 @@ fn container_rebalance_is_atomic_against_order_digest() {
     );
     assert!(matches!(
         rejected,
-        ProjectionEffect::Rejected { reason } if reason == arkret_sdk::ErrorCode::CAS_CONFLICT
+        ProjectionEffect::Rejected { reason } if reason == arkret_core::ErrorCode::CAS_CONFLICT
     ));
     assert_eq!(state.cell_value(&cell_id), Some(&current));
 }
@@ -156,7 +156,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
     let hlc = ServerHlc::new("test");
     state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::REALM_CREATE,
+            arkret_core::events::EventKind::REALM_CREATE,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -172,7 +172,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
 
     let notary = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::REALM_NOTARY,
+            arkret_core::events::EventKind::REALM_NOTARY,
             REALM_ID,
             serde_json::json!({
                 "realm_id": REALM_ID,
@@ -196,7 +196,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
 
     let transition = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+            arkret_core::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
             REALM_ID,
             serde_json::json!({
                 "from_digest_algorithm": "sha256",
@@ -219,7 +219,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
 
     let downgrade = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+            arkret_core::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
             REALM_ID,
             serde_json::json!({
                 "from_digest_algorithm": "blake3",
@@ -232,7 +232,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
     );
     assert!(matches!(
         downgrade,
-        ProjectionEffect::Rejected { reason } if reason == arkret_sdk::ErrorCode::SCHEMA_VIOLATION
+        ProjectionEffect::Rejected { reason } if reason == arkret_core::ErrorCode::SCHEMA_VIOLATION
     ));
     assert_eq!(
         state.realm_digest_algorithm(REALM_ID).as_deref(),

@@ -1,4 +1,4 @@
-use arkret_sdk::Operation;
+use arkret_core::Operation;
 use serde_json::Value;
 use soland_domain::kinds;
 use soland_storage::RetentionPolicyRecord;
@@ -35,8 +35,8 @@ fn operation_updates_realm_metadata(operation: &Operation) -> bool {
     matches!(
         kinds::canonical_kind_for_operation(operation),
         Some(
-            arkret_sdk::events::EventKind::REALM_CREATE
-                | arkret_sdk::events::EventKind::REALM_UPDATE
+            arkret_core::events::EventKind::REALM_CREATE
+                | arkret_core::events::EventKind::REALM_UPDATE
         )
     )
 }
@@ -70,7 +70,7 @@ pub(super) fn operation_realm_alias_input(operation: &Operation) -> Option<&str>
 
 pub(super) fn operation_realm_discoverability(operation: &Operation) -> Option<&str> {
     (kinds::canonical_kind_for_operation(operation)
-        == Some(arkret_sdk::events::EventKind::REALM_DISCOVERY))
+        == Some(arkret_core::events::EventKind::REALM_DISCOVERY))
     .then(|| operation.payload.get("value").and_then(Value::as_str))
     .flatten()
     .or_else(|| first_string_field(&operation.payload, &["discoverability"]))
@@ -86,7 +86,7 @@ pub(super) fn operation_realm_class(operation: &Operation) -> Option<&str> {
 
 pub(super) fn operation_realm_default_join_rule(operation: &Operation) -> Option<&str> {
     (kinds::canonical_kind_for_operation(operation)
-        == Some(arkret_sdk::events::EventKind::REALM_JOIN_RULE))
+        == Some(arkret_core::events::EventKind::REALM_JOIN_RULE))
     .then(|| operation.payload.get("value").and_then(Value::as_str))
     .flatten()
     .or_else(|| object_string_field(operation, &["default_join_rule"]))
@@ -105,10 +105,10 @@ pub(super) fn operation_realm_history_visibility(operation: &Operation) -> Optio
 
 pub(super) fn operation_realm_history_sharing_policy(operation: &Operation) -> Option<Value> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_sdk::events::EventKind::REALM_HISTORY_SHARING_POLICY) => {
+        Some(arkret_core::events::EventKind::REALM_HISTORY_SHARING_POLICY) => {
             operation.payload.get("value").cloned()
         }
-        Some(arkret_sdk::events::EventKind::REALM_CREATE) => operation
+        Some(arkret_core::events::EventKind::REALM_CREATE) => operation
             .payload
             .get("object")
             .and_then(|object| object.get("history_sharing_policy"))
@@ -119,10 +119,10 @@ pub(super) fn operation_realm_history_sharing_policy(operation: &Operation) -> O
 
 pub(super) fn operation_realm_preview_policy(operation: &Operation) -> Option<Value> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_sdk::events::EventKind::REALM_PREVIEW_POLICY) => {
+        Some(arkret_core::events::EventKind::REALM_PREVIEW_POLICY) => {
             operation.payload.get("value").cloned()
         }
-        Some(arkret_sdk::events::EventKind::REALM_CREATE) => operation
+        Some(arkret_core::events::EventKind::REALM_CREATE) => operation
             .payload
             .get("object")
             .and_then(|object| object.get("preview_policy"))
@@ -133,10 +133,10 @@ pub(super) fn operation_realm_preview_policy(operation: &Operation) -> Option<Va
 
 pub(super) fn operation_realm_asset_privacy_policy(operation: &Operation) -> Option<Value> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_sdk::events::EventKind::REALM_ASSET_PRIVACY_POLICY) => {
+        Some(arkret_core::events::EventKind::REALM_ASSET_PRIVACY_POLICY) => {
             operation.payload.get("value").cloned()
         }
-        Some(arkret_sdk::events::EventKind::REALM_CREATE) => operation
+        Some(arkret_core::events::EventKind::REALM_CREATE) => operation
             .payload
             .get("object")
             .and_then(|object| object.get("asset_privacy_policy"))

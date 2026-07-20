@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use arkret_sdk::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
+use arkret_core::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use soland::config::AppConfig;
@@ -25,7 +25,7 @@ fn test_signer_did(seed: [u8; 32]) -> String {
     let key = ed25519_dalek::SigningKey::from_bytes(&seed);
     format!(
         "did:key:{}",
-        arkret_sdk::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+        arkret_core::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
     )
 }
 
@@ -137,7 +137,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
     meta.plaintext_visible_services.insert(service_id.clone());
     meta.plaintext_visible_service_classes.insert(
         service_id,
-        BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
+        BTreeSet::from([arkret_core::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = chrono::Utc::now();
     state
@@ -369,8 +369,8 @@ fn install_projected_strand_scope(
             strand_id: strand_id.to_owned(),
             realm_id: realm_id.to_owned(),
             tracks: std::collections::BTreeMap::from([(
-                arkret_sdk::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
-                arkret_sdk::StrandTrackConfig::discussion_primary(),
+                arkret_core::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
+                arkret_core::StrandTrackConfig::discussion_primary(),
             )]),
             title: "Confidential discussion".to_owned(),
             summary: None,
@@ -501,18 +501,18 @@ fn signed_event(
     payload: Value,
 ) -> Value {
     let now = chrono::Utc::now();
-    let actor = arkret_sdk::Did::new(actor_id.to_owned()).expect("fixture actor DID");
+    let actor = arkret_core::Did::new(actor_id.to_owned()).expect("fixture actor DID");
     let verification_method = actor_id.strip_prefix("did:key:").map_or_else(
         || format!("{actor_id}#{device_id}"),
         |key| format!("{actor_id}#{key}"),
     );
-    let mut event = arkret_sdk::Event::new_with_id_at(
-        arkret_sdk::EventId::new(event_id.to_owned()).expect("fixture Event id"),
+    let mut event = arkret_core::Event::new_with_id_at(
+        arkret_core::EventId::new(event_id.to_owned()).expect("fixture Event id"),
         kind,
-        arkret_sdk::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_core::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
         actor.clone(),
         TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        arkret_sdk::Hlc::new(format!(
+        arkret_core::Hlc::new(format!(
             "{:012x}-0000-00000000",
             now.timestamp_millis().max(0) as u64
         ))
@@ -530,13 +530,16 @@ fn signed_event(
     } else {
         [21_u8; 32]
     };
-    let signer =
-        arkret_sdk::Ed25519MoveSigner::from_did_key_seed(seed, actor, verification_method.clone());
-    arkret_sdk::signatures::sign_event(
+    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+        seed,
+        actor,
+        verification_method.clone(),
+    );
+    arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_sdk::signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .expect("SDK Event signer accepts discussion fixture");
     serde_json::to_value(event).expect("SDK Event serializes")

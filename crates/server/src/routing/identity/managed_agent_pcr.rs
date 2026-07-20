@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use arkret_sdk::{
+use arkret_core::{
     AgentKeyScope, AgentPcrRecoveryState, BackupClass, Did, Hash, KeyBackup,
     KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding, RealmId,
     RealmSealFrontierView, RecoveryHpkeSuite, RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse,
@@ -28,7 +28,7 @@ const CONTROLLER_DELEGATION_PURPOSES: &[&str] = &[
 ];
 
 pub(crate) fn allocate_principal_control_realm_id() -> Result<RealmId, AppError> {
-    RealmId::new(arkret_sdk::new_prefixed_uuid7("ak:realm:"))
+    RealmId::new(arkret_core::new_prefixed_uuid7("ak:realm:"))
         .map_err(|error| AppError::internal(format!("allocated Agent PCR id invalid: {error}")))
 }
 
@@ -79,7 +79,7 @@ pub(crate) async fn persist_managed_agent_did_binding(
         "versionTime": now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         "state": document,
     });
-    let digest = arkret_sdk::canonical::canonical_sha256(&operation).map_err(|error| {
+    let digest = arkret_core::canonical::canonical_sha256(&operation).map_err(|error| {
         AppError::internal(format!(
             "managed Agent DID inception digest failed: {error}"
         ))
@@ -382,7 +382,7 @@ pub(crate) async fn active_series_pointer_is_current(
         if visited.len() > 10_000 {
             return Ok(false);
         }
-        let seal = arkret_sdk::state::SealStore::get(state.seal_store.as_ref(), &seal_id)
+        let seal = arkret_state::state::SealStore::get(state.seal_store.as_ref(), &seal_id)
             .map_err(|error| {
                 AppError::internal(format!("controller Seal ancestry lookup failed: {error}"))
             })?
@@ -410,16 +410,16 @@ pub(crate) async fn active_series_pointer_is_current(
         &pointer.frontier_ref.generation,
     ) {
         (
-            arkret_sdk::KeyBackupActiveSeriesTrustBinding::SskGeneration(auth),
-            arkret_sdk::KeyBackupActiveSeriesFrontierGeneration::SskGeneration(frontier),
+            arkret_core::KeyBackupActiveSeriesTrustBinding::SskGeneration(auth),
+            arkret_core::KeyBackupActiveSeriesFrontierGeneration::SskGeneration(frontier),
         ) => Ok(auth == frontier
             && crate::routing::identity::cross_signing::current_accepted_ssk_generation(
                 state,
                 controller_id,
             ) == Some(auth.get())),
         (
-            arkret_sdk::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id),
-            arkret_sdk::KeyBackupActiveSeriesFrontierGeneration::DeviceGenerationRef(frontier),
+            arkret_core::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id),
+            arkret_core::KeyBackupActiveSeriesFrontierGeneration::DeviceGenerationRef(frontier),
         ) => {
             let current = crate::routing::identity::device_generation::current_device_generation(
                 state,
@@ -434,7 +434,7 @@ pub(crate) async fn active_series_pointer_is_current(
             let Some(current) = current else {
                 return Ok(false);
             };
-            if current.status != arkret_sdk::DeviceGenerationStatus::Active
+            if current.status != arkret_core::DeviceGenerationStatus::Active
                 || current.current_ref != frontier.as_str()
             {
                 return Ok(false);
@@ -451,7 +451,7 @@ pub(crate) async fn active_series_pointer_is_current(
                 return Ok(false);
             };
             if authorize.actor_id != controller_id
-                || authorize.kind != arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
+                || authorize.kind != arkret_core::events::EventKind::DEVICE_AUTHORIZE
             {
                 return Ok(false);
             }
@@ -475,18 +475,18 @@ pub(crate) async fn active_series_pointer_is_current(
 
 pub(crate) async fn validate_active_series_operation_authority(
     state: &AppState,
-    operation: &arkret_sdk::Operation,
+    operation: &arkret_core::Operation,
 ) -> Result<(), &'static str> {
     if soland_domain::kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+        != Some(arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
     {
         return Ok(());
     }
-    let record = serde_json::from_value::<arkret_sdk::KeyBackupActiveSeries>(
+    let record = serde_json::from_value::<arkret_core::KeyBackupActiveSeries>(
         crate::routing::events::projection_context_stripped_payload(&operation.payload),
     )
     .map_err(|_| "key_backup_active_series_schema_violation")?;
-    if arkret_sdk::principal_control_realm_id(&record.actor_id) != operation.realm_id.as_str() {
+    if arkret_core::principal_control_realm_id(&record.actor_id) != operation.realm_id.as_str() {
         return Err("key_backup_active_series_wrong_control_realm");
     }
     let backup_class = record.backup_class.as_str().to_owned();
@@ -506,7 +506,7 @@ pub(crate) async fn validate_active_series_operation_authority(
     if !series_exists {
         return Err("key_backup_active_series_target_missing");
     }
-    let record_digest = arkret_sdk::key_backup_active_series_head(&record)
+    let record_digest = arkret_core::key_backup_active_series_head(&record)
         .map_err(|_| "key_backup_active_series_schema_violation")?
         .record_digest;
     let pointer = soland_domain::reducer::SolandKeyBackupActiveSeries {
@@ -538,23 +538,23 @@ async fn active_series_signature_is_valid(
     controller_id: &str,
     pointer: &soland_domain::reducer::SolandKeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
-    if pointer.auth_data.signature_algorithm != arkret_sdk::KeyBackupSignatureAlgorithm::Ed25519 {
+    if pointer.auth_data.signature_algorithm != arkret_core::KeyBackupSignatureAlgorithm::Ed25519 {
         return Ok(false);
     }
-    let record = arkret_sdk::KeyBackupActiveSeries {
+    let record = arkret_core::KeyBackupActiveSeries {
         schema: "ak.schema.key_backup_active_series.v1".to_owned(),
         actor_id: Did::new(pointer.actor_id.clone())
             .map_err(|error| AppError::internal(format!("active-series actor invalid: {error}")))?,
-        backup_class: arkret_sdk::BackupClass::try_from(pointer.backup_class.as_str())
+        backup_class: arkret_core::BackupClass::try_from(pointer.backup_class.as_str())
             .map_err(|error| AppError::internal(format!("active-series class invalid: {error}")))?,
-        active_series_id: arkret_sdk::BackupSeriesId::new(pointer.active_series_id.clone())
+        active_series_id: arkret_core::BackupSeriesId::new(pointer.active_series_id.clone())
             .map_err(|error| AppError::internal(format!("active-series id invalid: {error}")))?,
         series_pointer_version: pointer.series_pointer_version,
         previous_series_ids: pointer
             .previous_series_ids
             .iter()
             .cloned()
-            .map(arkret_sdk::BackupSeriesId::new)
+            .map(arkret_core::BackupSeriesId::new)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 AppError::internal(format!("active-series predecessor invalid: {error}"))
@@ -573,7 +573,7 @@ async fn active_series_signature_is_valid(
         .as_object_mut()
         .ok_or_else(|| AppError::internal("active-series auth_data is not an object"))?
         .remove("signature");
-    let message = arkret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let message = arkret_core::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
         AppError::internal(format!("active-series canonicalization failed: {error}"))
     })?;
     let signature = URL_SAFE_NO_PAD
@@ -608,7 +608,7 @@ async fn active_series_signature_is_valid(
             continue;
         }
         let anchored = match &pointer.auth_data.trust_binding {
-            arkret_sdk::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation) => {
+            arkret_core::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation) => {
                 crate::routing::identity::cross_signing::persisted_device_is_anchored_to_ssk_generation(
                     state,
                     controller_id,
@@ -618,7 +618,7 @@ async fn active_series_signature_is_valid(
                     generation.get(),
                 )
             }
-            arkret_sdk::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id) => {
+            arkret_core::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id) => {
                 device
                     .payload
                     .get("device_authorize_event_id")
@@ -814,14 +814,14 @@ pub(crate) async fn validate_delegated_agent_envelope(
             | "ak.self.agent.deactivate"
     );
     if !kind_is_delegated_control
-        && !(allow_realm_founding_grant && kind == arkret_sdk::events::EventKind::CAPABILITY_GRANT)
+        && !(allow_realm_founding_grant && kind == arkret_core::events::EventKind::CAPABILITY_GRANT)
     {
         return Err(failed_precondition(
             "controller delegation does not cover this Agent Event kind",
             "managed_agent_delegation_scope",
         ));
     }
-    if kind == arkret_sdk::events::EventKind::REALM_CREATE {
+    if kind == arkret_core::events::EventKind::REALM_CREATE {
         let object = envelope
             .get("payload")
             .and_then(|payload| payload.get("object"))
@@ -869,13 +869,13 @@ fn validate_agent_pcr_genesis_effect(
         .get("effects")
         .cloned()
         .ok_or_else(|| schema_error("managed Agent PCR genesis effects are missing"))?;
-    let effects = serde_json::from_value::<Vec<arkret_sdk::Effect>>(effects).map_err(|error| {
+    let effects = serde_json::from_value::<Vec<arkret_core::Effect>>(effects).map_err(|error| {
         schema_error(format!(
             "managed Agent PCR genesis effect is invalid: {error}"
         ))
     })?;
     let expected =
-        arkret_sdk::identity::managed_agent_principal_control_create_effect(realm_id, actor_seq)
+        arkret_bootstrap::managed_agent_principal_control_create_effect(realm_id, actor_seq)
             .map_err(|error| {
                 schema_error(format!(
                     "managed Agent PCR create effect is invalid: {error}"
@@ -1226,7 +1226,7 @@ async fn validate_current_recovery_recipient(
         .encryption
         .hpke_suite
         .as_deref()
-        .unwrap_or(arkret_sdk::DEFAULT_HPKE_SUITE);
+        .unwrap_or(arkret_core::DEFAULT_HPKE_SUITE);
     let suite: RecoveryHpkeSuite = serde_json::from_value(Value::String(suite_id.to_owned()))
         .map_err(|_| {
             AppError::new(
@@ -1273,7 +1273,7 @@ fn current_backup_hpke_agreement(
 fn canonical_binding_bytes(binding: &ManagedPrincipalBinding) -> Result<Vec<u8>, AppError> {
     let value = serde_json::to_value(binding)
         .map_err(|error| AppError::internal(format!("managed binding encode failed: {error}")))?;
-    arkret_sdk::canonical::canonical_json_bytes(&value)
+    arkret_core::canonical::canonical_json_bytes(&value)
         .map_err(|error| schema_error(format!("managed binding canonicalization failed: {error}")))
 }
 
@@ -1440,8 +1440,7 @@ mod tests {
     fn agent_pcr_genesis_requires_canonical_managed_create_effect() {
         let realm_id = RealmId::new(PCR).unwrap();
         let effect =
-            arkret_sdk::identity::managed_agent_principal_control_create_effect(&realm_id, 1)
-                .unwrap();
+            arkret_bootstrap::managed_agent_principal_control_create_effect(&realm_id, 1).unwrap();
         let envelope = json!({
             "actor_seq": 1,
             "effects": [effect],
@@ -1463,10 +1462,10 @@ mod tests {
     fn recovery_signing_key_cannot_be_used_as_managed_agent_backup_recipient() {
         let now: DateTime<Utc> = "2026-07-15T00:00:00Z".parse().unwrap();
         let agreement = RecoveryKeyAgreementEntry {
-            key_agreement_ref: arkret_sdk::DidUrl::new(format!("{CONTROLLER}#backup-hpke-1"))
+            key_agreement_ref: arkret_core::DidUrl::new(format!("{CONTROLLER}#backup-hpke-1"))
                 .unwrap(),
-            alg: arkret_sdk::RecoveryKeyAgreementAlgorithm::X25519,
-            public_key_multibase: arkret_sdk::NonEmptyString::new(
+            alg: arkret_core::RecoveryKeyAgreementAlgorithm::X25519,
+            public_key_multibase: arkret_core::NonEmptyString::new(
                 "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW".to_owned(),
             )
             .unwrap(),

@@ -217,7 +217,7 @@ mod tests {
             "sha256:old",
             true,
         );
-        old.display_hint = Some(arkret_sdk::PrincipalLocatorDisplayHint {
+        old.display_hint = Some(arkret_core::PrincipalLocatorDisplayHint {
             display_name_hint: Some("Alice".to_owned()),
             avatar_blob_ref: None,
         });

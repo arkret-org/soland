@@ -15,7 +15,7 @@
 //! - receiver: [`peer_contacts_submit`] — accept a delivered fact and project it into the local
 //!   target holder's contact projection.
 
-use arkret_sdk::{
+use arkret_core::{
     ContactIntroductionEvidence, Did, DisclosedOutcome, Event, EventId, Hash, Hlc,
     InviteReceiveAction, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
     Proof, RealmId, canonical, proof_kind,
@@ -829,7 +829,7 @@ fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> 
         .ok_or_else(|| {
             super::super::events::peer::schema_violation("required header content-digest missing")
         })?;
-    let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(body).map_err(|error| {
+    let canonical_bytes = arkret_core::canonical::canonical_json_bytes(body).map_err(|error| {
         super::super::events::peer::schema_violation(format!(
             "request body is not canonical-hashable: {error}"
         ))

@@ -10,7 +10,7 @@ authors.workspace = true
 description = "Persistence records and storage ports for Soland."
 
 [dependencies]
-arkret-sdk = {workspace = true,features = ["full-surface", "mls"]}
+arkret-core.workspace = true
 async-trait = {workspace = true}
 base64 = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}

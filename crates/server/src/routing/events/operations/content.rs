@@ -107,7 +107,7 @@ fn patch_operation_value_has_direct_field(value: &Value, field: &str) -> bool {
 
 pub(crate) fn strand_operation_carries_plaintext_private_content(operation: &Operation) -> bool {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_sdk::events::EventKind::STRAND_CREATE) => [
+        Some(arkret_core::events::EventKind::STRAND_CREATE) => [
             &["synthesis"][..],
             &["object", "synthesis"][..],
             &["content"][..],
@@ -119,10 +119,12 @@ pub(crate) fn strand_operation_carries_plaintext_private_content(operation: &Ope
         .any(|path| {
             value_at_path(&operation.payload, path).is_some_and(value_is_plaintext_content)
         }),
-        Some(arkret_sdk::events::EventKind::STRAND_UPDATE) => patch_touches_plaintext_content_path(
-            &operation.payload,
-            &["synthesis", "content", "attachments"],
-        ),
+        Some(arkret_core::events::EventKind::STRAND_UPDATE) => {
+            patch_touches_plaintext_content_path(
+                &operation.payload,
+                &["synthesis", "content", "attachments"],
+            )
+        }
         _ => false,
     }
 }
@@ -240,7 +242,7 @@ pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &s
         .is_some_and(|record| {
             !(record.allows_plaintext_data_class(
                 &state.service_id,
-                arkret_sdk::PlaintextDataClassKind::MessageContent,
+                arkret_core::PlaintextDataClassKind::MessageContent,
             ) || record.discoverability == "public"
                 && record.history_visibility == "world_readable")
         })
@@ -413,10 +415,10 @@ pub(crate) fn validate_patch_semantic_safety(
 ) -> Result<(), &'static str> {
     for (path, value) in patch {
         if patch_path_targets_reducer_managed(path) {
-            return Err(arkret_sdk::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
+            return Err(arkret_core::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
         }
         if patch_op_removes_value(value) && patch_path_targets_redactable_unset(path) {
-            return Err(arkret_sdk::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD);
+            return Err(arkret_core::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD);
         }
     }
     Ok(())
@@ -633,9 +635,9 @@ pub fn validate_canonical_json_value_inner(
                     && let Some(s) = value.as_str()
                 {
                     let canonical_seconds =
-                        arkret_sdk::canonical::validate_timestamp_canonical(s).is_ok();
+                        arkret_core::canonical::validate_timestamp_canonical(s).is_ok();
                     let canonical_millis =
-                        arkret_sdk::canonical::validate_timestamp_millis_canonical(s).is_ok();
+                        arkret_core::canonical::validate_timestamp_millis_canonical(s).is_ok();
                     if !canonical_seconds && !canonical_millis {
                         return Err(
                             "timestamp must use canonical RFC 3339 UTC whole-second or fixed-millisecond form",
@@ -647,12 +649,12 @@ pub fn validate_canonical_json_value_inner(
         _ => {}
     }
     // At the top level, attempt a canonical byte roundtrip to ensure full compliance.
-    if root && arkret_sdk::canonical::canonical_json_bytes(value).is_err() {
+    if root && arkret_core::canonical::canonical_json_bytes(value).is_err() {
         return Err("value fails canonical JSON byte serialization");
     }
     Ok(())
 }
 
 pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static str> {
-    arkret_sdk::validate_content_block(block).map_err(|error| error.message())
+    arkret_core::validate_content_block(block).map_err(|error| error.message())
 }

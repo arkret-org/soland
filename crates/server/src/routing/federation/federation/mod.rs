@@ -63,7 +63,7 @@ fn federation_destination_matches(state: &AppState, destination: &str) -> bool {
 #[cfg(test)]
 use actor_signature::federation_verify_actor_digest;
 #[cfg(test)]
-use arkret_sdk::{Operation, RealmId};
+use arkret_core::{Operation, RealmId};
 #[cfg(test)]
 use backfill::operation_frontier_value;
 // Cross-module helpers consumed elsewhere in `crate::routing`.

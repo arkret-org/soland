@@ -49,7 +49,7 @@ impl ProjectionState {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
-        if arkret_sdk::validate_calendar_event_metadata_fields(&fields).is_err() {
+        if arkret_core::validate_calendar_event_metadata_fields(&fields).is_err() {
             return ProjectionEffect::Rejected {
                 reason: "schema_violation".to_owned(),
             };
@@ -194,7 +194,7 @@ impl ProjectionState {
             }
             let mut next_fields = strand.fields.clone();
             apply_strand_fields_patch(&mut next_fields, patch);
-            if arkret_sdk::validate_calendar_event_metadata_fields(&next_fields).is_err() {
+            if arkret_core::validate_calendar_event_metadata_fields(&next_fields).is_err() {
                 return ProjectionEffect::Rejected {
                     reason: "schema_violation".to_owned(),
                 };
@@ -287,7 +287,7 @@ impl ProjectionState {
             Some(k) => k,
             None => return Ok(()),
         };
-        if !arkret_sdk::events::kinds::is_strand_tracks_kind(kind) {
+        if !arkret_core::events::kinds::is_strand_tracks_kind(kind) {
             return Ok(());
         }
         let Some(strand_id) = operation.payload.get("strand_id").and_then(|v| v.as_str()) else {
@@ -498,11 +498,11 @@ impl ProjectionState {
 
 fn strand_tracks_from_object(
     object: &serde_json::Map<String, Value>,
-) -> Result<BTreeMap<String, arkret_sdk::StrandTrackConfig>, &'static str> {
+) -> Result<BTreeMap<String, arkret_core::StrandTrackConfig>, &'static str> {
     let Some(tracks_value) = object.get("tracks") else {
         return Ok(crate::reducer::projections::default_strand_tracks());
     };
-    let tracks = serde_json::from_value::<BTreeMap<String, arkret_sdk::StrandTrackConfig>>(
+    let tracks = serde_json::from_value::<BTreeMap<String, arkret_core::StrandTrackConfig>>(
         tracks_value.clone(),
     )
     .map_err(|_| "strand_tracks_invalid")?;
@@ -514,9 +514,9 @@ fn strand_tracks_from_object(
 }
 
 fn apply_strand_tracks_update_to_map(
-    current: &BTreeMap<String, arkret_sdk::StrandTrackConfig>,
+    current: &BTreeMap<String, arkret_core::StrandTrackConfig>,
     payload: &Value,
-) -> Result<BTreeMap<String, arkret_sdk::StrandTrackConfig>, &'static str> {
+) -> Result<BTreeMap<String, arkret_core::StrandTrackConfig>, &'static str> {
     let mut tracks = current.clone();
     let mut changed = false;
     if let Some(track_updates) = payload
@@ -525,7 +525,7 @@ fn apply_strand_tracks_update_to_map(
         .transpose()?
     {
         for (track_id, track) in track_updates {
-            arkret_sdk::validate_strand_track_name(&track_id)
+            arkret_core::validate_strand_track_name(&track_id)
                 .map_err(|_| "strand_track_name_invalid")?;
             tracks.insert(track_id, track);
             changed = true;
@@ -538,7 +538,7 @@ fn apply_strand_tracks_update_to_map(
             .transpose()?
         {
             for (track_id, track) in track_updates {
-                arkret_sdk::validate_strand_track_name(&track_id)
+                arkret_core::validate_strand_track_name(&track_id)
                     .map_err(|_| "strand_track_name_invalid")?;
                 tracks.insert(track_id, track);
                 changed = true;
@@ -574,21 +574,21 @@ fn apply_strand_tracks_update_to_map(
 
 fn parse_track_update_map(
     value: &Value,
-) -> Result<BTreeMap<String, arkret_sdk::StrandTrackConfig>, &'static str> {
-    serde_json::from_value::<BTreeMap<String, arkret_sdk::StrandTrackConfig>>(value.clone())
+) -> Result<BTreeMap<String, arkret_core::StrandTrackConfig>, &'static str> {
+    serde_json::from_value::<BTreeMap<String, arkret_core::StrandTrackConfig>>(value.clone())
         .map_err(|_| "strand_tracks_invalid")
 }
 
 fn apply_whole_track_patch(
-    tracks: &mut BTreeMap<String, arkret_sdk::StrandTrackConfig>,
+    tracks: &mut BTreeMap<String, arkret_core::StrandTrackConfig>,
     track_id: &str,
     patch_value: &Value,
 ) -> Result<(), &'static str> {
-    arkret_sdk::validate_strand_track_name(track_id).map_err(|_| "strand_track_name_invalid")?;
+    arkret_core::validate_strand_track_name(track_id).map_err(|_| "strand_track_name_invalid")?;
     let patch = parse_patch_operation(patch_value)?;
     match patch {
         TrackPatchOperation::Set(value) => {
-            let track = serde_json::from_value::<arkret_sdk::StrandTrackConfig>(value.clone())
+            let track = serde_json::from_value::<arkret_core::StrandTrackConfig>(value.clone())
                 .map_err(|_| "strand_tracks_invalid")?;
             tracks.insert(track_id.to_owned(), track);
         }
@@ -600,12 +600,12 @@ fn apply_whole_track_patch(
 }
 
 fn apply_track_field_patch(
-    tracks: &mut BTreeMap<String, arkret_sdk::StrandTrackConfig>,
+    tracks: &mut BTreeMap<String, arkret_core::StrandTrackConfig>,
     track_id: &str,
     field: &str,
     patch_value: &Value,
 ) -> Result<(), &'static str> {
-    arkret_sdk::validate_strand_track_name(track_id).map_err(|_| "strand_track_name_invalid")?;
+    arkret_core::validate_strand_track_name(track_id).map_err(|_| "strand_track_name_invalid")?;
     let patch = parse_patch_operation(patch_value)?;
     let mut track_value = tracks
         .get(track_id)
@@ -630,7 +630,7 @@ fn apply_track_field_patch(
             track_object.remove(field);
         }
     }
-    let track = serde_json::from_value::<arkret_sdk::StrandTrackConfig>(track_value)
+    let track = serde_json::from_value::<arkret_core::StrandTrackConfig>(track_value)
         .map_err(|_| "strand_tracks_invalid")?;
     tracks.insert(track_id.to_owned(), track);
     Ok(())
@@ -659,10 +659,10 @@ fn parse_patch_operation(value: &Value) -> Result<TrackPatchOperation<'_>, &'sta
 }
 
 fn validate_strand_tracks(
-    tracks: &BTreeMap<String, arkret_sdk::StrandTrackConfig>,
+    tracks: &BTreeMap<String, arkret_core::StrandTrackConfig>,
 ) -> Result<(), &'static str> {
     for track_id in tracks.keys() {
-        arkret_sdk::validate_strand_track_name(track_id)
+        arkret_core::validate_strand_track_name(track_id)
             .map_err(|_| "strand_track_name_invalid")?;
     }
     Ok(())

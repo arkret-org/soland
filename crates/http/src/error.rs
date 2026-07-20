@@ -1,12 +1,12 @@
 //! Soland error integration for canonical Arkret SDK error codes.
 //!
-//! Wire-form error codes are owned by `arkret_sdk::ErrorCode`; this module
+//! Wire-form error codes are owned by `arkret_core::ErrorCode`; this module
 //! only adds soland-specific Salvo rendering and typed endpoint plumbing.
 
 /// Soland-local rejection reasons that are not registered protocol reason codes.
 ///
 /// Registered reasons and top-level errors are consumed directly through
-/// arkret_sdk::ReasonCode and arkret_sdk::ErrorCode.
+/// arkret_core::ReasonCode and arkret_core::ErrorCode.
 pub mod reasons {
     pub const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =
         "member_identity_handle_field_forbidden";
@@ -61,7 +61,7 @@ macro_rules! app_error {
     };
 }
 
-pub use arkret_sdk::ErrorCode;
+pub use arkret_core::ErrorCode;
 
 /// Convert the SDK registry status into Salvo's `StatusCode`.
 pub fn error_http_status(code: ErrorCode) -> StatusCode {
@@ -69,13 +69,13 @@ pub fn error_http_status(code: ErrorCode) -> StatusCode {
 }
 
 fn request_id() -> String {
-    arkret_sdk::new_prefixed_uuid7("ak:request:")
+    arkret_core::new_prefixed_uuid7("ak:request:")
 }
 
 pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {
     res.status_code(status);
     res.render(Json(
-        arkret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id()),
+        arkret_core::ErrorEnvelope::new(code, message).with_request_id(request_id()),
     ));
 }
 
@@ -88,7 +88,7 @@ pub fn render_error_with_detail(
 ) {
     res.status_code(status);
     res.render(Json(
-        arkret_sdk::ErrorEnvelope::new(code, message)
+        arkret_core::ErrorEnvelope::new(code, message)
             .with_request_id(request_id())
             .with_detail(
                 "reason_detail",
@@ -105,7 +105,7 @@ pub fn render_error_with_reason_code(
     reason_code: &str,
     reason_detail: Option<&str>,
 ) {
-    let mut envelope = arkret_sdk::ErrorEnvelope::new(code, message)
+    let mut envelope = arkret_core::ErrorEnvelope::new(code, message)
         .with_request_id(request_id())
         .with_detail(
             "reason_code",
@@ -129,7 +129,7 @@ pub fn render_error_with_top_level_reason(
     reason: &str,
     reason_detail: Option<&str>,
 ) {
-    let mut envelope = arkret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id());
+    let mut envelope = arkret_core::ErrorEnvelope::new(code, message).with_request_id(request_id());
     if let Some(reason_detail) = reason_detail {
         envelope = envelope.with_detail(
             "reason_detail",
@@ -405,7 +405,7 @@ impl Writer for AppError {
 
 impl EndpointOutRegister for AppError {
     fn register(components: &mut Components, operation: &mut Operation) {
-        // Reuse `arkret_sdk::ErrorEnvelope` (already `ToSchema` under the
+        // Reuse `arkret_core::ErrorEnvelope` (already `ToSchema` under the
         // SDK's `salvo` feature) as the response body schema for every error
         // status. The wire representation is the spec-canonical
         // `{ ok: false, error: { code, message, ... }, request_id }`.
@@ -416,7 +416,7 @@ impl EndpointOutRegister for AppError {
         // so the field is documentation-only — describe its shape and
         // stability contract in each response's `description` rather
         // than mutating the SDK-owned schema.
-        let envelope_schema = <arkret_sdk::ErrorEnvelope as ToSchema>::to_schema(components);
+        let envelope_schema = <arkret_core::ErrorEnvelope as ToSchema>::to_schema(components);
         const ERROR_DETAILS_DOC: &str = " (envelope details may contain stable \
             `reason_code: string` and/or unstable `reason_detail: string`; do not parse \
             `reason_detail`)";

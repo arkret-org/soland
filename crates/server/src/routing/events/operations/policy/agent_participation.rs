@@ -19,10 +19,10 @@ pub(super) fn agent_participation_ceiling_change(
 ) -> Option<(
     &'static str,
     String,
-    arkret_sdk::models::AgentParticipation,
+    arkret_core::models::AgentParticipation,
     Vec<String>,
 )> {
-    use arkret_sdk::models::AgentParticipation;
+    use arkret_core::models::AgentParticipation;
     let payload = &operation.payload;
     let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
     let find = || -> Option<Value> {
@@ -69,7 +69,7 @@ pub(super) fn agent_participation_ceiling_change(
             .map(ToOwned::to_owned)
     };
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_sdk::events::EventKind::REALM_POLICY_COMPONENTS) => {
+        Some(arkret_core::events::EventKind::REALM_POLICY_COMPONENTS) => {
             let value = find()?;
             Some((
                 "realm",
@@ -78,8 +78,8 @@ pub(super) fn agent_participation_ceiling_change(
                 Vec::new(),
             ))
         }
-        Some(arkret_sdk::events::EventKind::CIRCLE_CREATE)
-        | Some(arkret_sdk::events::EventKind::CIRCLE_UPDATE) => {
+        Some(arkret_core::events::EventKind::CIRCLE_CREATE)
+        | Some(arkret_core::events::EventKind::CIRCLE_UPDATE) => {
             let value = find()?;
             let circle_uuid = ap_uuid_part(&id_of("circle_id")?).to_owned();
             Some((
@@ -89,8 +89,8 @@ pub(super) fn agent_participation_ceiling_change(
                 vec![format!("realm:{realm_uuid}")],
             ))
         }
-        Some(arkret_sdk::events::EventKind::STRAND_CREATE)
-        | Some(arkret_sdk::events::EventKind::STRAND_UPDATE) => {
+        Some(arkret_core::events::EventKind::STRAND_CREATE)
+        | Some(arkret_core::events::EventKind::STRAND_UPDATE) => {
             let value = find()?;
             let strand_uuid = ap_uuid_part(&id_of("strand_id")?).to_owned();
             Some((
@@ -157,7 +157,7 @@ pub async fn validate_agent_participation_ceiling(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    use arkret_sdk::models::{AgentParticipation, validate_agent_participation_tightens};
+    use arkret_core::models::{AgentParticipation, validate_agent_participation_tightens};
     for operation in operations {
         let Some((scope_kind, _scope_key, child, parent_keys)) =
             agent_participation_ceiling_change(operation)
@@ -219,7 +219,7 @@ impl AgentParticipationMode {
 
 fn ap_effective_for_mode(
     mode: AgentParticipationMode,
-    effective: arkret_sdk::models::AgentParticipation,
+    effective: arkret_core::models::AgentParticipation,
 ) -> bool {
     match mode {
         AgentParticipationMode::Reply => effective.reply,
@@ -260,8 +260,8 @@ pub(super) async fn agent_lifecycle_rejection_reason(
         projection.agent_lifecycles.get(agent_id).copied()
     };
     Ok(match projected {
-        Some(arkret_sdk::AgentLifecycleState::Paused) => Some("agent_paused"),
-        Some(arkret_sdk::AgentLifecycleState::Deactivated) => Some("agent_deactivated"),
+        Some(arkret_core::AgentLifecycleState::Paused) => Some("agent_paused"),
+        Some(arkret_core::AgentLifecycleState::Deactivated) => Some("agent_deactivated"),
         _ => None,
     })
 }
@@ -399,7 +399,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
     if !agent_action_target_matches(&approval.target, operation) {
         return Err("agent_act_on_behalf_approval_target_mismatch");
     }
-    let payload_digest = arkret_sdk::canonical::canonical_sha256(&operation.payload)
+    let payload_digest = arkret_core::canonical::canonical_sha256(&operation.payload)
         .map_err(|_| "agent_act_on_behalf_approval_payload_digest_invalid")?;
     if approval.approved_payload_digest != payload_digest {
         return Err("agent_act_on_behalf_approval_payload_digest_mismatch");
@@ -413,7 +413,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
         approval_nonce,
         expires_at,
     ) {
-        return Err(arkret_sdk::error::ReasonCode::APPROVAL_NONCE_REUSED);
+        return Err(arkret_core::error::ReasonCode::APPROVAL_NONCE_REUSED);
     }
     Ok(())
 }

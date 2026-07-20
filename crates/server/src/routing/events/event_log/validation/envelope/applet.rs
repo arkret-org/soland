@@ -13,7 +13,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     let executed_by = event_string_field(object, &["executed_by"]).ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
-            arkret_sdk::ReasonCode::EXECUTED_BY_MISSING,
+            arkret_core::ReasonCode::EXECUTED_BY_MISSING,
             "applet-originated delegated Event requires executed_by",
         )
     })?;
@@ -155,7 +155,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     record: &crate::routing::extensions::applet_bridge::AppletRecord,
-    package: &arkret_sdk::AppletPackage,
+    package: &arkret_core::AppletPackage,
     grant: &crate::authz::Grant,
     applet_id: &str,
     executed_by: &str,
@@ -269,8 +269,8 @@ pub(super) fn applet_actor_matches_exact_namespace(
     record.namespaces.as_ref().is_some_and(|namespaces| {
         namespaces.actors.iter().any(|entry| {
             !applet_namespace_pattern_is_wildcard(&entry.pattern)
-                && arkret_sdk::namespace_pattern_matches(
-                    arkret_sdk::AppletNamespaceDomain::Actors,
+                && arkret_core::namespace_pattern_matches(
+                    arkret_core::AppletNamespaceDomain::Actors,
                     &entry.pattern,
                     actor_id,
                 )

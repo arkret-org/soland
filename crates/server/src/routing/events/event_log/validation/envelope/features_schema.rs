@@ -216,7 +216,7 @@ pub(crate) fn validate_event_schema_and_payload(
     is_self_principal_pcr_bootstrap_create: bool,
 ) -> Result<(), EventValidationError> {
     if !state.config.development_mode {
-        let registry = arkret_sdk::schema::schema_registry_from_default_spec_artifacts()
+        let registry = arkret_core::schema::schema_registry_from_default_spec_artifacts()
             .map_err(|_| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
@@ -257,13 +257,13 @@ pub(crate) fn validate_event_schema_and_payload(
     }
     if matches!(
         kind,
-        arkret_sdk::events::EventKind::SPACE_ARCHIVE
-            | arkret_sdk::events::EventKind::SPACE_RESTORE
-            | arkret_sdk::events::EventKind::SPACE_TOMBSTONE
+        arkret_core::events::EventKind::SPACE_ARCHIVE
+            | arkret_core::events::EventKind::SPACE_RESTORE
+            | arkret_core::events::EventKind::SPACE_TOMBSTONE
     ) {
         return validate_space_container_lifecycle_payload(payload);
     }
-    let catalog = arkret_sdk::schema::event_payload_validator_catalog().map_err(|error| {
+    let catalog = arkret_core::schema::event_payload_validator_catalog().map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -317,7 +317,7 @@ pub(crate) async fn validate_member_identity_proof(
             "identity_payload must carry member_identity or encrypted_payload",
         ));
     };
-    let identity: arkret_sdk::MemberIdentity =
+    let identity: arkret_core::MemberIdentity =
         serde_json::from_value(member_identity_value.clone()).map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
@@ -360,7 +360,7 @@ pub(crate) async fn validate_member_identity_proof(
     }
     if !matches!(
         identity.proof.signature_algorithm,
-        arkret_sdk::MemberIdentitySignatureAlgorithm::Ed25519
+        arkret_core::MemberIdentitySignatureAlgorithm::Ed25519
     ) {
         let code = soland_http::error::ErrorCode::UnsupportedSignatureAlg;
         return Err(event_validation_error(

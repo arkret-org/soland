@@ -1,8 +1,8 @@
 //! Reducer-level tests for `ak.realm.inheritance_policy` +
 //! `ak.capability.derived` (R3.2).
 
-use arkret_sdk::lattice::CellState;
-use arkret_sdk::{Operation, OperationId, RealmId};
+use arkret_core::{Operation, OperationId, RealmId};
+use arkret_state::lattice::CellState;
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
@@ -21,7 +21,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 
 fn link_op(source: &str, target: &str, link_kind: &str) -> Operation {
     op(
-        arkret_sdk::events::EventKind::REALM_LINK,
+        arkret_core::events::EventKind::REALM_LINK,
         source,
         json!({
             "target_realm_id": target,
@@ -33,7 +33,7 @@ fn link_op(source: &str, target: &str, link_kind: &str) -> Operation {
 
 fn inheritance_op(child: &str, parent: &str, bundles: &[&str]) -> Operation {
     op(
-        arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY,
+        arkret_core::events::EventKind::REALM_INHERITANCE_POLICY,
         child,
         json!({
             "source_realm_id": parent,
@@ -51,7 +51,7 @@ fn seed_source_grant(
     actions: &[&str],
     bundles: &[&str],
 ) {
-    let cell_id = arkret_sdk::CellRef::new(format!(
+    let cell_id = arkret_core::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{grant_ref}"
     ))
     .unwrap();
@@ -79,7 +79,7 @@ fn inheritance_policy_projects_cell_and_cache() {
     let hlc = ServerHlc::new("test");
     let effect = state.apply(
         &op(
-            arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_core::events::EventKind::REALM_INHERITANCE_POLICY,
             REALM_CHILD,
             json!({
                 "source_realm_id": REALM_PARENT,
@@ -108,7 +108,7 @@ fn inheritance_policy_projects_cell_and_cache() {
     assert_eq!(cached.max_depth, 1);
 
     // Cell projection.
-    let cell_id = arkret_sdk::CellRef::new(format!(
+    let cell_id = arkret_core::CellRef::new(format!(
         "ak:cell:ak.component.realm.inheritance_policy.v1:{REALM_CHILD}"
     ))
     .unwrap();
@@ -167,7 +167,7 @@ fn inheritance_policy_rejects_max_depth_above_cap() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let bad = op(
-        arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY,
+        arkret_core::events::EventKind::REALM_INHERITANCE_POLICY,
         REALM_CHILD,
         json!({
             "source_realm_id": REALM_PARENT,
@@ -190,7 +190,7 @@ fn inheritance_policy_rejects_missing_source_realm() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let bad = op(
-        arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY,
+        arkret_core::events::EventKind::REALM_INHERITANCE_POLICY,
         REALM_CHILD,
         json!({
             "allowed_policies": [],
@@ -228,7 +228,7 @@ fn capability_derived_projects_cell_and_cache() {
 
     let effect = state.apply(
         &op(
-            arkret_sdk::events::EventKind::CAPABILITY_DERIVED,
+            arkret_core::events::EventKind::CAPABILITY_DERIVED,
             REALM_CHILD,
             json!({
                 "capability_id": capability_id,
@@ -278,7 +278,7 @@ fn capability_derived_rejects_missing_source_grant() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let bad = op(
-        arkret_sdk::events::EventKind::CAPABILITY_DERIVED,
+        arkret_core::events::EventKind::CAPABILITY_DERIVED,
         REALM_CHILD,
         json!({
             "capability_id": "ak:capability:01904100-0000-7000-8000-dddddddddddd",
@@ -320,7 +320,7 @@ fn capability_derived_rejects_action_widening() {
     state.apply(&inheritance, &hlc);
 
     let bad = op(
-        arkret_sdk::events::EventKind::CAPABILITY_DERIVED,
+        arkret_core::events::EventKind::CAPABILITY_DERIVED,
         REALM_CHILD,
         json!({
             "capability_id": "ak:capability:01904100-0000-7000-8000-dddddddddddd",
@@ -360,7 +360,7 @@ fn capability_derived_rejects_non_capability_bearing_link_kind() {
     state.apply(&link_op(REALM_CHILD, REALM_PARENT, "join_gate_from"), &hlc);
 
     let bad = op(
-        arkret_sdk::events::EventKind::CAPABILITY_DERIVED,
+        arkret_core::events::EventKind::CAPABILITY_DERIVED,
         REALM_CHILD,
         json!({
             "capability_id": "ak:capability:01904100-0000-7000-8000-dddddddddddd",

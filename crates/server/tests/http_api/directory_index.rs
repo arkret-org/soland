@@ -526,7 +526,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         "audiences": ["link_token_holder"],
         "fields": ["title", "summary", "join_rule", "history_visibility", "member_count_bucket"]
     });
-    let policy_digest = arkret_sdk::canonical::canonical_sha256(&policy).unwrap();
+    let policy_digest = arkret_core::canonical::canonical_sha256(&policy).unwrap();
     let mut meta = state
         .test_persistence()
         .realm_meta()
@@ -613,11 +613,11 @@ fn preview_token_for_address(
     realm_id: &str,
     preview_policy_digest: &str,
 ) -> String {
-    let parsed = arkret_sdk::parse_address(address).unwrap();
-    let mut descriptor = arkret_sdk::TargetDescriptor::from_parsed(&parsed);
+    let parsed = arkret_core::parse_address(address).unwrap();
+    let mut descriptor = arkret_core::TargetDescriptor::from_parsed(&parsed);
     descriptor.set_realm_id(realm_id);
-    descriptor.link_type = arkret_sdk::LinkType::Preview;
-    let target_digest = arkret_sdk::target_digest(&descriptor).unwrap();
+    descriptor.link_type = arkret_core::LinkType::Preview;
+    let target_digest = arkret_core::target_digest(&descriptor).unwrap();
     let mut claim = serde_json::json!({
         "iss": state.service_id().clone(),
         "aud": "anonymous",
@@ -627,10 +627,11 @@ fn preview_token_for_address(
         "link_type": "preview",
         "preview_policy_digest": preview_policy_digest,
     });
-    let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&claim).unwrap();
-    let payload_digest = arkret_sdk::canonical::sha256_digest(&canonical_bytes);
+    let canonical_bytes = arkret_core::canonical::canonical_json_bytes(&claim).unwrap();
+    let payload_digest = arkret_core::canonical::sha256_digest(&canonical_bytes);
     let signing_key = state.notary_signing_key();
-    let jws = arkret_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key.as_ref()).unwrap();
+    let jws =
+        arkret_signatures::jws::sign_jws_ed25519(&canonical_bytes, signing_key.as_ref()).unwrap();
     claim["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",

@@ -59,7 +59,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     if let Some(session) = session.as_ref() {
         if let Err(error) = super::super::require_agent_session_scope(
             session,
-            arkret_sdk::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
+            arkret_core::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
         ) {
             render_error(res, error.http_status(), error.wire_code(), &error.message);
             return;
@@ -513,7 +513,7 @@ fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {
     res.headers_mut()
         .insert(header::RETRY_AFTER, retry_after_seconds.into());
     res.render(Json(
-        arkret_sdk::ErrorEnvelope::new(
+        arkret_core::ErrorEnvelope::new(
             "rate_limited",
             "Subscribe reconnect window is still active.",
         )
@@ -825,7 +825,7 @@ async fn events_query_impl(
     if let Some(session) = session.as_ref() {
         super::super::require_agent_session_scope(
             session,
-            arkret_sdk::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
+            arkret_core::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
         )?;
     }
     let filter_digest =
@@ -1102,7 +1102,7 @@ async fn events_query_event_visible(
 async fn full_events_from_projection_json(
     state: &AppState,
     projection_rows: &[Value],
-) -> Vec<arkret_sdk::Event> {
+) -> Vec<arkret_core::Event> {
     let mut events = Vec::with_capacity(projection_rows.len());
     for row in projection_rows {
         if let Some(event) = full_event_from_projection_json(state, row).await {
@@ -1121,7 +1121,7 @@ async fn full_events_from_projection_json(
 async fn full_event_from_projection_json(
     state: &AppState,
     row: &Value,
-) -> Option<arkret_sdk::Event> {
+) -> Option<arkret_core::Event> {
     let event_id = row.get("event_id").and_then(Value::as_str)?;
     if projection_row_is_redacted_message_tombstone(row) {
         return projection_only_event_from_row(state, row);
@@ -1138,8 +1138,8 @@ fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
     matches!(
         row.get("event_kind").and_then(Value::as_str),
         Some(
-            arkret_sdk::events::EventKind::MESSAGE_CREATE
-                | arkret_sdk::events::EventKind::MESSAGE_REVISE
+            arkret_core::events::EventKind::MESSAGE_CREATE
+                | arkret_core::events::EventKind::MESSAGE_REVISE
         )
     ) && row.get("payload").is_some_and(|payload| {
         payload.get("redacted").and_then(Value::as_bool) == Some(true)
@@ -1147,7 +1147,7 @@ fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
     })
 }
 
-fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkret_sdk::Event> {
+fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkret_core::Event> {
     let event_id = row.get("event_id").and_then(Value::as_str)?;
     let realm_id = row.get("realm_id").and_then(Value::as_str)?;
     let kind = row.get("event_kind").and_then(Value::as_str)?;
@@ -1212,9 +1212,9 @@ mod tests {
         kind: &str,
         payload: Value,
         created_at: DateTime<Utc>,
-    ) -> arkret_sdk::Operation {
-        let mut operation = arkret_sdk::Operation::create(
-            arkret_sdk::OperationId::new(operation_id.to_owned()).unwrap(),
+    ) -> arkret_core::Operation {
+        let mut operation = arkret_core::Operation::create(
+            arkret_core::OperationId::new(operation_id.to_owned()).unwrap(),
             RealmId::new(TEST_REALM.to_owned()).unwrap(),
             kind,
             payload,
@@ -1278,19 +1278,19 @@ mod tests {
         });
         let message = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa41",
-            arkret_sdk::events::EventKind::MESSAGE_CREATE,
+            arkret_core::events::EventKind::MESSAGE_CREATE,
             plaintext_payload.clone(),
             created_at,
         );
         let revise = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa43",
-            arkret_sdk::events::EventKind::MESSAGE_REVISE,
+            arkret_core::events::EventKind::MESSAGE_REVISE,
             revised_payload.clone(),
             revised_at,
         );
         let redaction = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa42",
-            arkret_sdk::events::EventKind::MESSAGE_REDACT,
+            arkret_core::events::EventKind::MESSAGE_REDACT,
             json!({
                 "event_id": TEST_REDACTION_EVENT,
                 "message_id": TEST_MESSAGE_ID,
@@ -1308,10 +1308,10 @@ mod tests {
         put_durable_event(
             &state,
             TEST_MESSAGE_EVENT,
-            arkret_sdk::events::EventKind::MESSAGE_CREATE,
+            arkret_core::events::EventKind::MESSAGE_CREATE,
             json!({
                 "event_id": TEST_MESSAGE_EVENT,
-                "kind": arkret_sdk::events::EventKind::MESSAGE_CREATE,
+                "kind": arkret_core::events::EventKind::MESSAGE_CREATE,
                 "realm_id": TEST_REALM,
                 "actor_id": TEST_ACTOR,
                 "actor_seq": 1,
@@ -1327,10 +1327,10 @@ mod tests {
         put_durable_event(
             &state,
             TEST_REVISE_EVENT,
-            arkret_sdk::events::EventKind::MESSAGE_REVISE,
+            arkret_core::events::EventKind::MESSAGE_REVISE,
             json!({
                 "event_id": TEST_REVISE_EVENT,
-                "kind": arkret_sdk::events::EventKind::MESSAGE_REVISE,
+                "kind": arkret_core::events::EventKind::MESSAGE_REVISE,
                 "realm_id": TEST_REALM,
                 "actor_id": TEST_ACTOR,
                 "actor_seq": 2,
@@ -1486,7 +1486,7 @@ async fn durable_events_query_from_parts(
 pub(super) async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
-) -> soland_http::result::JsonResult<arkret_sdk::SnapshotManifest> {
+) -> soland_http::result::JsonResult<arkret_state::SnapshotManifest> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| soland_http::error::AppError::missing_param("realm_id is required"))?;

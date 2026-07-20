@@ -1,5 +1,5 @@
-use arkret_sdk::account_data_crypto::AccountDataEncryptedValue;
-use arkret_sdk::{Did, RealmId};
+use arkret_core::{Did, RealmId};
+use arkret_crypto::account_data_crypto::AccountDataEncryptedValue;
 use serde_json::{Map, Value};
 
 const ACCOUNT_DATA_TYPE_AGENT_DRAFT: &str = "ak.agent.draft.v1";
@@ -28,21 +28,21 @@ const EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS: &[&str] = &[
 ];
 
 const SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
-    arkret_sdk::ACCOUNT_DATA_TYPE_CONTACTS_ACTOR,
-    arkret_sdk::ACCOUNT_DATA_TYPE_CONTACTS_REALM,
-    arkret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
-    arkret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
-    arkret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
-    arkret_sdk::ACCOUNT_DATA_TYPE_SAVED,
-    arkret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
-    arkret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
-    arkret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
+    arkret_core::ACCOUNT_DATA_TYPE_CONTACTS_ACTOR,
+    arkret_core::ACCOUNT_DATA_TYPE_CONTACTS_REALM,
+    arkret_core::ACCOUNT_DATA_TYPE_REMINDER,
+    arkret_core::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
+    arkret_core::ACCOUNT_DATA_TYPE_SNOOZE,
+    arkret_core::ACCOUNT_DATA_TYPE_SAVED,
+    arkret_core::ACCOUNT_DATA_TYPE_DRAFT,
+    arkret_core::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
+    arkret_core::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
 ];
 
 const AGENT_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
     ACCOUNT_DATA_TYPE_AGENT_DRAFT,
-    arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
-    arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
+    arkret_core::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
+    arkret_core::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
     ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION,
 ];
 
@@ -155,13 +155,13 @@ pub(crate) fn validate_encrypted_account_data_key(
                 .is_some_and(|rest| rest.starts_with('.') || rest.starts_with(':'))
         })
     {
-        return arkret_sdk::validate_private_account_data_key(data_type)
+        return arkret_core::validate_private_account_data_key(data_type)
             .map_err(|_| AccountDataEncryptionError::InvalidKeyPattern);
     }
     if let Some(rest) = data_type
         .strip_prefix(ACCOUNT_DATA_TYPE_AGENT_DRAFT)
-        .or_else(|| data_type.strip_prefix(arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION))
-        .or_else(|| data_type.strip_prefix(arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE))
+        .or_else(|| data_type.strip_prefix(arkret_core::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION))
+        .or_else(|| data_type.strip_prefix(arkret_core::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE))
         .or_else(|| data_type.strip_prefix(ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION))
     {
         return validate_agent_private_key_tail(rest);
@@ -297,7 +297,7 @@ fn validate_encrypted_envelope_metadata(
 ) -> Result<(), AccountDataEncryptionError> {
     let envelope: AccountDataEncryptedValue = serde_json::from_value(value.clone())
         .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)?;
-    arkret_sdk::account_data_crypto::validate_account_data_encrypted_value(
+    arkret_crypto::account_data_crypto::validate_account_data_encrypted_value(
         &envelope,
         expected_actor_id.unwrap_or(&envelope.aad.actor_id),
         data_type,
@@ -317,7 +317,7 @@ mod tests {
 
     fn encrypted_envelope(data_type: &str) -> Value {
         serde_json::to_value(
-            arkret_sdk::account_data_crypto::seal_account_data_value_with_nonce(
+            arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                 &[7u8; 32],
                 "did:web:alice.example",
                 data_type,

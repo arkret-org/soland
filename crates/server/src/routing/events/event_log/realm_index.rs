@@ -58,7 +58,7 @@ pub(super) fn invite_create_actor_is_inviter(
 /// later in the submit pipeline, not here.
 pub(super) fn member_self_knock(object: &serde_json::Map<String, Value>, actor: &str) -> bool {
     if object.get("kind").and_then(Value::as_str)
-        != Some(arkret_sdk::events::EventKind::MEMBER_STATE)
+        != Some(arkret_core::events::EventKind::MEMBER_STATE)
     {
         return false;
     }
@@ -98,7 +98,7 @@ pub(super) async fn member_join_accepts_pending_invite(
     // invitee can close their own invite through either path without first
     // being a realm member. Previously only (1) was exempt, so a spec-correct
     // `ak.invite.accept` from the invitee was rejected with `capability_denied`.
-    let is_member_state_join = kind == Some(arkret_sdk::events::EventKind::MEMBER_STATE);
+    let is_member_state_join = kind == Some(arkret_core::events::EventKind::MEMBER_STATE);
     let is_invite_accept = kind == Some("ak.invite.accept");
     if !is_member_state_join && !is_invite_accept {
         return false;
@@ -150,7 +150,7 @@ pub(super) async fn invitee_cancels_pending_invite(
     realm_id: &str,
 ) -> bool {
     if object.get("kind").and_then(Value::as_str)
-        != Some(arkret_sdk::events::EventKind::INVITE_CANCEL)
+        != Some(arkret_core::events::EventKind::INVITE_CANCEL)
     {
         return false;
     }
@@ -229,7 +229,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
 /// to fail duplicate `ak.realm.create` with `realm_already_exists` before
 /// applying the genesis-member bootstrap exception.
 pub(super) fn realm_exists_in_index(state: &AppState, realm_id: &str) -> bool {
-    let Ok(realm_id_typed) = arkret_sdk::RealmId::new(realm_id.to_owned()) else {
+    let Ok(realm_id_typed) = arkret_core::RealmId::new(realm_id.to_owned()) else {
         return false;
     };
     state.realms.lock().get(&realm_id_typed).is_some()
@@ -258,11 +258,11 @@ pub(super) async fn bootstrap_realm_member_index(
     actor: &str,
     object: &serde_json::Map<String, Value>,
 ) {
-    let Ok(realm_id_typed) = arkret_sdk::RealmId::new(realm_id.to_owned()) else {
+    let Ok(realm_id_typed) = arkret_core::RealmId::new(realm_id.to_owned()) else {
         tracing::warn!(%realm_id, "bootstrap_realm_member_index: invalid realm_id shape");
         return;
     };
-    let Ok(actor_typed) = arkret_sdk::Did::new(actor.to_owned()) else {
+    let Ok(actor_typed) = arkret_core::Did::new(actor.to_owned()) else {
         tracing::warn!(%actor, "bootstrap_realm_member_index: invalid actor DID");
         return;
     };

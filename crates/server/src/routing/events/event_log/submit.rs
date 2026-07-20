@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hasher;
 use std::sync::{Arc, OnceLock};
 
-use arkret_sdk::EventsSubmitRejectedItem;
+use arkret_core::EventsSubmitRejectedItem;
 
 use super::*;
 use crate::invite_claim_proofs::{
@@ -46,13 +46,13 @@ pub(in crate::routing) fn service_event_authoring_lock() -> Arc<tokio::sync::Mut
 }
 
 fn stamp_projection_operation_received_at(
-    operation: &mut arkret_sdk::Operation,
+    operation: &mut arkret_core::Operation,
     received_at: chrono::DateTime<chrono::Utc>,
 ) {
     if !matches!(
         operation.object_type.as_str(),
-        arkret_sdk::events::EventKind::MEMBER_STATE
-            | arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
+        arkret_core::events::EventKind::MEMBER_STATE
+            | arkret_core::events::EventKind::CIRCLE_MEMBER_STATE
     ) {
         return;
     }
@@ -147,7 +147,7 @@ impl InternalEventAdmission {
         Self {
             realm_id: realm_id.into(),
             actor_id: actor_id.into(),
-            kind: arkret_sdk::events::EventKind::MESSAGE_CREATE.to_owned(),
+            kind: arkret_core::events::EventKind::MESSAGE_CREATE.to_owned(),
             device_id: "mimi-provider-facade".to_owned(),
             binding: InternalEventBinding::MimiProvider {
                 binding_ref: binding_ref.into(),
@@ -165,7 +165,7 @@ impl InternalEventAdmission {
         Self {
             realm_id: realm_id.into(),
             actor_id: actor_id.into(),
-            kind: arkret_sdk::events::EventKind::ACCOUNT_DATA_SET.to_owned(),
+            kind: arkret_core::events::EventKind::ACCOUNT_DATA_SET.to_owned(),
             device_id: device_id.into(),
             binding: InternalEventBinding::AccountData {
                 owner: owner.into(),
@@ -364,7 +364,7 @@ pub(super) async fn submit_event_batch_outcome(
             "events submit batch must contain at least one envelope",
         ));
     }
-    if arkret_sdk::validate_event_submit_batch_count(envelopes.len()).is_err() {
+    if arkret_core::validate_event_submit_batch_count(envelopes.len()).is_err() {
         return Err(SubmitOneError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
@@ -405,7 +405,7 @@ pub(super) async fn submit_event_batch_outcome(
                     duplicate.push(response.event_id);
                 }
                 if !response.duplicate
-                    && kind.as_deref() == Some(arkret_sdk::events::EventKind::REALM_CREATE)
+                    && kind.as_deref() == Some(arkret_core::events::EventKind::REALM_CREATE)
                     && let (Some(realm_id), Some(actor_id)) = (realm_id, actor_id)
                 {
                     realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
@@ -551,7 +551,7 @@ pub(crate) async fn submit_federation_events(
         );
         return;
     }
-    if arkret_sdk::validate_event_submit_batch_count(events.len()).is_err() {
+    if arkret_core::validate_event_submit_batch_count(events.len()).is_err() {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -895,9 +895,9 @@ mod received_at_stamp_tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut device_authorize = operation_for_kind("ak.device.authorize", 1);
-        let mut member_state = operation_for_kind(arkret_sdk::events::EventKind::MEMBER_STATE, 2);
+        let mut member_state = operation_for_kind(arkret_core::events::EventKind::MEMBER_STATE, 2);
         let mut circle_member_state =
-            operation_for_kind(arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE, 3);
+            operation_for_kind(arkret_core::events::EventKind::CIRCLE_MEMBER_STATE, 3);
 
         stamp_projection_operation_received_at(&mut device_authorize, received_at);
         stamp_projection_operation_received_at(&mut member_state, received_at);

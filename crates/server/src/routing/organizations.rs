@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_sdk::{
+use arkret_core::{
     REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY,
     REALM_MODERATION_POLICY_MERGE_STRATEGY_MOST_RESTRICTIVE,
 };
@@ -604,7 +604,7 @@ pub(crate) fn verified_moderation_organization_ids(
     let proj = state.projection.lock();
     let mut ids = proj.verified_organizations_with_scope(
         realm_id,
-        arkret_sdk::models::RealmOrganizationControlScope::ModerationPolicy,
+        arkret_core::models::RealmOrganizationControlScope::ModerationPolicy,
         now,
     );
     ids.sort();
@@ -1117,7 +1117,7 @@ pub(crate) fn requires_organization_approval_error() -> AppError {
         "realm moderation policy override requires organization approval",
     )
     .with_status(StatusCode::CONFLICT)
-    .with_reason_code(arkret_sdk::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
+    .with_reason_code(arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
 }
 
 #[cfg(test)]
@@ -1133,7 +1133,7 @@ mod tests {
         assert_eq!(error.wire_code(), "failed_precondition");
         assert_eq!(
             error.reason_code.as_deref(),
-            Some(arkret_sdk::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
+            Some(arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
         );
     }
 }

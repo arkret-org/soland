@@ -16,8 +16,8 @@
 
 use std::collections::BTreeSet;
 
-use arkret_sdk::RealmId;
-use arkret_sdk::models::{
+use arkret_core::RealmId;
+use arkret_core::models::{
     Did, Hash, RealmOrganizationLifecyclePhase, RealmOrganizationRelationshipList,
     RealmOrganizationRelationshipRow,
 };

@@ -394,7 +394,7 @@ fn franking_proof_digest(proof: &FrankingProofVerifyRequestBody) -> String {
         "event_canonical_digest": proof.event_canonical_digest.as_deref().unwrap_or_default(),
     });
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
-    arkret_sdk::canonical::sha256_digest(&bytes)
+    arkret_core::canonical::sha256_digest(&bytes)
 }
 
 pub async fn append_audit_log(

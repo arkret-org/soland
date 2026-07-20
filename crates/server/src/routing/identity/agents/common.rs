@@ -243,8 +243,8 @@ pub(crate) fn agent_actions_within_requested_scope(
 pub(crate) fn agent_grant_within_requested_scope(
     record: &AgentPrincipalRecord,
     actions: &[String],
-    resources: &[arkret_sdk::WireResourceSelector],
-    constraints: &[arkret_sdk::GrantConstraint],
+    resources: &[arkret_core::WireResourceSelector],
+    constraints: &[arkret_core::GrantConstraint],
 ) -> bool {
     if !agent_actions_within_requested_scope(record, actions) {
         return false;
@@ -389,7 +389,7 @@ mod requested_scope_tests {
         record
     }
 
-    fn resource(value: Value) -> arkret_sdk::WireResourceSelector {
+    fn resource(value: Value) -> arkret_core::WireResourceSelector {
         serde_json::from_value(value).unwrap()
     }
 
@@ -503,11 +503,11 @@ mod requested_scope_tests {
 
     #[test]
     fn realm_grant_must_preserve_provision_constraints() {
-        let mut mandatory = arkret_sdk::GrantConstraint::new(
-            arkret_sdk::GrantConstraintType::ClaimBased,
-            arkret_sdk::GrantConstraintEffect::Allow,
+        let mut mandatory = arkret_core::GrantConstraint::new(
+            arkret_core::GrantConstraintType::ClaimBased,
+            arkret_core::GrantConstraintEffect::Allow,
         );
-        mandatory.subtype = Some(arkret_sdk::GrantConstraintSubtype::Approval);
+        mandatory.subtype = Some(arkret_core::GrantConstraintSubtype::Approval);
         mandatory.controller_approval_required = Some(true);
         let mandatory_value = serde_json::to_value(&mandatory).unwrap();
         let record = record_with_scope(json!({
@@ -646,8 +646,8 @@ pub(super) async fn agent_view_from_record(
 
 pub(super) fn agent_key_state_from_record(
     record: &AgentPrincipalRecord,
-    pcr_recovery: arkret_sdk::AgentPcrRecoveryState,
-    active_authorizations: Vec<arkret_sdk::AgentKeyAuthorizationState>,
+    pcr_recovery: arkret_core::AgentPcrRecoveryState,
+    active_authorizations: Vec<arkret_core::AgentKeyAuthorizationState>,
 ) -> Result<KeyState, AppError> {
     let requested_scope = record
         .requested_scope
@@ -674,7 +674,7 @@ pub(super) fn agent_key_state_from_record(
         ))
     })?;
     let requested_scope_digest =
-        arkret_sdk::agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
+        arkret_core::agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
             .map_err(|error| {
                 AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
             })?;
@@ -743,14 +743,14 @@ pub(super) fn agent_key_state_from_record(
 fn active_agent_key_authorizations(
     state: &AppState,
     agent_id: &str,
-) -> Result<Vec<arkret_sdk::AgentKeyAuthorizationState>, AppError> {
+) -> Result<Vec<arkret_core::AgentKeyAuthorizationState>, AppError> {
     state
         .projection
         .lock()
         .active_agent_key_authorizations(agent_id)
         .into_iter()
         .map(|(key_id, authorized_event_ref)| {
-            Ok(arkret_sdk::AgentKeyAuthorizationState {
+            Ok(arkret_core::AgentKeyAuthorizationState {
                 verification_method: key_id.clone(),
                 key_id,
                 authorized_event_ref: EventId::new(authorized_event_ref).map_err(|error| {
@@ -769,7 +769,7 @@ fn active_agent_key_authorizations(
 //
 // Stands up the cross-project HTTP contract at the same fidelity as the
 // sibling agent handlers (audit-log row + typed response), but performs
-// the REAL ceiling check via the shared `arkret_sdk` validators so the
+// the REAL ceiling check via the shared `arkret_core` validators so the
 // "inner scope MUST NOT exceed the outer ceiling" invariant is enforced
 // at the edge. Persistence into `agent_participation`, ceiling
 // resolution from the realm/circle/strand policy projection,

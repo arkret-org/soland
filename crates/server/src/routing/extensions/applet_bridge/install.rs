@@ -3,13 +3,14 @@
 
 use std::collections::BTreeSet;
 
-use arkret_sdk::{
+use arkret_core::{
     AppletApprovalRequest, AppletGhostActorMode, AppletId, AppletInstallAppletId,
     AppletInstallEffectiveStatus, AppletInstallOutcome, AppletInstallPlan,
     AppletInstallRequestBody, AppletPackage, AppletRejectedItem, AppletWireNamespaces,
-    CapabilityConstraint, DeniedScope, Did, DidDocument, E2eeEffect, E2eePolicy, EffectiveScope,
-    EventId, EventSubmission, GrantId, NamespaceConflict, RealmId, ScopeGrant, WidgetEffect,
+    CapabilityConstraint, DeniedScope, Did, E2eeEffect, E2eePolicy, EffectiveScope, EventId,
+    EventSubmission, GrantId, NamespaceConflict, RealmId, ScopeGrant, WidgetEffect,
 };
+use arkret_identity::DidDocument;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -412,13 +413,13 @@ fn install_execution_steps(
         1 + response.capability_grant_refs.len() + response.e2ee_authorization_refs.len(),
     );
     let registration_body = json!({
-        "event_kind": arkret_sdk::events::EventKind::APPLET_REGISTRATION,
+        "event_kind": arkret_core::events::EventKind::APPLET_REGISTRATION,
         "payload": registration_payload_from_package(package)?,
     });
     if let Some(event_ref) = response.registration_event_ref.as_ref() {
         steps.push(install_execution_step(
             0,
-            arkret_sdk::events::EventKind::APPLET_REGISTRATION,
+            arkret_core::events::EventKind::APPLET_REGISTRATION,
             event_ref.as_str(),
             canonical_digest(&registration_body)?,
             accepted,
@@ -433,7 +434,7 @@ fn install_execution_steps(
     {
         let grant = applet_install_grant(record, package, grant_id.as_str(), action);
         let grant_body = json!({
-            "event_kind": arkret_sdk::events::EventKind::CAPABILITY_GRANT,
+            "event_kind": arkret_core::events::EventKind::CAPABILITY_GRANT,
             "payload": {
                 "grant_id": grant_id,
                 "grant": grant,
@@ -441,7 +442,7 @@ fn install_execution_steps(
         });
         steps.push(install_execution_step(
             offset + 1,
-            arkret_sdk::events::EventKind::CAPABILITY_GRANT,
+            arkret_core::events::EventKind::CAPABILITY_GRANT,
             grant_id.as_str(),
             canonical_digest(&grant_body)?,
             accepted,
@@ -516,7 +517,7 @@ pub(super) async fn append_applet_registration_projection(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.to_owned(),
         realm_id,
-        event_kind: arkret_sdk::events::EventKind::APPLET_REGISTRATION.to_owned(),
+        event_kind: arkret_core::events::EventKind::APPLET_REGISTRATION.to_owned(),
         operation_type: "applet_install_registration".to_owned(),
         operation_id: None,
         sender: Some(record.owner_actor_id.clone()),
@@ -678,7 +679,7 @@ pub(super) async fn append_portal_message(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.to_owned(),
-        event_kind: arkret_sdk::events::EventKind::MESSAGE_CREATE.to_owned(),
+        event_kind: arkret_core::events::EventKind::MESSAGE_CREATE.to_owned(),
         operation_type: "applet_portal_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
         sender: Some(ghost.ghost_actor_id.clone()),
@@ -838,11 +839,11 @@ pub(super) fn validate_applet_package(
     })?;
     let mut unsigned = package.clone();
     unsigned.proof = None;
-    let unsigned_canonical_bytes =
-        arkret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let unsigned_canonical_bytes = arkret_core::canonical::canonical_json_bytes(&unsigned)
+        .map_err(|error| {
             AppError::internal(format!("package proof canonical bytes failed: {error}"))
         })?;
-    let expected_payload_digest = arkret_sdk::Hash::new(arkret_sdk::canonical::sha256_digest(
+    let expected_payload_digest = arkret_core::Hash::new(arkret_core::canonical::sha256_digest(
         &unsigned_canonical_bytes,
     ))
     .map_err(|error| AppError::internal(format!("package proof digest invalid: {error}")))?;
@@ -924,7 +925,7 @@ fn validate_controller_proof(
 fn validated_registration_epoch_evidence(
     state: &AppState,
     package: &AppletPackage,
-) -> Result<arkret_sdk::AppletRegistrationEpochEvidence, AppError> {
+) -> Result<arkret_core::AppletRegistrationEpochEvidence, AppError> {
     let document =
         crate::jws_verify::resolve_did_document(state, &package.service_id).map_err(|reason| {
             AppError::invalid_param("applet service DID document could not be resolved")
@@ -937,7 +938,7 @@ fn validated_registration_epoch_evidence(
 fn validate_registration_epoch_evidence_for_document(
     package: &AppletPackage,
     document: &DidDocument,
-) -> Result<arkret_sdk::AppletRegistrationEpochEvidence, AppError> {
+) -> Result<arkret_core::AppletRegistrationEpochEvidence, AppError> {
     let evidence = package.registration_epoch_evidence.clone().ok_or_else(|| {
         AppError::invalid_param("applet package registration_epoch evidence is required")
             .with_wire_code("applet_registration_epoch_evidence_mismatch")
@@ -1037,7 +1038,7 @@ pub(super) async fn build_install_plan(
         "approved_scopes": approved_scopes,
         "denied_scopes": denied_scopes,
         "events_to_submit": [{
-            "event_kind": arkret_sdk::events::EventKind::APPLET_REGISTRATION,
+            "event_kind": arkret_core::events::EventKind::APPLET_REGISTRATION,
             "payload": registration_payload,
         }],
         "capability_constraints": capability_constraints_for_scope(scope),
@@ -1063,7 +1064,7 @@ pub(super) async fn build_install_plan(
         approved_scopes,
         denied_scopes,
         events_to_submit: vec![EventSubmission {
-            event_kind: arkret_sdk::events::EventKind::APPLET_REGISTRATION.to_owned(),
+            event_kind: arkret_core::events::EventKind::APPLET_REGISTRATION.to_owned(),
             payload: event_payload,
             refs: None,
         }],
@@ -1221,7 +1222,7 @@ pub(super) fn deterministic_plan_id(plan_seed: &Value) -> Result<String, AppErro
 }
 
 pub(super) fn canonical_digest(value: &Value) -> Result<String, AppError> {
-    arkret_sdk::canonical::canonical_sha256(value)
+    arkret_core::canonical::canonical_sha256(value)
         .map_err(|error| AppError::internal(format!("canonical digest failed: {error}")))
 }
 
@@ -1387,7 +1388,7 @@ pub(super) fn package_namespace(package: &AppletPackage) -> String {
 pub(super) fn allow_ghost_actors_for_install(
     package: &AppletPackage,
     approved_actions: &[String],
-    actor_policy: Option<&arkret_sdk::AppletActorPolicy>,
+    actor_policy: Option<&arkret_core::AppletActorPolicy>,
 ) -> bool {
     let package_allows = package.ghost_policy.enabled;
     let scope_approved = approved_actions
@@ -1408,10 +1409,11 @@ pub(super) fn capability_allows_message_create(capability: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::{
+    use arkret_core::{
         AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry, Did,
-        Ed25519MoveSigner, Hash,
+        Hash,
     };
+    use arkret_signatures::Ed25519MoveSigner;
 
     use super::*;
 
@@ -1438,7 +1440,7 @@ mod tests {
     /// built-in `DidKeyResolver` resolves the embedded public key.
     fn did_key_for_seed(seed: [u8; 32]) -> (Did, String) {
         let verifying = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
-        let multibase = arkret_sdk::ed25519_pubkey_to_did_key_multibase(&verifying.to_bytes());
+        let multibase = arkret_core::ed25519_pubkey_to_did_key_multibase(&verifying.to_bytes());
         let did_str = format!("did:key:{multibase}");
         let vm = format!("{did_str}#{multibase}");
         (Did::new(did_str).unwrap(), vm)
@@ -1477,11 +1479,12 @@ mod tests {
             extra: Default::default(),
         }];
         package
-            .seal_registration_epoch(arkret_sdk::applet::AppletRegistrationEpochEvidence::new(
+            .seal_registration_epoch(arkret_core::applet::AppletRegistrationEpochEvidence::new(
                 package.service_id.clone(),
                 Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
-                arkret_sdk::applet::AppletDidMethodVersionEvidence::unversioned("did:web").unwrap(),
-                vec![arkret_sdk::applet::AppletAcceptedSigningKeyEvidence {
+                arkret_core::applet::AppletDidMethodVersionEvidence::unversioned("did:web")
+                    .unwrap(),
+                vec![arkret_core::applet::AppletAcceptedSigningKeyEvidence {
                     key_ref: package.webhook_auth.key_ref.clone(),
                     public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
                 }],
@@ -1512,7 +1515,7 @@ mod tests {
 
         let mut unsigned = package.clone();
         unsigned.proof = None;
-        let bytes = arkret_sdk::canonical::canonical_json_bytes(&unsigned).unwrap();
+        let bytes = arkret_core::canonical::canonical_json_bytes(&unsigned).unwrap();
         let error = validate_controller_proof(&state, &package, &bytes)
             .expect_err("wrong-key controller proof must be rejected");
         assert_eq!(error.wire_code(), "proof_invalid");
@@ -1531,7 +1534,7 @@ mod tests {
 
         let mut unsigned = package.clone();
         unsigned.proof = None;
-        let bytes = arkret_sdk::canonical::canonical_json_bytes(&unsigned).unwrap();
+        let bytes = arkret_core::canonical::canonical_json_bytes(&unsigned).unwrap();
         let error = validate_controller_proof(&state, &package, &bytes)
             .expect_err("controller proof not anchored to controller_id must be rejected");
         assert_eq!(error.wire_code(), "proof_invalid");
@@ -1548,7 +1551,7 @@ mod tests {
 
         let mut unsigned = package.clone();
         unsigned.proof = None;
-        let bytes = arkret_sdk::canonical::canonical_json_bytes(&unsigned).unwrap();
+        let bytes = arkret_core::canonical::canonical_json_bytes(&unsigned).unwrap();
         validate_controller_proof(&state, &package, &bytes)
             .expect("genuine controller proof must verify");
     }
@@ -1575,7 +1578,7 @@ mod tests {
             install_id: "ak:install:01974100-0000-7000-8000-000000000001".to_owned(),
             applet_id: package.applet_id.clone(),
             registration_event_ref: Some(
-                arkret_sdk::EventId::new(
+                arkret_core::EventId::new(
                     "ak:event:01974100-0000-7000-8000-000000000010".to_owned(),
                 )
                 .unwrap(),
@@ -1583,11 +1586,11 @@ mod tests {
             registration_epoch: package.registration_epoch.clone(),
             bot_actor_id: package.bot_actor_id.clone(),
             capability_grant_refs: vec![
-                arkret_sdk::GrantId::new(
+                arkret_core::GrantId::new(
                     "ak:grant:01974100-0000-7000-8000-000000000020".to_owned(),
                 )
                 .unwrap(),
-                arkret_sdk::GrantId::new(
+                arkret_core::GrantId::new(
                     "ak:grant:01974100-0000-7000-8000-000000000021".to_owned(),
                 )
                 .unwrap(),
@@ -1595,7 +1598,7 @@ mod tests {
             membership_event_refs: Vec::new(),
             e2ee_authorization_refs: Vec::new(),
             widget_policy_ref: None,
-            effective_status: arkret_sdk::AppletInstallEffectiveStatus::Installed,
+            effective_status: arkret_core::AppletInstallEffectiveStatus::Installed,
             rejected: Vec::new(),
         }
     }
@@ -1603,14 +1606,14 @@ mod tests {
     #[test]
     fn allow_ghost_actors_uses_package_ghost_policy_enabled() {
         let mut package = sample_package();
-        package.ghost_policy = arkret_sdk::applet::AppletGhostPolicy {
+        package.ghost_policy = arkret_core::applet::AppletGhostPolicy {
             enabled: true,
             accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
             ..Default::default()
         };
-        let actor_policy = arkret_sdk::AppletActorPolicy {
-            bot_membership: Some(arkret_sdk::AppletBotMembership::Join),
-            ghost_actor_mode: Some(arkret_sdk::AppletGhostActorMode::PolicyDeclared),
+        let actor_policy = arkret_core::AppletActorPolicy {
+            bot_membership: Some(arkret_core::AppletBotMembership::Join),
+            ghost_actor_mode: Some(arkret_core::AppletGhostActorMode::PolicyDeclared),
         };
         assert!(allow_ghost_actors_for_install(
             &package,
@@ -1618,7 +1621,7 @@ mod tests {
             Some(&actor_policy)
         ));
 
-        package.ghost_policy = arkret_sdk::applet::AppletGhostPolicy {
+        package.ghost_policy = arkret_core::applet::AppletGhostPolicy {
             enabled: false,
             accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
             ..Default::default()
@@ -1665,11 +1668,12 @@ mod tests {
     fn applet_record_round_trip_preserves_registration_epoch_evidence() {
         let mut package = sample_package();
         package.registration_epoch_evidence =
-            Some(arkret_sdk::applet::AppletRegistrationEpochEvidence::new(
+            Some(arkret_core::applet::AppletRegistrationEpochEvidence::new(
                 package.service_id.clone(),
                 Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
-                arkret_sdk::applet::AppletDidMethodVersionEvidence::unversioned("did:web").unwrap(),
-                vec![arkret_sdk::applet::AppletAcceptedSigningKeyEvidence {
+                arkret_core::applet::AppletDidMethodVersionEvidence::unversioned("did:web")
+                    .unwrap(),
+                vec![arkret_core::applet::AppletAcceptedSigningKeyEvidence {
                     key_ref: package.webhook_auth.key_ref.clone(),
                     public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
                 }],
@@ -1697,9 +1701,9 @@ mod tests {
         let version_time = chrono::DateTime::parse_from_rfc3339("2026-07-18T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let evidence = arkret_sdk::AppletRegistrationEpochEvidence::from_did_document(
+        let evidence = arkret_core::AppletRegistrationEpochEvidence::from_did_document(
             &document,
-            arkret_sdk::AppletDidMethodVersionEvidence::versioned(
+            arkret_core::AppletDidMethodVersionEvidence::versioned(
                 "did:web",
                 None,
                 Some(version_time),
@@ -1761,7 +1765,7 @@ mod tests {
         assert_eq!(pending_steps.len(), 3);
         assert_eq!(
             pending_steps[0]["target_event_kind"],
-            json!(arkret_sdk::events::EventKind::APPLET_REGISTRATION)
+            json!(arkret_core::events::EventKind::APPLET_REGISTRATION)
         );
         assert_eq!(pending_steps[0]["status"], json!("pending"));
         assert_eq!(pending_steps[0]["event_ref"], Value::Null);

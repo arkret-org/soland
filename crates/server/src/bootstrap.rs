@@ -7,14 +7,15 @@
 
 use std::sync::Arc;
 
-use arkret_sdk::{
-    Auth, CanonicalServiceUrl, Client, ClientBuilder, Did, FileIdentityBundleBackend,
-    IdentityBundleBackend, IdentityBundleBackendAvailability, KeyStore, LocalServiceIdentity,
-    ServiceIdentityBundle, ServiceIdentityDiagnostic, ServiceIdentityKeyRef,
-    ServiceIdentityProviderRef, ServiceIdentityState, ServiceRegistrationEnsureRequestBody,
-    ServiceRegistrationKey, ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceType,
+use arkret_core::{
+    CanonicalServiceUrl, Did, FileIdentityBundleBackend, IdentityBundleBackend,
+    IdentityBundleBackendAvailability, KeyStore, LocalServiceIdentity, ServiceIdentityBundle,
+    ServiceIdentityDiagnostic, ServiceIdentityKeyRef, ServiceIdentityProviderRef,
+    ServiceIdentityState, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
+    ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceType,
     ServiceWebvhDataIntegrityProof, StoredServiceIdentity,
 };
+use arkret_http_client::{Auth, Client, ClientBuilder};
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
@@ -69,7 +70,7 @@ pub async fn resolve_and_build_persistence(
     {
         Some(Arc::from(key_store))
     } else if config.development_mode && db.pool.is_none() {
-        Some(Arc::new(arkret_sdk::InMemoryKeyStore::new()))
+        Some(Arc::new(arkret_core::InMemoryKeyStore::new()))
     } else {
         None
     };
@@ -215,7 +216,7 @@ struct ExternalIdentityMaterial {
     signing_seed: [u8; 32],
     signing_key_ref: ServiceIdentityKeyRef,
     control_key_ref: ServiceIdentityKeyRef,
-    prepared: arkret_sdk::webvh::PreparedInception,
+    prepared: arkret_signatures::webvh::PreparedInception,
 }
 
 async fn resolve_external_service_identity(
@@ -262,7 +263,7 @@ async fn resolve_external_service_identity(
             )
             .await
         }
-        Err(arkret_sdk::http_client::Error::Api { status: 404, .. }) if existing.is_none() => {
+        Err(arkret_http_client::Error::Api { status: 404, .. }) if existing.is_none() => {
             let operation = material
                 .prepared
                 .service_registration_operation()
@@ -408,18 +409,19 @@ fn external_identity_material(
     .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let inception_seed = load_or_create_seed(key_store, &inception_seed_ref, allow_create)?;
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(inception_seed);
-    let prepared = arkret_sdk::webvh::prepare_service_registration_inception_with_did_key_seed(
-        &mut rng,
-        &arkret_sdk::webvh::ServiceRegistrationInceptionInput {
-            provider_endpoint: &provider.endpoint.as_url(),
-            registration_key,
-            also_known_as: &[],
-            version_time: chrono::Utc::now(),
-            did_key_fragment: Some("notary-key"),
-        },
-        &signing_seed,
-    )
-    .map_err(|error| anyhow::anyhow!("service DID inception failed: {error}"))?;
+    let prepared =
+        arkret_signatures::webvh::prepare_service_registration_inception_with_did_key_seed(
+            &mut rng,
+            &arkret_signatures::webvh::ServiceRegistrationInceptionInput {
+                provider_endpoint: &provider.endpoint.as_url(),
+                registration_key,
+                also_known_as: &[],
+                version_time: chrono::Utc::now(),
+                did_key_fragment: Some("notary-key"),
+            },
+            &signing_seed,
+        )
+        .map_err(|error| anyhow::anyhow!("service DID inception failed: {error}"))?;
     let control_key_ref =
         ServiceIdentityKeyRef::new(format!("arkret:control:soland-webvh:external:{suffix}:1"))
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -515,7 +517,7 @@ fn validate_external_stored_identity(
 }
 
 fn registration_key_ref_suffix(key: &ServiceRegistrationKey) -> anyhow::Result<String> {
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(key)
+    let bytes = arkret_core::canonical::canonical_json_bytes(key)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let digest = Sha256::digest(bytes);
     Ok(digest[..16]
@@ -592,11 +594,11 @@ fn service_identity_retry_at() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() + chrono::Duration::seconds(5)
 }
 
-fn provider_unavailable(error: &arkret_sdk::http_client::Error) -> bool {
+fn provider_unavailable(error: &arkret_http_client::Error) -> bool {
     matches!(
         error,
-        arkret_sdk::http_client::Error::Http(_)
-            | arkret_sdk::http_client::Error::Api {
+        arkret_http_client::Error::Http(_)
+            | arkret_http_client::Error::Api {
                 status: 429 | 502 | 503 | 504,
                 ..
             }
@@ -700,7 +702,7 @@ async fn restore_identity_bundle(
         seq: 1,
         method_evidence: json!({
             "mode": "service_identity_bundle_restore",
-            "operation": arkret_sdk::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
+            "operation": arkret_core::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
             "service_type": registration_key.service_type().as_str(),
             "public_base": registration_key.public_base().as_str(),
             "version_id": outcome.version_id,
@@ -795,7 +797,7 @@ fn validate_registration_receipt_signature(
         &receipt.provider_service_id,
         &receipt.proof.verification_method,
     )?;
-    let signature_bytes = arkret_sdk::decode_ed25519_signature_multibase(
+    let signature_bytes = arkret_core::decode_ed25519_signature_multibase(
         &receipt.proof.proof_value,
     )
     .map_err(|error| anyhow::anyhow!("identity bundle receipt proof is invalid: {error}"))?;
@@ -934,7 +936,7 @@ fn validate_service_signing_binding(
     stored: &StoredServiceIdentity,
     signing_seed: &[u8; 32],
 ) -> anyhow::Result<()> {
-    let expected = arkret_sdk::ed25519_pubkey_to_did_key_multibase(
+    let expected = arkret_core::ed25519_pubkey_to_did_key_multibase(
         SigningKey::from_bytes(signing_seed)
             .verifying_key()
             .as_bytes(),
@@ -962,7 +964,7 @@ fn validate_control_key_binding(
     let next_seed = load_seed(key_store, &next_ref)?;
     let current_public = seed_public_multibase(&current_seed);
     let next_public = seed_public_multibase(&next_seed);
-    let next_hash = arkret_sdk::webvh::webvh_next_key_hash(&next_public)
+    let next_hash = arkret_signatures::webvh::webvh_next_key_hash(&next_public)
         .map_err(|error| anyhow::anyhow!("deriving next WebVH control-key hash failed: {error}"))?;
     let update_keys = operation
         .pointer("/parameters/updateKeys")
@@ -1000,18 +1002,19 @@ async fn mint_local_service_identity(
         crate::state::getrandom_seed(&mut seed);
         seed
     });
-    let prepared = arkret_sdk::webvh::prepare_service_registration_inception_with_did_key_seed(
-        &mut rng,
-        &arkret_sdk::webvh::ServiceRegistrationInceptionInput {
-            provider_endpoint: &provider_endpoint,
-            registration_key: &registration_key,
-            also_known_as: &[],
-            version_time: chrono::Utc::now(),
-            did_key_fragment: Some("notary-key"),
-        },
-        &service_signing_seed,
-    )
-    .map_err(|error| anyhow::anyhow!("service DID inception failed: {error}"))?;
+    let prepared =
+        arkret_signatures::webvh::prepare_service_registration_inception_with_did_key_seed(
+            &mut rng,
+            &arkret_signatures::webvh::ServiceRegistrationInceptionInput {
+                provider_endpoint: &provider_endpoint,
+                registration_key: &registration_key,
+                also_known_as: &[],
+                version_time: chrono::Utc::now(),
+                did_key_fragment: Some("notary-key"),
+            },
+            &service_signing_seed,
+        )
+        .map_err(|error| anyhow::anyhow!("service DID inception failed: {error}"))?;
     let service_id = Did::new(prepared.did.clone())
         .map_err(|error| anyhow::anyhow!("minted service DID is invalid: {error}"))?;
     let signing_ref = signing_key_ref(config, &service_id, Some(key_store))?;
@@ -1063,7 +1066,7 @@ async fn mint_local_service_identity(
         seq: 1,
         method_evidence: json!({
             "mode": "service_registration_provider",
-            "operation": arkret_sdk::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
+            "operation": arkret_core::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
             "service_type": registration_key.service_type().as_str(),
             "public_base": registration_key.public_base().as_str(),
             "version_id": outcome.version_id,
@@ -1134,7 +1137,7 @@ fn sign_registration_receipt(
         "issued_at": issued_at,
         "provider_service_id": provider_service_id,
     });
-    let receipt_digest = arkret_sdk::canonical::canonical_sha256(&receipt_claims)?;
+    let receipt_digest = arkret_core::canonical::canonical_sha256(&receipt_claims)?;
     let receipt_id = format!(
         "ak:service_registration_receipt:{}",
         receipt_digest
@@ -1168,7 +1171,7 @@ fn sign_registration_receipt(
             cryptosuite: "eddsa-jcs-2022".to_owned(),
             verification_method,
             proof_purpose: "assertionMethod".to_owned(),
-            proof_value: arkret_sdk::encode_multibase_base58btc(signature.to_bytes()),
+            proof_value: arkret_core::encode_multibase_base58btc(signature.to_bytes()),
         },
     };
     receipt.validate_for(key, &receipt.service_id)?;
@@ -1204,10 +1207,10 @@ fn registration_receipt_signing_input(
         "provider_service_id": provider_service_id,
     });
     let mut signing_input = Vec::with_capacity(64);
-    let proof_config_bytes = arkret_sdk::canonical::canonical_json_bytes(&proof_config)?;
-    let receipt_bytes = arkret_sdk::canonical::canonical_json_bytes(&signed_receipt)?;
-    signing_input.extend_from_slice(&arkret_sdk::canonical::sha256_bytes(&proof_config_bytes));
-    signing_input.extend_from_slice(&arkret_sdk::canonical::sha256_bytes(&receipt_bytes));
+    let proof_config_bytes = arkret_core::canonical::canonical_json_bytes(&proof_config)?;
+    let receipt_bytes = arkret_core::canonical::canonical_json_bytes(&signed_receipt)?;
+    signing_input.extend_from_slice(&arkret_core::canonical::sha256_bytes(&proof_config_bytes));
+    signing_input.extend_from_slice(&arkret_core::canonical::sha256_bytes(&receipt_bytes));
     Ok(signing_input)
 }
 
@@ -1301,14 +1304,14 @@ fn load_seed(
 }
 
 fn seed_public_multibase(seed: &[u8; 32]) -> String {
-    arkret_sdk::ed25519_pubkey_to_did_key_multibase(
+    arkret_core::ed25519_pubkey_to_did_key_multibase(
         SigningKey::from_bytes(seed).verifying_key().as_bytes(),
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::{InMemoryKeyStore, KeyStore};
+    use arkret_core::{InMemoryKeyStore, KeyStore};
     use soland_storage::DeliveryPolicyStoreRegistry;
 
     use super::*;

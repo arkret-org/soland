@@ -267,7 +267,7 @@ fn normalize_contact_message(raw: Option<&str>) -> Result<Option<String>, AppErr
     if trimmed.is_empty() {
         return Ok(None);
     }
-    let normalized = arkret_sdk::canonical::to_nfc(trimmed);
+    let normalized = arkret_core::canonical::to_nfc(trimmed);
     let len = normalized.chars().count();
     if len > 2000 {
         return Err(AppError::invalid_param(
@@ -335,7 +335,7 @@ async fn append_local_stubbed_contact_message_audit(
             "scope": scope,
             "contact_event_id": contact_event_id,
             "message_chars": message.chars().count(),
-            "message_digest": arkret_sdk::canonical::sha256_digest(message.as_bytes()),
+            "message_digest": arkret_core::canonical::sha256_digest(message.as_bytes()),
         }),
         "accepted",
     )
@@ -348,7 +348,7 @@ fn contact_introduction_evidence_digest(
     let value = serde_json::to_value(evidence).map_err(|error| {
         AppError::internal(format!("contact introduction evidence serialize: {error}"))
     })?;
-    arkret_sdk::canonical::canonical_sha256(&value).map_err(|error| {
+    arkret_core::canonical::canonical_sha256(&value).map_err(|error| {
         AppError::internal(format!("contact introduction evidence digest: {error}"))
     })
 }
@@ -418,7 +418,7 @@ pub(crate) async fn contact_respond(
         if contact.status == requested_status {
             if contact.response_event_ref.is_none() {
                 return Err(contact_failed_precondition(
-                    arkret_sdk::ErrorCode::CONTACT_REQUEST_NOT_PENDING,
+                    arkret_core::ErrorCode::CONTACT_REQUEST_NOT_PENDING,
                     "contact request is no longer pending",
                 ));
             }
@@ -444,7 +444,7 @@ pub(crate) async fn contact_respond(
     let request_event_ref = contact_event_ref(&contact.request_event_ref, "request_event_ref")?;
     if request_event_ref != body.request_id {
         return Err(contact_failed_precondition(
-            arkret_sdk::ErrorCode::CONTACT_REQUEST_NOT_PENDING,
+            arkret_core::ErrorCode::CONTACT_REQUEST_NOT_PENDING,
             "contact request_id does not match the pending request",
         ));
     }
@@ -461,7 +461,7 @@ pub(crate) async fn contact_respond(
         )
         .await?;
         return Err(contact_failed_precondition(
-            arkret_sdk::ErrorCode::CONTACT_REQUEST_EXPIRED,
+            arkret_core::ErrorCode::CONTACT_REQUEST_EXPIRED,
             "contact request expired",
         ));
     }
@@ -772,7 +772,7 @@ fn blocked_invite_policy_update(
     state: &AppState,
     holder: &str,
     peer: &str,
-) -> Option<arkret_sdk::InviteReceivePolicy> {
+) -> Option<arkret_core::InviteReceivePolicy> {
     let peer_did = Did::new(peer.to_owned()).ok()?;
     let policies = state.invite_receive_policies.lock();
     let mut policy = policies

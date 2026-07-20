@@ -14,16 +14,16 @@
 ///
 /// - [`RealmId`] is the SDK security-boundary id and validates `ak:realm:`.
 /// - [`SpaceContainerId`] is the SDK Space container id and validates `ak:space:`.
-pub use arkret_sdk::{RealmId, SpaceId as SpaceContainerId};
+pub use arkret_core::{RealmId, SpaceId as SpaceContainerId};
 use uuid::Uuid;
 
 /// Generate a new typed wire ID with the given kind prefix.
 ///
 /// Format: `ak:<kind>:<uuid-v7-36-char-lowercase-hex>`. Delegates to the SDK
-/// [`arkret_sdk::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
+/// [`arkret_core::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
 /// form is produced by the single shared primitive.
 pub fn generate(kind: &str) -> String {
-    arkret_sdk::new_prefixed_uuid7(&format!("ak:{kind}:"))
+    arkret_core::new_prefixed_uuid7(&format!("ak:{kind}:"))
 }
 
 pub fn generate_space_id() -> String {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arkret_sdk::{
+use arkret_core::{
     BlobRef, DeviceGenerationStatus, Hash, NonEmptyString, RecoveryIdentityModel, SealBasis,
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
@@ -126,7 +126,7 @@ pub trait ContactPort: Send + Sync {
 
 #[async_trait]
 pub trait InviteReceivePolicyPort: Send + Sync {
-    async fn save_policy(&self, policy: arkret_sdk::InviteReceivePolicy) -> ApplicationResult<()>;
+    async fn save_policy(&self, policy: arkret_core::InviteReceivePolicy) -> ApplicationResult<()>;
 }
 
 #[async_trait]
@@ -189,7 +189,7 @@ impl ContactApplicationService {
 
     pub async fn save_invite_policy(
         &self,
-        policy: arkret_sdk::InviteReceivePolicy,
+        policy: arkret_core::InviteReceivePolicy,
     ) -> ApplicationResult<()> {
         self.invite_policies.save_policy(policy).await
     }
@@ -831,7 +831,7 @@ pub struct KeyBackupApplicationService {
 pub struct AgentSessionState {
     pub granted_scope: Vec<String>,
     pub scope_details: Value,
-    pub freshness_state: arkret_sdk::FreshnessState,
+    pub freshness_state: arkret_core::FreshnessState,
 }
 
 #[derive(Clone, Debug)]

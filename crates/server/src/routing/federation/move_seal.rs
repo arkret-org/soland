@@ -21,13 +21,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::lattice::SealedOp;
-use arkret_sdk::signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
-use arkret_sdk::state::{
+use arkret_core::{Event, Move, MoveId, NotarySig, RealmId, Seal, SealId, SealKind};
+use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
+use arkret_state::lattice::SealedOp;
+use arkret_state::state::{
     SealEffect, SealReject, StoreError, apply_seal, control_event_set_root,
     union_predecessor_covered_events, verify_move,
 };
-use arkret_sdk::{Event, Move, MoveId, NotarySig, RealmId, Seal, SealId, SealKind};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -141,7 +141,7 @@ async fn device_generation_event_seal_context(
     let bootstrap = records
         .iter()
         .filter(|record| {
-            record.kind == arkret_sdk::events::EventKind::REALM_CREATE
+            record.kind == arkret_core::events::EventKind::REALM_CREATE
                 && record
                     .envelope
                     .pointer("/payload/object/fields/purpose")
@@ -189,7 +189,7 @@ async fn device_generation_event_seal_context(
         .iter()
         .filter(|record| {
             record.actor_id == principal_id
-                && record.kind == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
+                && record.kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
                 && record
                     .envelope
                     .get("prev_refs")
@@ -205,7 +205,7 @@ async fn device_generation_event_seal_context(
         ));
     }
     let bootstrap_authorize = bootstrap_authorizes[0];
-    let bootstrap_payload = serde_json::from_value::<arkret_sdk::DeviceAuthorizePayload>(
+    let bootstrap_payload = serde_json::from_value::<arkret_core::DeviceAuthorizePayload>(
         bootstrap_authorize
             .envelope
             .get("payload")
@@ -334,13 +334,13 @@ fn verify_device_seal_signature(seal: &Seal, device_public_key: &str) -> Result<
     let canonical_bytes = seal
         .canonical_bytes_for_id()
         .map_err(|error| seal_admission_error(format!("Seal canonical bytes: {error}")))?;
-    let expected_digest = arkret_sdk::canonical::sha256_digest(&canonical_bytes);
+    let expected_digest = arkret_core::canonical::sha256_digest(&canonical_bytes);
     if signature.payload_digest.as_str() != expected_digest {
         return Err(device_generation_fenced(
             "B-model device Seal signature payload_digest mismatch",
         ));
     }
-    let key = arkret_sdk::decode_ed25519_multibase(device_public_key).map_err(|error| {
+    let key = arkret_core::decode_ed25519_multibase(device_public_key).map_err(|error| {
         device_generation_fenced(format!("B-model device Seal key is invalid: {error}"))
     })?;
     Ed25519DetachedJwsVerifier::new()
@@ -520,7 +520,7 @@ async fn try_apply_device_generation_event_seal(
         && let Some(requirement) = &context.generation_fence
         && requirement.payload.pre_fence_basis.is_none()
     {
-        arkret_sdk::validate_device_reanchor_recovery_first_seal(
+        arkret_core::validate_device_reanchor_recovery_first_seal(
             &requirement.payload,
             &seal.predecessor_refs,
             &seal.delta,
@@ -675,7 +675,7 @@ async fn try_apply_device_generation_event_seal(
             anchor_event_ids.insert(authorize_id.to_owned());
         }
     }
-    let mut new_ops: Vec<(arkret_sdk::CellRef, SealedOp)> = Vec::new();
+    let mut new_ops: Vec<(arkret_core::CellRef, SealedOp)> = Vec::new();
     for digest in &seal.delta {
         if quarantined.contains(digest.as_str()) {
             return Err(device_generation_fenced(
@@ -920,7 +920,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         events.push(event);
     }
     let material =
-        arkret_sdk::identity::materialize_managed_agent_pcr_control(&events).map_err(|error| {
+        arkret_bootstrap::materialize_managed_agent_pcr_control(&events).map_err(|error| {
             seal_admission_error(format!(
                 "managed Agent PCR control material is invalid: {error}"
             ))
@@ -1260,7 +1260,7 @@ async fn submit_seal(
     //
     // Capture mls.epoch before the reload so we can detect a
     // shift after the reload writes the new value.
-    let mls_epoch_cell = arkret_sdk::CellRef::new(format!(
+    let mls_epoch_cell = arkret_core::CellRef::new(format!(
         "ak:cell:ak.component.mls.epoch.v1:{}",
         seal.realm_id.as_str()
     ))
@@ -1449,7 +1449,7 @@ pub(crate) fn validate_seal_delta_entries(delta: &[String]) -> Result<(), (Error
 }
 
 fn is_sha256_digest(s: &str) -> bool {
-    s.starts_with("sha256:") && arkret_sdk::Hash::new(s.to_owned()).is_ok()
+    s.starts_with("sha256:") && arkret_core::Hash::new(s.to_owned()).is_ok()
 }
 
 #[cfg(test)]
@@ -1510,25 +1510,25 @@ mod seal_delta_tests {
 
     #[test]
     fn device_seal_signature_requires_the_bound_device_key() {
-        use arkret_sdk::signatures::Ed25519DetachedJwsSigner;
+        use arkret_signatures::Ed25519DetachedJwsSigner;
 
         let signer = Ed25519DetachedJwsSigner::from_seed(
             [7u8; 32],
             "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
         );
         let public_key =
-            arkret_sdk::ed25519_pubkey_to_did_key_multibase(&signer.verifying_key().to_bytes());
+            arkret_core::ed25519_pubkey_to_did_key_multibase(&signer.verifying_key().to_bytes());
         let wrong_signer = Ed25519DetachedJwsSigner::from_seed(
             [8u8; 32],
             "did:webvh:z6mkfixture:alice.example#ak:device:other",
         );
-        let wrong_public_key = arkret_sdk::ed25519_pubkey_to_did_key_multibase(
+        let wrong_public_key = arkret_core::ed25519_pubkey_to_did_key_multibase(
             &wrong_signer.verifying_key().to_bytes(),
         );
-        let empty_root = arkret_sdk::state::compute_state_root(&BTreeMap::new()).unwrap();
+        let empty_root = arkret_state::state::compute_state_root(&BTreeMap::new()).unwrap();
         let placeholder_id = SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap();
         let placeholder_digest =
-            arkret_sdk::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+            arkret_core::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
         let mut seal = Seal {
             id: placeholder_id,
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
@@ -1546,7 +1546,7 @@ mod seal_delta_tests {
             covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(arkret_sdk::MoveSignature {
+            notary_signature: NotarySig::Single(arkret_core::MoveSignature {
                 alg: "EdDSA".to_owned(),
                 verification_method: "did:webvh:z6mkfixture:alice.example#ak:device:recovery"
                     .to_owned(),
@@ -1555,16 +1555,16 @@ mod seal_delta_tests {
                 jws: "eyJhbGciOiJFZERTQSJ9..AA".to_owned(),
             }),
             sealed_at: chrono::Utc::now(),
-            hlc: arkret_sdk::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
-            kind: arkret_sdk::SealKind::Normal,
+            hlc: arkret_core::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
+            kind: arkret_core::SealKind::Normal,
         };
         let canonical_bytes = seal.canonical_bytes_for_id().unwrap();
         seal.id = Seal::id_from_canonical_bytes(&canonical_bytes).unwrap();
-        seal.notary_signature = NotarySig::Single(arkret_sdk::MoveSignature {
+        seal.notary_signature = NotarySig::Single(arkret_core::MoveSignature {
             alg: "EdDSA".to_owned(),
             verification_method: "did:webvh:z6mkfixture:alice.example#ak:device:recovery"
                 .to_owned(),
-            payload_digest: arkret_sdk::Hash::new(arkret_sdk::canonical::sha256_digest(
+            payload_digest: arkret_core::Hash::new(arkret_core::canonical::sha256_digest(
                 &canonical_bytes,
             ))
             .unwrap(),

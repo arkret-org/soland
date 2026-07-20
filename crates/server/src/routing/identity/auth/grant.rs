@@ -42,7 +42,7 @@ pub(crate) async fn validate_session_grant_binding(
                 "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
             )
         })?;
-    let audience = arkret_sdk::Did::new(state.service_id.clone()).map_err(|error| {
+    let audience = arkret_core::Did::new(state.service_id.clone()).map_err(|error| {
         AppError::internal(format!(
             "runtime principal service_id is not a DID: {error}"
         ))
@@ -114,7 +114,7 @@ pub(crate) async fn validate_session_grant_binding(
             "session grant subject does not match principal_id",
         ));
     }
-    if let Some(device_id) = grant.device_id.as_ref().map(arkret_sdk::DeviceId::as_str)
+    if let Some(device_id) = grant.device_id.as_ref().map(arkret_core::DeviceId::as_str)
         && device_id != input.device_id
     {
         return Err(AppError::capability_denied(

@@ -15,7 +15,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_sdk::{
+use arkret_core::{
     CellRef, DeviceId, Did, MediaIceConfigRequestBody, MediaIceMode, Operation, OperationId,
     RealmId,
 };
@@ -370,7 +370,7 @@ fn pairwise_turn_username(
         "issued_at_bucket": bucket,
         "nonce": URL_SAFE_NO_PAD.encode(nonce),
     });
-    let pseudonym_bytes = arkret_sdk::canonical::canonical_json_bytes(&pseudonym_input)
+    let pseudonym_bytes = arkret_core::canonical::canonical_json_bytes(&pseudonym_input)
         .unwrap_or_else(|_| pseudonym_input.to_string().into_bytes());
     let tag = hmac_sha256(&secret, &pseudonym_bytes);
     format!("ak_pseudonym_call_{}", hex::encode(&tag[..8]))
@@ -417,7 +417,7 @@ const ICE_CONFIG_SIGNING_LABEL: &str = "ak.media.ice_config.v1";
 /// `payload` is the unsigned outcome (the response object before the
 /// `signature` field is attached), serialized as RFC 8785 JCS canonical JSON.
 fn ice_config_payload_bytes<T: Serialize>(payload: &T) -> Vec<u8> {
-    arkret_sdk::canonical::canonical_json_bytes(payload)
+    arkret_core::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| serde_json::to_vec(payload).unwrap_or_default())
 }
 
@@ -431,7 +431,7 @@ fn ice_config_signing_input(payload: &[u8]) -> Vec<u8> {
 
 fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> (String, String) {
     let payload_bytes = ice_config_payload_bytes(payload);
-    let payload_digest = arkret_sdk::canonical::sha256_digest(&payload_bytes);
+    let payload_digest = arkret_core::canonical::sha256_digest(&payload_bytes);
     let signing_input = ice_config_signing_input(&payload_bytes);
     let signature = state.notary_signing_key().sign(&signing_input);
     (URL_SAFE_NO_PAD.encode(signature.to_bytes()), payload_digest)
@@ -470,7 +470,7 @@ impl MediaProviderKind {
                 ErrorCode::InvalidParam,
                 format!("unknown media focus provider `{value}`"),
             )
-            .with_wire_code(arkret_sdk::ReasonCode::UNKNOWN_FOCUS_TYPE)),
+            .with_wire_code(arkret_core::ReasonCode::UNKNOWN_FOCUS_TYPE)),
         }
     }
 
@@ -614,7 +614,7 @@ async fn handle_rtc_token(
     // The request body is the SDK typed shape: `realm_id`/`call_id`/`actor_id`/
     // `device_id` arrive already validated as the corresponding scalar id types,
     // and the response binding carries the same typed ids — so the wire outcome
-    // reuses `arkret_sdk::CallMediaTokenExchangeOutcome` directly instead of a
+    // reuses `arkret_core::CallMediaTokenExchangeOutcome` directly instead of a
     // stringly soland mirror.
     let realm_id = body.realm_id.clone();
     if !is_valid_webrtc_session_id(body.call_id.as_str()) {
@@ -682,7 +682,7 @@ async fn handle_rtc_token(
             "actor was removed from the call (ban) and cannot re-issue a join token",
         )
         .with_status(StatusCode::FORBIDDEN)
-        .with_wire_code(arkret_sdk::ReasonCode::CALL_PARTICIPANT_REMOVED));
+        .with_wire_code(arkret_core::ReasonCode::CALL_PARTICIPANT_REMOVED));
     }
     let media_epoch = media_service_epoch_for_realm(state, body.realm_id.as_str())?;
 
@@ -702,7 +702,7 @@ async fn handle_rtc_token(
                 body.focus_id, session_focus
             ),
         )
-        .with_wire_code(arkret_sdk::ReasonCode::FOCUS_MISMATCH));
+        .with_wire_code(arkret_core::ReasonCode::FOCUS_MISMATCH));
     }
     let focus = media_epoch.focus(&session_focus).ok_or_else(|| {
         focus_unavailable_error("selected focus is not present in media_service epoch")
@@ -725,14 +725,14 @@ async fn handle_rtc_token(
             ErrorCode::FailedPrecondition,
             format!("e2ee_key_source `{e2ee_key_source}` is not authorized by media_service epoch"),
         )
-        .with_wire_code(arkret_sdk::ReasonCode::E2EE_KEY_SOURCE_UNAUTHORISED));
+        .with_wire_code(arkret_core::ReasonCode::E2EE_KEY_SOURCE_UNAUTHORISED));
     }
 
     // MEDIA-1 — token TTL defaults to 300s and is capped at the spec ceiling
     // even if the realm focus advertises a larger backend TTL.
     let ttl_secs = focus
         .ttl_seconds
-        .clamp(1, arkret_sdk::MEDIA_TOKEN_TTL_MAX_SECS);
+        .clamp(1, arkret_core::MEDIA_TOKEN_TTL_MAX_SECS);
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
@@ -742,7 +742,7 @@ async fn handle_rtc_token(
     // exchange so the SFU cannot be linked back to (realm, call, actor, device)
     // by recomputing the id, and the wire form matches the schema pattern
     // `^ak:rtc_participant:<uuidv7>$`.
-    let participant_identity = arkret_sdk::new_prefixed_uuid7("ak:rtc_participant:");
+    let participant_identity = arkret_core::new_prefixed_uuid7("ak:rtc_participant:");
     let signing_key = state.notary_signing_key();
     // `bindings/livekit.md` §2/§5 — publish grants are derived from the
     // caller's `desired_media`. Absent the field we default to audio+video
@@ -835,7 +835,7 @@ async fn handle_rtc_token(
     };
 
     let participant_binding = CallMediaParticipantBinding {
-        scheme: arkret_sdk::PARTICIPANT_BINDING_SCHEMA.to_owned(),
+        scheme: arkret_core::PARTICIPANT_BINDING_SCHEMA.to_owned(),
         sig,
         issuer_kid,
         realm_id,
@@ -934,7 +934,7 @@ impl CallStateCell {
                 let mut projection = state.projection.lock();
                 projection.cells.insert(
                     cell_id,
-                    arkret_sdk::lattice::CellState::Value(value.clone()),
+                    arkret_state::lattice::CellState::Value(value.clone()),
                 );
                 Some(value)
             }
@@ -1023,7 +1023,7 @@ async fn call_state_from_event_log(
         .map_err(|error| AppError::internal(format!("events store unavailable: {error}")))?
         .into_iter()
         .filter(|record| {
-            record.kind == arkret_sdk::events::EventKind::CALL_STATE
+            record.kind == arkret_core::events::EventKind::CALL_STATE
                 && record_call_id(record) == Some(call_id)
         })
         .collect::<Vec<_>>();
@@ -1087,7 +1087,7 @@ fn call_state_operation_from_record(
     let mut operation = Operation::create(
         operation_id,
         realm_id,
-        arkret_sdk::events::EventKind::CALL_STATE,
+        arkret_core::events::EventKind::CALL_STATE,
         payload,
     );
     operation.canonical_event_digest = Some(record.canonical_digest.clone());
@@ -1105,7 +1105,7 @@ fn media_service_epoch_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Result<MediaServiceEpoch, AppError> {
-    let cell_id = arkret_sdk::CellRef::new(format!(
+    let cell_id = arkret_core::CellRef::new(format!(
         "ak:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
@@ -1168,7 +1168,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .or_else(|| focus_value.get("token_ttl_seconds"))
             .or_else(|| config.get("ttl_seconds"))
             .and_then(Value::as_u64)
-            .unwrap_or(arkret_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS);
+            .unwrap_or(arkret_core::MEDIA_TOKEN_TTL_SHOULD_SECS);
         let connect_url = focus_value
             .get("connect_url")
             .and_then(Value::as_str)
@@ -1272,7 +1272,7 @@ fn issue_signed_backend_token(
         },
         "nonce": nonce,
     });
-    let token_bytes = arkret_sdk::canonical::canonical_json_bytes(&token_payload)
+    let token_bytes = arkret_core::canonical::canonical_json_bytes(&token_payload)
         .unwrap_or_else(|_| token_payload.to_string().into_bytes());
     let payload_b64 = URL_SAFE_NO_PAD.encode(&token_bytes);
     let signing_input = format!(
@@ -1430,12 +1430,12 @@ fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
 
 fn token_issuer_unauthorised(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::FailedPrecondition, message)
-        .with_wire_code(arkret_sdk::ReasonCode::TOKEN_ISSUER_UNAUTHORISED)
+        .with_wire_code(arkret_core::ReasonCode::TOKEN_ISSUER_UNAUTHORISED)
 }
 
 fn focus_unavailable_error(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::FailedPrecondition, message)
-        .with_wire_code(arkret_sdk::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT)
+        .with_wire_code(arkret_core::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT)
 }
 
 #[endpoint(
@@ -1552,7 +1552,7 @@ async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<Stri
     let members = {
         let realms = state.realms.lock();
         Some({
-            arkret_sdk::RealmId::new(realm_id.to_owned())
+            arkret_core::RealmId::new(realm_id.to_owned())
                 .ok()
                 .and_then(|id| realms.get(&id))
                 .map(|realm| realm.members.iter().map(ToString::to_string).collect())

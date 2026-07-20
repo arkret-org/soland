@@ -187,16 +187,16 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     config.did_resolver_allow_methods =
         vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
     let state = AppState::new(config, Db { pool: None });
-    let key = arkret_sdk::ServiceRegistrationKey::new(
-        arkret_sdk::ServiceType::AuthServer,
-        arkret_sdk::CanonicalServiceUrl::new("https://auth.example/").unwrap(),
+    let key = arkret_core::ServiceRegistrationKey::new(
+        arkret_core::ServiceType::AuthServer,
+        arkret_core::CanonicalServiceUrl::new("https://auth.example/").unwrap(),
     )
     .unwrap();
     let provider_endpoint = url::Url::parse("https://soland.example/").unwrap();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed([81u8; 32]);
-    let prepared = arkret_sdk::webvh::prepare_service_registration_inception(
+    let prepared = arkret_signatures::webvh::prepare_service_registration_inception(
         &mut rng,
-        &arkret_sdk::webvh::ServiceRegistrationInceptionInput {
+        &arkret_signatures::webvh::ServiceRegistrationInceptionInput {
             provider_endpoint: &provider_endpoint,
             registration_key: &key,
             also_known_as: &[],
@@ -205,7 +205,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         },
     )
     .unwrap();
-    let request = arkret_sdk::ServiceRegistrationEnsureRequestBody::new(
+    let request = arkret_core::ServiceRegistrationEnsureRequestBody::new(
         key.clone(),
         prepared.service_registration_operation().unwrap(),
         None,
@@ -232,13 +232,13 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         StatusCode::OK,
         "service registration response: {created_body}"
     );
-    let created: arkret_sdk::ServiceRegistrationOutcome =
+    let created: arkret_core::ServiceRegistrationOutcome =
         serde_json::from_value(created_body).unwrap();
     assert!(created.created);
     assert_eq!(created.service_id, request.inception_operation.state.id);
     created.validate_for(&key).unwrap();
 
-    let existing: arkret_sdk::ServiceRegistrationOutcome =
+    let existing: arkret_core::ServiceRegistrationOutcome =
         TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
             .add_header("authorization", "Bearer test-webvh-token", true)
             .json(&request)
@@ -254,7 +254,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         created.registration_receipt.receipt_id
     );
 
-    let fetched: arkret_sdk::ServiceRegistrationOutcome = TestClient::get(
+    let fetched: arkret_core::ServiceRegistrationOutcome = TestClient::get(
         "http://server/_arkret/root/identity/service-registrations?service_type=auth_server&public_base=https%3A%2F%2Fauth.example%2F",
     )
     .add_header("authorization", "Bearer test-webvh-token", true)
@@ -267,9 +267,9 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     assert_eq!(fetched.service_id, created.service_id);
 
     let mut fork_rng = rand_chacha::ChaCha20Rng::from_seed([82u8; 32]);
-    let fork = arkret_sdk::webvh::prepare_service_registration_inception(
+    let fork = arkret_signatures::webvh::prepare_service_registration_inception(
         &mut fork_rng,
-        &arkret_sdk::webvh::ServiceRegistrationInceptionInput {
+        &arkret_signatures::webvh::ServiceRegistrationInceptionInput {
             provider_endpoint: &provider_endpoint,
             registration_key: &key,
             also_known_as: &[],
@@ -278,7 +278,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         },
     )
     .unwrap();
-    let fork_request = arkret_sdk::ServiceRegistrationEnsureRequestBody::new(
+    let fork_request = arkret_core::ServiceRegistrationEnsureRequestBody::new(
         key,
         fork.service_registration_operation().unwrap(),
         None,
@@ -497,8 +497,8 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
         vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
     let endpoint = url::Url::parse("https://soland.example").unwrap();
     let next_root = SigningKey::from_bytes(&[52u8; 32]);
-    let inception = arkret_sdk::webvh::prepare_principal_inception(
-        &arkret_sdk::webvh::PrincipalInceptionInput {
+    let inception = arkret_signatures::webvh::prepare_principal_inception(
+        &arkret_signatures::webvh::PrincipalInceptionInput {
             principal_endpoint: &endpoint,
             local_id: "bobwebvh",
             also_known_as: &["acct:alice@example.com".to_owned()],
@@ -507,9 +507,10 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
                 .with_timezone(&chrono::Utc),
             root_seed: &[51u8; 32],
             next_root_public_key_multibase: &test_ed25519_multibase_public(&next_root),
-            enrollment: arkret_sdk::webvh::PrincipalEnrollmentDelegation::ExternalAuthority {
-                authority_did: "did:web:enrollment.example",
-            },
+            enrollment:
+                arkret_signatures::webvh::PrincipalEnrollmentDelegation::ExternalAuthority {
+                    authority_did: "did:web:enrollment.example",
+                },
         },
     )
     .unwrap();
@@ -675,8 +676,8 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
     let next_root_public = test_ed25519_multibase_public(&next_root);
     let sibling_next_root_public = test_ed25519_multibase_public(&sibling_next_root);
     let also_known_as = vec!["acct:rotation@example.com".to_owned()];
-    let inception = arkret_sdk::webvh::prepare_principal_inception(
-        &arkret_sdk::webvh::PrincipalInceptionInput {
+    let inception = arkret_signatures::webvh::prepare_principal_inception(
+        &arkret_signatures::webvh::PrincipalInceptionInput {
             principal_endpoint: &endpoint,
             local_id: "rotation",
             also_known_as: &also_known_as,
@@ -685,9 +686,10 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
                 .with_timezone(&chrono::Utc),
             root_seed: &root_seed,
             next_root_public_key_multibase: &committed_root_public,
-            enrollment: arkret_sdk::webvh::PrincipalEnrollmentDelegation::ExternalAuthority {
-                authority_did: "did:web:enrollment.example",
-            },
+            enrollment:
+                arkret_signatures::webvh::PrincipalEnrollmentDelegation::ExternalAuthority {
+                    authority_did: "did:web:enrollment.example",
+                },
         },
     )
     .unwrap();
@@ -704,8 +706,8 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
     assert_eq!(inception_outcome["seq"], 1);
 
     let state_document = inception.log_entry["state"].clone();
-    let rotation =
-        arkret_sdk::webvh::prepare_principal_rotation(&arkret_sdk::webvh::PrincipalRotationInput {
+    let rotation = arkret_signatures::webvh::prepare_principal_rotation(
+        &arkret_signatures::webvh::PrincipalRotationInput {
             did: &inception.did,
             local_id: "rotation",
             previous_entries: std::slice::from_ref(&inception.log_entry),
@@ -715,8 +717,9 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
             current_root_seed: &committed_root_seed,
             next_root_public_key_multibase: &next_root_public,
             state: &state_document,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     let rotation_request = serde_json::to_value(&rotation.submit_body).unwrap();
     let rotation_outcome: Value =
         TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
@@ -739,8 +742,8 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
             .unwrap();
     assert_eq!(duplicate["status"], "duplicate");
 
-    let sibling =
-        arkret_sdk::webvh::prepare_principal_rotation(&arkret_sdk::webvh::PrincipalRotationInput {
+    let sibling = arkret_signatures::webvh::prepare_principal_rotation(
+        &arkret_signatures::webvh::PrincipalRotationInput {
             did: &inception.did,
             local_id: "rotation",
             previous_entries: std::slice::from_ref(&inception.log_entry),
@@ -750,8 +753,9 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
             current_root_seed: &committed_root_seed,
             next_root_public_key_multibase: &sibling_next_root_public,
             state: &state_document,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     let sibling_response =
         TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
             .json(&serde_json::to_value(&sibling.submit_body).unwrap())

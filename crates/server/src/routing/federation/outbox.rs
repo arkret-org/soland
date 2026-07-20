@@ -173,7 +173,7 @@ fn rfc9421_sign(
     target_url: &str,
     body: &[u8],
 ) -> reqwest::header::HeaderMap {
-    let request_canonical_digest = arkret_sdk::canonical::sha256_digest(body);
+    let request_canonical_digest = arkret_core::canonical::sha256_digest(body);
     insert_header_if_valid(
         &mut headers,
         "request-canonical-digest",
@@ -222,7 +222,7 @@ fn rfc9421_sign(
         ],
         &signature_params,
     );
-    let signature = arkret_sdk::http_signature::sign_message(
+    let signature = arkret_signatures::http_signature::sign_message(
         signature_base.as_bytes(),
         &state.notary_signing_key(),
     );

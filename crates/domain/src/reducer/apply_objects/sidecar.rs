@@ -8,7 +8,7 @@ impl ProjectionState {
             };
         };
         let Ok(sidecar) =
-            serde_json::from_value::<arkret_sdk::models::AgentSidecar>(object.clone())
+            serde_json::from_value::<arkret_core::models::AgentSidecar>(object.clone())
         else {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_create_invalid".to_owned(),
@@ -22,7 +22,7 @@ impl ProjectionState {
         if let Some(existing) = self.sidecars.values().find(|existing| {
             existing.realm_id == sidecar.realm_id.as_str()
                 && existing.controller_id == sidecar.controller_id.as_str()
-                && existing.state != arkret_sdk::models::AgentSidecarState::Tombstoned
+                && existing.state != arkret_core::models::AgentSidecarState::Tombstoned
         }) {
             return if existing.sidecar_id == sidecar.id.as_str() {
                 ProjectionEffect::Ignored
@@ -55,10 +55,10 @@ mod tests {
 
     fn create(sidecar_id: &str) -> Operation {
         Operation::create(
-            arkret_sdk::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
+            arkret_core::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
                 .unwrap(),
-            arkret_sdk::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
-            arkret_sdk::events::EventKind::SIDECAR_CREATE,
+            arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+            arkret_core::events::EventKind::SIDECAR_CREATE,
             serde_json::json!({"object": {
                 "id": sidecar_id,
                 "schema": "ak.schema.agent_sidecar.v1",

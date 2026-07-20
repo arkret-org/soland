@@ -1,4 +1,4 @@
-use arkret_sdk::StoredServiceIdentity;
+use arkret_core::StoredServiceIdentity;
 
 use super::{PersistenceResult, async_trait};
 /// Persistence for the deployment's SDK-defined, verified service identity.

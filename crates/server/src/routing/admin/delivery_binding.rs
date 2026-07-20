@@ -14,7 +14,7 @@
 //! intentionally not exposed here yet; policy changes strand through the
 //! regular `ak.realm.delivery_binding_policy` event submit path.
 
-use arkret_sdk::RealmId;
+use arkret_core::RealmId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;

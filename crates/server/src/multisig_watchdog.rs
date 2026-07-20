@@ -20,7 +20,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_sdk::{
+use arkret_core::{
     Did, Hash, Hlc, MoveId, PartialSignature, RealmId, Seal, SealId, ThresholdAggregator, WireError,
 };
 use base64::Engine as _;

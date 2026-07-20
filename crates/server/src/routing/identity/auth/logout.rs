@@ -1,4 +1,4 @@
-use arkret_sdk::{
+use arkret_core::{
     AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody, SESSION_REVOKE_LIFECYCLE_PROOF_KIND,
 };
 use base64::Engine as _;
@@ -179,7 +179,7 @@ async fn introspect_session_grant_for_logout(
             "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
         ));
     };
-    let audience = arkret_sdk::Did::new(state.service_id.clone()).map_err(|error| {
+    let audience = arkret_core::Did::new(state.service_id.clone()).map_err(|error| {
         AppError::internal(format!(
             "runtime principal service_id is not a DID: {error}"
         ))
@@ -474,14 +474,14 @@ async fn verify_cross_session_revoke_proof(
         ));
     }
 
-    let actor = arkret_sdk::Did::new(session.actor.clone())
+    let actor = arkret_core::Did::new(session.actor.clone())
         .map_err(|_| AppError::invalid_param("session actor is not a valid DID"))?;
-    let service_id = arkret_sdk::Did::new(state.service_id.clone()).map_err(|error| {
+    let service_id = arkret_core::Did::new(state.service_id.clone()).map_err(|error| {
         AppError::internal(format!("configured service_id is not a valid DID: {error}"))
     })?;
     let session_device = DeviceId::new(session.device_id.clone())
         .map_err(|_| AppError::invalid_param("session device_id is not a valid DeviceId"))?;
-    let expected_digest = arkret_sdk::AccountLifecycleProof::session_revoke_request_digest(
+    let expected_digest = arkret_core::AccountLifecycleProof::session_revoke_request_digest(
         &actor,
         &service_id,
         &session_device,
@@ -531,7 +531,7 @@ async fn verify_cross_session_revoke_proof(
 fn session_revoke_proof_invalid(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::InvalidSignature, message)
         .with_status(StatusCode::UNAUTHORIZED)
-        .with_wire_code(arkret_sdk::ReasonCode::PROOF_INVALID)
+        .with_wire_code(arkret_core::ReasonCode::PROOF_INVALID)
 }
 
 fn session_revoke_has_applet_selector(body: &SessionRevokeRequestBody) -> bool {

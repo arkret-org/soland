@@ -1,5 +1,5 @@
-use arkret_sdk::lattice::CellState;
-use arkret_sdk::{CellRef, Operation};
+use arkret_core::{CellRef, Operation};
+use arkret_state::lattice::CellState;
 use serde_json::{Value, json};
 use soland_storage_postgres::Db;
 
@@ -81,7 +81,7 @@ fn signed_binding(state: &AppState, expires_at: &str) -> Value {
     let signing_key = state.notary_signing_key();
     let sig = participant_binding::sign_binding(&signed, &signing_key);
     json!({
-        "scheme": arkret_sdk::PARTICIPANT_BINDING_SCHEMA,
+        "scheme": arkret_core::PARTICIPANT_BINDING_SCHEMA,
         "issuer_kid": ISSUER_KID,
         "realm_id": REALM_ID,
         "call_id": CALL_ID,
@@ -97,9 +97,9 @@ fn signed_binding(state: &AppState, expires_at: &str) -> Value {
 
 fn call_state_op(binding: Value) -> Operation {
     let mut op = Operation::create(
-        arkret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        arkret_sdk::RealmId::new(REALM_ID.to_owned()).unwrap(),
-        arkret_sdk::events::EventKind::CALL_STATE,
+        arkret_core::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        arkret_core::RealmId::new(REALM_ID.to_owned()).unwrap(),
+        arkret_core::events::EventKind::CALL_STATE,
         json!({
             "call_id": CALL_ID,
             "state": "active",
@@ -242,7 +242,7 @@ fn signing_input_matches_spec_construction() {
     let actual = participant_binding::binding_signing_input(&canonical);
 
     let mut expected = Vec::new();
-    expected.extend_from_slice(arkret_sdk::PARTICIPANT_BINDING_SCHEMA.as_bytes());
+    expected.extend_from_slice(arkret_core::PARTICIPANT_BINDING_SCHEMA.as_bytes());
     expected.push(0);
     // canonical-json is key-sorted (alphabetical) over the seven fields only.
     let expected_json = format!(

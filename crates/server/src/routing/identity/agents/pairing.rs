@@ -102,14 +102,14 @@ pub(super) async fn submit_agent_runtime_key_request(
     verify_runtime_approval_proof_of_possession(&body, agent_id, &state.service_id)?;
     let agent_did = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
-    let public_key_digest = arkret_sdk::agent_runtime_public_key_digest(&body.public_key)
+    let public_key_digest = arkret_core::agent_runtime_public_key_digest(&body.public_key)
         .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?;
     let runtime_attestation = runtime_attestation_value(body.runtime_attestation.as_ref())?;
-    let attestation_digest = arkret_sdk::agent_runtime_attestation_digest(
+    let attestation_digest = arkret_core::agent_runtime_attestation_digest(
         runtime_attestation.as_ref(),
     )
     .map_err(|error| AppError::invalid_param(format!("runtime_attestation invalid: {error}")))?;
-    let binding_digest = arkret_sdk::agent_runtime_key_binding_digest_from_digests(
+    let binding_digest = arkret_core::agent_runtime_key_binding_digest_from_digests(
         &agent_did,
         &body.pairing_request_id,
         &body.verification_method,
@@ -683,7 +683,7 @@ async fn validate_requested_scope_disclosure(
     }
     if disclosure.verifier_did.as_str() != state.service_id
         || disclosure.audience.as_str()
-            != arkret_sdk::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY
+            != arkret_core::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY
     {
         return Err(AppError::invalid_param(
             "requested_scope_disclosure verifier or audience does not match this operation",
@@ -722,7 +722,7 @@ async fn validate_requested_scope_disclosure(
         AppError::internal(format!("stored Agent controller DID is invalid: {error}"))
     })?;
     let stored_digest =
-        arkret_sdk::agent_requested_scope_digest(&agent_id, &controller_id, &stored_scope)
+        arkret_core::agent_requested_scope_digest(&agent_id, &controller_id, &stored_scope)
             .map_err(|error| {
                 AppError::internal(format!(
                     "stored Agent requested_scope digest failed: {error}"
@@ -814,7 +814,7 @@ fn ensure_current_runtime_key_request_matches(
     }
     let agent_id = Did::new(body.agent_id.as_str().to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
-    let current_binding = arkret_sdk::agent_runtime_key_binding_digest(
+    let current_binding = arkret_core::agent_runtime_key_binding_digest(
         &agent_id,
         &body.pairing_request_id,
         &body.verification_method,
@@ -1102,10 +1102,10 @@ pub(super) fn ensure_key_authorize_event_matches_request(
 fn agent_key_pair_request_digest(body: &AgentKeyPairRequestBody) -> Result<String, AppError> {
     let value = serde_json::to_value(body)
         .map_err(|error| AppError::invalid_param(format!("pairing request invalid: {error}")))?;
-    let canonical = arkret_sdk::canonical::canonical_json_bytes(&value).map_err(|error| {
+    let canonical = arkret_core::canonical::canonical_json_bytes(&value).map_err(|error| {
         AppError::invalid_param(format!("pairing request canonicalization failed: {error}"))
     })?;
-    Ok(arkret_sdk::canonical::sha256_digest(&canonical))
+    Ok(arkret_core::canonical::sha256_digest(&canonical))
 }
 
 fn paired_request_digest_from_record_event(
@@ -1122,12 +1122,12 @@ fn paired_request_digest_from_record_event(
         })?;
     request.insert("authorize_event".to_owned(), authorize_event.clone());
     let canonical =
-        arkret_sdk::canonical::canonical_json_bytes(&Value::Object(request)).map_err(|error| {
+        arkret_core::canonical::canonical_json_bytes(&Value::Object(request)).map_err(|error| {
             AppError::internal(format!(
                 "accepted pairing request canonicalization failed: {error}"
             ))
         })?;
-    Ok(arkret_sdk::canonical::sha256_digest(&canonical))
+    Ok(arkret_core::canonical::sha256_digest(&canonical))
 }
 
 pub(super) fn ensure_pairing_request_open(
@@ -1244,7 +1244,7 @@ pub(super) fn runtime_key_request_for_controller(body: &AgentRuntimeApprovalRequ
 }
 
 fn runtime_attestation_value(
-    runtime_attestation: Option<&arkret_sdk::AgentKeyAuthorizePayloadRuntimeAttestation>,
+    runtime_attestation: Option<&arkret_core::AgentKeyAuthorizePayloadRuntimeAttestation>,
 ) -> Result<Option<Value>, AppError> {
     runtime_attestation
         .map(serde_json::to_value)
@@ -1322,8 +1322,8 @@ fn verify_runtime_key_proof_of_possession(
     pairing_request_id: &str,
     verification_method: &str,
     public_key: &PublicKey,
-    proof_of_possession: &arkret_sdk::NonEmptyJsonObject,
-    runtime_attestation: Option<&arkret_sdk::AgentKeyAuthorizePayloadRuntimeAttestation>,
+    proof_of_possession: &arkret_core::NonEmptyJsonObject,
+    runtime_attestation: Option<&arkret_core::AgentKeyAuthorizePayloadRuntimeAttestation>,
     agent_id: &str,
     service_id: &str,
 ) -> Result<(), AppError> {
@@ -1347,7 +1347,7 @@ fn verify_runtime_key_proof_of_possession(
             "proof_of_possession has expired",
         ));
     }
-    let expected_digest = arkret_sdk::agent_key_pair_proof_request_binding_digest(
+    let expected_digest = arkret_core::agent_key_pair_proof_request_binding_digest(
         pairing_request_id,
         &agent_id,
         verification_method,
@@ -1367,7 +1367,7 @@ fn verify_runtime_key_proof_of_possession(
     }
     let request_digest = Hash::new(proof.request_canonical_digest.clone())
         .map_err(|_| AppError::invalid_param("proof_of_possession digest is invalid"))?;
-    let signing_input = arkret_sdk::agent::agent_key_pair_proof_signing_input(
+    let signing_input = arkret_signatures::agent::agent_key_pair_proof_signing_input(
         verification_method.to_owned(),
         proof.challenge,
         proof.audience,
@@ -1431,7 +1431,7 @@ pub(super) fn runtime_public_key_digest(
     verification_method: &str,
 ) -> Result<String, AppError> {
     runtime_ed25519_public_key(public_key, verification_method)?;
-    arkret_sdk::agent_runtime_public_key_digest(public_key)
+    arkret_core::agent_runtime_public_key_digest(public_key)
         .map(|digest| digest.as_str().to_owned())
         .map_err(|error| AppError::invalid_param(format!("public_key is invalid: {error}")))
 }
@@ -1484,7 +1484,7 @@ pub(super) fn pairing_request_binding_digest(
         .map_err(|error| AppError::invalid_param(format!("agent DID invalid: {error}")))?;
     let runtime_public_key_digest = Hash::new(runtime_public_key_digest.to_owned())
         .map_err(|_| AppError::invalid_param("runtime_public_key_digest is invalid"))?;
-    arkret_sdk::agent_key_pairing_request_binding_digest(
+    arkret_core::agent_key_pairing_request_binding_digest(
         &controller,
         &agent_id,
         verification_method,

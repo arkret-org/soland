@@ -2,7 +2,7 @@
 //!
 //! All `LatticeKind` impls and the [`default_lattice_registry`] /
 //! [`build_sdk_cell_registry`] factories moved to
-//! `arkret_sdk::lattice_registry` (SDK-8). This module is a thin
+//! `arkret_core::lattice_registry` (SDK-8). This module is a thin
 //! re-export shim. Existing callers
 //! (`crate::reducer::lattice_kinds::default_lattice_registry()`,
 //! `build_sdk_cell_registry()`) keep working without changes.
@@ -11,7 +11,7 @@
 // soland test that referenced them by name (e.g. `ViewCreate`,
 // `ViewUpdate`, `ViewReconcile` mentioned in `routing/events/operations.rs`
 // comments) continues to compile.
-pub use arkret_sdk::lattice_registry::{
+pub use arkret_lattice_registry::{
     AccountStatus, AgentKey, AgentStatus, CallState, CallSummary, CapabilityDelegate,
     CapabilityDerived, CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant,
     ContactFactLog, CoveredSeals, CrossSigningPublish, CrossSigningReset, DeviceAuthorized,

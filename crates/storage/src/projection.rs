@@ -86,7 +86,7 @@ pub struct SpaceContainerProjectionRecord {
 pub struct StrandProjectionRecord {
     pub strand_id: String,
     pub realm_id: String,
-    pub tracks: BTreeMap<String, arkret_sdk::StrandTrackConfig>,
+    pub tracks: BTreeMap<String, arkret_core::StrandTrackConfig>,
     pub title: String,
     pub summary: Option<String>,
     /// One of `active` / `archived` / `deleted` / `redacted` per spec.
@@ -177,8 +177,8 @@ fn operation_updates_realm_metadata(operation: &Operation) -> bool {
     matches!(
         soland_domain::kinds::canonical_kind_for_operation(operation),
         Some(
-            arkret_sdk::events::EventKind::REALM_CREATE
-                | arkret_sdk::events::EventKind::REALM_UPDATE
+            arkret_core::events::EventKind::REALM_CREATE
+                | arkret_core::events::EventKind::REALM_UPDATE
         )
     )
 }
@@ -211,7 +211,7 @@ pub fn projected_operation_realm_discoverability(operation: &Operation) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::{OperationId, RealmId};
+    use arkret_core::{OperationId, RealmId};
     use serde_json::json;
 
     use super::*;
@@ -229,11 +229,11 @@ mod tests {
     fn child_object_metadata_is_not_realm_metadata() {
         for operation in [
             operation(
-                arkret_sdk::events::EventKind::SPACE_CREATE,
+                arkret_core::events::EventKind::SPACE_CREATE,
                 json!({"object": {"title": "List", "summary": "List summary"}}),
             ),
             operation(
-                arkret_sdk::events::EventKind::STRAND_UPDATE,
+                arkret_core::events::EventKind::STRAND_UPDATE,
                 json!({
                     "patch": {
                         "title": {"$op": "set", "value": "Thread"},
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn realm_update_metadata_is_still_projected() {
         let operation = operation(
-            arkret_sdk::events::EventKind::REALM_UPDATE,
+            arkret_core::events::EventKind::REALM_UPDATE,
             json!({
                 "patch": {
                     "title": {"$op": "set", "value": "Realm"},

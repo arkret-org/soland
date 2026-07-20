@@ -51,7 +51,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             active_series_payload(),
         ),
@@ -76,13 +76,13 @@ fn key_backup_active_series_projects_pointer_and_cell() {
     assert_eq!(projected.previous_series_ids, vec![PREVIOUS_SERIES]);
     assert!(matches!(
         projected.auth_data.trust_binding,
-        arkret_sdk::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation)
+        arkret_core::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation)
             if generation.get() == 2
     ));
 
-    let subject = arkret_sdk::composite_subject(&[ACTOR, "secret_storage"])
+    let subject = arkret_core::composite_subject(&[ACTOR, "secret_storage"])
         .expect("active series composite subject");
-    let cell = arkret_sdk::CellRef::new(format!(
+    let cell = arkret_core::CellRef::new(format!(
         "ak:cell:ak.component.key_backup.active_series.v1:{subject}"
     ))
     .expect("active series cell ref");
@@ -111,7 +111,7 @@ fn key_backup_active_series_requires_complete_signed_fields() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             payload,
         ),
@@ -134,7 +134,7 @@ fn key_backup_active_series_rejects_active_series_in_previous_set() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             payload,
         ),
@@ -157,7 +157,7 @@ fn key_backup_active_series_rejects_frontier_ssk_mismatch() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             payload,
         ),
@@ -180,7 +180,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
 
     let initial_gap = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             gap,
         ),
@@ -194,7 +194,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
 
     let accepted = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             active_series_payload(),
         ),
@@ -207,7 +207,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
 
     let duplicate = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             active_series_payload(),
         ),
@@ -219,7 +219,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
     fork["issued_at"] = json!("2026-07-18T00:00:01Z");
     let fork = state.apply(
         &make_operation(
-            arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             REALM,
             fork,
         ),

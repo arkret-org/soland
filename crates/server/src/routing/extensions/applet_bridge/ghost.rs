@@ -1,11 +1,13 @@
 //! Ghost / bot actor provisioning, revocation, and the formal applet event
 //! build + persistence path.
 
-use arkret_sdk::{
-    AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind, ActorProfileId,
-    AppletDelegatedEventAuthorization, AppletId, AppletNamespaceDomain, Did, Event, EventRef,
-    GhostActorProfileRequest, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof, RealmId,
-    canonical, namespace_pattern_matches,
+use arkret_core::{
+    ActorProfileId, AppletDelegatedEventAuthorization, AppletId, AppletNamespaceDomain, Did, Event,
+    EventRef, GhostActorProfileRequest, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof,
+    RealmId, canonical, namespace_pattern_matches,
+};
+use arkret_models_collaboration::governance::accountability::{
+    AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind,
 };
 use serde_json::{Value, json};
 use soland_http::error::AppError;
@@ -167,16 +169,16 @@ pub(super) async fn build_ghost_accountability_grant_event(
     grant.validate_lifecycle_at(now).map_err(|error| {
         AppError::invalid_param(format!("accountability_grant invalid: {error}"))
     })?;
-    let event = grant
-        .to_event(
-            realm_id.clone(),
-            next_actor_seq(state, service_id.as_str()).await?,
-            next_hlc(state)?,
-            None,
-        )
-        .map_err(|error| {
-            AppError::internal(format!("accountability grant event build failed: {error}"))
-        })?;
+    let event = arkret_event_draft::accountability_grant_event(
+        &grant,
+        realm_id.clone(),
+        next_actor_seq(state, service_id.as_str()).await?,
+        next_hlc(state)?,
+        None,
+    )
+    .map_err(|error| {
+        AppError::internal(format!("accountability grant event build failed: {error}"))
+    })?;
     formal_event_from_sdk_event(state, event, service_id)
 }
 
@@ -196,7 +198,7 @@ pub(super) async fn build_ghost_profile_create_event(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(provision.external_user_id.as_str());
-    let profile_id = ActorProfileId::new(arkret_sdk::new_prefixed_uuid7("ak:actor_profile:"))
+    let profile_id = ActorProfileId::new(arkret_core::new_prefixed_uuid7("ak:actor_profile:"))
         .map_err(|error| AppError::internal(format!("profile id generation failed: {error}")))?;
     let external_ref = json!({
         "schema": "ak.applet.ghost_actor.external_ref.v1",
@@ -285,16 +287,16 @@ pub(super) fn formal_event_from_sdk_event(
 ) -> Result<FormalAppletEvent, AppError> {
     let event_id = event.event_id.to_string();
     let verification_method = format!("{signing_did}#notary-key");
-    let signer = arkret_sdk::Ed25519MoveSigner::new(
+    let signer = arkret_signatures::Ed25519MoveSigner::new(
         state.notary_signing_key().as_ref().clone(),
         signing_did.clone(),
         verification_method.clone(),
     );
-    arkret_sdk::signatures::sign_event(
+    arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_sdk::signatures::SignEventOptions::new(),
+        arkret_signatures::SignEventOptions::new(),
     )
     .map_err(|error| AppError::internal(format!("event proof signing failed: {error}")))?;
     Ok(FormalAppletEvent { event_id, event })
@@ -318,11 +320,11 @@ pub(super) fn production_payload_proof(
         ))
     })?;
     let digest = canonical::sha256_digest(&binding_bytes);
-    let jws =
-        arkret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
-            .map_err(|error| {
-                AppError::internal(format!("accountability proof signing failed: {error}"))
-            })?;
+    let jws = arkret_signatures::jws::sign_jws_ed25519(
+        &binding_bytes,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|error| AppError::internal(format!("accountability proof signing failed: {error}")))?;
     Ok(PayloadProof {
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),

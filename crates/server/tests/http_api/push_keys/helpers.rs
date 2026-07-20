@@ -41,7 +41,7 @@ pub(crate) fn keys_upload_signing_input(
         "one_time_keys": one_time_keys,
         "fallback_keys": fallback_keys,
     });
-    let canonical = arkret_sdk::canonical::canonical_json_bytes(&body).unwrap();
+    let canonical = arkret_core::canonical::canonical_json_bytes(&body).unwrap();
     let mut input = b"ak.keys-upload-v1\n".to_vec();
     input.extend_from_slice(&canonical);
     input
@@ -55,7 +55,7 @@ pub(crate) fn signed_keys_upload_body(
     fallback_keys: Value,
 ) -> Value {
     let signing_input = keys_upload_signing_input(device_id, &one_time_keys, &fallback_keys);
-    let sig = arkret_sdk::base64url_encode(signing_key.sign(&signing_input).to_bytes());
+    let sig = arkret_core::base64url_encode(signing_key.sign(&signing_input).to_bytes());
     serde_json::json!({
         "device_id": device_id,
         "one_time_keys": one_time_keys,

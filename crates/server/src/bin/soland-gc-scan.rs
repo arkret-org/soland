@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
 
     let candidates = match realm_id.as_deref() {
         Some(id) => {
-            let realm = arkret_sdk::RealmId::new(id.to_owned())
+            let realm = arkret_core::RealmId::new(id.to_owned())
                 .map_err(|e| anyhow::anyhow!("invalid --realm-id: {e}"))?;
             gc::scan_gc_candidates(&state, &realm)
         }

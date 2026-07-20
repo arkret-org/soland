@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
-use arkret_sdk::{
+use arkret_core::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
+use arkret_core::{
     Did, EventId, EventsFrontierFederationPeerState, EventsQueryPostRequestBody,
     EventsSubmitFederationRequestBody, RealmId, canonical,
 };
@@ -787,7 +787,7 @@ impl PeerReadAuthz {
     }
 
     fn apply_member_record(&mut self, record: &CanonicalEventRecord) {
-        if record.kind != arkret_sdk::events::EventKind::MEMBER_STATE {
+        if record.kind != arkret_core::events::EventKind::MEMBER_STATE {
             return;
         }
         let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
@@ -872,7 +872,7 @@ impl PeerReadAuthz {
     }
 
     fn apply_circle_member_record(&mut self, record: &CanonicalEventRecord) {
-        if record.kind != arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE {
+        if record.kind != arkret_core::events::EventKind::CIRCLE_MEMBER_STATE {
             return;
         }
         let Some(payload) = record_payload(record) else {
@@ -1392,7 +1392,7 @@ pub(in crate::routing) async fn validate_peer_request(
     body: Option<&Value>,
 ) -> Result<(), AppError> {
     let expected_destination =
-        arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+        arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
             .map_err(|_| AppError::internal("service trust_domain is invalid"))?;
     if let Some(body) = body {
         let trust_headers =
@@ -1438,7 +1438,7 @@ pub(in crate::routing) async fn validate_peer_request(
         }
         let destination_trust_domain = required_header(req, "destination-trust-domain")?;
         let destination_trust_domain =
-            arkret_sdk::TypedTrustDomainId::new(destination_trust_domain)
+            arkret_core::TypedTrustDomainId::new(destination_trust_domain)
                 .map_err(|_| schema_violation("destination-trust-domain must be a trust domain"))?;
         if destination_trust_domain != expected_destination {
             return Err(cross_domain_replay(
@@ -1446,7 +1446,7 @@ pub(in crate::routing) async fn validate_peer_request(
             ));
         }
         let source_trust_domain = required_header(req, "source-trust-domain")?;
-        arkret_sdk::TypedTrustDomainId::new(source_trust_domain)
+        arkret_core::TypedTrustDomainId::new(source_trust_domain)
             .map_err(|_| schema_violation("source-trust-domain must be a trust domain"))?;
     }
     let source_service_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;

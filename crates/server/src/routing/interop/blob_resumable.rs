@@ -728,7 +728,7 @@ async fn complete_resumable_upload(
     };
     let realm_id = match meta_value("realm_id") {
         Some(realm_id) => {
-            if arkret_sdk::RealmId::new(realm_id.clone()).is_err() {
+            if arkret_core::RealmId::new(realm_id.clone()).is_err() {
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
@@ -927,9 +927,9 @@ async fn complete_resumable_upload(
         legal_hold: false,
         redacted: false,
         visibility: if realm_id.is_some() {
-            arkret_sdk::BlobVisibility::RealmBound
+            arkret_core::BlobVisibility::RealmBound
         } else {
-            arkret_sdk::BlobVisibility::Public
+            arkret_core::BlobVisibility::Public
         },
         uploaded_by: actor.to_owned(),
         created_at: received_at,

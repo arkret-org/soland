@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_sdk::{
+use arkret_core::{
     ConsentCellList, ConsentCellView, ConsentId, ConsentRequestRequestBody, ConsentState,
     ConsentUpdateRequestBody, Did, EventId, Operation,
 };
@@ -611,7 +611,7 @@ pub(crate) fn event_ref_for_dot(dot: &str) -> Option<&str> {
         Some((prefix, seq)) if seq.chars().all(|c| c.is_ascii_digit()) && !seq.is_empty() => prefix,
         _ => dot,
     };
-    arkret_sdk::EventId::new(candidate).ok().map(|_| candidate)
+    arkret_core::EventId::new(candidate).ok().map(|_| candidate)
 }
 
 /// Spec invite-addressing.md §2 / contact-operations.schema.json — resolve
@@ -1098,7 +1098,7 @@ fn consent_cell_id(holder: &str, peer: &str, scope: &str) -> String {
 fn consent_cell_id_for_consent_id(consent_id: &str) -> String {
     let consent_id = ConsentId::new(consent_id.to_owned())
         .expect("consent IDs are validated before cell projection");
-    arkret_sdk::consent::consent_cell_id(&consent_id)
+    arkret_state::consent::consent_cell_id(&consent_id)
         .expect("typed consent IDs always produce valid cell references")
         .into_string()
 }

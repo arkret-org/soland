@@ -11,18 +11,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::http::{
+use arkret_core::http::{
     ContactAgentProjection, ContactList, ContactListRow, ContactRequestOutcome,
     ContactRequestRequestBody, ContactRespondOutcome, ContactRespondRequestBody, ContactState,
     ContactTombstone, ContactTombstoneRequestBody, DirectConversationBindingState,
     DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
     DirectConversationResolveState, DirectConversationSummary,
 };
-// `arkret_sdk::InviteReceivePolicy` also resolves at the crate root, but the
+// `arkret_core::InviteReceivePolicy` also resolves at the crate root, but the
 // invite-addressing strong type lives under `model`; import it via the
 // `model` path to avoid binding the wrong same-named re-export.
-use arkret_sdk::models::{Handle as SdkHandle, InviteReceivePolicy};
-use arkret_sdk::{
+use arkret_core::models::{Handle as SdkHandle, InviteReceivePolicy};
+use arkret_core::{
     ACTOR_PROFILE_SCHEMA, AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody,
     AccountRegistrationAudit, AccountRegistrationAuditOutcome, AccountRegistrationEvidenceSummary,
     AccountRegistrationPolicy, AccountRegistrationPolicyEvidence,
@@ -362,7 +362,7 @@ fn account_registration_policy_snapshot(state: &AppState) -> AccountRegistration
 fn account_registration_policy_digest(
     policy: &AccountRegistrationPolicy,
 ) -> Result<Hash, AppError> {
-    let digest = arkret_sdk::canonical::canonical_sha256(policy)
+    let digest = arkret_core::canonical::canonical_sha256(policy)
         .map_err(|error| AppError::internal(format!("registration policy digest: {error}")))?;
     Hash::new(digest).map_err(|error| {
         AppError::internal(format!("registration policy digest is invalid: {error}"))
@@ -436,7 +436,7 @@ async fn reject_account_registration(
 }
 
 fn digest_registration_secret(value: &str) -> Result<Hash, AppError> {
-    Hash::new(arkret_sdk::canonical::sha256_digest(
+    Hash::new(arkret_core::canonical::sha256_digest(
         value.trim().as_bytes(),
     ))
     .map_err(|error| AppError::internal(format!("registration secret digest: {error}")))
@@ -1341,7 +1341,7 @@ fn actor_profile_from_account(
     if let Some(bio) = account.bio.clone() {
         profile_fields.insert("bio".to_owned(), Value::String(bio));
     }
-    let id = ActorProfileId::new(arkret_sdk::new_prefixed_uuid7("ak:actor_profile:")).map_err(
+    let id = ActorProfileId::new(arkret_core::new_prefixed_uuid7("ak:actor_profile:")).map_err(
         |error| AppError::internal(format!("actor profile id construction failed: {error}")),
     )?;
     Ok(ActorProfile {
@@ -1396,13 +1396,13 @@ async fn direct_conversation_resolve(
     let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, &scope).await?
     else {
         return Err(direct_resolve_precondition(
-            arkret_sdk::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+            arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation is unavailable",
         ));
     };
     if !has_active_consent_for_scope(state, &peer, &session.actor, &scope, now()) {
         return Err(direct_resolve_precondition(
-            arkret_sdk::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+            arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation is unavailable",
         ));
     }

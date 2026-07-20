@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::{Did, RealmId};
+use arkret_core::{Did, RealmId};
 use chrono::{DateTime, Utc};
 
 #[derive(Clone, Debug, Default)]

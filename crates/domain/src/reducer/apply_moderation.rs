@@ -639,10 +639,10 @@ impl ProjectionState {
 /// adapter and the ingest preflight.
 pub(crate) fn appeal_target_state(kind: &str) -> Option<&'static str> {
     match kind {
-        arkret_sdk::events::EventKind::MODERATION_APPEAL_SUBMIT => Some("submitted"),
-        arkret_sdk::events::EventKind::MODERATION_APPEAL_REVIEW => Some("under_review"),
-        arkret_sdk::events::EventKind::MODERATION_APPEAL_DECISION => Some("decided"),
-        arkret_sdk::events::EventKind::MODERATION_APPEAL_CLOSE => Some("closed"),
+        arkret_core::events::EventKind::MODERATION_APPEAL_SUBMIT => Some("submitted"),
+        arkret_core::events::EventKind::MODERATION_APPEAL_REVIEW => Some("under_review"),
+        arkret_core::events::EventKind::MODERATION_APPEAL_DECISION => Some("decided"),
+        arkret_core::events::EventKind::MODERATION_APPEAL_CLOSE => Some("closed"),
         _ => None,
     }
 }

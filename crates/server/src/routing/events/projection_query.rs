@@ -32,7 +32,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::{
+use arkret_core::{
     CellRef, Did, DocumentMorphProjectionOutcome, HistoryRangeContext, HistoryReaderContext,
     HistoryReaderEventState, HistorySharingPolicyPayloadValue, HistorySharingRestrictedScopeRef,
     HistorySharingScopeKind, HistoryVisibility, MorphId, ProjectionAssignedToRelation,
@@ -109,7 +109,7 @@ async fn realm_history_sharing_policy(
         .flatten()?
         .history_sharing_policy?;
     let policy = serde_json::from_value::<HistorySharingPolicyPayloadValue>(policy_value).ok()?;
-    arkret_sdk::validate_history_sharing_policy(&policy).ok()?;
+    arkret_core::validate_history_sharing_policy(&policy).ok()?;
     Some(policy)
 }
 
@@ -263,7 +263,7 @@ fn member_state_at_history_basis(
         return None;
     }
     let cell = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor}")).ok()?;
-    let state_at_basis = arkret_sdk::state::effective_state_at(
+    let state_at_basis = arkret_state::state::effective_state_at(
         &seals,
         &realm,
         state.seal_store.as_ref(),
@@ -272,10 +272,10 @@ fn member_state_at_history_basis(
     )
     .ok()?;
     match state_at_basis.get(&cell) {
-        Some(arkret_sdk::lattice::CellState::Value(Value::String(member_state))) => {
+        Some(arkret_state::lattice::CellState::Value(Value::String(member_state))) => {
             Some(member_state.clone())
         }
-        Some(arkret_sdk::lattice::CellState::Value(Value::Object(object))) => object
+        Some(arkret_state::lattice::CellState::Value(Value::Object(object))) => object
             .get("state")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
@@ -374,7 +374,7 @@ fn strand_assigned_to_relations(
 fn document_projection_document(
     morph: &MorphProjection,
     body: Value,
-) -> Result<arkret_sdk::DocumentMorphProjection, AppError> {
+) -> Result<arkret_core::DocumentMorphProjection, AppError> {
     parse_projection_id::<MorphId>(&morph.morph_id, "document.morph_id")?;
     parse_projection_id::<RealmId>(&morph.realm_id, "document.realm_id")?;
     parse_projection_id::<Did>(&morph.created_by, "document.created_by")?;
