@@ -744,6 +744,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
     ) {
         return Ok(());
     }
+    validate_sidecar_mention_subjects(state, operation).await?;
     let mentions = operation_audience_mentions(operation)?;
     if mentions.is_empty() {
         return Ok(());
@@ -789,6 +790,69 @@ pub(crate) async fn validate_audience_mention_operation_policy(
         audience_mention_policy_allows(&policy, mention.audience(), count)?;
     }
     Ok(())
+}
+
+async fn validate_sidecar_mention_subjects(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let strand_id = operation
+        .payload
+        .get("strand_id")
+        .or_else(|| operation.payload.get("target_ref"))
+        .and_then(Value::as_str);
+    let Some((controller_id, realm_id)) = strand_id.and_then(|strand_id| {
+        let projection = state.projection.lock();
+        let circle_id = projection
+            .strands
+            .get(strand_id)
+            .and_then(|strand| strand.scope_circle_id.as_deref())?;
+        projection
+            .sidecars
+            .values()
+            .find(|sidecar| sidecar.backing_circle_id == circle_id)
+            .map(|sidecar| (sidecar.controller_id.clone(), sidecar.realm_id.clone()))
+    }) else {
+        return Ok(());
+    };
+    let subjects = operation
+        .payload
+        .get("content")
+        .and_then(|content| content.get("mentions"))
+        .and_then(Value::as_array)
+        .map(|mentions| {
+            mentions
+                .iter()
+                .filter_map(|mention| {
+                    mention.as_str().or_else(|| {
+                        mention
+                            .get("subject_id")
+                            .or_else(|| mention.get("did"))
+                            .and_then(Value::as_str)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if subjects.is_empty() {
+        return Ok(());
+    }
+    let eligible = crate::routing::identity::agents::sidecar::eligible_sidecar_agents(
+        state,
+        &realm_id,
+        &controller_id,
+        &[],
+    )
+    .await
+    .map_err(|_| "addressed_agent_not_eligible")?;
+    if subjects
+        .iter()
+        .any(|subject| !eligible.iter().any(|agent| agent == subject))
+    {
+        Err("addressed_agent_not_eligible")
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) async fn realm_owner_and_members(

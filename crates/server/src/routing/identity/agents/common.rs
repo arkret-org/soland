@@ -325,7 +325,7 @@ pub(super) fn agent_requested_participation_ceiling(
 }
 
 pub(super) fn ensure_sidecar_controller_request(
-    body: &AgentSidecarThreadEnsureRequestBody,
+    body: &AgentSidecarEnsureRequestBody,
     session: &SessionRecord,
 ) -> Result<(), AppError> {
     if body.controller_id.as_str() != session.actor.as_str() {

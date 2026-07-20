@@ -51,6 +51,7 @@ mod realm_invites;
 mod recovery;
 mod service_identity;
 mod sessions;
+mod sidecars;
 mod sync_cursor;
 mod unit_of_work;
 mod webvh;
@@ -81,6 +82,7 @@ pub use realm_invites::*;
 pub use recovery::*;
 pub use service_identity::*;
 pub use sessions::*;
+pub use sidecars::*;
 pub use sync_cursor::*;
 pub use unit_of_work::*;
 pub use webvh::*;
@@ -191,6 +193,8 @@ pub trait MlsAgentStoreRegistry: Send + Sync {
     fn agent_participation(&self) -> &dyn AgentParticipationStore;
     // AKP-0008 — native personal agent principals.
     fn agents(&self) -> &dyn AgentStore;
+    /// First-class Agent Sidecar aggregates and context bindings.
+    fn sidecars(&self) -> &dyn SidecarStore;
     // AKP-0016 — per-recipient notification projection.
     fn notifications(&self) -> &dyn NotificationStore;
 }

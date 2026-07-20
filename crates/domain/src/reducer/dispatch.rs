@@ -493,6 +493,14 @@ fn apply_circle_member_state_dispatch(
     s.apply_circle_member_state(op, projection_received_at(op))
 }
 
+fn apply_sidecar_create_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_sidecar_create(op)
+}
+
 fn apply_applet_registration_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1160,6 +1168,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
         apply_circle_member_state_dispatch,
+    );
+    m.insert(
+        arkret_sdk::events::EventKind::SIDECAR_CREATE,
+        apply_sidecar_create_dispatch,
     );
     m.insert(
         arkret_sdk::events::EventKind::APPLET_REGISTRATION,

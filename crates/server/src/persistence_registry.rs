@@ -62,6 +62,7 @@ pub struct PgPersistenceStore {
     mls_commits: PgMlsCommitStore,
     agent_participation: PgAgentParticipationStore,
     agents: PgAgentStore,
+    sidecars: PgSidecarStore,
     notifications: PgNotificationStore,
     sync_cursors: PgSyncCursorStore,
     idempotency_keys: PgIdempotencyStore,
@@ -124,6 +125,7 @@ impl PgPersistenceStore {
             mls_commits: PgMlsCommitStore { pool: pool.clone() },
             agent_participation: PgAgentParticipationStore { pool: pool.clone() },
             agents: PgAgentStore { pool: pool.clone() },
+            sidecars: PgSidecarStore { pool: pool.clone() },
             sync_cursors: PgSyncCursorStore { pool: pool.clone() },
             idempotency_keys: PgIdempotencyStore { pool: pool.clone() },
             notifications: PgNotificationStore { pool },
@@ -377,6 +379,10 @@ impl MlsAgentStoreRegistry for PgPersistenceStore {
 
     fn agents(&self) -> &dyn AgentStore {
         &self.agents
+    }
+
+    fn sidecars(&self) -> &dyn SidecarStore {
+        &self.sidecars
     }
 
     fn notifications(&self) -> &dyn NotificationStore {

@@ -929,9 +929,9 @@ pub(super) async fn lifecycle_transition(
     })
 }
 
-/// Active sidecar Circles owned by `controller` created strictly after
-/// `since`. `since=None` (missing/unparsable pause timestamp) fails closed by
-/// treating every sidecar circle as new, forcing an explicit ack.
+/// Active Sidecar backing Circles owned by `controller` created strictly
+/// after `since`. `since=None` fails closed by treating every Sidecar as new,
+/// forcing an explicit acknowledgement.
 fn controller_sidecar_circles_since(
     state: &AppState,
     controller: &str,
@@ -939,19 +939,14 @@ fn controller_sidecar_circles_since(
 ) -> Vec<String> {
     let projection = state.projection.lock();
     projection
-        .circles
+        .sidecars
         .values()
-        .filter(|circle| {
-            circle.created_by == controller
-                && circle.directory_visibility == "members"
-                && circle.state == soland_domain::reducer::CircleLifecycleState::Active
-                && circle.title
-                    == super::sidecar::sidecar_short_name(
-                        &super::sidecar::controller_agent_circle_key(&circle.realm_id, controller),
-                    )
-                && since.is_none_or(|since| circle.created_at > since)
+        .filter(|sidecar| {
+            sidecar.controller_id == controller
+                && sidecar.state == arkret_sdk::models::AgentSidecarState::Active
+                && since.is_none_or(|since| sidecar.created_at > since)
         })
-        .map(|circle| circle.circle_id.clone())
+        .map(|sidecar| sidecar.backing_circle_id.clone())
         .collect()
 }
 

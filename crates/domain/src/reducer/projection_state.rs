@@ -139,6 +139,8 @@ pub struct ProjectionState {
     /// the struct so the wire layer can enforce
     /// `Circle.members ⊆ Realm.members` without an extra DB hop.
     pub circles: BTreeMap<String, CircleProjection>,
+    /// First-class Sidecars keyed by `sidecar_id`.
+    pub sidecars: BTreeMap<String, SidecarProjection>,
     /// Side-band membership boundaries for Circle history filtering. Keyed by
     /// `(circle_id, actor_id)` and retained across leave/ban transitions so
     /// read-side helpers can enforce invited/joined floors deterministically.

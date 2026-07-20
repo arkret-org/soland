@@ -1,0 +1,52 @@
+use super::{PersistenceResult, Value, async_trait};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentSidecarRecord {
+    pub sidecar_id: String,
+    pub realm_id: String,
+    pub controller_id: String,
+    pub backing_circle_id: String,
+    pub state: String,
+    pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentSidecarContextRecord {
+    pub sidecar_id: String,
+    pub normalized_context_ref_digest: String,
+    pub normalized_context_ref: Value,
+    pub private_strand_id: String,
+    pub private_relation_id: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[async_trait]
+pub trait SidecarStore: Send + Sync {
+    async fn insert_or_get(
+        &self,
+        record: AgentSidecarRecord,
+    ) -> PersistenceResult<AgentSidecarRecord>;
+    async fn get(&self, sidecar_id: &str) -> PersistenceResult<Option<AgentSidecarRecord>>;
+    async fn get_for_realm_controller(
+        &self,
+        realm_id: &str,
+        controller_id: &str,
+    ) -> PersistenceResult<Option<AgentSidecarRecord>>;
+    async fn list_for_controller(
+        &self,
+        controller_id: &str,
+        realm_id: Option<&str>,
+    ) -> PersistenceResult<Vec<AgentSidecarRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<AgentSidecarRecord>>;
+    async fn insert_or_get_context(
+        &self,
+        record: AgentSidecarContextRecord,
+    ) -> PersistenceResult<AgentSidecarContextRecord>;
+    async fn get_context(
+        &self,
+        sidecar_id: &str,
+        normalized_context_ref_digest: &str,
+    ) -> PersistenceResult<Option<AgentSidecarContextRecord>>;
+}

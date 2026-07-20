@@ -1,16 +1,21 @@
+use arkret_sdk::models::{
+    AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
+    AgentSidecarEncryptionProfile, AgentSidecarEnsureOutcome, AgentSidecarEnsureRequestBody,
+    AgentSidecarList, AgentSidecarSchema, AgentSidecarState, AgentSidecarView,
+    PendingSidecarAccessReconciliationItem, PendingSidecarAccessReconciliationStage,
+};
+use arkret_sdk::{NonEmptyString, SidecarId};
+use salvo::oapi::extract::QueryParam;
+use soland_storage::{AgentSidecarContextRecord, AgentSidecarRecord};
+
 use super::*;
 
 pub(super) const ADDRESSED_AGENT_NOT_ELIGIBLE: &str = "addressed_agent_not_eligible";
 pub(super) const CONTROLLER_IN_ADDRESSED_AGENTS: &str = "controller_in_addressed_agents";
 
 const SIDECAR_ENSURE_LOCK_SHARDS: usize = 256;
+const SIDECAR_LIST_PAGE_SIZE: usize = 100;
 
-/// Serialize one controller's per-Realm sidecar aggregate.
-///
-/// Both the Circle reuse key and every private Strand reuse key are derived
-/// below this `(realm_id, controller_id)` scope. Holding the same lane across
-/// the complete find-or-create sequence makes concurrent ensures converge as
-/// required by circle.md §11.1.
 async fn lock_sidecar_ensure(realm_id: &str, controller: &str) -> tokio::sync::OwnedMutexGuard<()> {
     use std::hash::{Hash as _, Hasher as _};
     use std::sync::{Arc, OnceLock};
@@ -42,7 +47,7 @@ pub(super) fn sidecar_failed_precondition(
         .with_wire_code(reason)
 }
 
-pub(super) fn sidecar_reducer_reject_to_app_error(reason: &'static str) -> AppError {
+fn sidecar_reducer_reject_to_app_error(reason: &'static str) -> AppError {
     AppError::new(
         ErrorCode::FailedPrecondition,
         format!("agent sidecar reducer rejected: {reason}"),
@@ -51,7 +56,7 @@ pub(super) fn sidecar_reducer_reject_to_app_error(reason: &'static str) -> AppEr
     .with_wire_code(reason)
 }
 
-pub(super) async fn authorize_sidecar_ensure(
+async fn authorize_sidecar_ensure(
     state: &AppState,
     controller: &str,
     realm_id: &str,
@@ -66,7 +71,7 @@ pub(super) async fn authorize_sidecar_ensure(
     let members = realm_members_for_authz(state, realm_id);
     let verdict = state.authz.check(
         controller,
-        arkret_sdk::CapabilityActionId::SELF_AGENT_SIDECAR_THREAD_COMMAND_ENSURE,
+        arkret_sdk::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
         realm_id,
         realm_id,
         owner.as_deref(),
@@ -81,44 +86,32 @@ pub(super) async fn authorize_sidecar_ensure(
         "explicit_deny" | "quarantine" | "require_review" | "constraints_not_satisfied"
     ) {
         return Err(sidecar_create_denied(
-            "ak.self.agent.sidecar_thread.command.ensure denied by policy",
+            "ak.self.agent.sidecar.command.ensure denied by policy",
         ));
     }
     if realm_member_joined(state, realm_id, controller) {
         return Ok(());
     }
     Err(sidecar_create_denied(
-        "ak.self.agent.sidecar_thread.command.ensure requires a Realm member controller",
+        "ak.self.agent.sidecar.command.ensure requires a Realm member controller",
     ))
 }
 
-pub(super) fn realm_members_for_authz(state: &AppState, realm_id: &str) -> Vec<String> {
-    {
-        let realms = state.realms.lock();
-        {
-            RealmId::new(realm_id.to_owned())
-                .ok()
-                .and_then(|id| realms.get(&id).cloned())
-        }
-    }
-    .map(|realm| {
-        realm
-            .members
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-    })
-    .unwrap_or_default()
+fn realm_members_for_authz(state: &AppState, realm_id: &str) -> Vec<String> {
+    let realms = state.realms.lock();
+    RealmId::new(realm_id.to_owned())
+        .ok()
+        .and_then(|id| realms.get(&id).cloned())
+        .map(|realm| realm.members.iter().map(ToString::to_string).collect())
+        .unwrap_or_default()
 }
 
 pub(super) fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
     let in_realm_directory = {
         let realms = state.realms.lock();
-        {
-            RealmId::new(realm_id.to_owned())
-                .ok()
-                .and_then(|id| realms.get(&id).cloned())
-        }
+        RealmId::new(realm_id.to_owned())
+            .ok()
+            .and_then(|id| realms.get(&id).cloned())
     }
     .and_then(|realm| {
         Did::new(actor.to_owned())
@@ -126,110 +119,66 @@ pub(super) fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str)
             .map(|did| realm.members.contains(&did))
     })
     .unwrap_or(false);
-    if in_realm_directory {
-        return true;
-    }
-    {
-        let projection = state.projection.lock();
-        {
-            projection
-                .member(realm_id, actor)
-                .map(|membership| membership.state == "join")
-        }
-    }
-    .unwrap_or(false)
+    in_realm_directory
+        || state
+            .projection
+            .lock()
+            .member(realm_id, actor)
+            .is_some_and(|membership| membership.state == "join")
 }
 
-pub(super) fn normalize_sidecar_context_ref(
-    context_ref: &AgentSidecarContextRef,
-) -> Result<Value, AppError> {
-    let has_strand = context_ref.strand_id.is_some();
-    let has_relation = context_ref.relation_id.is_some();
-    if has_relation
-        && (has_strand || context_ref.message_id.is_some() || context_ref.track_name.is_some())
-    {
-        return Err(AppError::invalid_param(
-            "context_ref with relation_id must not include strand_id, message_id, or track_name",
-        ));
-    }
-    if !has_relation && !has_strand {
-        return Err(AppError::invalid_param(
-            "context_ref must include either strand_id or relation_id",
-        ));
-    }
-    if context_ref.message_id.is_some() && !has_strand {
-        return Err(AppError::invalid_param(
-            "context_ref.message_id requires strand_id",
-        ));
-    }
+fn normalize_sidecar_context_ref(context_ref: &AgentSidecarContextRef) -> Result<Value, AppError> {
     serde_json::to_value(context_ref)
         .map_err(|err| AppError::internal(format!("context_ref serialization failed: {err}")))
 }
 
-pub(super) fn sidecar_context_target_ref(context_ref: &AgentSidecarContextRef) -> String {
-    if let Some(relation_id) = &context_ref.relation_id {
-        return relation_id.to_string();
-    }
-    if let Some(message_id) = &context_ref.message_id {
-        return message_id.to_string();
-    }
-    context_ref
-        .strand_id
-        .as_ref()
-        .expect("context_ref validated")
-        .to_string()
+fn context_realm_id(context_ref: &AgentSidecarContextRef) -> &RealmId {
+    context_ref.realm_id()
 }
 
-pub(super) fn validate_sidecar_context_projection(
+fn sidecar_context_target_ref(context_ref: &AgentSidecarContextRef) -> &str {
+    match context_ref {
+        AgentSidecarContextRef::Strand(context) => context.strand_id.as_str(),
+        AgentSidecarContextRef::Relation(context) => context.relation_id.as_str(),
+    }
+}
+
+fn validate_sidecar_context_projection(
     state: &AppState,
     context_ref: &AgentSidecarContextRef,
 ) -> Result<(), AppError> {
     let projection = state.projection.lock();
-    let realm_id = context_ref.realm_id.as_str();
-    if let Some(relation_id) = &context_ref.relation_id {
-        let relation = projection
-            .relations
-            .get(relation_id.as_str())
-            .ok_or_else(|| AppError::not_found("context_ref.relation_id not found"))?;
-        if relation.realm_id != realm_id {
-            return Err(sidecar_failed_precondition(
-                "context_ref_realm_mismatch",
-                "context_ref.relation_id belongs to another Realm",
-            ));
+    let realm_id = context_ref.realm_id().as_str();
+    match context_ref {
+        AgentSidecarContextRef::Strand(context) => {
+            let strand = projection
+                .strands
+                .get(context.strand_id.as_str())
+                .ok_or_else(|| AppError::not_found("context_ref.strand_id not found"))?;
+            if strand.realm_id != realm_id {
+                return Err(sidecar_failed_precondition(
+                    "context_ref_realm_mismatch",
+                    "context_ref.strand_id belongs to another Realm",
+                ));
+            }
         }
-        if relation.state != "active" {
-            return Err(sidecar_failed_precondition(
-                "relation_not_active",
-                "context_ref.relation_id is not active",
-            ));
-        }
-        return Ok(());
-    }
-    let Some(strand_id) = &context_ref.strand_id else {
-        return Err(AppError::invalid_param(
-            "context_ref must include strand_id or relation_id",
-        ));
-    };
-    let strand = projection
-        .strands
-        .get(strand_id.as_str())
-        .ok_or_else(|| AppError::not_found("context_ref.strand_id not found"))?;
-    if strand.realm_id != realm_id {
-        return Err(sidecar_failed_precondition(
-            "context_ref_realm_mismatch",
-            "context_ref.strand_id belongs to another Realm",
-        ));
-    }
-    if let Some(message_id) = &context_ref.message_id {
-        let message = projection
-            .messages
-            .get(message_id.as_str())
-            .ok_or_else(|| AppError::not_found("context_ref.message_id not found"))?;
-        if message.realm_id != realm_id || message.thread_id != strand_id.as_str() {
-            return Err(sidecar_failed_precondition(
-                "context_ref_realm_mismatch",
-                "context_ref.message_id does not belong to the referenced Strand",
-            ));
+        AgentSidecarContextRef::Relation(context) => {
+            let relation = projection
+                .relations
+                .get(context.relation_id.as_str())
+                .ok_or_else(|| AppError::not_found("context_ref.relation_id not found"))?;
+            if relation.realm_id != realm_id {
+                return Err(sidecar_failed_precondition(
+                    "context_ref_realm_mismatch",
+                    "context_ref.relation_id belongs to another Realm",
+                ));
+            }
+            if relation.state != "active" {
+                return Err(sidecar_failed_precondition(
+                    "relation_not_active",
+                    "context_ref.relation_id is not active",
+                ));
+            }
         }
     }
     Ok(())
@@ -237,26 +186,28 @@ pub(super) fn validate_sidecar_context_projection(
 
 pub(super) fn normalize_addressed_agents(
     controller: &str,
-    body: &AgentSidecarThreadEnsureRequestBody,
+    body: &AgentSidecarEnsureRequestBody,
 ) -> Result<Vec<String>, AppError> {
-    let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
+    if body
+        .addressed_agent_ids
+        .iter()
+        .any(|agent| agent.as_str() == controller)
+    {
+        return Err(sidecar_failed_precondition(
+            CONTROLLER_IN_ADDRESSED_AGENTS,
+            "addressed_agent_ids must not contain the controller",
+        ));
+    }
+    body.validate()
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    let mut out = Vec::with_capacity(body.addressed_agent_ids.len());
     for agent in &body.addressed_agent_ids {
-        let agent = agent.as_str().trim();
-        if agent == controller {
-            return Err(sidecar_failed_precondition(
-                CONTROLLER_IN_ADDRESSED_AGENTS,
-                "addressed_agent_ids must not contain the controller",
-            ));
-        }
-        if seen.insert(agent.to_owned()) {
-            out.push(agent.to_owned());
-        }
+        out.push(agent.to_string());
     }
     Ok(out)
 }
 
-pub(super) async fn eligible_sidecar_agents(
+pub(crate) async fn eligible_sidecar_agents(
     state: &AppState,
     realm_id: &str,
     controller: &str,
@@ -266,124 +217,44 @@ pub(super) async fn eligible_sidecar_agents(
         .agent_pairing_application()
         .agents_for_controller(controller)
         .await
-        .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?
-        .into_iter()
-        .collect::<Vec<_>>();
-    let mut eligible = BTreeSet::new();
-    for record in records {
-        if agent_record_is_sidecar_eligible(state, realm_id, controller, &record) {
-            eligible.insert(record.id.clone());
-        }
-    }
-    for addressed in addressed_agents {
-        if !eligible.contains(addressed) {
-            return Err(sidecar_failed_precondition(
-                ADDRESSED_AGENT_NOT_ELIGIBLE,
-                "addressed agent is not eligible for this sidecar Realm",
-            ));
-        }
+        .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
+    let eligible = records
+        .iter()
+        .filter(|record| agent_record_is_sidecar_eligible(state, realm_id, controller, record))
+        .map(|record| record.id.clone())
+        .collect::<BTreeSet<_>>();
+    if addressed_agents
+        .iter()
+        .any(|addressed| !eligible.contains(addressed))
+    {
+        return Err(sidecar_failed_precondition(
+            ADDRESSED_AGENT_NOT_ELIGIBLE,
+            "addressed agent is not eligible for this Sidecar Realm",
+        ));
     }
     Ok(eligible.into_iter().collect())
 }
 
-pub(super) fn agent_record_is_sidecar_eligible(
+fn agent_record_is_sidecar_eligible(
     state: &AppState,
     realm_id: &str,
     controller: &str,
     record: &AgentPrincipalRecord,
 ) -> bool {
     let agent_id = record.id.as_str();
-    if record.controller_id != controller {
-        return false;
-    }
-    if record.state != "active" {
-        return false;
-    }
-    if !realm_member_joined(state, realm_id, agent_id) {
-        return false;
-    }
-    let projection = state.projection.lock();
-    !matches!(
-        projection.agent_lifecycles.get(agent_id),
-        Some(AgentLifecycleState::Paused | AgentLifecycleState::Deactivated)
-    ) && projection.agent_has_authorized_key(agent_id)
+    record.controller_id == controller
+        && record.state == "active"
+        && realm_member_joined(state, realm_id, agent_id)
+        && {
+            let projection = state.projection.lock();
+            !matches!(
+                projection.agent_lifecycles.get(agent_id),
+                Some(AgentLifecycleState::Paused | AgentLifecycleState::Deactivated)
+            ) && projection.agent_has_authorized_key(agent_id)
+        }
 }
 
-pub(super) fn controller_agent_circle_key(realm_id: &str, controller: &str) -> String {
-    arkret_sdk::agent_sidecar_circle_key(realm_id, controller)
-}
-
-pub(super) fn sidecar_short_name(controller_agent_circle_key: &str) -> String {
-    arkret_sdk::agent_sidecar_short_name(controller_agent_circle_key)
-}
-
-pub(super) fn find_sidecar_circle(
-    state: &AppState,
-    realm_id: &str,
-    controller: &str,
-    short_name: &str,
-) -> Option<CircleId> {
-    let projection = state.projection.lock();
-    projection
-        .circles
-        .values()
-        .find(|circle| {
-            circle.realm_id == realm_id
-                && circle.profile_ref.as_deref() == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
-                && circle.created_by == controller
-                && circle.title == short_name
-                && circle.directory_visibility == "members"
-                && circle.state == soland_domain::reducer::CircleLifecycleState::Active
-        })
-        .and_then(|circle| CircleId::new(circle.circle_id.clone()).ok())
-}
-
-fn sidecar_circle_encryption_is_compliant(
-    circle: &soland_domain::reducer::CircleProjection,
-) -> bool {
-    circle.encryption_profile == "mls_rfc9420"
-        && circle.content_encryption_floor.as_deref() == Some("e2ee_required")
-        && circle.metadata_encryption_floor.as_deref() == Some("e2ee_required")
-}
-
-/// Repair the one legacy Sidecar shape created before the reserved aggregate
-/// fixed its encryption fields. This is deliberately limited to the canonical
-/// `(realm, controller, profile, short_name)` singleton: it does not provide a
-/// general bypass for Circle create-locked encryption fields and it preserves
-/// the Circle id/membership instead of creating a second private aggregate.
-fn migrate_legacy_sidecar_circle_encryption(
-    state: &AppState,
-    realm_id: &str,
-    controller: &str,
-    short_name: &str,
-) {
-    let mut projection = state.projection.lock();
-    let Some(circle) = projection.circles.values_mut().find(|circle| {
-        circle.realm_id == realm_id
-            && circle.profile_ref.as_deref() == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
-            && circle.created_by == controller
-            && circle.title == short_name
-            && circle.directory_visibility == "members"
-            && circle.state == soland_domain::reducer::CircleLifecycleState::Active
-    }) else {
-        return;
-    };
-    if sidecar_circle_encryption_is_compliant(circle) {
-        return;
-    }
-    tracing::warn!(
-        circle_id = %circle.circle_id,
-        %realm_id,
-        %controller,
-        previous_encryption_profile = %circle.encryption_profile,
-        "migrating legacy Sidecar Circle to the mandatory MLS encryption profile"
-    );
-    circle.encryption_profile = "mls_rfc9420".to_owned();
-    circle.content_encryption_floor = Some("e2ee_required".to_owned());
-    circle.metadata_encryption_floor = Some("e2ee_required".to_owned());
-}
-
-pub(super) fn new_sidecar_operation(
+fn new_sidecar_operation(
     realm_id: &RealmId,
     kind: &'static str,
     payload: Value,
@@ -398,86 +269,175 @@ pub(super) fn new_sidecar_operation(
     ))
 }
 
-pub(super) async fn ensure_sidecar_circle(
+fn backing_circle_is_compliant(
+    circle: &soland_domain::reducer::CircleProjection,
+    sidecar_id: &SidecarId,
+    controller: &str,
+) -> bool {
+    let expected_short_name =
+        arkret_sdk::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
+    circle.profile_ref.is_none()
+        && circle.title == "Agent Sidecar Scope"
+        && circle.summary.is_none()
+        && circle.created_by == controller
+        && circle.directory_visibility == "members"
+        && circle.join_rule == "invite"
+        && circle.history_visibility == "restricted"
+        && circle.encryption_profile == "mls_rfc9420"
+        && circle.content_encryption_floor.as_deref() == Some("e2ee_required")
+        && circle.metadata_encryption_floor.as_deref() == Some("e2ee_required")
+        && circle
+            .display
+            .pointer("/short_name")
+            .and_then(Value::as_str)
+            == Some(expected_short_name.as_str())
+        && circle
+            .display
+            .pointer("/symbol/glyph")
+            .and_then(Value::as_str)
+            == Some("lock")
+}
+
+async fn ensure_backing_circle(
     state: &AppState,
     controller: &str,
     realm_id: &RealmId,
-    short_name: &str,
-) -> Result<CircleId, AppError> {
-    migrate_legacy_sidecar_circle_encryption(state, realm_id.as_str(), controller, short_name);
-    if let Some(circle_id) = find_sidecar_circle(state, realm_id.as_str(), controller, short_name) {
-        let compliant = {
-            let projection = state.projection.lock();
-            projection
-                .circles
-                .get(circle_id.as_str())
-                .is_some_and(sidecar_circle_encryption_is_compliant)
+    sidecar_id: &SidecarId,
+    circle_id: &CircleId,
+) -> Result<(), AppError> {
+    if let Some(circle) = state.projection.lock().circles.get(circle_id.as_str()) {
+        return if circle.realm_id == realm_id.as_str()
+            && backing_circle_is_compliant(circle, sidecar_id, controller)
+        {
+            Ok(())
+        } else {
+            Err(sidecar_create_denied("Sidecar backing scope conflict"))
         };
-        if !compliant {
-            return Err(sidecar_failed_precondition(
-                "sidecar_encryption_profile_invalid",
-                "Sidecar Circle does not satisfy the mandatory MLS encryption profile",
-            ));
-        }
-        return Ok(circle_id);
     }
-    let circle_id = CircleId::new(ids::generate_circle_id())
-        .map_err(|err| AppError::internal(format!("generated circle id invalid: {err}")))?;
+    let short_name = arkret_sdk::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
     let object = json!({
         "id": circle_id,
         "schema": "ak.schema.circle.v1",
         "realm_id": realm_id,
-        "profile_ref": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
-        "title": short_name,
-        "summary": "Controller-private AI sidecar scope",
+        "title": "Agent Sidecar Scope",
         "display": {
             "short_name": short_name,
             "color_token": "slate",
-            "symbol": { "glyph": "spark" },
+            "symbol": { "glyph": "lock" }
         },
         "directory_visibility": "members",
         "join_rule": "invite",
-        "history_visibility": "joined",
+        "history_visibility": "restricted",
         "content_encryption_floor": "e2ee_required",
         "metadata_encryption_floor": "e2ee_required",
         "encryption_profile": "mls_rfc9420",
         "state": "active",
         "created_by": controller,
-        "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     });
-    // `ak.circle.create` is a closed wire payload: the authorization context
-    // belongs to this already-authenticated aggregate, not beside `object`.
-    // The trusted sidecar acceptor below re-checks the reserved profile shape
-    // against `controller` before projection.
-    let payload = json!({ "object": object });
     let operation = new_sidecar_operation(
         realm_id,
         arkret_sdk::events::EventKind::CIRCLE_CREATE,
-        payload,
+        json!({"object": object}),
     )?;
     crate::routing::events::projection::accept_trusted_sidecar_circle_operation(
-        state, controller, &operation,
+        state, controller, sidecar_id, &operation,
     )
     .await
     .map_err(sidecar_reducer_reject_to_app_error)?;
-    find_sidecar_circle(state, realm_id.as_str(), controller, short_name)
-        .ok_or_else(|| AppError::internal("sidecar Circle accepted but not projected"))
-}
-
-pub(super) fn circle_has_member(state: &AppState, circle_id: &str, actor: &str) -> bool {
+    if state
+        .projection
+        .lock()
+        .circles
+        .get(circle_id.as_str())
+        .is_some_and(|circle| backing_circle_is_compliant(circle, sidecar_id, controller))
     {
-        let projection = state.projection.lock();
-        {
-            projection
-                .circles
-                .get(circle_id)
-                .map(|circle| circle.members.contains(actor))
-        }
+        Ok(())
+    } else {
+        Err(AppError::internal(
+            "Sidecar backing Circle accepted but not projected",
+        ))
     }
-    .unwrap_or(false)
 }
 
-pub(super) async fn ensure_sidecar_member(
+async fn ensure_sidecar_aggregate(
+    state: &AppState,
+    controller: &str,
+    realm_id: &RealmId,
+) -> Result<AgentSidecarRecord, AppError> {
+    if let Some(record) = state
+        .sidecars_store()
+        .get_for_realm_controller(realm_id.as_str(), controller)
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?
+    {
+        let sidecar_id = SidecarId::new(record.sidecar_id.clone())
+            .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?;
+        let circle_id = CircleId::new(record.backing_circle_id.clone())
+            .map_err(|error| AppError::internal(format!("stored backing Circle id: {error}")))?;
+        ensure_backing_circle(state, controller, realm_id, &sidecar_id, &circle_id).await?;
+        return Ok(record);
+    }
+
+    let sidecar_id = SidecarId::new(ids::generate("sidecar"))
+        .map_err(|error| AppError::internal(format!("generated Sidecar id: {error}")))?;
+    let backing_circle_id = CircleId::new(ids::generate_circle_id())
+        .map_err(|error| AppError::internal(format!("generated Circle id: {error}")))?;
+    let created_at = chrono::Utc::now();
+    ensure_backing_circle(state, controller, realm_id, &sidecar_id, &backing_circle_id).await?;
+    let sidecar = AgentSidecar {
+        id: sidecar_id.clone(),
+        schema: AgentSidecarSchema::V1,
+        realm_id: realm_id.clone(),
+        controller_id: Did::new(controller.to_owned())
+            .map_err(|error| AppError::internal(format!("controller id: {error}")))?,
+        backing_circle_id: backing_circle_id.clone(),
+        encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
+        state: AgentSidecarState::Active,
+        state_changed_at: None,
+        created_at,
+        updated_at: None,
+    };
+    let operation = new_sidecar_operation(
+        realm_id,
+        arkret_sdk::events::EventKind::SIDECAR_CREATE,
+        json!({"object": sidecar}),
+    )?;
+    crate::routing::events::projection::accept_trusted_sidecar_create_operation(
+        state,
+        controller,
+        &backing_circle_id,
+        &operation,
+    )
+    .await
+    .map_err(sidecar_reducer_reject_to_app_error)?;
+    let record = AgentSidecarRecord {
+        sidecar_id: sidecar_id.to_string(),
+        realm_id: realm_id.to_string(),
+        controller_id: controller.to_owned(),
+        backing_circle_id: backing_circle_id.to_string(),
+        state: "active".to_owned(),
+        state_changed_at: None,
+        created_at,
+        updated_at: None,
+    };
+    state
+        .sidecars_store()
+        .insert_or_get(record)
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar persistence failed: {error}")))
+}
+
+fn circle_has_member(state: &AppState, circle_id: &str, actor: &str) -> bool {
+    state
+        .projection
+        .lock()
+        .circles
+        .get(circle_id)
+        .is_some_and(|circle| circle.members.contains(actor))
+}
+
+async fn ensure_sidecar_member(
     state: &AppState,
     controller: &str,
     realm_id: &RealmId,
@@ -487,15 +447,10 @@ pub(super) async fn ensure_sidecar_member(
     if circle_has_member(state, circle_id.as_str(), actor) {
         return Ok(());
     }
-    let payload = json!({
-        "circle_id": circle_id,
-        "actor_id": actor,
-        "membership": "join",
-    });
     let operation = new_sidecar_operation(
         realm_id,
         arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
-        payload,
+        json!({"circle_id": circle_id, "actor_id": actor, "membership": "join"}),
     )?;
     crate::routing::events::projection::accept_trusted_sidecar_member_operation(
         state, controller, &operation,
@@ -506,285 +461,454 @@ pub(super) async fn ensure_sidecar_member(
         Ok(())
     } else {
         Err(AppError::internal(
-            "sidecar Circle membership accepted but not projected",
+            "Sidecar backing membership accepted but not projected",
         ))
     }
 }
 
-pub(super) fn find_sidecar_strand(
-    state: &AppState,
-    realm_id: &str,
-    controller: &str,
-    circle_id: &str,
-    normalized_context_ref_digest: &str,
-) -> Option<StrandId> {
-    let projection = state.projection.lock();
-    projection
-        .strands
-        .values()
-        .find(|strand| {
-            strand.realm_id == realm_id
-                && strand.scope_circle_id.as_deref() == Some(circle_id)
-                && strand.fields.get("sidecar_profile").and_then(Value::as_str)
-                    == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
-                && strand.fields.get("controller_id").and_then(Value::as_str) == Some(controller)
-                && strand
-                    .fields
-                    .get("normalized_context_ref_digest")
-                    .and_then(Value::as_str)
-                    == Some(normalized_context_ref_digest)
-        })
-        .and_then(|strand| StrandId::new(strand.strand_id.clone()).ok())
-}
-
-pub(super) async fn ensure_sidecar_strand(
+async fn ensure_sidecar_mls_genesis(
     state: &AppState,
     controller: &str,
+    controller_device_id: &str,
     realm_id: &RealmId,
     circle_id: &CircleId,
+) -> Result<(), AppError> {
+    if state
+        .projection
+        .lock()
+        .circles
+        .get(circle_id.as_str())
+        .is_some_and(|circle| circle.mls_group_ref.is_some())
+    {
+        return Ok(());
+    }
+    let mut member_event_refs = state
+        .projection_events_store()
+        .snapshot_all()
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Sidecar MLS frontier lookup failed: {error}"))
+        })?
+        .into_iter()
+        .filter(|event| event.event_kind == arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE)
+        .filter(|event| {
+            event.payload.get("circle_id").and_then(Value::as_str) == Some(circle_id.as_str())
+                && event.payload.get("membership").and_then(Value::as_str) == Some("join")
+        })
+        .map(|event| event.event_id)
+        .collect::<Vec<_>>();
+    member_event_refs.sort();
+    member_event_refs.dedup();
+    if member_event_refs.is_empty() {
+        return Err(AppError::internal(
+            "Sidecar MLS genesis requires a persisted membership frontier",
+        ));
+    }
+    let group_id = ids::generate("mls_group");
+    let effective_scope = json!({
+        "kind": "circle",
+        "realm_id": realm_id,
+        "circle_id": circle_id,
+    });
+    let governance_binding = json!({
+        "binding_version": 1,
+        "encoding_profile": "cbor-deterministic-rfc8949-v1",
+        "realm_id": realm_id,
+        "effective_scope": effective_scope,
+        "mls_group_id": group_id,
+        "previous_epoch": 0,
+        "next_epoch": 0,
+        "membership_frontier": member_event_refs,
+        "policy_root": arkret_sdk::canonical::sha256_digest(format!("sidecar-policy:{realm_id}:{group_id}")),
+        "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+        "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1,
+    });
+    let operation = new_sidecar_operation(
+        realm_id,
+        arkret_sdk::events::EventKind::MLS_GENESIS,
+        json!({
+            "mls_group_id": group_id,
+            "effective_scope": effective_scope,
+            "epoch": 0,
+            "creator_principal_id": controller,
+            "creator_device_id": controller_device_id,
+            "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+            "group_info_digest": arkret_sdk::canonical::sha256_digest(format!("sidecar-group-info:{realm_id}:{group_id}")),
+            "ratchet_tree_digest": arkret_sdk::canonical::sha256_digest(format!("sidecar-ratchet-tree:{realm_id}:{group_id}")),
+            "covered_seals": member_event_refs,
+            "governance_binding": governance_binding,
+            "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        }),
+    )?;
+    let effect =
+        soland_domain::reducer::mls::apply_group_genesis(&mut state.projection.lock(), &operation);
+    match &effect {
+        soland_domain::reducer::ProjectionEffect::Mls(
+            soland_domain::reducer::MlsEffect::GroupGenesis { .. },
+        ) => {
+            crate::routing::events::projection::mirror_mls_effect_to_persistence(
+                state,
+                controller,
+                controller_device_id,
+                &operation,
+                &effect,
+            )
+            .await;
+            Ok(())
+        }
+        soland_domain::reducer::ProjectionEffect::Rejected { reason } => Err(AppError::internal(
+            format!("Sidecar MLS genesis rejected: {reason}"),
+        )),
+        other => Err(AppError::internal(format!(
+            "unexpected Sidecar MLS genesis effect: {other:?}"
+        ))),
+    }
+}
+
+fn private_tracks_for_context(state: &AppState, context_ref: &AgentSidecarContextRef) -> Value {
+    let AgentSidecarContextRef::Strand(context) = context_ref else {
+        return json!({"synthesis": {}, "discussion": {"profile": "discussion", "is_primary": true}});
+    };
+    state
+        .projection
+        .lock()
+        .strands
+        .get(context.strand_id.as_str())
+        .and_then(|strand| serde_json::to_value(&strand.tracks).ok())
+        .unwrap_or_else(|| json!({"synthesis": {}}))
+}
+
+async fn create_private_context(
+    state: &AppState,
+    controller: &str,
+    sidecar: &AgentSidecarRecord,
+    context_ref: &AgentSidecarContextRef,
     normalized_context_ref: &Value,
     normalized_context_ref_digest: &str,
-) -> Result<StrandId, AppError> {
-    if let Some(strand_id) = find_sidecar_strand(
-        state,
-        realm_id.as_str(),
-        controller,
-        circle_id.as_str(),
-        normalized_context_ref_digest,
-    ) {
-        return Ok(strand_id);
-    }
+) -> Result<AgentSidecarContextRecord, AppError> {
+    let realm_id = RealmId::new(sidecar.realm_id.clone())
+        .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?;
+    let circle_id = CircleId::new(sidecar.backing_circle_id.clone())
+        .map_err(|error| AppError::internal(format!("stored Circle id: {error}")))?;
     let strand_id = StrandId::new(ids::generate("strand"))
-        .map_err(|err| AppError::internal(format!("generated strand id invalid: {err}")))?;
-    let object = json!({
-        "id": strand_id,
-        "schema": "ak.schema.strand.v1",
-        "realm_id": realm_id,
-        "metadata": {
-            "title": "AI sidecar",
-            "summary": "Controller-private AI sidecar thread",
-            "fields": {
-                "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
-                "controller_id": controller,
-                "normalized_context_ref": normalized_context_ref,
-                "normalized_context_ref_digest": normalized_context_ref_digest,
-            },
-        },
-        "tracks": { "discussion": { "enabled": true, "is_primary": true } },
-        "scope_circle_id": circle_id,
-        "created_by": controller,
-        "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-    });
-    let payload = json!({
-        "object": object,
-    });
-    let operation = new_sidecar_operation(
-        realm_id,
+        .map_err(|error| AppError::internal(format!("generated Strand id: {error}")))?;
+    let strand_operation = new_sidecar_operation(
+        &realm_id,
         arkret_sdk::events::EventKind::STRAND_CREATE,
-        payload,
+        json!({"object": {
+            "id": strand_id,
+            "schema": "ak.schema.strand.v1",
+            "realm_id": realm_id,
+            "metadata": {"title": "Private Sidecar"},
+            "tracks": private_tracks_for_context(state, context_ref),
+            "scope_circle_id": circle_id,
+            "created_by": controller,
+            "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        }}),
     )?;
-    accept_local_operations(state, controller, std::slice::from_ref(&operation))
+    accept_local_operations(state, controller, std::slice::from_ref(&strand_operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;
-    find_sidecar_strand(
-        state,
-        realm_id.as_str(),
-        controller,
-        circle_id.as_str(),
-        normalized_context_ref_digest,
-    )
-    .ok_or_else(|| AppError::internal("sidecar Strand accepted but not projected"))
-}
 
-pub(super) fn find_sidecar_relation(
-    state: &AppState,
-    realm_id: &str,
-    circle_id: &str,
-    private_strand_id: &str,
-    target_ref: &str,
-) -> Option<RelationId> {
-    let projection = state.projection.lock();
-    projection
-        .relations
-        .values()
-        .find(|relation| {
-            relation.realm_id == realm_id
-                && relation.relation_kind == "agent_sidecar_of"
-                && relation.scope_circle_id.as_deref() == Some(circle_id)
-                && relation.from_ref.as_deref() == Some(private_strand_id)
-                && relation.to_ref.as_deref() == Some(target_ref)
-                && relation.state == "active"
-        })
-        .and_then(|relation| RelationId::new(relation.relation_id.clone()).ok())
-}
-
-pub(super) async fn ensure_sidecar_relation(
-    state: &AppState,
-    controller: &str,
-    realm_id: &RealmId,
-    circle_id: &CircleId,
-    private_strand_id: &StrandId,
-    target_ref: &str,
-    normalized_context_ref_digest: &str,
-    track_name: Option<&str>,
-) -> Result<RelationId, AppError> {
-    if let Some(relation_id) = find_sidecar_relation(
-        state,
-        realm_id.as_str(),
-        circle_id.as_str(),
-        private_strand_id.as_str(),
-        target_ref,
-    ) {
-        return Ok(relation_id);
-    }
     let relation_id = RelationId::new(ids::generate_relation_id())
-        .map_err(|err| AppError::internal(format!("generated relation id invalid: {err}")))?;
-    let mut fields = json!({
-        "sidecar_profile": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
-        "controller_id": controller,
-        "normalized_context_ref_digest": normalized_context_ref_digest,
-    });
-    if let Some(track_name) = track_name
-        && let Some(object) = fields.as_object_mut()
-    {
-        object.insert(
-            "context_track_name".to_owned(),
-            Value::String(track_name.to_owned()),
-        );
-    }
-    let payload = json!({
-        "relation": {
+        .map_err(|error| AppError::internal(format!("generated Relation id: {error}")))?;
+    let relation_operation = new_sidecar_operation(
+        &realm_id,
+        arkret_sdk::events::EventKind::RELATION_CREATE,
+        json!({"relation": {
             "id": relation_id,
             "kind": "agent_sidecar_of",
-            "from_ref": private_strand_id,
-            "to_ref": target_ref,
+            "from_ref": strand_id,
+            "to_ref": sidecar_context_target_ref(context_ref),
             "scope_circle_id": circle_id,
-            "fields": fields,
-            "created_by": controller,
-        }
-    });
-    let operation = new_sidecar_operation(
-        realm_id,
-        arkret_sdk::events::EventKind::RELATION_CREATE,
-        payload,
+            "created_by": controller
+        }}),
     )?;
-    accept_local_operations(state, controller, std::slice::from_ref(&operation))
+    accept_local_operations(state, controller, std::slice::from_ref(&relation_operation))
         .await
         .map_err(sidecar_reducer_reject_to_app_error)?;
-    find_sidecar_relation(
-        state,
-        realm_id.as_str(),
-        circle_id.as_str(),
-        private_strand_id.as_str(),
-        target_ref,
-    )
-    .ok_or_else(|| AppError::internal("sidecar Relation accepted but not projected"))
+
+    let record = AgentSidecarContextRecord {
+        sidecar_id: sidecar.sidecar_id.clone(),
+        normalized_context_ref_digest: normalized_context_ref_digest.to_owned(),
+        normalized_context_ref: normalized_context_ref.clone(),
+        private_strand_id: strand_id.to_string(),
+        private_relation_id: relation_id.to_string(),
+        created_at: chrono::Utc::now(),
+    };
+    state
+        .sidecars_store()
+        .insert_or_get_context(record)
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar context persistence failed: {error}")))
 }
 
-pub(super) async fn ensure_sidecar_thread_impl(
-    aa: AuthArgs,
-    body: AgentSidecarThreadEnsureRequestBody,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AgentSidecarThreadEnsureOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    ensure_sidecar_controller_request(&body, &session)?;
-    let controller = body.controller_id.as_str();
-    let realm_id = body.context_ref.realm_id.clone();
-    authorize_sidecar_ensure(state, controller, realm_id.as_str()).await?;
-    let normalized_context_ref = normalize_sidecar_context_ref(&body.context_ref)?;
-    validate_sidecar_context_projection(state, &body.context_ref)?;
-    let normalized_context_ref_digest =
-        arkret_sdk::canonical::canonical_sha256(&normalized_context_ref)
-            .map_err(|err| AppError::internal(format!("context_ref digest failed: {err}")))?;
-    let target_ref = sidecar_context_target_ref(&body.context_ref);
-    let addressed_agents = normalize_addressed_agents(controller, &body)?;
-    tracing::info!(
-        controller_id = controller,
-        realm_id = %realm_id,
-        target_ref = %target_ref,
-        addressed_agent_count = addressed_agents.len(),
-        normalized_context_ref_digest = %normalized_context_ref_digest,
-        "agent sidecar ensure request validated"
-    );
-    let eligible_agents =
-        eligible_sidecar_agents(state, realm_id.as_str(), controller, &addressed_agents).await?;
-    let _ensure_guard = lock_sidecar_ensure(realm_id.as_str(), controller).await;
-    let controller_agent_circle_key = controller_agent_circle_key(realm_id.as_str(), controller);
-    let short_name = sidecar_short_name(&controller_agent_circle_key);
-    let private_circle_id =
-        ensure_sidecar_circle(state, controller, &realm_id, &short_name).await?;
-    ensure_sidecar_member(state, controller, &realm_id, &private_circle_id, controller).await?;
-    for agent in &eligible_agents {
-        ensure_sidecar_member(state, controller, &realm_id, &private_circle_id, agent).await?;
+async fn ensure_private_context(
+    state: &AppState,
+    controller: &str,
+    sidecar: &AgentSidecarRecord,
+    context_ref: &AgentSidecarContextRef,
+    normalized_context_ref: &Value,
+    normalized_context_ref_digest: &str,
+) -> Result<AgentSidecarContextRecord, AppError> {
+    if let Some(record) = state
+        .sidecars_store()
+        .get_context(&sidecar.sidecar_id, normalized_context_ref_digest)
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar context lookup failed: {error}")))?
+    {
+        return Ok(record);
     }
-    let private_strand_id = ensure_sidecar_strand(
+    create_private_context(
         state,
         controller,
-        &realm_id,
-        &private_circle_id,
+        sidecar,
+        context_ref,
+        normalized_context_ref,
+        normalized_context_ref_digest,
+    )
+    .await
+}
+
+fn sidecar_from_record(record: &AgentSidecarRecord) -> Result<AgentSidecar, AppError> {
+    let state = match record.state.as_str() {
+        "active" => AgentSidecarState::Active,
+        "suspended" => AgentSidecarState::Suspended,
+        "tombstoned" => AgentSidecarState::Tombstoned,
+        _ => return Err(AppError::internal("stored Sidecar state is invalid")),
+    };
+    Ok(AgentSidecar {
+        id: SidecarId::new(record.sidecar_id.clone())
+            .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
+        schema: AgentSidecarSchema::V1,
+        realm_id: RealmId::new(record.realm_id.clone())
+            .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?,
+        controller_id: Did::new(record.controller_id.clone())
+            .map_err(|error| AppError::internal(format!("stored controller id: {error}")))?,
+        backing_circle_id: CircleId::new(record.backing_circle_id.clone())
+            .map_err(|error| AppError::internal(format!("stored Circle id: {error}")))?,
+        encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
+        state,
+        state_changed_at: record.state_changed_at,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    })
+}
+
+async fn sidecar_view(
+    state: &AppState,
+    record: &AgentSidecarRecord,
+) -> Result<AgentSidecarView, AppError> {
+    let desired =
+        eligible_sidecar_agents(state, &record.realm_id, &record.controller_id, &[]).await?;
+    let (circle_members, mls_ready) = state
+        .projection
+        .lock()
+        .circles
+        .get(&record.backing_circle_id)
+        .map(|circle| (circle.members.clone(), circle.mls_group_ref.is_some()))
+        .unwrap_or_default();
+    let mut pending = Vec::new();
+    let effective = Vec::<Did>::new();
+    for agent_id in &desired {
+        let stage = if !circle_members.contains(agent_id) {
+            Some((
+                PendingSidecarAccessReconciliationStage::BackingScopeMembership,
+                "backing_scope_membership_pending",
+            ))
+        } else if !mls_ready {
+            Some((
+                PendingSidecarAccessReconciliationStage::MlsWelcome,
+                "mls_group_or_welcome_pending",
+            ))
+        } else {
+            Some((
+                PendingSidecarAccessReconciliationStage::MlsWelcome,
+                "mls_welcome_or_epoch_commit_pending",
+            ))
+        };
+        if let Some((stage, reason)) = stage {
+            pending.push(PendingSidecarAccessReconciliationItem {
+                agent_id: Did::new(agent_id.clone())
+                    .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))?,
+                stage,
+                reason: NonEmptyString::new(reason).map_err(|error| {
+                    AppError::internal(format!("reconciliation reason: {error}"))
+                })?,
+            });
+        }
+    }
+    let access_readiness = if pending
+        .iter()
+        .any(|item| item.stage == PendingSidecarAccessReconciliationStage::BackingScopeMembership)
+    {
+        AgentSidecarAccessReadiness::AccessReconciliationPending
+    } else if !mls_ready || !pending.is_empty() {
+        AgentSidecarAccessReadiness::KeyMaterialPending
+    } else {
+        AgentSidecarAccessReadiness::Ready
+    };
+    let view = AgentSidecarView {
+        sidecar: sidecar_from_record(record)?,
+        desired_agent_ids: desired
+            .into_iter()
+            .map(Did::new)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))?,
+        effective_agent_ids: effective,
+        access_readiness,
+        pending_access_reconciliations: pending,
+    };
+    view.validate()
+        .map_err(|error| AppError::internal(format!("Sidecar view invariant: {error}")))?;
+    Ok(view)
+}
+
+async fn ensure_sidecar_impl(
+    aa: AuthArgs,
+    body: AgentSidecarEnsureRequestBody,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AgentSidecarEnsureOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    if body.controller_id.as_str() != session.actor {
+        return Err(sidecar_create_denied(
+            "Sidecar controller_id must match the authenticated session",
+        ));
+    }
+    let controller = body.controller_id.as_str();
+    let realm_id = context_realm_id(&body.context_ref).clone();
+    authorize_sidecar_ensure(state, controller, realm_id.as_str()).await?;
+    validate_sidecar_context_projection(state, &body.context_ref)?;
+    let addressed_agents = normalize_addressed_agents(controller, &body)?;
+    let normalized_context_ref = normalize_sidecar_context_ref(&body.context_ref)?;
+    let normalized_context_ref_digest =
+        arkret_sdk::canonical::canonical_sha256(&normalized_context_ref)
+            .map_err(|error| AppError::internal(format!("context_ref digest failed: {error}")))?;
+    let eligible_agents =
+        eligible_sidecar_agents(state, realm_id.as_str(), controller, &addressed_agents).await?;
+
+    let _guard = lock_sidecar_ensure(realm_id.as_str(), controller).await;
+    let sidecar = ensure_sidecar_aggregate(state, controller, &realm_id).await?;
+    let circle_id = CircleId::new(sidecar.backing_circle_id.clone())
+        .map_err(|error| AppError::internal(format!("stored Circle id: {error}")))?;
+    ensure_sidecar_member(state, controller, &realm_id, &circle_id, controller).await?;
+    for agent_id in &eligible_agents {
+        ensure_sidecar_member(state, controller, &realm_id, &circle_id, agent_id).await?;
+    }
+    ensure_sidecar_mls_genesis(state, controller, &session.device_id, &realm_id, &circle_id)
+        .await?;
+    let context = ensure_private_context(
+        state,
+        controller,
+        &sidecar,
+        &body.context_ref,
         &normalized_context_ref,
         &normalized_context_ref_digest,
     )
     .await?;
-    let private_relation_id = ensure_sidecar_relation(
-        state,
-        controller,
-        &realm_id,
-        &private_circle_id,
-        &private_strand_id,
-        &target_ref,
-        &normalized_context_ref_digest,
-        body.context_ref.track_name.as_deref(),
-    )
-    .await?;
-    tracing::info!(
-        controller_id = controller,
-        realm_id = %realm_id,
-        private_circle_id = %private_circle_id,
-        private_strand_id = %private_strand_id,
-        private_relation_id = %private_relation_id,
-        eligible_agent_count = eligible_agents.len(),
-        "agent sidecar ensure completed"
-    );
+    let view = sidecar_view(state, &sidecar).await?;
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.self.agent.sidecar_thread.command.ensure",
+        "ak.self.agent.sidecar.command.ensure",
         json!({
             "controller_id": body.controller_id,
-            "addressed_agent_ids": addressed_agents,
-            "context_ref": normalized_context_ref,
-            "normalized_context_ref_digest": normalized_context_ref_digest,
-            "private_circle_id": private_circle_id,
-            "private_strand_id": private_strand_id,
-            "private_relation_id": private_relation_id,
+            "realm_id": realm_id,
+            "addressed_agent_count": addressed_agents.len(),
+            "context_ref_digest": normalized_context_ref_digest
         }),
         "accepted",
     )
     .await;
-    json_ok(AgentSidecarThreadEnsureOutcome {
+    json_ok(AgentSidecarEnsureOutcome {
         ok: true,
-        private_circle_id,
-        private_strand_id,
-        private_relation_id,
-        pending_member_reconciliations: Vec::new(),
+        sidecar_id: view.sidecar.id,
+        private_strand_id: StrandId::new(context.private_strand_id)
+            .map_err(|error| AppError::internal(format!("stored Strand id: {error}")))?,
+        private_relation_id: RelationId::new(context.private_relation_id)
+            .map_err(|error| AppError::internal(format!("stored Relation id: {error}")))?,
+        access_readiness: view.access_readiness,
+        pending_access_reconciliations: view.pending_access_reconciliations,
     })
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.sidecar_thread.command.ensure",
+    operation_id = "ak.self.agent.sidecar.command.ensure",
     tags("agents"),
-    summary = "Idempotently ensure the controller<->agent sidecar Circle exists",
-    status_codes(200, 201, 400, 401, 403, 500)
+    summary = "Idempotently ensure a controller-owned Agent Sidecar",
+    status_codes(200, 201, 400, 401, 403, 412, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.sidecar_thread.command.ensure"))]
-pub(super) async fn ensure_sidecar_thread_canonical(
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.sidecar.command.ensure"))]
+pub(super) async fn ensure_sidecar(
     aa: AuthArgs,
-    body: JsonBody<AgentSidecarThreadEnsureRequestBody>,
+    body: JsonBody<AgentSidecarEnsureRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentSidecarThreadEnsureOutcome> {
-    ensure_sidecar_thread_impl(aa, body.into_inner(), depot, req).await
+) -> JsonResult<AgentSidecarEnsureOutcome> {
+    ensure_sidecar_impl(aa, body.into_inner(), depot, req).await
+}
+
+#[endpoint(
+    operation_id = "ak.self.agent.sidecar.resource.get",
+    tags("agents"),
+    summary = "Read one controller-owned Agent Sidecar",
+    status_codes(200, 401, 404, 500)
+)]
+pub(super) async fn get_sidecar(
+    aa: AuthArgs,
+    sidecar_id: PathParam<SidecarId>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AgentSidecarView> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let record = state
+        .sidecars_store()
+        .get(sidecar_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?
+        .filter(|record| record.controller_id == session.actor)
+        .ok_or_else(|| AppError::not_found("Sidecar not found"))?;
+    json_ok(sidecar_view(state, &record).await?)
+}
+
+#[endpoint(
+    operation_id = "ak.self.agent.sidecar.query.list",
+    tags("agents"),
+    summary = "List controller-owned Agent Sidecars",
+    status_codes(200, 400, 401, 500)
+)]
+pub(super) async fn list_sidecars(
+    aa: AuthArgs,
+    realm_id: QueryParam<RealmId, false>,
+    cursor: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AgentSidecarList> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let mut records = state
+        .sidecars_store()
+        .list_for_controller(&session.actor, realm_id.as_ref().map(RealmId::as_str))
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar list failed: {error}")))?;
+    records.sort_by(|left, right| left.sidecar_id.cmp(&right.sidecar_id));
+    if let Some(cursor) = cursor.as_ref() {
+        records.retain(|record| record.sidecar_id.as_str() > cursor.as_str());
+    }
+    let has_more = records.len() > SIDECAR_LIST_PAGE_SIZE;
+    records.truncate(SIDECAR_LIST_PAGE_SIZE);
+    let next_cursor = has_more
+        .then(|| records.last().map(|record| record.sidecar_id.clone()))
+        .flatten()
+        .map(NonEmptyString::new)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("Sidecar cursor: {error}")))?;
+    let mut items = Vec::with_capacity(records.len());
+    for record in records {
+        items.push(sidecar_view(state, &record).await?);
+    }
+    json_ok(AgentSidecarList { items, next_cursor })
 }

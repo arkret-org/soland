@@ -9,6 +9,8 @@ DROP TABLE IF EXISTS handle_releases CASCADE;
 DROP TABLE IF EXISTS agent_keys CASCADE;
 DROP TABLE IF EXISTS agent_participation CASCADE;
 DROP TABLE IF EXISTS agent_participation_ceiling CASCADE;
+DROP TABLE IF EXISTS agent_sidecar_contexts CASCADE;
+DROP TABLE IF EXISTS agent_sidecars CASCADE;
 DROP TABLE IF EXISTS agent_principals CASCADE;
 DROP TABLE IF EXISTS agent_sessions CASCADE;
 DROP TABLE IF EXISTS applet_registrations CASCADE;

@@ -14,4 +14,5 @@ mod applet_agent;
 mod circle;
 mod morph;
 mod queries;
+mod sidecar;
 mod strand;

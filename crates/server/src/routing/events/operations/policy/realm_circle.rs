@@ -76,24 +76,22 @@ pub(super) async fn validate_circle_create_policy(
     {
         return Ok(());
     }
-    if payload_declares_agent_sidecar_profile(&operation.payload) {
-        // The profile id is reserved to the authenticated aggregate ensure
-        // operation. A regular `ak.circle.create` must not turn an ordinary
-        // Circle grant into sidecar access merely by selecting the profile.
-        if !payload_asserts_agent_sidecar_ensure(&operation.payload) {
-            return Err("sidecar_create_denied");
-        }
+    if let Some(sidecar_id) = operation
+        .payload
+        .get("trusted_sidecar_id")
+        .and_then(Value::as_str)
+    {
         let Some(actor) = policy_operation_sender(operation) else {
             return Err("sidecar_create_denied");
         };
-        if !sidecar_circle_create_shape_is_constrained(&operation.payload, operation, actor) {
+        if !sidecar_circle_object_shape_is_constrained(operation, actor, sidecar_id) {
             return Err("sidecar_create_denied");
         }
         let realm_id = operation.realm_id.as_str();
         let (owner, members) = realm_owner_and_members(state, realm_id).await;
         let verdict = state.authz.check(
             actor,
-            arkret_sdk::CapabilityActionId::SELF_AGENT_SIDECAR_THREAD_COMMAND_ENSURE,
+            arkret_sdk::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
             realm_id,
             realm_id,
             owner.as_deref(),
@@ -106,6 +104,19 @@ pub(super) async fn validate_circle_create_policy(
         {
             return Ok(());
         }
+        return Err("sidecar_create_denied");
+    }
+    if operation
+        .payload
+        .pointer("/object/display/short_name")
+        .and_then(Value::as_str)
+        .is_some_and(|short_name| short_name.starts_with("SC-"))
+        || operation
+            .payload
+            .pointer("/object/title")
+            .and_then(Value::as_str)
+            == Some("Agent Sidecar Scope")
+    {
         return Err("sidecar_create_denied");
     }
     let Some(actor) = policy_operation_sender(operation) else {
@@ -161,6 +172,21 @@ pub(super) async fn validate_circle_management_policy(
     let Some(circle_id) = operation_circle_id(operation) else {
         return Ok(());
     };
+    if state
+        .projection
+        .lock()
+        .circle(circle_id)
+        .is_some_and(|circle| {
+            circle.title == "Agent Sidecar Scope"
+                || circle
+                    .display
+                    .pointer("/short_name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|short_name| short_name.starts_with("SC-"))
+        })
+    {
+        return Err("sidecar_create_denied");
+    }
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
@@ -205,8 +231,14 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
             return false;
         };
         if circle.realm_id != realm_id
-            || circle.profile_ref.as_deref() != Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+            || circle.profile_ref.is_some()
+            || circle.title != "Agent Sidecar Scope"
             || circle.created_by != controller
+            || !circle
+                .display
+                .pointer("/short_name")
+                .and_then(Value::as_str)
+                .is_some_and(|short_name| short_name.starts_with("SC-"))
         {
             return false;
         }
@@ -318,62 +350,10 @@ pub(super) fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor
     .unwrap_or(false)
 }
 
-pub(super) fn payload_asserts_agent_sidecar_ensure(payload: &Value) -> bool {
-    if !payload_declares_agent_sidecar_profile(payload) {
-        return false;
-    }
-    if payload
-        .get("sidecar_ensure_capability_verified")
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
-        return true;
-    }
-    payload
-        .get("actor_capability")
-        .and_then(Value::as_object)
-        .is_some_and(|cap| {
-            cap.get("action").and_then(Value::as_str)
-                == Some(arkret_sdk::CapabilityActionId::SELF_AGENT_SIDECAR_THREAD_COMMAND_ENSURE)
-                && cap.get("allowed").and_then(Value::as_bool) == Some(true)
-        })
-}
-
-pub(super) fn payload_declares_agent_sidecar_profile(payload: &Value) -> bool {
-    payload.get("profile").and_then(Value::as_str).or_else(|| {
-        payload
-            .get("object")
-            .and_then(|object| object.get("profile_ref"))
-            .and_then(Value::as_str)
-    }) == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
-}
-
-pub(super) fn sidecar_circle_create_shape_is_constrained(
-    payload: &Value,
-    operation: &Operation,
-    actor: &str,
-) -> bool {
-    if !sidecar_circle_object_shape_is_constrained(operation, actor) {
-        return false;
-    }
-    let controller = payload
-        .get("controller_id")
-        .and_then(Value::as_str)
-        .unwrap_or(actor);
-    if controller != actor {
-        return false;
-    }
-    let realm_id = operation.realm_id.as_str();
-    let expected_key = arkret_sdk::agent_sidecar_circle_key(realm_id, actor);
-    payload
-        .get("controller_agent_circle_key")
-        .and_then(Value::as_str)
-        == Some(expected_key.as_str())
-}
-
 pub(super) fn sidecar_circle_object_shape_is_constrained(
     operation: &Operation,
     actor: &str,
+    sidecar_id: &str,
 ) -> bool {
     if kinds::canonical_kind_for_operation(operation)
         != Some(arkret_sdk::events::EventKind::CIRCLE_CREATE)
@@ -391,9 +371,7 @@ pub(super) fn sidecar_circle_object_shape_is_constrained(
     if object.get("created_by").and_then(Value::as_str) != Some(actor) {
         return false;
     }
-    if object.get("profile_ref").and_then(Value::as_str)
-        != Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
-    {
+    if object.get("profile_ref").is_some() {
         return false;
     }
     if object.get("directory_visibility").and_then(Value::as_str) != Some("members") {
@@ -402,7 +380,7 @@ pub(super) fn sidecar_circle_object_shape_is_constrained(
     if object.get("join_rule").and_then(Value::as_str) != Some("invite") {
         return false;
     }
-    if object.get("history_visibility").and_then(Value::as_str) != Some("joined") {
+    if object.get("history_visibility").and_then(Value::as_str) != Some("restricted") {
         return false;
     }
     // Sidecars are never a plaintext escape hatch. The reserved aggregate is
@@ -422,12 +400,17 @@ pub(super) fn sidecar_circle_object_shape_is_constrained(
     {
         return false;
     }
-    let expected_key = arkret_sdk::agent_sidecar_circle_key(realm_id, actor);
-    let expected_short_name = arkret_sdk::agent_sidecar_short_name(&expected_key);
-    object.get("title").and_then(Value::as_str) == Some(expected_short_name.as_str())
+    let expected_short_name = arkret_sdk::agent_sidecar_backing_circle_short_name(sidecar_id);
+    object.get("title").and_then(Value::as_str) == Some("Agent Sidecar Scope")
+        && object.get("summary").is_none()
         && object
             .get("display")
             .and_then(|display| display.get("short_name"))
             .and_then(Value::as_str)
             == Some(expected_short_name.as_str())
+        && object
+            .get("display")
+            .and_then(|display| display.pointer("/symbol/glyph"))
+            .and_then(Value::as_str)
+            == Some("lock")
 }

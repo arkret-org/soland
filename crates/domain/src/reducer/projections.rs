@@ -648,6 +648,21 @@ pub struct CircleProjection {
     pub members: BTreeSet<String>,
 }
 
+/// First-class Agent Sidecar aggregate. The referenced Circle is an internal
+/// delivery/MLS binding and is never the Sidecar identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SidecarProjection {
+    pub sidecar_id: String,
+    pub realm_id: String,
+    pub controller_id: String,
+    pub backing_circle_id: String,
+    pub encryption_profile: arkret_sdk::models::AgentSidecarEncryptionProfile,
+    pub state: arkret_sdk::models::AgentSidecarState,
+    pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CircleMembershipState {
     pub circle_id: String,

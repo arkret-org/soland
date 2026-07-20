@@ -3,7 +3,6 @@ use arkret_sdk::{Did, RealmId};
 use serde_json::{Map, Value};
 
 const ACCOUNT_DATA_TYPE_AGENT_DRAFT: &str = "ak.agent.draft.v1";
-const ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION: &str = "ak.agent.sidecar_projection.v1";
 const ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION: &str = "ak.agent.participation.v1";
 const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ak.account.blocklist";
 const ACCOUNT_DATA_TYPE_CLIENT_UI_STATE: &str = "ak.client.ui_state";
@@ -42,7 +41,8 @@ const SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
 
 const AGENT_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
     ACCOUNT_DATA_TYPE_AGENT_DRAFT,
-    ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
+    arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
+    arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
     ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION,
 ];
 
@@ -160,7 +160,8 @@ pub(crate) fn validate_encrypted_account_data_key(
     }
     if let Some(rest) = data_type
         .strip_prefix(ACCOUNT_DATA_TYPE_AGENT_DRAFT)
-        .or_else(|| data_type.strip_prefix(ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION))
+        .or_else(|| data_type.strip_prefix(arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION))
+        .or_else(|| data_type.strip_prefix(arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE))
         .or_else(|| data_type.strip_prefix(ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION))
     {
         return validate_agent_private_key_tail(rest);

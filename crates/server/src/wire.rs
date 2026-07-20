@@ -438,8 +438,8 @@ pub struct SolandAccountRegisterOutcome {
 // `agent-operations.schema.json`): `agent_view`/`agent_list` carry the spec
 // `agent_projection`; the `agent_key_pair` outcome is
 // `{ok, authorized_event_ref}`; grant attach/detach outcomes are
-// `{ok, grant_id}` / `{ok, revoked_at}`; sidecar ensure carries the typed
-// `private_circle_id`/`private_strand_id`/`private_relation_id`. The lifecycle
+// `{ok, grant_id}` / `{ok, revoked_at}`; Sidecar ensure carries the typed
+// `sidecar_id`/`private_strand_id`/`private_relation_id`. The lifecycle
 // outcome (`agent_lifecycle_state` = `operation_status_outcome` =
 // `{ok: true, status}`) has no struct mirror in the SDK and is emitted as a
 // spec-exact JSON object by the agents handler. `AgentProvisionRequestBody` /
@@ -454,8 +454,9 @@ pub struct SolandAccountRegisterOutcome {
 pub use arkret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
-    AgentPauseRequestBody, AgentResumeRequestBody, AgentSidecarThreadEnsureOutcome,
-    AgentSidecarThreadEnsureRequestBody, AgentView, CallMediaTokenExchangeRequestBody,
+    AgentPauseRequestBody, AgentResumeRequestBody, AgentSidecarEnsureOutcome,
+    AgentSidecarEnsureRequestBody, AgentSidecarList, AgentSidecarView, AgentView,
+    CallMediaTokenExchangeRequestBody,
 };
 // Key-backup replace/delete outcomes are the SDK server-side DTOs
 // (`arkret_sdk::models` is the authoritative carrier for

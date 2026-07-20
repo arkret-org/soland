@@ -47,7 +47,11 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: "ak.agent.sidecar_projection.v1",
+        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
+        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
         controller_private: true,
     },
     AccountDataTypeSpec {

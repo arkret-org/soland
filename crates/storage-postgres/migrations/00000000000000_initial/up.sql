@@ -118,6 +118,31 @@ CREATE TABLE public.agent_principals (
     CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['pending_runtime_key'::text, 'active'::text, 'paused'::text, 'deactivated'::text, 'pairing_expired'::text])))
 );
 
+CREATE TABLE public.agent_sidecars (
+    id uuid PRIMARY KEY,
+    realm_id uuid NOT NULL,
+    controller_id text NOT NULL,
+    backing_circle_id uuid NOT NULL UNIQUE,
+    state text DEFAULT 'active'::text NOT NULL,
+    state_changed_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone,
+    CONSTRAINT agent_sidecars_realm_controller_key UNIQUE (realm_id, controller_id),
+    CONSTRAINT agent_sidecars_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'tombstoned'::text])))
+);
+
+CREATE TABLE public.agent_sidecar_contexts (
+    sidecar_id uuid NOT NULL REFERENCES public.agent_sidecars(id) ON DELETE CASCADE,
+    normalized_context_ref_digest text NOT NULL,
+    normalized_context_ref jsonb NOT NULL,
+    private_strand_id uuid NOT NULL UNIQUE,
+    private_relation_id uuid NOT NULL UNIQUE,
+    created_at timestamp with time zone NOT NULL,
+    PRIMARY KEY (sidecar_id, normalized_context_ref_digest)
+);
+
+CREATE INDEX agent_sidecars_controller_idx ON public.agent_sidecars USING btree (controller_id, created_at, id);
+
 CREATE TABLE public.agent_sessions (
     id uuid NOT NULL,
     agent_id text NOT NULL,

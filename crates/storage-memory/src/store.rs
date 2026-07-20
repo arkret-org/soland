@@ -25,16 +25,17 @@ use super::{
     MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
     MemoryRecoveryReceiptStore, MemoryRecoverySessionStore, MemoryRetentionPolicyStore,
     MemoryRetentionTombstoneStore, MemoryServiceIdentityStore, MemorySessionStore,
-    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore, MemorySyncCursorStore,
-    MemoryTypingStore, MemoryWebvhStore, MessageStore, MlsCommitStore, MlsKeyPackageStore,
-    MlsWelcomeStore, ModerationStore, MorphProjectionStore, MultisigPendingStore,
-    NotificationStore, OneTimeKeyStore, OrganizationPolicyStore, OrganizationStore,
-    PersistenceStore, PolicyDocumentStore, PresenceStore, ProjectionEventStore,
+    MemorySidecarStore, MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
+    MemorySyncCursorStore, MemoryTypingStore, MemoryWebvhStore, MessageStore, MlsCommitStore,
+    MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
+    MultisigPendingStore, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
+    OrganizationStore, PersistenceStore, PolicyDocumentStore, PresenceStore, ProjectionEventStore,
     PushBridgeCacheStore, PushDeviceStore, ReadReceiptRelayStore, RealmInviteStore,
     RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore, RealmOrganizationStatementStore,
     RealmOrganizationStore, RecoveryPolicyStore, RecoveryReceiptStore, RecoverySessionStore,
     RetentionPolicyStore, RetentionTombstoneStore, ServiceIdentityStore, SessionStore,
-    SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore, TypingStore, WebvhStore,
+    SidecarStore, SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore,
+    TypingStore, WebvhStore,
 };
 
 /// In-memory implementation of persistence store.
@@ -97,6 +98,7 @@ pub struct SolandMemoryPersistenceStore {
     mls_commits: MemoryMlsCommitStore,
     agent_participation: MemoryAgentParticipationStore,
     agents: MemoryAgentStore,
+    sidecars: MemorySidecarStore,
     notifications: MemoryNotificationStore,
     sync_cursors: MemorySyncCursorStore,
     pub(crate) idempotency_keys: MemoryIdempotencyStore,
@@ -167,6 +169,7 @@ impl SolandMemoryPersistenceStore {
             mls_commits: MemoryMlsCommitStore::new(),
             agent_participation: MemoryAgentParticipationStore::new(),
             agents: MemoryAgentStore::new(),
+            sidecars: MemorySidecarStore::new(),
             notifications: MemoryNotificationStore::new(),
             sync_cursors: MemorySyncCursorStore::new(),
             idempotency_keys: MemoryIdempotencyStore::new(),
@@ -452,6 +455,10 @@ impl soland_storage::MlsAgentStoreRegistry for SolandMemoryPersistenceStore {
 
     fn agents(&self) -> &dyn AgentStore {
         &self.agents
+    }
+
+    fn sidecars(&self) -> &dyn SidecarStore {
+        &self.sidecars
     }
 
     fn notifications(&self) -> &dyn NotificationStore {

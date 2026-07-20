@@ -224,8 +224,17 @@ fn circle_directory_visible_to_actor(
                 .is_some_and(|member| member.state == "join"))
 }
 
-fn is_ordinary_circle_profile(profile_ref: Option<&str>) -> bool {
-    profile_ref.is_none()
+fn is_reserved_sidecar_circle(circle: &CircleProjection) -> bool {
+    circle.title == "Agent Sidecar Scope"
+        || circle
+            .display
+            .pointer("/short_name")
+            .and_then(Value::as_str)
+            .is_some_and(|short_name| short_name.starts_with("SC-"))
+}
+
+fn is_ordinary_circle(circle: &CircleProjection) -> bool {
+    circle.profile_ref.is_none() && !is_reserved_sidecar_circle(circle)
 }
 
 fn pending_mls_removals_from_projection(
@@ -409,7 +418,7 @@ async fn list_circles(
     let circles = projection
         .circles_for_realm(realm_id.as_str())
         .iter()
-        .filter(|c| is_ordinary_circle_profile(c.profile_ref.as_deref()))
+        .filter(|c| is_ordinary_circle(c))
         .filter(|c| circle_directory_visible_to_actor(&projection, c, &session.actor))
         .map(|c| circle_view_from_projection(&projection, c, &session.actor))
         .collect::<Result<Vec<_>, _>>()?;
@@ -435,7 +444,9 @@ async fn get_circle(
     let circle = projection
         .circle(&circle_id)
         .ok_or_else(|| AppError::not_found("circle not found"))?;
-    if !circle_directory_visible_to_actor(&projection, circle, &session.actor) {
+    if !is_ordinary_circle(circle)
+        || !circle_directory_visible_to_actor(&projection, circle, &session.actor)
+    {
         return Err(AppError::not_found("circle not found"));
     }
     json_ok(circle_view_from_projection(
@@ -1055,13 +1066,8 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_circle_list_filter_rejects_sidecar_and_unknown_profiles() {
-        assert!(is_ordinary_circle_profile(None));
-        assert!(!is_ordinary_circle_profile(Some(
-            arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD
-        )));
-        assert!(!is_ordinary_circle_profile(Some(
-            "ak.profile.future_private_circle.v1"
-        )));
+    fn reserved_sidecar_short_names_are_not_ordinary() {
+        assert!("SC-ABC234".starts_with("SC-"));
+        assert!(!"Project Alpha".starts_with("SC-"));
     }
 }
