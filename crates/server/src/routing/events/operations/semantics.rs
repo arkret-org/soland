@@ -443,9 +443,14 @@ pub(crate) fn validate_operation_schema_from_sdk_artifact(
     kind: &str,
     operation: &Operation,
 ) -> Result<(), &'static str> {
+    let payload = if operation.canonical_event_digest.is_some() {
+        projection_context_stripped_payload(&operation.payload)
+    } else {
+        operation.payload.clone()
+    };
     event_payload_validator_catalog()
         .map_err(|_| "operation payload validator catalog unavailable")?
-        .validate_payload(kind, &operation.payload)
+        .validate_payload(kind, &payload)
         .map_err(|_| "operation payload violates SDK artifact schema")
 }
 
@@ -935,7 +940,9 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         // Agent runtime keys are reducer inputs backed by the SDK payload
         // schemas. Register both kinds here so accepted Events are converted
-        // into Operations and reach the reducer dispatch table.
+        // into Operations and reach the reducer dispatch table. The shared
+        // validator removes projection-only context only for Operations that
+        // carry a canonical Event digest; standalone Operations remain strict.
         arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE
         | arkret_sdk::events::EventKind::AGENT_KEY_REVOKE => OperationPayloadSchema {
             requirements: &[],
@@ -1116,6 +1123,56 @@ mod tests {
                 &noop,
             ),
             Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        );
+    }
+
+    #[test]
+    fn agent_key_event_projection_is_not_revalidated_as_wire_payload() {
+        let kind = arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE;
+        let mut projected = operation(
+            kind,
+            serde_json::json!({
+                "agent_id": "did:web:agent.example",
+                "key_id": "did:web:agent.example#runtime-1",
+                "verification_method": "did:web:agent.example#runtime-1",
+                "accountable_principal_id": "did:web:controller.example",
+                "agent_key_scope": {
+                    "actions": ["ak.self.events.command.submit"],
+                    "resources": [{
+                        "kind": "operation",
+                        "operation": "ak.self.events.command.submit"
+                    }]
+                },
+                "audience": ["did:web:principal.example"],
+                "issued_at": "2026-07-20T15:09:03.628Z",
+                "approval_evidence": {
+                    "kind": "pairing_request",
+                    "request_canonical_digest": concat!(
+                        "sha256:",
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    ),
+                    "pairing_request_id": "agent_pairing_request:test",
+                    "approved_by": "did:web:controller.example"
+                },
+                "event_id": "ak:event:019f8012-cd0c-7233-9106-954399185e19",
+                "sender": "did:web:agent.example",
+                "accepted_event_id": "ak:event:019f8012-cd0c-7233-9106-954399185e19"
+            }),
+        );
+        projected.canonical_event_digest = Some(
+            concat!(
+                "sha256:",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            )
+            .to_owned(),
+        );
+
+        assert_eq!(validate_operation_payload_schema(kind, &projected), Ok(()));
+
+        projected.canonical_event_digest = None;
+        assert_eq!(
+            validate_operation_payload_schema(kind, &projected),
+            Err("operation payload violates SDK artifact schema")
         );
     }
 }
