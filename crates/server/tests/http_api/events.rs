@@ -1031,7 +1031,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     });
     let (_, bundle) =
         fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request).await;
-    arkret_sdk::verify_mls_governance_proof_bundle(
+    arkret_sdk::verify_mls_governance_proof_bundle::<arkret_sdk::Error, _, _>(
         &bundle,
         &bundle.governance_binding,
         &bundle.trusted_anchor_seal_id,
@@ -1119,7 +1119,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     });
     let (proof_chunks, bundle) =
         fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request.clone()).await;
-    let verified = arkret_sdk::verify_mls_governance_proof_bundle(
+    let verified = arkret_sdk::verify_mls_governance_proof_bundle::<arkret_sdk::Error, _, _>(
         &bundle,
         &bundle.governance_binding,
         &bundle.trusted_anchor_seal_id,
