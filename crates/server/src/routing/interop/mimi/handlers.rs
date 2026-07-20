@@ -102,7 +102,7 @@ pub(super) async fn mimi_room_update(
                     AppError::invalid_param(
                         "room_binding requires `binding_scope.realm_id` or a top-level `realm_id`",
                     )
-                    .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
+                    .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
                 })?;
             Some(event_id)
         }
@@ -162,7 +162,7 @@ pub(super) async fn mimi_notify(
     // into projection_events so it doesn't pollute durable history.
     let realm_id = mimi_bound_realm_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Arkret Realm")
-            .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
+            .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
     })?;
     let event_id = ids::generate_event_id();
     let notify_record = ProjectionEventRecord {
@@ -256,7 +256,7 @@ pub(super) async fn mimi_room_message(
         .get("original_envelope_hash")
         .and_then(|value| value.as_str())
         .map(str::to_owned)
-        .unwrap_or_else(|| arkret_sdk::canonical::sha256_digest(body.to_string().as_bytes()));
+        .unwrap_or_else(|| arkret_core::canonical::sha256_digest(body.to_string().as_bytes()));
 
     // Map the MIMI message into the canonical Arkret timeline.
     // Append a MessageRecord + a `ak.message.create` projection event so
@@ -268,7 +268,7 @@ pub(super) async fn mimi_room_message(
         .await
         .ok_or_else(|| {
             AppError::not_found("MIMI room is not bound to any Arkret Realm")
-                .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
+                .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
         })?;
     enforce_mimi_submit_binding(&room_binding, &body, &message)?;
     let realm_id = room_binding.realm_id.clone();
@@ -300,7 +300,7 @@ pub(super) async fn mimi_room_message(
         "original_sender": sender,
         "original_envelope_hash": original_hash,
         "source_format": source_format,
-        "accepted_at": arkret_sdk::canonical::format_timestamp_canonical(created_at),
+        "accepted_at": arkret_core::canonical::format_timestamp_canonical(created_at),
     });
     let projection_payload = json!({
         "strand_id": thread_id.clone(),
@@ -387,7 +387,7 @@ pub(super) async fn mimi_group_info(
     }
     let realm_id = mimi_bound_realm_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Arkret Realm")
-            .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
+            .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
     })?;
     let projection = mimi_room_projection(state, &room_id, &realm_id);
     let projection_bytes = serde_json::to_vec(&projection)
@@ -396,7 +396,7 @@ pub(super) async fn mimi_group_info(
         mls_group_id: MlsGroupId::new(format!("mls:{room_id}"))
             .map_err(|error| AppError::internal(format!("MIMI group id invalid: {error}")))?,
         epoch: 0,
-        group_info: Base64UrlString::new(arkret_sdk::base64url_encode(&projection_bytes))
+        group_info: Base64UrlString::new(arkret_core::base64url_encode(&projection_bytes))
             .map_err(|error| AppError::internal(format!("MIMI group info invalid: {error}")))?,
     };
     let _receipt = mimi_receipt(
@@ -452,7 +452,7 @@ pub(super) async fn mimi_consent_request(
         .as_ref()
         .map(|(consent_id, _cell)| consent_id.clone())
         .unwrap_or_else(|| ids::generate("consent"));
-    let consent_id = arkret_sdk::ConsentId::new(consent_id)
+    let consent_id = arkret_core::ConsentId::new(consent_id)
         .map_err(|error| AppError::internal(format!("generated consent id is invalid: {error}")))?;
     let _receipt = mimi_receipt(
         state,
@@ -490,7 +490,7 @@ pub(super) async fn mimi_consent_update(
     if let Some(message) = unsupported_mimi_draft(&body_value) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let granted = matches!(body.decision, arkret_sdk::MimiConsentDecision::Accept);
+    let granted = matches!(body.decision, arkret_core::MimiConsentDecision::Accept);
     let consent_id = body.consent_id.as_str();
     let actor_id = body.actor_id.as_str();
     verify_mimi_consent_update_authority(state, req, aa, &body, &body_value).await?;
@@ -636,7 +636,7 @@ async fn consume_mimi_consent_proof_replay(
     body: &MimiUpdateConsentRequestBody,
 ) -> Result<(), AppError> {
     let proof = &body.signature;
-    let replay_digest = arkret_sdk::canonical::canonical_sha256(&json!({
+    let replay_digest = arkret_core::canonical::canonical_sha256(&json!({
         "actor_id": body.actor_id,
         "payload_digest": proof.payload_digest,
         "jws": proof.jws,
@@ -802,7 +802,7 @@ pub(super) async fn mimi_report_abuse(
         return Err(AppError::invalid_param(
             "mimi report requires `realm_id` or a `mimi_room_uri` that resolves to a bound Arkret Realm",
         )
-        .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
+        .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
     };
     let reporter = body
         .get("reporter_did")
@@ -1088,7 +1088,7 @@ pub(super) fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> App
 
 #[cfg(test)]
 mod consent_proof_tests {
-    use arkret_sdk::{
+    use arkret_core::{
         Audience, ConsentId, Did, Hash, MimiConsentDecision, PayloadProof, proof_kind,
     };
     use soland_http::error::ErrorCode;
@@ -1128,8 +1128,9 @@ mod consent_proof_tests {
         };
         request.signature.payload_digest = request.payload_digest().unwrap();
         let binding = request.signature_binding_bytes().unwrap();
-        let signing_key = arkret_sdk::signatures::development_signing_key(&verification_method);
-        request.signature.jws = arkret_sdk::jws::sign_jws_ed25519(&binding, &signing_key).unwrap();
+        let signing_key = arkret_signatures::development_signing_key(&verification_method);
+        request.signature.jws =
+            arkret_signatures::jws::sign_jws_ed25519(&binding, &signing_key).unwrap();
         request
     }
 

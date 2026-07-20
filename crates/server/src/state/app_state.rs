@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use arc_swap::ArcSwap;
-use arkret_sdk::state::{CellRegistry, CellStore, MoveStore, SealStore};
-use arkret_sdk::{
+use arkret_core::{
     AccountRegistrationPolicy, AccountStatus, AppletPackage, CanonicalServiceUrl, Did,
     LocalServiceIdentity, RealmId, ServiceIdentityKeyRef, ServiceIdentityState,
     ServiceRegistrationKey, ServiceType,
 };
+use arkret_state::state::{CellRegistry, CellStore, MoveStore, SealStore};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -122,7 +122,7 @@ pub struct AppState {
     /// a `ak.device.authorize` `cross_signing_binding`. In-memory like the other
     /// reducer projections; durable rehydration rides on the durable event
     /// store (control-realm Phase 3).
-    pub(crate) cross_signing: Arc<Mutex<arkret_sdk::DeviceManager>>,
+    pub(crate) cross_signing: Arc<Mutex<super::CrossSigningRegistry>>,
     /// Process-local replay fence for consumed cross-signing reset
     /// `(principal_id, previous_generation)` tuples.
     pub(crate) cross_signing_reset_replays:
@@ -227,7 +227,7 @@ pub struct AppState {
     /// recommended default policy. `ak.self.contact.command.tombstone(block_peer)`
     /// writes the peer DID into the holder entry's `blocked_subjects`.
     pub(crate) invite_receive_policies:
-        Arc<Mutex<BTreeMap<String, arkret_sdk::InviteReceivePolicy>>>,
+        Arc<Mutex<BTreeMap<String, arkret_core::InviteReceivePolicy>>>,
     /// Direct conversation binding projection keyed by sorted participant DID
     /// pair. This is the bounded server-side fallback for
     /// `ak.self.direct_conversation.command.resolve` until signed
@@ -307,7 +307,7 @@ pub struct AppState {
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
     pub(crate) notary_signing_key_origin: Arc<Mutex<NotarySigningKeyOrigin>>,
     /// Per-admin signing keys: SDK
-    /// [`arkret_sdk::AdminKeyStore`] keyed by the `application_id`
+    /// [`arkret_core::AdminKeyStore`] keyed by the `application_id`
     /// `soland.<service_id>`. Each admin DID in
     /// `config.admin_principal_dids` gets its own ed25519 signing seed
     /// (provisioned at boot in `development_mode`; lazily loaded from the
@@ -315,7 +315,7 @@ pub struct AppState {
     /// built via `admin_signer_for(state, admin_did)` — this replaces the
     /// service-wide `service_admin_signer` shortcut for endpoints that
     /// want operator attribution in the audit chain.
-    pub(crate) admin_keystore: Arc<arkret_sdk::AdminKeyStore>,
+    pub(crate) admin_keystore: Arc<arkret_core::AdminKeyStore>,
     /// G4.T3 — verified-profile descriptors loaded from the artifact path in
     /// `SOLAND_VERIFIED_PROFILES_ARTIFACT` at startup. Filtered to entries
     /// whose `service_role == "principal_server"` and additionally
@@ -607,13 +607,13 @@ impl AppState {
         // without a provisioned key fall back to
         // `service_admin_signer` at signing time with a sticky-warn.
         let admin_app_id = format!("soland.{service_id}");
-        let admin_keystore_inner: Box<dyn arkret_sdk::KeyStore> = config
+        let admin_keystore_inner: Box<dyn arkret_core::KeyStore> = config
             .key_store
             .open(&admin_app_id)
             .expect("configured KeyStore must open every namespace")
-            .unwrap_or_else(|| Box::new(arkret_sdk::keystore::InMemoryKeyStore::new()));
+            .unwrap_or_else(|| Box::new(arkret_core::keystore::InMemoryKeyStore::new()));
         let admin_keystore =
-            arkret_sdk::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
+            arkret_core::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
         if config.development_mode {
             for did_str in &config.admin_principal_dids {
                 let Ok(did) = Did::new(did_str.clone()) else {
@@ -768,7 +768,7 @@ impl AppState {
             jobs_application,
             object_storage,
             realms: Arc::new(Mutex::new(realms)),
-            cross_signing: Arc::new(Mutex::new(arkret_sdk::DeviceManager::new())),
+            cross_signing: Arc::new(Mutex::new(super::CrossSigningRegistry::new())),
             cross_signing_reset_replays: Arc::new(Mutex::new(BTreeMap::new())),
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             account_lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1249,7 +1249,7 @@ impl AppState {
         }
 
         // A-model active-series signatures are bound to the current accepted
-        // SSK generation. Rebuild the DeviceManager before restoring those
+        // SSK generation. Rebuild the cross-signing registry before restoring those
         // pointers; otherwise a restart makes every correctly hydrated
         // pointer appear stale because the generation cache is empty.
         let cross_signing =
@@ -1880,7 +1880,7 @@ impl AppState {
     }
 
     #[doc(hidden)]
-    pub fn test_seal_store(&self) -> &Arc<dyn arkret_sdk::SealStore> {
+    pub fn test_seal_store(&self) -> &Arc<dyn arkret_state::SealStore> {
         &self.seal_store
     }
 
@@ -1915,7 +1915,7 @@ impl AppState {
     }
 
     #[doc(hidden)]
-    pub fn test_cross_signing(&self) -> &Arc<Mutex<arkret_sdk::DeviceManager>> {
+    pub fn test_cross_signing(&self) -> &Arc<Mutex<super::CrossSigningRegistry>> {
         &self.cross_signing
     }
 
@@ -2672,7 +2672,7 @@ impl soland_application::identity::ContactPort for PersistenceContacts {
 impl soland_application::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolicies {
     async fn save_policy(
         &self,
-        policy: arkret_sdk::InviteReceivePolicy,
+        policy: arkret_core::InviteReceivePolicy,
     ) -> soland_application::ApplicationResult<()> {
         self.0.invite_receive_policies().put(&policy).await?;
         Ok(())
@@ -3628,15 +3628,16 @@ impl soland_application::identity::DidDocumentPort for PersistenceDidDocuments {
 
     async fn service_registration(
         &self,
-        key: &arkret_sdk::ServiceRegistrationKey,
-    ) -> soland_application::ApplicationResult<Option<arkret_sdk::ServiceRegistrationOutcome>> {
+        key: &arkret_core::ServiceRegistrationKey,
+    ) -> soland_application::ApplicationResult<Option<arkret_core::ServiceRegistrationOutcome>>
+    {
         Ok(self.0.webvh().get_service_registration(key).await?)
     }
 
     async fn commit_service_registration(
         &self,
-        key: arkret_sdk::ServiceRegistrationKey,
-        outcome: arkret_sdk::ServiceRegistrationOutcome,
+        key: arkret_core::ServiceRegistrationKey,
+        outcome: arkret_core::ServiceRegistrationOutcome,
         document: soland_application::identity::DidDocumentState,
         event: soland_application::identity::DidLogEvent,
     ) -> soland_application::ApplicationResult<
@@ -4184,7 +4185,7 @@ pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
 
 #[cfg(test)]
 mod membership_hydration_tests {
-    use arkret_sdk::{Did, RealmId};
+    use arkret_core::{Did, RealmId};
     use soland_storage::{
         EventProjectionStoreRegistry, IdentityStoreRegistry, MlsAgentStoreRegistry,
     };
@@ -4323,7 +4324,7 @@ mod membership_hydration_tests {
                 actor_id: "did:web:alice.example".to_owned(),
                 actor_seq: 2,
                 realm_id: Some(realm_id.to_owned()),
-                kind: arkret_sdk::events::EventKind::MEMBER_STATE.to_owned(),
+                kind: arkret_core::events::EventKind::MEMBER_STATE.to_owned(),
                 schema_id: "ak.schema.event.v1".to_owned(),
                 canonical_digest: "sha256:membership".to_owned(),
                 canonical_bytes: Vec::new(),
@@ -4332,7 +4333,7 @@ mod membership_hydration_tests {
                     "actor_id": "did:web:alice.example",
                     "actor_seq": 2,
                     "realm_id": realm_id,
-                    "kind": arkret_sdk::events::EventKind::MEMBER_STATE,
+                    "kind": arkret_core::events::EventKind::MEMBER_STATE,
                     "created_at": "2026-07-20T00:00:00Z",
                     "payload": {
                         "actor_id": member,
@@ -4470,8 +4471,8 @@ mod membership_hydration_tests {
         assert_eq!(
             hydration::parse_child_scope_policy(Some("require_scope_circle_id"), Some(circle_id))
                 .unwrap(),
-            Some(arkret_sdk::ChildScopePolicy::RequireScopeCircleId {
-                scope_circle_id: arkret_sdk::CircleId::new(circle_id.to_owned()).unwrap(),
+            Some(arkret_core::ChildScopePolicy::RequireScopeCircleId {
+                scope_circle_id: arkret_core::CircleId::new(circle_id.to_owned()).unwrap(),
             })
         );
         assert!(hydration::parse_child_scope_policy(Some("allow_any"), Some(circle_id)).is_err());
@@ -4496,7 +4497,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775902".to_owned(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
+                event_kind: arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
                 operation_type: "event".to_owned(),
                 operation_id: Some(
                     "ak:operation:019f0dd3-081c-7f03-b388-e0399e775903".to_owned(),
@@ -4555,7 +4556,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775904".to_owned(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
+                event_kind: arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
                 operation_type: "event".to_owned(),
                 operation_id: Some(
                     "ak:operation:019f0dd3-081c-7f03-b388-e0399e775905".to_owned(),
@@ -4617,7 +4618,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: event_id.to_owned(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                event_kind: arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
                 operation_type: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775904".to_owned()),
                 sender: Some(agent_id.to_owned()),
@@ -4637,7 +4638,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775905".to_owned(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_sdk::events::EventKind::AGENT_KEY_REVOKE.to_owned(),
+                event_kind: arkret_core::events::EventKind::AGENT_KEY_REVOKE.to_owned(),
                 operation_type: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775906".to_owned()),
                 sender: Some(agent_id.to_owned()),
@@ -4655,7 +4656,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: replacement_event_id.to_owned(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                event_kind: arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
                 operation_type: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775908".to_owned()),
                 sender: Some(agent_id.to_owned()),

@@ -9,7 +9,7 @@ pub(super) fn validate_control_move_seal_basis(
         .and_then(Value::as_array)
         .is_some_and(|effects| !effects.is_empty());
     if object.get("kind").and_then(Value::as_str)
-        == Some(arkret_sdk::events::EventKind::REALM_CREATE)
+        == Some(arkret_core::events::EventKind::REALM_CREATE)
     {
         if object.contains_key("seal_ref")
             || object.contains_key("auth_context")
@@ -128,7 +128,7 @@ pub(super) fn cba_effect_cell_family(effect: &Value) -> Result<&str, EventValida
             "effects[] entries require cell",
         )
     })?;
-    if arkret_sdk::CellRef::new(cell.to_owned()).is_err() {
+    if arkret_core::CellRef::new(cell.to_owned()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -177,7 +177,7 @@ fn cba_cell_family_plane(family: &str) -> Result<CbaEffectPlane, EventValidation
 }
 
 pub(super) fn is_realm_bootstrap_followup_kind(kind: &str) -> bool {
-    arkret_sdk::realm::bootstrap::is_realm_bootstrap_followup_kind(kind)
+    arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(kind)
 }
 
 pub(super) async fn reject_revoked_actor_device_signature(

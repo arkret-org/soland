@@ -6,8 +6,8 @@ use soland_storage::DeviceMessageRecord;
 
 use super::common::*;
 
-fn registration_secret_digest(value: &str) -> arkret_sdk::Hash {
-    arkret_sdk::Hash::new(arkret_sdk::canonical::sha256_digest(value.as_bytes())).unwrap()
+fn registration_secret_digest(value: &str) -> arkret_core::Hash {
+    arkret_core::Hash::new(arkret_core::canonical::sha256_digest(value.as_bytes())).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -88,17 +88,17 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     let state = AppState::new(test_config(), Db { pool: None });
     {
         let mut policy = state.test_account_registration_policy().lock();
-        *policy = arkret_sdk::AccountRegistrationPolicy {
-            verification_code: arkret_sdk::AccountRegistrationVerificationPolicy {
+        *policy = arkret_core::AccountRegistrationPolicy {
+            verification_code: arkret_core::AccountRegistrationVerificationPolicy {
                 required: true,
                 code_digest: Some(registration_secret_digest("246810")),
             },
             organization_allowlist: vec!["example.edu".to_owned()],
-            invitation: arkret_sdk::AccountRegistrationInvitationPolicy {
+            invitation: arkret_core::AccountRegistrationInvitationPolicy {
                 required: true,
                 token_digests: vec![registration_secret_digest("invite-token")],
             },
-            ..arkret_sdk::AccountRegistrationPolicy::default()
+            ..arkret_core::AccountRegistrationPolicy::default()
         };
     }
 
@@ -226,7 +226,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     let rate_limited_state = AppState::new(test_config(), Db { pool: None });
     {
         let mut policy = rate_limited_state.test_account_registration_policy().lock();
-        policy.rate_limit = Some(arkret_sdk::AccountRegistrationRateLimitPolicy {
+        policy.rate_limit = Some(arkret_core::AccountRegistrationRateLimitPolicy {
             max_attempts: 1,
             window_seconds: 60,
         });

@@ -1,4 +1,4 @@
-use arkret_sdk::PrincipalLocatorDisplayHint;
+use arkret_core::PrincipalLocatorDisplayHint;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

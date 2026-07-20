@@ -115,49 +115,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arkret"
-version = "0.3.0"
-dependencies = [
- "argon2",
- "arkret-auth",
- "arkret-canonical",
- "arkret-core",
- "arkret-crypto",
- "arkret-egress-policy",
- "arkret-ffi",
- "arkret-http-client",
- "arkret-identity",
- "arkret-keystore",
- "arkret-mls",
- "arkret-models-crypto",
- "arkret-policy",
- "arkret-server",
- "arkret-signatures",
- "arkret-state",
- "arkret-wire",
- "base64",
- "chacha20poly1305",
- "chrono",
- "ed25519-dalek",
- "getrandom 0.4.3",
- "hex",
- "hkdf 0.13.0",
- "hmac 0.13.0",
- "parking_lot",
- "reqwest",
- "salvo",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "subtle",
- "thiserror",
- "tokio",
- "uuid",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
 name = "arkret-auth"
 version = "0.3.0"
 dependencies = [
@@ -177,6 +134,21 @@ dependencies = [
  "subtle",
  "thiserror",
  "uuid",
+]
+
+[[package]]
+name = "arkret-bootstrap"
+version = "0.3.0"
+dependencies = [
+ "arkret-canonical",
+ "arkret-lattice-registry",
+ "arkret-models-collaboration",
+ "arkret-models-identity",
+ "arkret-state",
+ "arkret-wire",
+ "chrono",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -208,7 +180,6 @@ dependencies = [
  "arkret-identifiers",
  "arkret-identity",
  "arkret-keystore",
- "arkret-mls",
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-models-discovery",
@@ -241,27 +212,20 @@ dependencies = [
 name = "arkret-crypto"
 version = "0.3.0"
 dependencies = [
- "argon2",
  "arkret-canonical",
  "arkret-models-crypto",
  "arkret-models-identity",
  "arkret-signatures",
  "arkret-wire",
- "bip39",
  "chacha20poly1305",
  "chrono",
- "ed25519-dalek",
  "getrandom 0.4.3",
  "hkdf 0.13.0",
- "hmac 0.13.0",
- "hpke",
- "rand_core 0.9.5",
  "regex",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "thiserror",
- "x25519-dalek",
  "zeroize",
 ]
 
@@ -281,21 +245,13 @@ dependencies = [
  "arkret-identifiers",
  "arkret-models-collaboration",
  "arkret-models-crypto",
+ "arkret-models-integration",
  "arkret-wire",
  "chrono",
  "salvo",
  "serde",
  "serde_json",
  "thiserror",
-]
-
-[[package]]
-name = "arkret-ffi"
-version = "0.3.0"
-dependencies = [
- "arkret-core",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -388,6 +344,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "arkret-lattice-registry"
+version = "0.3.0"
+dependencies = [
+ "arkret-models-collaboration",
+ "arkret-schema",
+ "arkret-state",
+ "arkret-wire",
+ "serde_json",
+]
+
+[[package]]
 name = "arkret-mls"
 version = "0.3.0"
 dependencies = [
@@ -396,6 +363,7 @@ dependencies = [
  "arkret-identifiers",
  "arkret-models-crypto",
  "arkret-models-identity",
+ "arkret-policy",
  "arkret-signatures",
  "arkret-wire",
  "chacha20poly1305",
@@ -498,6 +466,7 @@ version = "0.3.0"
 dependencies = [
  "arkret-canonical",
  "arkret-models-collaboration",
+ "arkret-models-crypto",
  "arkret-models-integration",
  "arkret-schema",
  "arkret-wire",
@@ -540,10 +509,8 @@ dependencies = [
  "arkret-state",
  "arkret-wire",
  "chrono",
- "salvo",
  "serde",
  "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -746,17 +713,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "bip39"
-version = "2.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
-dependencies = [
- "bitcoin_hashes",
- "serde",
- "unicode-normalization",
-]
-
-[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -770,15 +726,6 @@ name = "bit-vec"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
-
-[[package]]
-name = "bitcoin_hashes"
-version = "0.14.101"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bca4c7abb40c8817d77403c880988cfd484f23ab2365726afb2f798363e2c4a2"
-dependencies = [
- "hex-conservative",
-]
 
 [[package]]
 name = "bitflags"
@@ -2093,15 +2040,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hex-conservative"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fda06d18ac606267c40c04e41b9947729bf8b9efe74bd4e82b61a5f26a510b9f"
-dependencies = [
- "arrayvec",
-]
-
-[[package]]
 name = "hkdf"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2135,26 +2073,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
-]
-
-[[package]]
-name = "hpke"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f65d16b699dd1a1fa2d851c970b0c971b388eeeb40f744252b8de48860980c8f"
-dependencies = [
- "aead",
- "aes-gcm",
- "chacha20poly1305",
- "digest 0.10.7",
- "generic-array",
- "hkdf 0.12.4",
- "hmac 0.12.1",
- "rand_core 0.9.5",
- "sha2 0.10.9",
- "subtle",
- "x25519-dalek",
- "zeroize",
 ]
 
 [[package]]
@@ -4815,13 +4733,13 @@ dependencies = [
 
 [[package]]
 name = "serde_repr"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "175ee3e80ae9982737ca543e96133087cbd9a485eecc3bc4de9c1a37b47ea59c"
+checksum = "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.118",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -4975,7 +4893,21 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
- "arkret",
+ "arkret-auth",
+ "arkret-bootstrap",
+ "arkret-core",
+ "arkret-crypto",
+ "arkret-event-draft",
+ "arkret-http-client",
+ "arkret-identity",
+ "arkret-keystore",
+ "arkret-mls",
+ "arkret-models-collaboration",
+ "arkret-models-crypto",
+ "arkret-policy",
+ "arkret-server",
+ "arkret-signatures",
+ "arkret-state",
  "arkret-wire",
  "async-stream",
  "async-trait",
@@ -5029,7 +4961,7 @@ dependencies = [
 name = "soland-application"
 version = "0.3.0"
 dependencies = [
- "arkret",
+ "arkret-core",
  "async-trait",
  "chrono",
  "serde_json",
@@ -5055,7 +4987,10 @@ dependencies = [
 name = "soland-domain"
 version = "0.3.0"
 dependencies = [
- "arkret",
+ "arkret-core",
+ "arkret-lattice-registry",
+ "arkret-models-crypto",
+ "arkret-state",
  "arkret-wire",
  "base64",
  "chrono",
@@ -5073,7 +5008,9 @@ dependencies = [
 name = "soland-http"
 version = "0.3.0"
 dependencies = [
- "arkret",
+ "arkret-core",
+ "arkret-server",
+ "arkret-signatures",
  "base64",
  "chrono",
  "ed25519-dalek",
@@ -5090,7 +5027,7 @@ dependencies = [
 name = "soland-storage"
 version = "0.3.0"
 dependencies = [
- "arkret",
+ "arkret-core",
  "async-trait",
  "base64",
  "chrono",
@@ -5106,7 +5043,7 @@ dependencies = [
 name = "soland-storage-memory"
 version = "0.3.0"
 dependencies = [
- "arkret",
+ "arkret-core",
  "async-trait",
  "chrono",
  "parking_lot",
@@ -5121,7 +5058,8 @@ name = "soland-storage-postgres"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "arkret",
+ "arkret-core",
+ "arkret-state",
  "async-trait",
  "base64",
  "chrono",
@@ -5225,6 +5163,17 @@ name = "syn"
 version = "2.0.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a207d6d6a2b7fc470b80443726053f18a2481b7e1eee970597051596567987a3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6389,9 +6338,9 @@ dependencies = [
 
 [[package]]
 name = "zbus"
-version = "5.17.0"
+version = "5.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a28b97f866896a4be7aefd2b5a8e01bb6773d19a775d54ab28b4d094b9a4480e"
+checksum = "fe18fb60dc696039e738717b76eaea21e7a4489bbb1885020b43c94236d7e98a"
 dependencies = [
  "async-broadcast",
  "async-recursion",
@@ -6419,9 +6368,9 @@ dependencies = [
 
 [[package]]
 name = "zbus_macros"
-version = "5.17.0"
+version = "5.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e05ad887425eecf5e8384dc2406a4a9313eb73468712fc1cdea362eb4fe0469"
+checksum = "fe96480bed92df2b442a1a30df364e12d08eed03aeb061f2b8dc6afb2be91119"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -6434,9 +6383,9 @@ dependencies = [
 
 [[package]]
 name = "zbus_names"
-version = "4.3.3"
+version = "4.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1039ca249fee9559680f3a9f05b55e0761fee51af4f6c1e7d8c1f31e549721d2"
+checksum = "d8bf88b4a3ff53e883001e0e0115b297a9d53c31b9c1edd2bfdd853e3428624e"
 dependencies = [
  "serde",
  "winnow 1.0.3",
@@ -6573,9 +6522,9 @@ dependencies = [
 
 [[package]]
 name = "zvariant"
-version = "5.13.0"
+version = "5.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cf057bb00bf5c9ad77abb6147b0ca4818236a1858416e9d988e40d6322fefa7"
+checksum = "bee2a0bcd2a907786a456fff45aaaaf54c9ba5f50b71ae9ec1a4edd200c94911"
 dependencies = [
  "endi",
  "enumflags2",
@@ -6587,9 +6536,9 @@ dependencies = [
 
 [[package]]
 name = "zvariant_derive"
-version = "5.13.0"
+version = "5.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8118ca6bda77bfc0ab51d660db0c955f2505eef854c9a449435bccb616933b31"
+checksum = "38a708216a18780796770bfe3f4739c7c83a3e8f789b755534bbbc06e4e23e12"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

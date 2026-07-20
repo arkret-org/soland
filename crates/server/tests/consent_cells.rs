@@ -225,14 +225,14 @@ async fn revoke_cell(
 }
 
 fn iso_now() -> String {
-    arkret_sdk::canonical::format_timestamp_canonical(Utc::now())
+    arkret_core::canonical::format_timestamp_canonical(Utc::now())
 }
 
 fn signing_actor(seed: [u8; 32]) -> String {
     let key = ed25519_dalek::SigningKey::from_bytes(&seed);
     format!(
         "did:key:{}",
-        arkret_sdk::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+        arkret_core::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
     )
 }
 
@@ -254,22 +254,22 @@ fn signed_event_with_prev_refs(
     kind: &str,
     actor_seq: u64,
     payload: Value,
-    prev_refs: Vec<arkret_sdk::EventId>,
+    prev_refs: Vec<arkret_core::EventId>,
 ) -> Value {
     let now = Utc::now();
     assert_eq!(actor, signing_actor(seed));
-    let actor_id = arkret_sdk::Did::new(actor.to_owned()).expect("fixture actor DID");
+    let actor_id = arkret_core::Did::new(actor.to_owned()).expect("fixture actor DID");
     let key = actor
         .strip_prefix("did:key:")
         .expect("fixture did:key actor");
     let verification_method = format!("{actor}#{key}");
-    let mut event = arkret_sdk::Event::new_with_id_at(
-        arkret_sdk::EventId::new(ids::generate_event_id()).expect("fixture Event id"),
+    let mut event = arkret_core::Event::new_with_id_at(
+        arkret_core::EventId::new(ids::generate_event_id()).expect("fixture Event id"),
         kind,
-        arkret_sdk::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_core::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
         actor_id.clone(),
         actor_seq,
-        arkret_sdk::Hlc::new(format!(
+        arkret_core::Hlc::new(format!(
             "{:012x}-0000-00000000",
             now.timestamp_millis().max(0) as u64
         ))
@@ -279,16 +279,16 @@ fn signed_event_with_prev_refs(
     )
     .expect("SDK Event builder accepts consent fixture");
     event.prev_refs = prev_refs;
-    let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
         seed,
         actor_id,
         verification_method.clone(),
     );
-    arkret_sdk::signatures::sign_event(
+    arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_sdk::signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .expect("SDK Event signer accepts consent fixture");
     serde_json::to_value(event).expect("SDK Event serializes")
@@ -357,7 +357,7 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
             }
         }),
     );
-    let create_event_id = arkret_sdk::EventId::new(
+    let create_event_id = arkret_core::EventId::new(
         create["event_id"]
             .as_str()
             .expect("Realm create fixture has an Event id")
@@ -365,18 +365,18 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
     )
     .expect("Realm create fixture Event id is canonical");
     let grant_id = ids::generate_grant_id();
-    let grant_proof = serde_json::to_value(arkret_sdk::PayloadProof {
-        kind: arkret_sdk::proof_kind::DETACHED_JWS.to_owned(),
+    let grant_proof = serde_json::to_value(arkret_core::PayloadProof {
+        kind: arkret_core::proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method: format!("{actor}#founding-grant"),
-        payload_digest: arkret_sdk::Hash::new(format!("sha256:{}", "0".repeat(64)))
+        payload_digest: arkret_core::Hash::new(format!("sha256:{}", "0".repeat(64)))
             .expect("fixture payload digest"),
         created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
             .expect("fixture created_at")
             .with_timezone(&Utc),
         domain: None,
         audience: None,
-        proof_purpose: Some(arkret_sdk::PayloadProofPurpose::IssuerAttestation),
+        proof_purpose: Some(arkret_core::PayloadProofPurpose::IssuerAttestation),
         jws: "eyJhbGciOiJFZERTQSJ9..c2lnbmF0dXJl".to_owned(),
     })
     .expect("founding grant proof serializes");
@@ -384,7 +384,7 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
         seed,
         actor,
         &realm_id,
-        arkret_sdk::events::EventKind::CAPABILITY_GRANT,
+        arkret_core::events::EventKind::CAPABILITY_GRANT,
         2,
         serde_json::json!({
             "grant_id": grant_id,
@@ -399,7 +399,7 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
                     "ak.capability.grant",
                     "ak.capability.revoke"
                 ],
-                "capability_action_registry_digest": arkret_sdk::current_capability_action_registry_digest().unwrap(),
+                "capability_action_registry_digest": arkret_core::current_capability_action_registry_digest().unwrap(),
                 "resources": [{
                     "kind": "realm",
                     "realm_id": realm_id,
@@ -514,7 +514,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
         "observed_dots": [grant_dot],
         "revoked_at": (Utc::now() + Duration::seconds(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
     });
-    let typed_revoke: arkret_sdk::ConsentRevokePayload =
+    let typed_revoke: arkret_core::ConsentRevokePayload =
         serde_json::from_value(revoke_payload.clone()).unwrap_or_else(|error| {
             panic!(
                 "canonical consent revoke fixture must decode: {error}; payload={revoke_payload}"

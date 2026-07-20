@@ -1,4 +1,4 @@
-use arkret_sdk::Operation;
+use arkret_core::Operation;
 use serde_json::Value;
 use soland_storage::MessageRecord;
 

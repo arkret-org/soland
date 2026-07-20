@@ -226,7 +226,7 @@ pub(super) fn event_proof_binding_bytes(
     created_at: &str,
     proof_object: &serde_json::Map<String, Value>,
 ) -> Result<Vec<u8>, EventValidationError> {
-    let proof: arkret_sdk::Proof = serde_json::from_value(Value::Object(proof_object.clone()))
+    let proof: arkret_core::Proof = serde_json::from_value(Value::Object(proof_object.clone()))
         .map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
@@ -236,7 +236,7 @@ pub(super) fn event_proof_binding_bytes(
         })?;
     if proof.event_digest.as_str() != event_digest
         || proof.verification_method != verification_method
-        || arkret_sdk::canonical::format_timestamp_millis_canonical(proof.created_at) != created_at
+        || arkret_core::canonical::format_timestamp_millis_canonical(proof.created_at) != created_at
     {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -244,7 +244,7 @@ pub(super) fn event_proof_binding_bytes(
             "event proof binding fields are inconsistent",
         ));
     }
-    let actor = arkret_sdk::Did::new(actor_id.to_owned()).map_err(|error| {
+    let actor = arkret_core::Did::new(actor_id.to_owned()).map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_proof",

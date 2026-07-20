@@ -72,7 +72,7 @@ async fn run() -> anyhow::Result<()> {
     let bootstrap = soland::bootstrap::resolve_and_build_persistence(&config, &db).await?;
     let bootstrap = if matches!(
         bootstrap.state,
-        arkret_sdk::ServiceIdentityState::WaitingProvider { .. }
+        arkret_core::ServiceIdentityState::WaitingProvider { .. }
     ) {
         tracing::warn!(
             retry_seconds = 5,
@@ -484,7 +484,7 @@ where
                 Ok(bootstrap)
                     if matches!(
                         bootstrap.state,
-                        arkret_sdk::ServiceIdentityState::WaitingProvider { .. }
+                        arkret_core::ServiceIdentityState::WaitingProvider { .. }
                     ) =>
                 {
                     tracing::warn!("service identity Provider remains unavailable; retrying");
@@ -541,11 +541,11 @@ async fn service_identity_waiting(res: &mut Response) {
 fn spawn_service_identity_supervisor(
     state: AppState,
     persistence: std::sync::Arc<dyn soland_storage::PersistenceStore>,
-    key_store: Option<std::sync::Arc<dyn arkret_sdk::KeyStore>>,
+    key_store: Option<std::sync::Arc<dyn arkret_core::KeyStore>>,
 ) {
     if !matches!(
         state.service_identity_state().as_ref(),
-        arkret_sdk::ServiceIdentityState::DegradedStored { .. }
+        arkret_core::ServiceIdentityState::DegradedStored { .. }
     ) {
         return;
     }
@@ -564,8 +564,8 @@ fn spawn_service_identity_supervisor(
                 Ok(bootstrap) => {
                     let keep_retrying = matches!(
                         bootstrap.state,
-                        arkret_sdk::ServiceIdentityState::DegradedStored { .. }
-                            | arkret_sdk::ServiceIdentityState::WaitingProvider { .. }
+                        arkret_core::ServiceIdentityState::DegradedStored { .. }
+                            | arkret_core::ServiceIdentityState::WaitingProvider { .. }
                     );
                     if let Some(identity) = bootstrap.state.identity()
                         && identity.service_id.as_str() != state.service_id()
@@ -623,7 +623,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         continue;
                     }
                 };
-                let client = match arkret_sdk::ClientBuilder::new(base_url)
+                let client = match arkret_http_client::ClientBuilder::new(base_url)
                     .allow_insecure_localhost()
                     .build()
                 {
@@ -635,7 +635,8 @@ fn spawn_federation_peer_discovery(state: AppState) {
                 };
                 match client.describe().await {
                     Ok(description)
-                        if description.service_type == arkret_sdk::ServiceType::PrincipalServer
+                        if description.service_type
+                            == arkret_core::ServiceType::PrincipalServer
                             && description.service_id.as_str() != state.service_id() =>
                     {
                         let document_view = match client
@@ -656,7 +657,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         let document_value = serde_json::Value::Object(
                             document_view.did_document.into_iter().collect(),
                         );
-                        let document = match serde_json::from_value::<arkret_sdk::ServiceDidDocument>(
+                        let document = match serde_json::from_value::<arkret_core::ServiceDidDocument>(
                             document_value,
                         ) {
                             Ok(document) => document,
@@ -670,7 +671,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                                 continue;
                             }
                         };
-                        let public_base = match arkret_sdk::CanonicalServiceUrl::canonicalize(
+                        let public_base = match arkret_core::CanonicalServiceUrl::canonicalize(
                             endpoint.as_str(),
                         ) {
                             Ok(public_base) => public_base,
@@ -679,8 +680,8 @@ fn spawn_federation_peer_discovery(state: AppState) {
                                 continue;
                             }
                         };
-                        let registration_key = match arkret_sdk::ServiceRegistrationKey::new(
-                            arkret_sdk::ServiceType::PrincipalServer,
+                        let registration_key = match arkret_core::ServiceRegistrationKey::new(
+                            arkret_core::ServiceType::PrincipalServer,
                             public_base,
                         ) {
                             Ok(key) => key,
@@ -721,7 +722,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             continue;
                         };
                         let verifying_key =
-                            match arkret_sdk::decode_ed25519_multibase(public_key_multibase)
+                            match arkret_core::decode_ed25519_multibase(public_key_multibase)
                                 .map_err(|error| error.to_string())
                                 .and_then(|raw| {
                                     ed25519_dalek::VerifyingKey::from_bytes(&raw)

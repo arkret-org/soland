@@ -41,9 +41,9 @@ impl<'a> SignatureBaseComponent<'a> {
 }
 
 pub fn rfc9530_content_digest(bytes: &[u8]) -> String {
-    arkret_sdk::http_signature::ContentDigest::compute(
+    arkret_signatures::http_signature::ContentDigest::compute(
         bytes,
-        arkret_sdk::http_signature::ContentDigestAlgorithm::Sha256,
+        arkret_signatures::http_signature::ContentDigestAlgorithm::Sha256,
     )
     .wire_value
 }
@@ -52,11 +52,11 @@ pub fn canonical_body_digests(
     value: &Value,
     canonical_error: impl FnOnce(String) -> AppError,
 ) -> Result<CanonicalBodyDigests, AppError> {
-    let body_bytes = arkret_sdk::canonical::canonical_json_bytes(value)
+    let body_bytes = arkret_core::canonical::canonical_json_bytes(value)
         .map_err(|error| canonical_error(error.to_string()))?;
     Ok(CanonicalBodyDigests {
         content_digest: rfc9530_content_digest(&body_bytes),
-        request_digest: arkret_sdk::canonical::sha256_digest(&body_bytes),
+        request_digest: arkret_core::canonical::sha256_digest(&body_bytes),
     })
 }
 
@@ -129,14 +129,14 @@ pub fn signature_base(components: &[SignatureBaseComponent<'_>], signature_param
         .filter_map(|component| {
             component.value.map(|value| {
                 (
-                    arkret_sdk::http_signature::Component::parse(component.name),
+                    arkret_signatures::http_signature::Component::parse(component.name),
                     value.to_owned(),
                 )
             })
         })
         .collect::<Vec<_>>();
     String::from_utf8(
-        arkret_sdk::http_signature::canonical_message_from_component_values(
+        arkret_signatures::http_signature::canonical_message_from_component_values(
             &components,
             signature_params,
         ),
@@ -162,7 +162,7 @@ pub fn verify_signature_header(
 }
 
 pub fn decode_signature_header(value: &str) -> Result<Signature, &'static str> {
-    let signature_bytes = arkret_sdk::http_signature::parse_signature_header(value, "sig1")
+    let signature_bytes = arkret_signatures::http_signature::parse_signature_header(value, "sig1")
         .map_err(|_| "Signature header must contain a valid sig1 byte sequence")?;
     Signature::from_slice(&signature_bytes).map_err(|_| "Signature header is not Ed25519 length")
 }

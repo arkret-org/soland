@@ -2,8 +2,8 @@
 //!
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
-use arkret_sdk::CellRef;
-use arkret_sdk::lattice::CellState;
+use arkret_core::CellRef;
+use arkret_state::lattice::CellState;
 
 use super::common::*;
 
@@ -565,7 +565,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         "participant_identity must be a typed ak:rtc_participant id"
     );
     assert!(
-        arkret_sdk::identifiers::is_lowercase_uuidv7(
+        arkret_core::identifiers::is_lowercase_uuidv7(
             participant_identity
                 .strip_prefix("ak:rtc_participant:")
                 .unwrap()
@@ -1220,8 +1220,8 @@ fn call_signal_envelope(
             "data": {"sdp_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
         }
     });
-    let canonical = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
-    let event_digest = arkret_sdk::canonical::sha256_digest(&canonical);
+    let canonical = arkret_core::canonical::canonical_json_bytes(&envelope).unwrap();
+    let event_digest = arkret_core::canonical::sha256_digest(&canonical);
     envelope["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",
@@ -1272,7 +1272,7 @@ async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_dev
         &state,
         DEMO_REALM_ID,
         alice,
-        arkret_sdk::CapabilityActionId::CALL_SIGNAL_SEND,
+        arkret_core::CapabilityActionId::CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca11";
@@ -1330,7 +1330,7 @@ async fn ephemeral_call_signal_reaches_same_actor_other_device() {
         &state,
         DEMO_REALM_ID,
         alice,
-        arkret_sdk::CapabilityActionId::CALL_SIGNAL_SEND,
+        arkret_core::CapabilityActionId::CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca12";
@@ -1367,7 +1367,7 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
         &state,
         DEMO_REALM_ID,
         alice,
-        arkret_sdk::CapabilityActionId::CALL_SIGNAL_SEND,
+        arkret_core::CapabilityActionId::CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca13";
@@ -1479,7 +1479,7 @@ async fn ephemeral_call_signal_incremental_resubscribe_does_not_redeliver() {
         &state,
         DEMO_REALM_ID,
         alice,
-        arkret_sdk::CapabilityActionId::CALL_SIGNAL_SEND,
+        arkret_core::CapabilityActionId::CALL_SIGNAL_SEND,
     );
 
     let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca20";

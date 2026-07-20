@@ -23,7 +23,7 @@
 //! `applet_bridge::build_ghost_accountability_grant_event`; bot-actor inception
 //! grants remain a follow-up).
 
-use arkret_sdk::Did;
+use arkret_core::Did;
 use soland_http::error::AppError;
 
 /// Validate that an extension actor DID is a bare DID scalar (no DID URL

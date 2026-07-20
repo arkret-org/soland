@@ -7,7 +7,7 @@
 //! `GET /_soland/admin/realms/{realm_id}/multisig/pending` lists the in-flight
 //! seals awaiting threshold so the admin UI can render them.
 
-use arkret_sdk::{Did, PartialSignature, RealmId, SealId, ThresholdAggregator};
+use arkret_core::{Did, PartialSignature, RealmId, SealId, ThresholdAggregator};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -261,7 +261,7 @@ pub(crate) async fn admin_rotate_signing_key(
         state,
         req,
         &admin_session,
-        arkret_sdk::admin_scopes::NOTARY_ROTATE_SIGNING_KEY,
+        arkret_core::admin_scopes::NOTARY_ROTATE_SIGNING_KEY,
     )
     .await?;
     // Validate realm_id shape so the endpoint surfaces a clean 400 on a

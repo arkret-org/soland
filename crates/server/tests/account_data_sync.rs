@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use arkret_sdk::{Did, RealmId};
+use arkret_core::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -16,7 +16,7 @@ fn test_event_signer_did() -> String {
     let key = ed25519_dalek::SigningKey::from_bytes(&[21_u8; 32]);
     format!(
         "did:key:{}",
-        arkret_sdk::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+        arkret_core::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
     )
 }
 
@@ -99,7 +99,7 @@ async fn put_account_data(
 }
 
 async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> String {
-    let realm_id = arkret_sdk::new_prefixed_uuid7("ak:realm:");
+    let realm_id = arkret_core::new_prefixed_uuid7("ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -131,7 +131,7 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
                 plaintext_visible_service_classes: std::collections::BTreeMap::from([(
                     "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
                     std::collections::BTreeSet::from([
-                        arkret_sdk::PlaintextDataClassKind::MessageContent,
+                        arkret_core::PlaintextDataClassKind::MessageContent,
                     ]),
                 )]),
                 minimal_metadata_realm: false,
@@ -166,19 +166,19 @@ fn signed_actor_private_event_envelope(
     payload: Value,
 ) -> Value {
     let now = chrono::Utc::now();
-    let actor_id = arkret_sdk::Did::new(actor.to_owned()).expect("fixture actor DID");
+    let actor_id = arkret_core::Did::new(actor.to_owned()).expect("fixture actor DID");
     let verification_method = actor.strip_prefix("did:key:").map_or_else(
         || format!("{actor}#{device_id}"),
         |key| format!("{actor}#{key}"),
     );
-    let mut event = arkret_sdk::Event::new_with_id_at(
-        arkret_sdk::EventId::new(arkret_sdk::new_prefixed_uuid7("ak:event:"))
+    let mut event = arkret_core::Event::new_with_id_at(
+        arkret_core::EventId::new(arkret_core::new_prefixed_uuid7("ak:event:"))
             .expect("fixture Event id"),
         kind,
-        arkret_sdk::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_core::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
         actor_id.clone(),
         TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        arkret_sdk::Hlc::new(format!(
+        arkret_core::Hlc::new(format!(
             "{:012x}-0000-00000000",
             now.timestamp_millis().max(0) as u64
         ))
@@ -187,16 +187,16 @@ fn signed_actor_private_event_envelope(
         now,
     )
     .expect("SDK Event builder accepts actor-private fixture");
-    let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
         [21_u8; 32],
         actor_id,
         verification_method.clone(),
     );
-    arkret_sdk::signatures::sign_event(
+    arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_sdk::signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .expect("SDK Event signer accepts actor-private fixture");
     serde_json::to_value(event).expect("SDK Event serializes")
@@ -238,7 +238,7 @@ fn read_cursor_payload(
     hlc: &str,
 ) -> Value {
     json!({
-        "id": arkret_sdk::new_prefixed_uuid7("ak:read_cursor:"),
+        "id": arkret_core::new_prefixed_uuid7("ak:read_cursor:"),
         "schema": "ak.schema.read_cursor.v1",
         "actor_id": actor,
         "device_id": device_id,
@@ -279,7 +279,7 @@ fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>)
 
 fn encrypted_account_data_value(actor_id: &str, data_type: &str, plaintext: &Value) -> Value {
     serde_json::to_value(
-        arkret_sdk::account_data_crypto::seal_account_data_value_with_nonce(
+        arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
             &[7u8; 32], actor_id, data_type, plaintext, [9u8; 24],
         )
         .unwrap(),
@@ -334,7 +334,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         .unwrap_or_else(|| panic!("latest account_data Event missing: {phone_sync}"));
     assert_eq!(
         event["kind"],
-        arkret_sdk::events::EventKind::ACCOUNT_DATA_SET
+        arkret_core::events::EventKind::ACCOUNT_DATA_SET
     );
     assert_eq!(
         event["actor_id"].as_str(),
@@ -348,7 +348,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
             .is_some_and(|proofs| !proofs.is_empty())
     );
     assert!(!event.to_string().contains("first"));
-    serde_json::from_value::<arkret_sdk::Event>(event.clone())
+    serde_json::from_value::<arkret_core::Event>(event.clone())
         .expect("sync account_data entry is a typed canonical Event");
 
     state
@@ -384,7 +384,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         .unwrap()
         .into_iter()
         .filter(|record| {
-            record.kind == arkret_sdk::events::EventKind::ACCOUNT_DATA_SET
+            record.kind == arkret_core::events::EventKind::ACCOUNT_DATA_SET
                 && record
                     .envelope
                     .get("payload")

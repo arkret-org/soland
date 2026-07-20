@@ -1,6 +1,6 @@
 //! Effective mention-routing policy for Realm notifications.
 
-use arkret_sdk::{MentionRoutingHint, effective_mention_routing_hint};
+use arkret_core::{MentionRoutingHint, effective_mention_routing_hint};
 
 use crate::state::AppState;
 
@@ -19,7 +19,7 @@ pub(crate) async fn effective_realm_mention_routing_hint(
         profiles.push(profile);
     }
     if record.minimal_metadata_realm {
-        profiles.push(arkret_sdk::mls::MINIMAL_METADATA_REALM_PROFILE.to_owned());
+        profiles.push(arkret_models_crypto::MINIMAL_METADATA_REALM_PROFILE.to_owned());
     }
     effective_mention_routing_hint(&profiles, declared_hint)
 }

@@ -55,7 +55,7 @@ impl SolandEventsSubmitRequestBody {
             for entry in frontier {
                 if !seen.insert(entry.as_str()) {
                     return Err((
-                        arkret_sdk::ErrorCode::SCHEMA_VIOLATION,
+                        arkret_core::ErrorCode::SCHEMA_VIOLATION,
                         format!("{name} contains duplicate entry {:?}", entry.as_str()),
                     ));
                 }
@@ -63,16 +63,16 @@ impl SolandEventsSubmitRequestBody {
         }
         if binding.destination_service_type.trim().is_empty() {
             return Err((
-                arkret_sdk::ErrorCode::SCHEMA_VIOLATION,
+                arkret_core::ErrorCode::SCHEMA_VIOLATION,
                 "service_binding_ref.destination_service_type MUST be a non-empty string"
                     .to_owned(),
             ));
         }
-        let expected_reducer_digest = arkret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST;
+        let expected_reducer_digest = arkret_core::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST;
         let actual_reducer_digest = binding.reducer_profile_digest.to_string();
         if actual_reducer_digest != expected_reducer_digest {
             return Err((
-                arkret_sdk::ReasonCode::REDUCER_PROFILE_MISMATCH,
+                arkret_core::ReasonCode::REDUCER_PROFILE_MISMATCH,
                 format!(
                     "service_binding_ref.reducer_profile_digest mismatch: expected {expected_reducer_digest}, got {actual_reducer_digest}"
                 ),
@@ -114,7 +114,7 @@ where
 /// rejected; returns `None` when the kind is fine to forward to the
 /// existing durable-event validator pipeline.
 pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static str)> {
-    if arkret_sdk::events::is_ephemeral_kind(kind) {
+    if arkret_core::events::is_ephemeral_kind(kind) {
         return Some((
             ErrorCode::SchemaViolation,
             "ephemeral kind MUST be carried via ak.schema.ephemeral_envelope.v1 \
@@ -122,7 +122,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
              (ak.key.verification.* to-device); not durable ak.self.events.command.submit",
         ));
     }
-    if arkret_sdk::events::is_receipt_object_only(kind) {
+    if arkret_core::events::is_receipt_object_only(kind) {
         return Some((
             ErrorCode::SchemaViolation,
             "ak.event_batch_receipt is a receipt object only; \
@@ -141,7 +141,7 @@ pub fn terminal_realm_check(
     realm_in_terminal_state: bool,
     kind: &str,
 ) -> Option<(ErrorCode, &'static str)> {
-    if realm_in_terminal_state && !arkret_sdk::events::kinds::is_audit_kind(kind) {
+    if realm_in_terminal_state && !arkret_core::events::kinds::is_audit_kind(kind) {
         return Some((
             ErrorCode::FailedPrecondition,
             "Realm has reached ak.realm.tombstone or ak.realm.destroy \
@@ -152,13 +152,13 @@ pub fn terminal_realm_check(
 }
 
 fn frozen_realm_write_exempt(kind: &str) -> bool {
-    arkret_sdk::events::kinds::is_audit_kind(kind)
+    arkret_core::events::kinds::is_audit_kind(kind)
         || matches!(
             kind,
-            arkret_sdk::events::EventKind::REALM_ARCHIVE
-                | arkret_sdk::events::EventKind::REALM_FREEZE
-                | arkret_sdk::events::EventKind::REALM_TOMBSTONE
-                | arkret_sdk::events::EventKind::REALM_DESTROY
+            arkret_core::events::EventKind::REALM_ARCHIVE
+                | arkret_core::events::EventKind::REALM_FREEZE
+                | arkret_core::events::EventKind::REALM_TOMBSTONE
+                | arkret_core::events::EventKind::REALM_DESTROY
         )
 }
 
@@ -227,7 +227,7 @@ pub fn cross_signing_reset_replay_check(
                     .to_owned(),
             )
         })?;
-    if arkret_sdk::EventId::new(payload_reset_event_id).is_err() {
+    if arkret_core::EventId::new(payload_reset_event_id).is_err() {
         return Err((
             ErrorCode::SchemaViolation,
             "cross_signing.reset.reset_event_id must be a ak:event:<uuidv7>".to_owned(),
@@ -282,13 +282,13 @@ pub fn realm_policy_components_check(
         .and_then(Value::as_u64)
     {
         let window_u32 = u32::try_from(window).unwrap_or(u32::MAX);
-        if arkret_sdk::validate_relaxed_window_ms(window_u32).is_err() {
+        if arkret_core::validate_relaxed_window_ms(window_u32).is_err() {
             return Err((
                 ErrorCode::FailedPrecondition,
                 format!(
                     "e2ee_relaxed.relaxed_window_max_ms={window} exceeds absolute \
                      hard ceiling of {}ms",
-                    arkret_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS
+                    arkret_core::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS
                 ),
             ));
         }
@@ -351,7 +351,7 @@ pub fn realm_policy_components_check(
                  for discussion_metadata_digest recomputation"
                     .to_owned(),
             ))?;
-            let covered = arkret_sdk::Hash::new(covered_digest.to_owned()).map_err(|_| {
+            let covered = arkret_core::Hash::new(covered_digest.to_owned()).map_err(|_| {
                 (
                     ErrorCode::FailedPrecondition,
                     "governance binding discussion_metadata_digest is not a valid \
@@ -359,7 +359,7 @@ pub fn realm_policy_components_check(
                         .to_owned(),
                 )
             })?;
-            if arkret_sdk::models::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
+            if arkret_core::models::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
                 return Err((
                     ErrorCode::FailedPrecondition,
                     "media_service_decrypts=true fact recomputed from the policy \
@@ -373,7 +373,7 @@ pub fn realm_policy_components_check(
     Ok(())
 }
 
-/// SEC-03 — build a `arkret_sdk::models::MediaDecryptPolicyValue`
+/// SEC-03 — build a `arkret_core::models::MediaDecryptPolicyValue`
 /// from a `ak.realm.policy_components` payload and derive its canonical
 /// `discussion_metadata_digest`. Returns `None` only when the SDK's canonical
 /// digest derivation fails (it never does for well-formed input), so callers
@@ -383,8 +383,8 @@ pub fn realm_policy_components_check(
 /// rule 2 (service DIDs whose `data_classes[]` contains `media_plaintext` in
 /// `plaintext_visible_services[]`). Free-text purposes do not grant authority
 /// and are excluded from the digest input.
-fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_sdk::Hash> {
-    use arkret_sdk::models::{
+fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_core::Hash> {
+    use arkret_core::models::{
         MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
     };
 
@@ -413,7 +413,7 @@ fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_sdk
                     .flatten()
             });
             if let Some(did_str) = did_str
-                && let Ok(service_id) = arkret_sdk::Did::new(did_str.to_owned())
+                && let Ok(service_id) = arkret_core::Did::new(did_str.to_owned())
             {
                 plaintext_visible_services.push(MediaPlaintextService { service_id });
             }

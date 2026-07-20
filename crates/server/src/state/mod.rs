@@ -5,12 +5,14 @@
 pub mod did_resolver_chain;
 
 mod app_state;
+mod cross_signing_registry;
 mod member_identity;
 mod notification;
 mod realm_directory;
 
 pub use app_state::AppState;
 pub(crate) use app_state::getrandom_seed;
+pub(crate) use cross_signing_registry::CrossSigningRegistry;
 pub(crate) use member_identity::display_state_digest;
 pub use member_identity::{
     EffectiveIdentityEntry, HandleClaimDigestInput, HandleClaimEvidenceRecord,

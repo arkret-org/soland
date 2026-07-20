@@ -43,7 +43,7 @@ pub(super) async fn enforce_sibling_fork_limit(
         .filter_map(|record| stored_prev_frontier_digest(record).ok())
         .filter(|digest| digest == &prev_frontier_digest)
         .count();
-    if sibling_count < arkret_sdk::MAX_ACTOR_SEQ_SIBLINGS {
+    if sibling_count < arkret_core::MAX_ACTOR_SEQ_SIBLINGS {
         return Ok(());
     }
     append_audit_log(
@@ -57,7 +57,7 @@ pub(super) async fn enforce_sibling_fork_limit(
             "actor_seq": parsed.actor_seq,
             "prev_frontier_digest": prev_frontier_digest,
             "accepted_sibling_count": sibling_count,
-            "max_actor_seq_siblings": arkret_sdk::MAX_ACTOR_SEQ_SIBLINGS,
+            "max_actor_seq_siblings": arkret_core::MAX_ACTOR_SEQ_SIBLINGS,
         }),
         "fork_quarantine",
     )

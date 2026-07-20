@@ -41,7 +41,7 @@ async fn set_demo_realm_visibility(
             plaintext_visible_service_classes: std::collections::BTreeMap::from([(
                 state.service_id().clone(),
                 std::collections::BTreeSet::from([
-                    arkret_sdk::PlaintextDataClassKind::MessageContent,
+                    arkret_core::PlaintextDataClassKind::MessageContent,
                 ]),
             )]),
             minimal_metadata_realm: false,
@@ -55,7 +55,7 @@ async fn set_demo_realm_visibility(
         std::collections::BTreeSet::from([state.service_id().clone()]);
     meta.plaintext_visible_service_classes.insert(
         state.service_id().clone(),
-        std::collections::BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
+        std::collections::BTreeSet::from([arkret_core::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = now;
     state
@@ -190,8 +190,8 @@ fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i
             "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
         }
     });
-    let canonical = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
-    let event_digest = arkret_sdk::canonical::sha256_digest(&canonical);
+    let canonical = arkret_core::canonical::canonical_json_bytes(&envelope).unwrap();
+    let event_digest = arkret_core::canonical::sha256_digest(&canonical);
     envelope["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",

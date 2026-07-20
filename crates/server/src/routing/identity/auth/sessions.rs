@@ -29,7 +29,7 @@ pub async fn authenticated_session(
     if req
         .uri()
         .query()
-        .is_some_and(arkret_sdk::contains_query_auth_material)
+        .is_some_and(arkret_core::contains_query_auth_material)
     {
         // Spec: A.3 — auth material MUST NOT appear in query strings.
         // We log a truncated preview of the offending token so on-call

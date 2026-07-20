@@ -29,11 +29,11 @@ pub trait InviteReceivePolicyStore: Send + Sync {
     async fn get(
         &self,
         subject_id: &str,
-    ) -> PersistenceResult<Option<arkret_sdk::InviteReceivePolicy>>;
-    async fn put(&self, policy: &arkret_sdk::InviteReceivePolicy) -> PersistenceResult<()>;
+    ) -> PersistenceResult<Option<arkret_core::InviteReceivePolicy>>;
+    async fn put(&self, policy: &arkret_core::InviteReceivePolicy) -> PersistenceResult<()>;
     async fn snapshot_all(
         &self,
-    ) -> PersistenceResult<Vec<(String, arkret_sdk::InviteReceivePolicy)>>;
+    ) -> PersistenceResult<Vec<(String, arkret_core::InviteReceivePolicy)>>;
 }
 /// Durable backing for the holder-private consent-cell projection (spec
 /// `consent-model.md` §3 / G3.S4). The in-memory

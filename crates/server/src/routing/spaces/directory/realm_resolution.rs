@@ -254,8 +254,8 @@ pub(super) async fn resolve_target(
         as_of,
         source_refs: Vec::new(),
         join_candidates,
-        policy_revision: arkret_sdk::NonEmptyString::new(policy_revision.unwrap_or_else(|| {
-            arkret_sdk::canonical::sha256_digest(
+        policy_revision: arkret_core::NonEmptyString::new(policy_revision.unwrap_or_else(|| {
+            arkret_core::canonical::sha256_digest(
                 format!("{}:{discoverability}:{join_rule}", realm_entry.realm_id).as_bytes(),
             )
         }))
@@ -264,7 +264,7 @@ pub(super) async fn resolve_target(
 }
 
 fn object_preview_for_address(
-    parsed: &arkret_sdk::ParsedAddress,
+    parsed: &arkret_core::ParsedAddress,
     target_kind: TargetKind,
     as_of: DateTime<Utc>,
     policy_revision: &str,
@@ -305,7 +305,7 @@ fn object_preview_for_address(
 
 pub(super) async fn resolve_realm_for_address(
     state: &AppState,
-    parsed: &arkret_sdk::ParsedAddress,
+    parsed: &arkret_core::ParsedAddress,
 ) -> Option<RealmDirectoryEntry> {
     let candidates: Vec<RealmDirectoryEntry> = {
         let realms = state.realms.lock();
@@ -321,7 +321,7 @@ pub(super) async fn resolve_realm_for_address(
     })
 }
 
-pub(super) fn target_kind_for_address(parsed: &arkret_sdk::ParsedAddress) -> TargetKind {
+pub(super) fn target_kind_for_address(parsed: &arkret_core::ParsedAddress) -> TargetKind {
     if parsed.message.is_some() {
         TargetKind::Message
     } else if parsed.strand.is_some() {
@@ -713,7 +713,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
         return Vec::new();
     };
     let seal = seal_view.accepted_seal;
-    let seal_basis = arkret_sdk::SealBasis {
+    let seal_basis = arkret_core::SealBasis {
         leaves: vec![seal.id.clone()],
         control_event_set_root: seal.control_event_set_root.clone(),
         state_root: seal.state_root.clone(),

@@ -3,7 +3,7 @@
 //! Split out of the `reducer` mod file; re-exported there so the
 //! `crate::reducer::ProjectionEffect` / `MlsEffect` paths stay unchanged.
 
-use arkret_sdk::AgentLifecycleState;
+use arkret_core::AgentLifecycleState;
 use serde_json::Value;
 
 use super::{

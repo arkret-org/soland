@@ -1,10 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::lattice::{CellState, SealedOp};
-use arkret_sdk::models::EffectiveScope as GovernanceScope;
-use arkret_sdk::move_event::{LatticeOp, LatticeOpType};
-use arkret_sdk::state::compute_state_root;
-use arkret_sdk::{
+use arkret_core::models::EffectiveScope as GovernanceScope;
+use arkret_core::move_event::{LatticeOp, LatticeOpType};
+use arkret_core::{
     CellId, CellRef, Event, Hash, MaterializedMlsGovernanceProofBundle,
     MlsGovernanceBindingPayload, MlsGovernanceControlStateLeaf, MlsGovernanceControlStateValue,
     MlsGovernanceProofBundle, MlsGovernanceProofRequest, MoveId, SealId,
@@ -12,6 +10,8 @@ use arkret_sdk::{
     derive_mls_discussion_metadata_digest, derive_mls_policy_root,
     is_mls_membership_frontier_component,
 };
+use arkret_state::lattice::{CellState, SealedOp};
+use arkret_state::state::compute_state_root;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
@@ -118,8 +118,8 @@ async fn materialize_realm_control(
                 format!("canonical Event bounds preflight unavailable: {error}"),
             )
         })?;
-    if stats.count > arkret_sdk::MLS_GOVERNANCE_MAX_COVERED_EVENT_DIGESTS as u64
-        || stats.canonical_bytes > arkret_sdk::MLS_GOVERNANCE_MAX_TOTAL_ITEM_BYTES as u64
+    if stats.count > arkret_core::MLS_GOVERNANCE_MAX_COVERED_EVENT_DIGESTS as u64
+        || stats.canonical_bytes > arkret_core::MLS_GOVERNANCE_MAX_TOTAL_ITEM_BYTES as u64
     {
         return Err(AppError::new(
             ErrorCode::MlsGovernanceProofBoundsExceeded,
@@ -144,7 +144,7 @@ async fn materialize_realm_control(
             .is_some_and(|effects| {
                 effects.iter().any(|effect| {
                     effect.get("cell").and_then(serde_json::Value::as_str)
-                        == Some(arkret_sdk::identity::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL)
+                        == Some(arkret_bootstrap::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL)
                 })
             })
     }) {
@@ -154,7 +154,7 @@ async fn materialize_realm_control(
     let principal_control_actor = realm_records
         .iter()
         .find(|record| {
-            record.kind == arkret_sdk::events::EventKind::REALM_CREATE
+            record.kind == arkret_core::events::EventKind::REALM_CREATE
                 && record
                     .envelope
                     .pointer("/payload/object/fields/purpose")
@@ -194,7 +194,7 @@ async fn materialize_realm_control(
     let preserved_generation_coverage = if let Some(requirement) = &generation_fence
         && !requirement.accepted_frontier_refs.is_empty()
     {
-        arkret_sdk::leaf_union_proof(
+        arkret_state::leaf_union_proof(
             &requirement.accepted_frontier_refs,
             state.seal_store.as_ref(),
         )
@@ -251,7 +251,7 @@ async fn materialize_realm_control(
         })
         .collect::<BTreeSet<_>>();
     for bootstrap in realm_records.iter().filter(|record| {
-        record.kind == arkret_sdk::events::EventKind::REALM_CREATE
+        record.kind == arkret_core::events::EventKind::REALM_CREATE
             && record
                 .envelope
                 .pointer("/payload/object/fields/purpose")
@@ -263,7 +263,7 @@ async fn materialize_realm_control(
             realm_records
                 .iter()
                 .filter(|record| {
-                    record.kind == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
+                    record.kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
                         && record
                             .envelope
                             .get("prev_refs")
@@ -477,7 +477,7 @@ fn materialize_managed_agent_realm_control(
         events.push(event);
     }
     let material =
-        arkret_sdk::identity::materialize_managed_agent_pcr_control(&events).map_err(|error| {
+        arkret_bootstrap::materialize_managed_agent_pcr_control(&events).map_err(|error| {
             AppError::new(
                 ErrorCode::StateMismatch,
                 format!("managed Agent PCR control material is invalid: {error}"),
@@ -630,12 +630,12 @@ async fn materialize_governance_proof(
     }
 
     Ok(MaterializedMlsGovernanceProofBundle {
-        bundle_version: arkret_sdk::MLS_GOVERNANCE_PROOF_BUNDLE_VERSION,
+        bundle_version: arkret_core::MLS_GOVERNANCE_PROOF_BUNDLE_VERSION,
         proof_request_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
             .expect("zero sha256 digest is valid"),
         bundle_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
             .expect("zero sha256 digest is valid"),
-        materialization_profile: arkret_sdk::MLS_GOVERNANCE_COMPLETE_MATERIALIZATION_PROFILE
+        materialization_profile: arkret_core::MLS_GOVERNANCE_COMPLETE_MATERIALIZATION_PROFILE
             .to_owned(),
         realm_id: request.realm_id.clone(),
         effective_scope: request.effective_scope.clone(),
@@ -732,7 +732,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
             ));
         }
         let reanchor = candidates[0];
-        let payload = serde_json::from_value::<arkret_sdk::DeviceReanchorPayload>(
+        let payload = serde_json::from_value::<arkret_core::DeviceReanchorPayload>(
             reanchor
                 .envelope
                 .get("payload")
@@ -749,7 +749,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
             .iter()
             .find(|record| {
                 record.event_id == payload.replacement_authorize_event_id.as_str()
-                    && record.kind == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
+                    && record.kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
                     && record.canonical_digest == payload.replacement_authorize_digest.as_str()
                     && record
                         .envelope
@@ -765,7 +765,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
                     "active device re-anchor replacement authorization is missing",
                 )
             })?;
-        let authorize_payload = serde_json::from_value::<arkret_sdk::DeviceAuthorizePayload>(
+        let authorize_payload = serde_json::from_value::<arkret_core::DeviceAuthorizePayload>(
             authorize
                 .envelope
                 .get("payload")
@@ -867,7 +867,7 @@ pub(crate) fn canonical_event_ops(
     event: &Event,
     move_id: &MoveId,
 ) -> Result<Vec<(CellRef, SealedOp)>, AppError> {
-    if event.kind.as_str() != arkret_sdk::events::EventKind::REALM_CREATE {
+    if event.kind.as_str() != arkret_core::events::EventKind::REALM_CREATE {
         return Ok(event
             .effects
             .iter()
@@ -913,7 +913,7 @@ pub(crate) fn canonical_event_ops(
         )
     })?;
     let notary_value =
-        serde_json::from_value::<arkret_sdk::NotaryValue>(notary.clone()).map_err(|error| {
+        serde_json::from_value::<arkret_core::NotaryValue>(notary.clone()).map_err(|error| {
             AppError::new(
                 ErrorCode::StateMismatch,
                 format!("Realm create proof notary value is invalid: {error}"),
@@ -938,10 +938,10 @@ pub(crate) fn canonical_event_ops(
         .and_then(serde_json::Value::as_str)
         == Some("principal_control")
     {
-        let principal_cell = CellRef::new(arkret_sdk::identity::PRINCIPAL_CONTROL_CREATE_CELL)
+        let principal_cell = CellRef::new(arkret_bootstrap::PRINCIPAL_CONTROL_CREATE_CELL)
             .map_err(proof_state_error)?;
         let managed_agent_cell =
-            CellRef::new(arkret_sdk::identity::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL)
+            CellRef::new(arkret_bootstrap::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL)
                 .map_err(proof_state_error)?;
         let principal_count = event
             .effects
@@ -1074,13 +1074,13 @@ mod tests {
 
     fn managed_agent_pcr_create() -> Event {
         let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe").unwrap();
-        let actor_id = arkret_sdk::Did::new("did:web:agent.example").unwrap();
+        let actor_id = arkret_core::Did::new("did:web:agent.example").unwrap();
         let mut event = Event::new(
-            arkret_sdk::events::EventKind::REALM_CREATE,
+            arkret_core::events::EventKind::REALM_CREATE,
             realm_id.clone(),
             actor_id.clone(),
             1,
-            arkret_sdk::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
+            arkret_core::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
             serde_json::json!({
                 "object": {
                     "id": realm_id,
@@ -1092,7 +1092,7 @@ mod tests {
         )
         .unwrap();
         event.effects = vec![
-            arkret_sdk::identity::managed_agent_principal_control_create_effect(
+            arkret_bootstrap::managed_agent_principal_control_create_effect(
                 &event.realm_id,
                 event.actor_seq,
             )
@@ -1111,14 +1111,14 @@ mod tests {
             cell.as_str() == format!("ak:cell:ak.component.realm.create.v1:{}", event.realm_id)
         }));
         assert!(ops.iter().all(|(cell, _)| {
-            cell.as_str() != arkret_sdk::identity::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL
+            cell.as_str() != arkret_bootstrap::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL
         }));
     }
 
     #[test]
     fn governance_materializer_rejects_legacy_managed_agent_create_effect() {
         let mut event = managed_agent_pcr_create();
-        event.effects = vec![arkret_sdk::Effect {
+        event.effects = vec![arkret_core::Effect {
             cell: CellRef::new(format!(
                 "ak:cell:ak.component.realm.create.v1:{}",
                 event.realm_id

@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use arkret_sdk::{
+use arkret_core::{
     KeyBackupDeleteDevelopmentProof, KeyBackupDeleteProof, KeysBackupsDeleteRequestBody,
 };
 use serde_json::{Map, Value};
@@ -118,7 +118,7 @@ pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> Stri
         "created_at": session["created_at"],
         "expires_at": session["expires_at"],
     });
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
+    let bytes = arkret_core::canonical::canonical_json_bytes(&transcript).unwrap();
     URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
 }
 
@@ -158,7 +158,7 @@ pub(crate) fn sign_trusted_recovery_service_proof(
         "expires_at": session["expires_at"],
         "proof_body": proof_body,
     });
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
+    let bytes = arkret_core::canonical::canonical_json_bytes(&transcript).unwrap();
     URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
 }
 
@@ -263,8 +263,8 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
     let principal = session["principal_id"].as_str().unwrap();
     let device = session["requesting_device_id"].as_str().unwrap();
     let generation = session["ssk_generation"].as_u64().unwrap();
-    let did = arkret_sdk::Did::new(principal.to_owned()).unwrap();
-    let device_id = arkret_sdk::DeviceId::new(device.to_owned()).unwrap();
+    let did = arkret_core::Did::new(principal.to_owned()).unwrap();
+    let device_id = arkret_core::DeviceId::new(device.to_owned()).unwrap();
     // The new device's real keypair — its multibase public key is what the
     // server records, and what a later recovery_receipt MUST be signed by.
     let device_public_key = test_ed25519_multibase_public(&recovery_device_key());
@@ -273,7 +273,7 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
         "ak.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
         "ak.mls.v1".to_owned(),
     ];
-    let input = arkret_sdk::DeviceTrustBinding::canonical_input(
+    let input = arkret_crypto::DeviceTrustBinding::canonical_input(
         &did,
         &device_id,
         &device_public_key,
@@ -304,7 +304,7 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
 }
 
 /// Seed an accepted `ak.test_cross_signing().publish` (generation 1) into the server's
-/// DeviceManager so `/complete` can verify the device binding against the SSK.
+/// cross-signing registry so `/complete` can verify the device binding against the SSK.
 pub(crate) fn seed_cross_signing(
     state: &AppState,
     principal_id: &str,
@@ -334,7 +334,7 @@ pub(crate) fn seed_cross_signing(
         "generation": 1,
         "issued_at": "2026-05-30T00:00:00Z",
     });
-    let content: arkret_sdk::CrossSigningPublish =
+    let content: arkret_core::CrossSigningPublish =
         serde_json::from_value(publish).expect("cross-signing publish content");
     state
         .test_cross_signing()
@@ -353,7 +353,7 @@ pub(crate) async fn seed_control_event(
     payload: Value,
 ) {
     let envelope = serde_json::json!({ "payload": payload });
-    let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
+    let canonical_bytes = arkret_core::canonical::canonical_json_bytes(&envelope).unwrap();
     state
         .test_persistence()
         .events()
@@ -866,7 +866,7 @@ pub(crate) fn sign_recovery_payload(
         "signed_fields": signed_fields,
         "payload": Value::Object(signed_payload),
     });
-    let transcript_bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
+    let transcript_bytes = arkret_core::canonical::canonical_json_bytes(&transcript).unwrap();
     let signature = signing.sign(&transcript_bytes);
     payload["auth_data"]["signature"] =
         serde_json::json!(URL_SAFE_NO_PAD.encode(signature.to_bytes()));

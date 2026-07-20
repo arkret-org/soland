@@ -145,7 +145,7 @@ impl FrontierExchangeWorker {
         if !status.is_success() {
             return Err(format!("http_status:{}", status.as_u16()));
         }
-        let state: arkret_sdk::EventsFrontierFederationPeerState =
+        let state: arkret_core::EventsFrontierFederationPeerState =
             serde_json::from_str(&body).map_err(|_| "bad_json".to_owned())?;
         validate_frontier_response(&state, peer_did, realm_id)
     }
@@ -314,7 +314,7 @@ fn local_frontier_root(records: &[CanonicalEventRecord], realm_id: &str) -> Resu
 }
 
 fn validate_frontier_response(
-    state: &arkret_sdk::EventsFrontierFederationPeerState,
+    state: &arkret_core::EventsFrontierFederationPeerState,
     peer_did: &str,
     realm_id: &str,
 ) -> Result<String, String> {
@@ -359,7 +359,7 @@ mod tests {
             "observed_at": "2026-01-01T00:00:00Z",
             "signature": {"alg": "EdDSA", "value": "c2ln"}
         });
-        let state: arkret_sdk::EventsFrontierFederationPeerState =
+        let state: arkret_core::EventsFrontierFederationPeerState =
             serde_json::from_value(body).expect("valid peer state fixture");
         assert!(
             validate_frontier_response(

@@ -3,11 +3,11 @@ use super::*;
 
 pub(super) fn batch_begins_realm_create(envelopes: &[Value]) -> bool {
     event_string_field_from_value(envelopes.first().unwrap_or(&Value::Null), "kind").as_deref()
-        == Some(arkret_sdk::events::EventKind::REALM_CREATE)
+        == Some(arkret_core::events::EventKind::REALM_CREATE)
 }
 
 fn bootstrap_error(
-    error: arkret_sdk::realm::bootstrap::RealmBootstrapValidationError,
+    error: arkret_policy::realm_bootstrap::RealmBootstrapValidationError,
 ) -> SubmitOneError {
     let reason = error.reason_code();
     if matches!(reason, "effects_payload_mismatch" | "plane_cross_write") {
@@ -34,7 +34,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .iter()
         .cloned()
         .map(|envelope| {
-            serde_json::from_value::<arkret_sdk::Event>(envelope).map_err(|error| {
+            serde_json::from_value::<arkret_core::Event>(envelope).map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
                     "schema_violation",
@@ -43,7 +43,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let unit = arkret_sdk::realm::bootstrap::validate_realm_bootstrap_unit(&typed_events)
+    let unit = arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&typed_events)
         .map_err(bootstrap_error)?;
 
     for envelope in &envelopes {
@@ -56,7 +56,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 )
             })?
             .len();
-        if arkret_sdk::validate_event_envelope_byte_len(encoded_len).is_err() {
+        if arkret_core::validate_event_envelope_byte_len(encoded_len).is_err() {
             return Err(SubmitOneError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",
@@ -94,7 +94,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         )
     })?;
     if existing.iter().any(|record| {
-        record.kind == arkret_sdk::events::EventKind::REALM_CREATE
+        record.kind == arkret_core::events::EventKind::REALM_CREATE
             && record.realm_id.as_deref() == Some(unit.realm_id.as_str())
     }) {
         return Err(realm_already_exists_error());
@@ -152,11 +152,12 @@ pub(super) async fn submit_realm_bootstrap_batch(
         let mut founding_grant_effect = None;
         for (index, operation) in operations.iter().enumerate() {
             let effect = if index == 1
-                && operation.object_type.as_str() == arkret_sdk::events::EventKind::CAPABILITY_GRANT
+                && operation.object_type.as_str()
+                    == arkret_core::events::EventKind::CAPABILITY_GRANT
             {
                 staged.apply_validated_realm_founding_grant(operation, operation.created_at)
             } else if operation.object_type.as_str().starts_with("ak.realm.")
-                && operation.object_type.as_str() != arkret_sdk::events::EventKind::REALM_CREATE
+                && operation.object_type.as_str() != arkret_core::events::EventKind::REALM_CREATE
             {
                 staged.apply_validated_realm_bootstrap_facet(operation)
             } else {
@@ -165,7 +166,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             match effect {
                 soland_domain::reducer::ProjectionEffect::Rejected { reason } => {
                     let code = if operation.object_type.as_str()
-                        == arkret_sdk::events::EventKind::CAPABILITY_GRANT
+                        == arkret_core::events::EventKind::CAPABILITY_GRANT
                     {
                         "invalid_realm_founding_grant"
                     } else {

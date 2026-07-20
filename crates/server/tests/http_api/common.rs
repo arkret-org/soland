@@ -8,7 +8,7 @@ pub(crate) use std::sync::LazyLock;
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 
-pub(crate) use arkret_sdk::{Did, Operation, OperationId, RealmId, new_prefixed_uuid7};
+pub(crate) use arkret_core::{Did, Operation, OperationId, RealmId, new_prefixed_uuid7};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
@@ -40,7 +40,7 @@ static TEST_EVENT_SIGNER_DID: LazyLock<String> = LazyLock::new(|| {
     let key = SigningKey::from_bytes(&[21_u8; 32]);
     format!(
         "did:key:{}",
-        arkret_sdk::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+        arkret_core::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
     )
 });
 
@@ -191,7 +191,7 @@ fn signed_federation_request_headers(
     target_uri: &str,
     body: &Value,
 ) -> Vec<(&'static str, String)> {
-    let body_bytes = arkret_sdk::canonical::canonical_json_bytes(body).unwrap();
+    let body_bytes = arkret_core::canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let request_digest = format!("sha256:{}", hex::encode(Sha256::digest(&body_bytes)));
     let source_trust_domain = trust_domain_from_service_id(origin);
@@ -358,13 +358,13 @@ pub(crate) async fn seed_test_realm(
             (
                 service.clone(),
                 std::collections::BTreeSet::from([
-                    arkret_sdk::PlaintextDataClassKind::MessageContent,
-                    arkret_sdk::PlaintextDataClassKind::AttachmentPlaintext,
-                    arkret_sdk::PlaintextDataClassKind::AttachmentPreview,
-                    arkret_sdk::PlaintextDataClassKind::Thumbnail,
-                    arkret_sdk::PlaintextDataClassKind::FullTextIndex,
-                    arkret_sdk::PlaintextDataClassKind::NotificationSummary,
-                    arkret_sdk::PlaintextDataClassKind::MediaPlaintext,
+                    arkret_core::PlaintextDataClassKind::MessageContent,
+                    arkret_core::PlaintextDataClassKind::AttachmentPlaintext,
+                    arkret_core::PlaintextDataClassKind::AttachmentPreview,
+                    arkret_core::PlaintextDataClassKind::Thumbnail,
+                    arkret_core::PlaintextDataClassKind::FullTextIndex,
+                    arkret_core::PlaintextDataClassKind::NotificationSummary,
+                    arkret_core::PlaintextDataClassKind::MediaPlaintext,
                 ]),
             )
         })
@@ -547,7 +547,7 @@ pub(crate) fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value 
 }
 
 pub(crate) fn sha256_json(value: &Value) -> String {
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(value)
+    let bytes = arkret_core::canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -619,18 +619,18 @@ pub(crate) fn signed_canonical_event(
     payload: Value,
 ) -> Value {
     let now = chrono::Utc::now();
-    let actor = arkret_sdk::Did::new(actor_id.to_owned()).expect("fixture actor DID");
+    let actor = arkret_core::Did::new(actor_id.to_owned()).expect("fixture actor DID");
     let verification_method = actor_id.strip_prefix("did:key:").map_or_else(
         || format!("{actor_id}#{device_id}"),
         |key| format!("{actor_id}#{key}"),
     );
-    let mut event = arkret_sdk::Event::new_with_id_at(
-        arkret_sdk::EventId::new(event_id.to_owned()).expect("fixture Event id"),
+    let mut event = arkret_core::Event::new_with_id_at(
+        arkret_core::EventId::new(event_id.to_owned()).expect("fixture Event id"),
         kind,
-        arkret_sdk::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_core::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
         actor.clone(),
         actor_seq,
-        arkret_sdk::Hlc::new(format!(
+        arkret_core::Hlc::new(format!(
             "{:012x}-0000-00000000",
             now.timestamp_millis().max(0) as u64
         ))
@@ -641,18 +641,18 @@ pub(crate) fn signed_canonical_event(
     .expect("SDK Event builder accepts HTTP fixture");
     event.prev_refs = prev_refs
         .into_iter()
-        .map(|event_id| arkret_sdk::EventId::new(event_id.to_owned()).expect("fixture prev_ref"))
+        .map(|event_id| arkret_core::EventId::new(event_id.to_owned()).expect("fixture prev_ref"))
         .collect();
-    let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
         [21_u8; 32],
         actor,
         verification_method.clone(),
     );
-    arkret_sdk::signatures::sign_event(
+    arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_sdk::signatures::SignEventOptions::new().with_created_at(now),
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .expect("SDK Event signer accepts HTTP fixture");
     serde_json::to_value(event).expect("SDK Event serializes")
@@ -670,20 +670,20 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
         .as_str()
         .expect("fixture verification method")
         .to_owned();
-    let mut typed: arkret_sdk::Event =
+    let mut typed: arkret_core::Event =
         serde_json::from_value(event.clone()).expect("fixture Event roundtrip");
     typed.proofs.clear();
-    let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
         [21_u8; 32],
         typed.actor_id.clone(),
         verification_method.clone(),
     );
     let created_at = typed.created_at;
-    arkret_sdk::signatures::sign_event(
+    arkret_signatures::sign_event(
         &mut typed,
         &signer,
         &verification_method,
-        arkret_sdk::signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .expect("SDK Event signer re-signs mutated HTTP fixture");
     *event = serde_json::to_value(typed).expect("re-signed fixture serializes");
@@ -940,7 +940,7 @@ pub(crate) async fn authorize_test_plaintext_message_service(
     meta.plaintext_visible_service_classes
         .entry(state.service_id().clone())
         .or_default()
-        .insert(arkret_sdk::PlaintextDataClassKind::MessageContent);
+        .insert(arkret_core::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;
     state
         .test_persistence()
@@ -1118,11 +1118,11 @@ pub(crate) fn test_embedded_webvh_proof(
         "proofPurpose": "assertionMethod",
         "verificationMethod": format!("{did}#{update_public_key_multibase}"),
     });
-    let proof_config = arkret_sdk::canonical::canonical_json_bytes(&proof).unwrap();
-    let document = arkret_sdk::canonical::canonical_json_bytes(&entry).unwrap();
+    let proof_config = arkret_core::canonical::canonical_json_bytes(&proof).unwrap();
+    let document = arkret_core::canonical::canonical_json_bytes(&entry).unwrap();
     let mut signing_input = Vec::with_capacity(64);
-    signing_input.extend_from_slice(&arkret_sdk::canonical::sha256_bytes(&proof_config));
-    signing_input.extend_from_slice(&arkret_sdk::canonical::sha256_bytes(&document));
+    signing_input.extend_from_slice(&arkret_core::canonical::sha256_bytes(&proof_config));
+    signing_input.extend_from_slice(&arkret_core::canonical::sha256_bytes(&document));
     let signature = update_signing.sign(&signing_input);
     proof["proofValue"] = Value::String(format!(
         "z{}",
@@ -1144,7 +1144,7 @@ pub(crate) fn test_webvh_method_authority(url: &str) -> String {
 }
 
 pub(crate) fn test_scid(value: &Value) -> String {
-    let canonical = arkret_sdk::canonical::canonical_json_bytes(value).unwrap();
+    let canonical = arkret_core::canonical::canonical_json_bytes(value).unwrap();
     test_sha256_multihash_base58btc(&canonical)
 }
 
@@ -1159,7 +1159,7 @@ pub(crate) fn test_webvh_entry_hash(value: &Value, prev_anchor: &str) -> String 
             Value::String(prev_anchor.to_owned()),
         );
     }
-    let canonical = arkret_sdk::canonical::canonical_json_bytes(&clone).unwrap();
+    let canonical = arkret_core::canonical::canonical_json_bytes(&clone).unwrap();
     test_sha256_multihash_base58btc(&canonical)
 }
 
@@ -1237,17 +1237,17 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 
 fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        arkret_sdk::events::EventKind::SPACE_ARCHIVE
-        | arkret_sdk::events::EventKind::SPACE_RESTORE => {
-            serde_json::to_value(arkret_sdk::SpaceStateTransitionPayload {
+        arkret_core::events::EventKind::SPACE_ARCHIVE
+        | arkret_core::events::EventKind::SPACE_RESTORE => {
+            serde_json::to_value(arkret_core::SpaceStateTransitionPayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
                 effective_at: None,
             })
             .expect("space lifecycle payload serialization")
         }
-        arkret_sdk::events::EventKind::SPACE_TOMBSTONE => {
-            serde_json::to_value(arkret_sdk::SpaceObjectTombstonePayload {
+        arkret_core::events::EventKind::SPACE_TOMBSTONE => {
+            serde_json::to_value(arkret_core::SpaceObjectTombstonePayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
                 replacement_space: optional_space_id(&payload, "replacement_space"),
@@ -1260,22 +1260,22 @@ fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
     }
 }
 
-fn required_space_id(payload: &Value, field: &str) -> arkret_sdk::SpaceId {
+fn required_space_id(payload: &Value, field: &str) -> arkret_core::SpaceId {
     let value = payload
         .get(field)
         .and_then(Value::as_str)
         .expect("space lifecycle payload requires space_id");
-    arkret_sdk::SpaceId::new(value.to_owned()).expect("valid space id")
+    arkret_core::SpaceId::new(value.to_owned()).expect("valid space id")
 }
 
-fn optional_space_id(payload: &Value, field: &str) -> Option<arkret_sdk::SpaceId> {
+fn optional_space_id(payload: &Value, field: &str) -> Option<arkret_core::SpaceId> {
     payload
         .get(field)
         .and_then(Value::as_str)
-        .map(|value| arkret_sdk::SpaceId::new(value.to_owned()).expect("valid optional space id"))
+        .map(|value| arkret_core::SpaceId::new(value.to_owned()).expect("valid optional space id"))
 }
 
-fn optional_event_ref(payload: &Value, field: &str) -> Option<arkret_sdk::EventRef> {
+fn optional_event_ref(payload: &Value, field: &str) -> Option<arkret_core::EventRef> {
     payload
         .get(field)
         .map(|value| serde_json::from_value(value.clone()).expect("valid optional event ref"))
@@ -1415,33 +1415,33 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
 
 fn typed_morph_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        arkret_sdk::events::EventKind::MORPH_ARCHIVE => arkret_sdk::ObjectLifecyclePayload::new(
+        arkret_core::events::EventKind::MORPH_ARCHIVE => arkret_core::ObjectLifecyclePayload::new(
             required_string(&payload, "target_ref", "morph lifecycle target_ref"),
         )
         .with_target_state("archived")
         .to_value()
         .expect("morph archive payload serialization"),
-        arkret_sdk::events::EventKind::MORPH_RESTORE => arkret_sdk::ObjectLifecyclePayload::new(
+        arkret_core::events::EventKind::MORPH_RESTORE => arkret_core::ObjectLifecyclePayload::new(
             required_string(&payload, "target_ref", "morph lifecycle target_ref"),
         )
         .with_target_state("active")
         .to_value()
         .expect("morph restore payload serialization"),
-        arkret_sdk::events::EventKind::MORPH_UPDATE => {
-            let morph_id = arkret_sdk::MorphId::new(required_string(
+        arkret_core::events::EventKind::MORPH_UPDATE => {
+            let morph_id = arkret_core::MorphId::new(required_string(
                 &payload,
                 "target_ref",
                 "morph update target_ref",
             ))
             .expect("valid morph id");
-            let patch: arkret_sdk::Patch = serde_json::from_value(
+            let patch: arkret_core::Patch = serde_json::from_value(
                 payload
                     .get("patch")
                     .cloned()
                     .expect("morph update payload requires patch"),
             )
             .expect("valid morph update patch");
-            arkret_sdk::MorphUpdatePayload::for_morph(morph_id, patch)
+            arkret_core::MorphUpdatePayload::for_morph(morph_id, patch)
                 .expect("valid morph update payload")
                 .to_value()
                 .expect("morph update payload serialization")
@@ -1486,7 +1486,7 @@ fn typed_relation_create_payload(payload: Value) -> Value {
     let to_ref = relation_payload_str(&payload, &["to_ref", "to"])
         .expect("relation create payload requires to_ref");
     let rank = relation_payload_str(&payload, &["rank"]);
-    let mut typed = arkret_sdk::RelationCreatePayload::new(kind, from_ref, to_ref);
+    let mut typed = arkret_core::RelationCreatePayload::new(kind, from_ref, to_ref);
     if let Some(rank) = rank {
         typed = typed.with_rank(rank);
     }
@@ -1621,7 +1621,7 @@ pub(crate) async fn persist_test_message(
             kind: "ak.message.create".to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             canonical_digest,
-            canonical_bytes: arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap(),
+            canonical_bytes: arkret_core::canonical::canonical_json_bytes(&envelope).unwrap(),
             envelope,
             received_at: record.created_at,
         })

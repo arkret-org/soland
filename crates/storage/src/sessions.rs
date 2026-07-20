@@ -27,7 +27,7 @@ pub fn decode_session_agent_payload(payload: &Value) -> Option<AgentSessionRecor
 }
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::FreshnessState;
+    use arkret_core::FreshnessState;
 
     use super::{
         AgentSessionRecord, SessionRecord, decode_session_agent_payload, encode_session_payload,

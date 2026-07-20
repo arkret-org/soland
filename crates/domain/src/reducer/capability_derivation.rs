@@ -7,8 +7,8 @@
 
 use std::collections::BTreeSet;
 
-use arkret_sdk::CellRef;
-use arkret_sdk::lattice::CellState;
+use arkret_core::CellRef;
+use arkret_state::lattice::CellState;
 use serde_json::Value;
 
 use super::{ProjectionState, RealmInheritancePolicyState};

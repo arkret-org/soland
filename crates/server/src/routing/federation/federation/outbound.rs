@@ -67,7 +67,7 @@ pub(super) fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
     } else {
         return None;
     };
-    arkret_sdk::Did::new(did.to_owned()).ok()?;
+    arkret_core::Did::new(did.to_owned()).ok()?;
     Some(FederationPeerTarget {
         url: url.trim_end_matches('/').to_owned(),
         did: did.to_owned(),
@@ -103,7 +103,7 @@ pub(super) async fn enqueue_outbound_for(
     // signing path so the body bytes the dispatcher POSTs are identical
     // to what the signature transcript covers — important once full
     // RFC 9421 signing lands.
-    let payload_bytes = arkret_sdk::canonical::canonical_json_bytes(&payload)
+    let payload_bytes = arkret_core::canonical::canonical_json_bytes(&payload)
         .unwrap_or_else(|_| serde_json::to_vec(&payload).unwrap_or_default());
     let payload_json =
         String::from_utf8(payload_bytes.clone()).unwrap_or_else(|_| payload.to_string());
@@ -273,9 +273,9 @@ fn signed_fanout_intent_evidence(
     state: &AppState,
     intent: &serde_json::Value,
 ) -> serde_json::Value {
-    let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(intent)
+    let canonical_bytes = arkret_core::canonical::canonical_json_bytes(intent)
         .unwrap_or_else(|_| serde_json::to_vec(intent).unwrap_or_default());
-    let payload_digest = arkret_sdk::canonical::sha256_digest(&canonical_bytes);
+    let payload_digest = arkret_core::canonical::sha256_digest(&canonical_bytes);
     let protected_header = br#"{"alg":"EdDSA","typ":"ak.federation.outbound_fanout.intent.v1"}"#;
     let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
     let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);

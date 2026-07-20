@@ -131,7 +131,7 @@ pub async fn sync_token_for_client_sync_frontiers(
         notification_position,
     );
     let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, &binding);
-    let cursor = arkret_sdk::Cursor::new_at(issued_at, 60 * 60 * 1000)
+    let cursor = arkret_core::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
     let expires_at_ms = cursor.x;
@@ -172,7 +172,7 @@ pub(crate) async fn sync_token_for_events_query(
         &target,
     );
     let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, &binding);
-    let cursor = arkret_sdk::Cursor::new_at(issued_at, 60 * 60 * 1000)
+    let cursor = arkret_core::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
     let expires_at_ms = cursor.x;
@@ -207,7 +207,7 @@ async fn sync_token_for_state_positions(
     let issued_at_ms = issued_at.timestamp_millis();
     let binding = service_cursor_handle_binding(&state.service_id, &realms_positions);
     let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, &binding);
-    let cursor = arkret_sdk::Cursor::new_at(issued_at, 60 * 60 * 1000)
+    let cursor = arkret_core::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
     let expires_at_ms = cursor.x;
@@ -238,7 +238,7 @@ async fn sync_token_for_state_positions(
 
 #[cfg(test)]
 pub(crate) fn encode_sync_cursor_value(cursor: Value) -> String {
-    let bytes = arkret_sdk::canonical::canonical_json_bytes(&cursor)
+    let bytes = arkret_core::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
     format!("ak:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
@@ -289,7 +289,7 @@ pub(crate) fn stream_cursor_handle_binding_with_notification_position(
         "to_device": to_device_position,
         "notifications": notification_position,
     });
-    arkret_sdk::canonical::canonical_json_bytes(&binding)
+    arkret_core::canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
@@ -308,7 +308,7 @@ pub(crate) fn events_query_cursor_handle_binding(
         "purpose": STREAM_CURSOR_PURPOSE,
         "target": target,
     });
-    arkret_sdk::canonical::canonical_json_bytes(&binding)
+    arkret_core::canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
@@ -329,7 +329,7 @@ fn service_cursor_handle_binding(
         "device_lists": {},
         "to_device": 0,
     });
-    arkret_sdk::canonical::canonical_json_bytes(&binding)
+    arkret_core::canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
@@ -489,7 +489,7 @@ pub async fn parse_and_validate_sync_cursor(
     now_ms: i64,
 ) -> Result<SyncCursor, SyncCursorError> {
     let cursor = decode_sync_cursor(token, now_ms)?;
-    if cursor.purpose != arkret_sdk::CursorPurpose::Stream {
+    if cursor.purpose != arkret_core::CursorPurpose::Stream {
         return Err(SyncCursorError::Invalid(
             "after must be a v1 account cursor",
         ));
@@ -620,7 +620,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
         ));
     }
     let cursor = decode_sync_cursor(token, now_ms)?;
-    if cursor.purpose != arkret_sdk::CursorPurpose::Stream {
+    if cursor.purpose != arkret_core::CursorPurpose::Stream {
         return Err(SyncCursorError::Integrity(
             "cursor purpose does not match stream",
         ));
@@ -678,8 +678,8 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
     })
 }
 
-fn decode_sync_cursor(token: &str, now_ms: i64) -> Result<arkret_sdk::Cursor, SyncCursorError> {
-    arkret_sdk::Cursor::decode_at(token, now_ms).map_err(|error| {
+fn decode_sync_cursor(token: &str, now_ms: i64) -> Result<arkret_core::Cursor, SyncCursorError> {
+    arkret_core::Cursor::decode_at(token, now_ms).map_err(|error| {
         if error.to_string().contains("cursor has expired") {
             SyncCursorError::Expired
         } else {
@@ -690,7 +690,7 @@ fn decode_sync_cursor(token: &str, now_ms: i64) -> Result<arkret_sdk::Cursor, Sy
 
 #[cfg(test)]
 pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCursorError> {
-    let cursor = arkret_sdk::Cursor::decode(token)
+    let cursor = arkret_core::Cursor::decode(token)
         .map_err(|_| SyncCursorError::Invalid("cursor must use the canonical SDK wire profile"))?;
     serde_json::to_value(cursor)
         .map_err(|_| SyncCursorError::Invalid("cursor cannot be represented as JSON"))
@@ -770,8 +770,8 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
     let binding = json!({
         "filter": filter,
     });
-    arkret_sdk::canonical::canonical_sha256(&binding)
-        .unwrap_or_else(|_| arkret_sdk::canonical::sha256_digest(binding.to_string().as_bytes()))
+    arkret_core::canonical::canonical_sha256(&binding)
+        .unwrap_or_else(|_| arkret_core::canonical::sha256_digest(binding.to_string().as_bytes()))
 }
 
 /// `POST /_arkret/self/account/cursor/revoke` — `ak.self.account.command.revoke_cursor`.
@@ -792,10 +792,10 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.command.revoke_cursor"))]
 pub(super) async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<arkret_sdk::AccountCursorRevokeRequestBody>,
+    body: salvo::oapi::extract::JsonBody<arkret_core::AccountCursorRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> soland_http::result::JsonResult<arkret_sdk::AccountCursorRevokeOutcome> {
+) -> soland_http::result::JsonResult<arkret_core::AccountCursorRevokeOutcome> {
     use soland_http::error::AppError;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -811,14 +811,14 @@ pub(super) async fn account_cursor_revoke(
     }
     let scope = body.revoke_scope;
     let scope_value = match scope {
-        arkret_sdk::CursorRevokeScope::ThisCursor => "this_cursor",
-        arkret_sdk::CursorRevokeScope::SameDevice => "same_device",
-        arkret_sdk::CursorRevokeScope::SameSession => "same_session",
+        arkret_core::CursorRevokeScope::ThisCursor => "this_cursor",
+        arkret_core::CursorRevokeScope::SameDevice => "same_device",
+        arkret_core::CursorRevokeScope::SameSession => "same_session",
     };
 
     let revoked_at = now();
     let expires_at = revoked_at + ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS);
-    let device_id = if matches!(scope, arkret_sdk::CursorRevokeScope::ThisCursor) {
+    let device_id = if matches!(scope, arkret_core::CursorRevokeScope::ThisCursor) {
         None
     } else {
         Some(session.device_id.clone())
@@ -860,7 +860,7 @@ pub(super) async fn account_cursor_revoke(
         revocations.push(record);
     }
 
-    crate::json_ok(arkret_sdk::AccountCursorRevokeOutcome {
+    crate::json_ok(arkret_core::AccountCursorRevokeOutcome {
         revoked: true,
         expires_at,
         revoke_scope_effective: Some(scope),

@@ -30,8 +30,8 @@
 use std::collections::BTreeSet;
 
 #[cfg(test)]
-use arkret_sdk::models::AgentSidecarContextRef;
-use arkret_sdk::models::{
+use arkret_core::models::AgentSidecarContextRef;
+use arkret_core::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentKeyScope,
     AgentLifecycleOutcome, AgentLifecycleState, AgentList, AgentPairingBootstrap, AgentPairingMode,
@@ -45,7 +45,7 @@ use arkret_sdk::models::{
     KeyState, PublicKey, effective_participation, validate_agent_slug,
     validate_selection_within_ceiling,
 };
-use arkret_sdk::{
+use arkret_core::{
     BlobRef, CircleId, Did, EventId, GrantId, Hash, Operation, OperationId, RealmId, RelationId,
     StrandId,
 };
@@ -284,15 +284,15 @@ mod tests {
             "key": encoded_public_key.clone(),
         });
         let public_key = PublicKey {
-            kty: arkret_sdk::NonEmptyString::new("OKP").unwrap(),
-            kid: arkret_sdk::NonEmptyString::new(verification_method).unwrap(),
-            alg: arkret_sdk::NonEmptyString::new("Ed25519").unwrap(),
-            key: arkret_sdk::Base64UrlString::new(encoded_public_key).unwrap(),
+            kty: arkret_core::NonEmptyString::new("OKP").unwrap(),
+            kid: arkret_core::NonEmptyString::new(verification_method).unwrap(),
+            alg: arkret_core::NonEmptyString::new("Ed25519").unwrap(),
+            key: arkret_core::Base64UrlString::new(encoded_public_key).unwrap(),
             key_digest: None,
         };
         let agent_id = Did::new(agent.to_owned()).expect("agent did");
         let pairing_request_id = "agent_pairing_request:01999999-0000-7000-8000-00000000feed";
-        let request_digest = arkret_sdk::agent_key_pair_proof_request_binding_digest(
+        let request_digest = arkret_core::agent_key_pair_proof_request_binding_digest(
             pairing_request_id,
             &agent_id,
             verification_method,
@@ -303,7 +303,7 @@ mod tests {
         let expires_at = chrono::DateTime::parse_from_rfc3339("2999-01-01T00:00:00.000Z")
             .expect("fixed future expiry")
             .with_timezone(&chrono::Utc);
-        let signing_input = arkret_sdk::agent::agent_key_pair_proof_signing_input(
+        let signing_input = arkret_core::agent::agent_key_pair_proof_signing_input(
             verification_method.to_owned(),
             pairing_request_id,
             service_id.to_owned(),
@@ -319,7 +319,7 @@ mod tests {
         let requested_scope: AgentKeyScope =
             serde_json::from_value(requested_agent_scope()).unwrap();
         let requested_scope_digest =
-            arkret_sdk::agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
+            arkret_core::agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
                 .unwrap();
         let requested_scope_disclosure = serde_json::from_value(json!({
             "schema": "ak.schema.agent_requested_scope_disclosure.v1",
@@ -344,11 +344,11 @@ mod tests {
         }))
         .unwrap();
         AgentKeyPairRequestBody {
-            pairing_request_id: arkret_sdk::NonEmptyString::new(pairing_request_id).unwrap(),
+            pairing_request_id: arkret_core::NonEmptyString::new(pairing_request_id).unwrap(),
             agent_id,
-            verification_method: arkret_sdk::DidUrl::new(verification_method).unwrap(),
+            verification_method: arkret_core::DidUrl::new(verification_method).unwrap(),
             public_key,
-            proof_of_possession: arkret_sdk::NonEmptyJsonObject::new(
+            proof_of_possession: arkret_core::NonEmptyJsonObject::new(
                 std::collections::BTreeMap::from([
                     ("challenge".to_owned(), json!(pairing_request_id)),
                     ("audience".to_owned(), json!(service_id)),
@@ -372,12 +372,12 @@ mod tests {
             .unwrap(),
             requested_scope_disclosure,
             runtime_attestation: None,
-            authorize_event: arkret_sdk::Event::new(
+            authorize_event: arkret_core::Event::new(
                 "ak.agent.key.authorize",
-                arkret_sdk::RealmId::new("ak:realm:01999999-0000-7000-8000-00000000feed").unwrap(),
-                arkret_sdk::Did::new("did:web:agent.example").unwrap(),
+                arkret_core::RealmId::new("ak:realm:01999999-0000-7000-8000-00000000feed").unwrap(),
+                arkret_core::Did::new("did:web:agent.example").unwrap(),
                 1,
-                arkret_sdk::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
+                arkret_core::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
                 json!({}),
             )
             .unwrap(),
@@ -593,7 +593,7 @@ mod tests {
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let key_pair = key_pair_request_body(agent, verification_method, service_id);
         let request = AgentRuntimeApprovalRequestBody {
-            pairing_code: arkret_sdk::NonEmptyString::new("12345678").unwrap(),
+            pairing_code: arkret_core::NonEmptyString::new("12345678").unwrap(),
             pairing_request_id: key_pair.pairing_request_id.clone(),
             agent_id: key_pair.agent_id.clone(),
             verification_method: key_pair.verification_method.clone(),
@@ -645,7 +645,7 @@ mod tests {
 
         let key_state = agent_key_state_from_record(
             &record,
-            arkret_sdk::AgentPcrRecoveryState::Pending,
+            arkret_core::AgentPcrRecoveryState::Pending,
             Vec::new(),
         )
         .expect("key state projection");
@@ -1102,7 +1102,7 @@ mod tests {
 
         assert_eq!(
             err.wire_code(),
-            arkret_sdk::ReasonCode::SIDECAR_CREATE_DENIED
+            arkret_core::ReasonCode::SIDECAR_CREATE_DENIED
         );
     }
 

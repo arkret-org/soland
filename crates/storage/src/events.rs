@@ -107,10 +107,10 @@ pub fn stage_identity_anchor_events(
             }
             return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
         }
-        if record.kind == arkret_sdk::events::EventKind::REALM_CREATE
+        if record.kind == arkret_core::events::EventKind::REALM_CREATE
             && record.realm_id.is_some()
             && staged.values().any(|existing| {
-                existing.kind == arkret_sdk::events::EventKind::REALM_CREATE
+                existing.kind == arkret_core::events::EventKind::REALM_CREATE
                     && existing.realm_id == record.realm_id
             })
         {
@@ -155,8 +155,8 @@ pub fn identity_anchor_slot_conflicts<'a>(
 #[doc(hidden)]
 pub fn receipt_covers_event(receipt: &EventBatchReceipt, event_id: &str) -> bool {
     receipt.events.iter().any(|event| match event {
-        arkret_sdk::EventBatchReceiptEvent::Item(item) => item.event_id.as_str() == event_id,
-        arkret_sdk::EventBatchReceiptEvent::Digest(_) => false,
+        arkret_core::EventBatchReceiptEvent::Item(item) => item.event_id.as_str() == event_id,
+        arkret_core::EventBatchReceiptEvent::Digest(_) => false,
     })
 }
 #[doc(hidden)]
@@ -208,8 +208,8 @@ pub fn peer_page_record_matches(
 pub fn record_is_peer_authz_state_record(record: &CanonicalEventRecord) -> bool {
     matches!(
         record.kind.as_str(),
-        arkret_sdk::events::EventKind::MEMBER_STATE
-            | arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
+        arkret_core::events::EventKind::MEMBER_STATE
+            | arkret_core::events::EventKind::CIRCLE_MEMBER_STATE
     ) || event_payload_field(&record.envelope, "sync_endpoints").is_some()
 }
 #[doc(hidden)]

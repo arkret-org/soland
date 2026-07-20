@@ -160,7 +160,7 @@ async fn sweep_retention_policy(
         .unwrap_or_default()
         .into_iter()
         .filter(|event| event.realm_id == realm_id)
-        .filter(|event| event.event_kind == arkret_sdk::events::EventKind::MESSAGE_CREATE)
+        .filter(|event| event.event_kind == arkret_core::events::EventKind::MESSAGE_CREATE)
         .collect::<Vec<_>>();
     let examined = events.len();
     let mut created = Vec::new();

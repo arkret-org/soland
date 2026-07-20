@@ -32,7 +32,7 @@ pub(super) async fn submit_identity_anchor_batch(
         let encoded_len = serde_json::to_vec(envelope)
             .map_err(|_| unit_error("identity anchor Event cannot be encoded"))?
             .len();
-        if arkret_sdk::validate_event_envelope_byte_len(encoded_len).is_err() {
+        if arkret_core::validate_event_envelope_byte_len(encoded_len).is_err() {
             return Err(SubmitOneError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",
@@ -42,10 +42,10 @@ pub(super) async fn submit_identity_anchor_batch(
     }
     let first_kind = event_string_field_from_value(&envelopes[0], "kind");
     let second_kind = event_string_field_from_value(&envelopes[1], "kind");
-    let is_bootstrap = first_kind.as_deref() == Some(arkret_sdk::events::EventKind::REALM_CREATE)
-        && second_kind.as_deref() == Some(arkret_sdk::events::EventKind::DEVICE_AUTHORIZE);
+    let is_bootstrap = first_kind.as_deref() == Some(arkret_core::events::EventKind::REALM_CREATE)
+        && second_kind.as_deref() == Some(arkret_core::events::EventKind::DEVICE_AUTHORIZE);
     let is_reanchor = first_kind.as_deref() == Some("ak.device.reanchor")
-        && second_kind.as_deref() == Some(arkret_sdk::events::EventKind::DEVICE_AUTHORIZE);
+        && second_kind.as_deref() == Some(arkret_core::events::EventKind::DEVICE_AUTHORIZE);
     if !is_bootstrap && !is_reanchor {
         return Err(unit_error(
             "identity anchor unit must be [ak.realm.create, ak.device.authorize] or [ak.device.reanchor, ak.device.authorize]",
@@ -160,7 +160,7 @@ pub(super) async fn submit_identity_anchor_batch(
     }
     if is_bootstrap
         && existing.iter().any(|record| {
-            record.kind == arkret_sdk::events::EventKind::REALM_CREATE
+            record.kind == arkret_core::events::EventKind::REALM_CREATE
                 && (record.realm_id.as_deref() == Some(first.realm_id.as_str())
                     || (record.actor_id == first.actor_id
                         && record
@@ -373,7 +373,7 @@ pub(super) async fn submit_identity_anchor_batch(
 fn validate_self_principal_pcr_bootstrap_context(
     envelopes: &[Value],
 ) -> Result<RealmBootstrapBatchContext, SubmitOneError> {
-    let create: arkret_sdk::Event =
+    let create: arkret_core::Event =
         serde_json::from_value(envelopes[0].clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
@@ -381,7 +381,7 @@ fn validate_self_principal_pcr_bootstrap_context(
                 format!("self-principal PCR create is not a canonical Event: {error}"),
             )
         })?;
-    let authorize: arkret_sdk::Event =
+    let authorize: arkret_core::Event =
         serde_json::from_value(envelopes[1].clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
@@ -389,7 +389,7 @@ fn validate_self_principal_pcr_bootstrap_context(
                 format!("self-principal PCR authorize is not a canonical Event: {error}"),
             )
         })?;
-    arkret_sdk::identity::validate_self_principal_bootstrap_unit(&create, &authorize).map_err(
+    arkret_bootstrap::validate_self_principal_bootstrap_unit(&create, &authorize).map_err(
         |error| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
@@ -632,10 +632,10 @@ async fn validate_unit_relationships(
 async fn validate_reanchor_actor_frontier(
     state: &AppState,
     reanchor: &ValidatedEventEnvelope,
-    basis: Option<&arkret_sdk::SealBasis>,
+    basis: Option<&arkret_core::SealBasis>,
 ) -> Result<(), SubmitOneError> {
     let covered_digests = if let Some(basis) = basis {
-        arkret_sdk::leaf_union_proof(&basis.leaves, state.seal_store.as_ref())
+        arkret_state::leaf_union_proof(&basis.leaves, state.seal_store.as_ref())
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::CONFLICT,
@@ -707,7 +707,7 @@ fn preserved_actor_frontier(
         .copied()
         .filter(|record| {
             record.actor_seq == 0
-                && record.kind == arkret_sdk::events::EventKind::REALM_CREATE
+                && record.kind == arkret_core::events::EventKind::REALM_CREATE
                 && record
                     .envelope
                     .pointer("/payload/object/fields/purpose")
@@ -724,7 +724,7 @@ fn preserved_actor_frontier(
         .copied()
         .filter(|record| {
             record.actor_seq == 1
-                && record.kind == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
+                && record.kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
                 && event_prev_refs(&record.envelope) == vec![genesis.event_id.as_str()]
         })
         .collect::<Vec<_>>();
@@ -785,8 +785,8 @@ fn event_prev_refs(envelope: &Value) -> Vec<&str> {
 
 async fn validate_reanchor_entry_delegation(
     state: &AppState,
-    reanchor: &arkret_sdk::DeviceReanchorPayload,
-    authorize: &arkret_sdk::DeviceAuthorizePayload,
+    reanchor: &arkret_core::DeviceReanchorPayload,
+    authorize: &arkret_core::DeviceAuthorizePayload,
 ) -> Result<(), SubmitOneError> {
     let binding = authorize
         .enrollment_authority_binding
@@ -835,7 +835,7 @@ async fn validate_reanchor_entry_delegation(
         .flatten()
         .any(|service| {
             service.get("type").and_then(Value::as_str)
-                == Some(arkret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY)
+                == Some(arkret_core::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY)
                 && service.get("id").and_then(Value::as_str)
                     == Some(binding.authorization_ref.as_str())
                 && service.get("serviceEndpoint").and_then(Value::as_str)
@@ -854,8 +854,8 @@ async fn validate_reanchor_entry_delegation(
 
 async fn validate_reanchor_recovery_session(
     state: &AppState,
-    reanchor: &arkret_sdk::DeviceReanchorPayload,
-    authorize: &arkret_sdk::DeviceAuthorizePayload,
+    reanchor: &arkret_core::DeviceReanchorPayload,
+    authorize: &arkret_core::DeviceAuthorizePayload,
 ) -> Result<(), SubmitOneError> {
     let session_id = authorize.recovery_session_id.as_ref().ok_or_else(|| {
         SubmitOneError::new(
@@ -884,7 +884,7 @@ async fn validate_reanchor_recovery_session(
         })?;
     if session.state != "verified"
         || session.expires_at <= now()
-        || session.identity_model != arkret_sdk::RecoveryIdentityModel::EnrollmentAuthority
+        || session.identity_model != arkret_core::RecoveryIdentityModel::EnrollmentAuthority
         || session.principal_id != authorize.principal_id.as_str()
         || session.requesting_device_id != authorize.device_id.as_str()
         || session
@@ -934,7 +934,7 @@ async fn validate_reanchor_recovery_session(
 async fn validate_pre_fence_basis(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
-    basis: Option<&arkret_sdk::SealBasis>,
+    basis: Option<&arkret_core::SealBasis>,
 ) -> Result<(), SubmitOneError> {
     let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
         SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
@@ -974,7 +974,7 @@ async fn validate_pre_fence_basis(
     if declared_sorted != expected_leaves {
         return Err(frontier_error());
     }
-    let view = arkret_sdk::effective_seal_view(
+    let view = arkret_state::effective_seal_view(
         &leaves,
         &realm_id,
         state.seal_store.as_ref(),
@@ -992,7 +992,7 @@ async fn validate_pre_fence_basis(
 
 fn typed_device_reanchor_payload(
     envelope: &Value,
-) -> Result<arkret_sdk::DeviceReanchorPayload, SubmitOneError> {
+) -> Result<arkret_core::DeviceReanchorPayload, SubmitOneError> {
     serde_json::from_value(envelope.get("payload").cloned().unwrap_or(Value::Null)).map_err(
         |error| {
             SubmitOneError::new(
@@ -1006,7 +1006,7 @@ fn typed_device_reanchor_payload(
 
 fn typed_device_authorize_payload(
     envelope: &Value,
-) -> Result<arkret_sdk::DeviceAuthorizePayload, SubmitOneError> {
+) -> Result<arkret_core::DeviceAuthorizePayload, SubmitOneError> {
     serde_json::from_value(envelope.get("payload").cloned().unwrap_or(Value::Null)).map_err(
         |error| {
             SubmitOneError::new(
@@ -1054,7 +1054,7 @@ fn bootstrap_b_model_generation_ref(
         .and_then(|references| {
             references.iter().find(|reference| {
                 reference.get("role").and_then(Value::as_str)
-                    == Some(arkret_sdk::identity::DID_INCEPTION_REF_ROLE)
+                    == Some(arkret_bootstrap::DID_INCEPTION_REF_ROLE)
             })
         })
         .and_then(|reference| reference.get("id"))
@@ -1155,7 +1155,7 @@ async fn build_reanchor_batch_receipt(
     authorize: &ValidatedEventEnvelope,
     reanchor_envelope: &Value,
     created_at: DateTime<Utc>,
-) -> Result<arkret_sdk::EventBatchReceipt, SubmitOneError> {
+) -> Result<arkret_core::EventBatchReceipt, SubmitOneError> {
     let payload = typed_device_reanchor_payload(reanchor_envelope)?;
     let registry_head = state
         .did_application()
@@ -1181,9 +1181,9 @@ async fn build_reanchor_batch_receipt(
                 "accepted registry head digest is unavailable",
             )
         })?;
-    let mut receipt = arkret_sdk::EventBatchReceipt {
+    let mut receipt = arkret_core::EventBatchReceipt {
         schema: "ak.schema.event_batch_receipt.v1".to_owned(),
-        receipt_id: arkret_sdk::ReceiptId::new(crate::ids::generate("receipt")).map_err(
+        receipt_id: arkret_core::ReceiptId::new(crate::ids::generate("receipt")).map_err(
             |error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1199,9 +1199,9 @@ async fn build_reanchor_batch_receipt(
                 format!("service DID is invalid: {error}"),
             )
         })?,
-        scope: arkret_sdk::EventBatchReceiptScope::DeviceReanchor(
-            arkret_sdk::DeviceReanchorReceiptScope {
-                kind: arkret_sdk::DeviceReanchorReceiptScopeKind::DeviceReanchorUnit,
+        scope: arkret_core::EventBatchReceiptScope::DeviceReanchor(
+            arkret_core::DeviceReanchorReceiptScope {
+                kind: arkret_core::DeviceReanchorReceiptScopeKind::DeviceReanchorUnit,
                 principal_id: payload.principal_id,
                 realm_id: RealmId::new(reanchor.realm_id.clone()).map_err(|error| {
                     SubmitOneError::new(
@@ -1235,7 +1235,7 @@ async fn build_reanchor_batch_receipt(
                     })?,
             },
         ),
-        frontier: arkret_sdk::EventBatchReceiptFrontier {
+        frontier: arkret_core::EventBatchReceiptFrontier {
             actor_seq: Some(authorize.actor_seq),
             event_id: Some(EventId::new(authorize.event_id.clone()).map_err(|error| {
                 SubmitOneError::new(
@@ -1256,7 +1256,7 @@ async fn build_reanchor_batch_receipt(
             hlc: None,
         },
         events: vec![
-            arkret_sdk::EventBatchReceiptEvent::Item(arkret_sdk::EventBatchReceiptItem {
+            arkret_core::EventBatchReceiptEvent::Item(arkret_core::EventBatchReceiptItem {
                 event_id: EventId::new(reanchor.event_id.clone()).map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1271,10 +1271,10 @@ async fn build_reanchor_batch_receipt(
                         format!("re-anchor digest is invalid: {error}"),
                     )
                 })?,
-                kind: arkret_sdk::NonEmptyString::new(reanchor.kind.clone())
+                kind: arkret_core::NonEmptyString::new(reanchor.kind.clone())
                     .expect("validated Event kind is non-empty"),
             }),
-            arkret_sdk::EventBatchReceiptEvent::Item(arkret_sdk::EventBatchReceiptItem {
+            arkret_core::EventBatchReceiptEvent::Item(arkret_core::EventBatchReceiptItem {
                 event_id: EventId::new(authorize.event_id.clone()).map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1289,7 +1289,7 @@ async fn build_reanchor_batch_receipt(
                         format!("replacement authorization digest is invalid: {error}"),
                     )
                 })?,
-                kind: arkret_sdk::NonEmptyString::new(authorize.kind.clone())
+                kind: arkret_core::NonEmptyString::new(authorize.kind.clone())
                     .expect("validated Event kind is non-empty"),
             }),
         ],
@@ -1318,7 +1318,7 @@ async fn build_reanchor_batch_receipt(
 
 fn sign_event_batch_receipt(
     state: &AppState,
-    receipt: &arkret_sdk::EventBatchReceipt,
+    receipt: &arkret_core::EventBatchReceipt,
 ) -> Result<Proof, SubmitOneError> {
     let mut receipt_value = serde_json::to_value(receipt).map_err(|error| {
         SubmitOneError::new(
@@ -1353,15 +1353,17 @@ fn sign_event_batch_receipt(
             format!("Event Batch Receipt proof binding failed: {error}"),
         )
     })?;
-    let jws =
-        arkret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("Event Batch Receipt signing failed: {error}"),
-                )
-            })?;
+    let jws = arkret_signatures::jws::sign_jws_ed25519(
+        &binding_bytes,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("Event Batch Receipt signing failed: {error}"),
+        )
+    })?;
     Ok(Proof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
@@ -1400,10 +1402,10 @@ mod tests {
         format!("ak:event:01904100-0000-7000-8000-{suffix}")
     }
 
-    fn attach_bootstrap_fixture_proof(event: &mut arkret_sdk::Event, verification_method: &str) {
-        let digest = arkret_sdk::Hash::new(event.event_digest().unwrap()).unwrap();
-        event.proofs = vec![arkret_sdk::Proof {
-            kind: arkret_sdk::proof_kind::DETACHED_JWS.to_owned(),
+    fn attach_bootstrap_fixture_proof(event: &mut arkret_core::Event, verification_method: &str) {
+        let digest = arkret_core::Hash::new(event.event_digest().unwrap()).unwrap();
+        event.proofs = vec![arkret_core::Proof {
+            kind: arkret_core::proof_kind::DETACHED_JWS.to_owned(),
             alg: "EdDSA".to_owned(),
             verification_method: verification_method.to_owned(),
             event_digest: digest,
@@ -1416,27 +1418,27 @@ mod tests {
 
     fn sdk_canonical_self_principal_bootstrap_unit() -> Vec<Value> {
         let principal =
-            arkret_sdk::Did::new("did:webvh:z6mkfixture:users.example:alice".to_owned()).unwrap();
-        let realm_id = arkret_sdk::RealmId::new(
+            arkret_core::Did::new("did:webvh:z6mkfixture:users.example:alice".to_owned()).unwrap();
+        let realm_id = arkret_core::RealmId::new(
             soland_domain::identity::principal_control_realm_for_did(principal.as_str()),
         )
         .unwrap();
         let created_at = "2026-07-15T00:00:00Z".parse().unwrap();
-        let mut create = arkret_sdk::identity::build_self_principal_pcr_create(
-            arkret_sdk::identity::SelfPrincipalPcrCreateInput {
+        let mut create = arkret_bootstrap::build_self_principal_pcr_create(
+            arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: principal.clone(),
                 realm_id: realm_id.clone(),
-                trust_domain: arkret_sdk::TypedTrustDomainId::new(
+                trust_domain: arkret_core::TypedTrustDomainId::new(
                     "ak:trust_domain:example.net".to_owned(),
                 )
                 .unwrap(),
-                did_inception_ref: arkret_sdk::EventRef::new(
+                did_inception_ref: arkret_core::EventRef::new(
                     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    arkret_sdk::identity::DID_INCEPTION_REF_ROLE,
+                    arkret_bootstrap::DID_INCEPTION_REF_ROLE,
                 ),
-                event_id: arkret_sdk::EventId::new(event_id("000000000001")).unwrap(),
+                event_id: arkret_core::EventId::new(event_id("000000000001")).unwrap(),
                 created_at,
-                hlc: arkret_sdk::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
+                hlc: arkret_core::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
             },
         )
         .unwrap();
@@ -1445,54 +1447,55 @@ mod tests {
             "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ#z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ",
         );
 
-        let authority = arkret_sdk::Did::new(
+        let authority = arkret_core::Did::new(
             "did:key:z6MkgZb469vbyZCg3L7kx1PbQuUD4NToPpcy1utdLxUUfpsh".to_owned(),
         )
         .unwrap();
         let authorization_ref =
-            arkret_sdk::NonEmptyString::new(format!("{}#enrollment-authority", create.actor_id))
+            arkret_core::NonEmptyString::new(format!("{}#enrollment-authority", create.actor_id))
                 .unwrap();
-        let payload = arkret_sdk::DeviceAuthorizePayload {
+        let payload = arkret_core::DeviceAuthorizePayload {
             principal_id: create.actor_id.clone(),
-            device_id: arkret_sdk::DeviceId::new(
+            device_id: arkret_core::DeviceId::new(
                 "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
             )
             .unwrap(),
-            device_public_key: arkret_sdk::NonEmptyString::new("z6MkDeviceKey".to_owned()).unwrap(),
-            hpke_key: arkret_sdk::NonEmptyString::new("z6LSDeviceHpkeKey".to_owned()).unwrap(),
+            device_public_key: arkret_core::NonEmptyString::new("z6MkDeviceKey".to_owned())
+                .unwrap(),
+            hpke_key: arkret_core::NonEmptyString::new("z6LSDeviceHpkeKey".to_owned()).unwrap(),
             algorithms: vec![
-                arkret_sdk::NonEmptyString::new(
+                arkret_core::NonEmptyString::new(
                     "ak.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
                 )
                 .unwrap(),
             ],
             device_key_algorithm: Some(
-                arkret_sdk::NonEmptyString::new("EdDSA".to_owned()).unwrap(),
+                arkret_core::NonEmptyString::new("EdDSA".to_owned()).unwrap(),
             ),
-            authorized_by: arkret_sdk::DeviceOrPrincipalRef::Did(authority.clone()),
+            authorized_by: arkret_core::DeviceOrPrincipalRef::Did(authority.clone()),
             scopes: None,
             not_before: create.created_at,
             expires_at: None,
             device_signature: None,
             proof: None,
             cross_signing_binding: None,
-            enrollment_authority_binding: Some(arkret_sdk::DeviceEnrollmentAuthorityBinding {
-                kind: arkret_sdk::DeviceEnrollmentAuthorityBindingKind::ServiceAttested,
+            enrollment_authority_binding: Some(arkret_core::DeviceEnrollmentAuthorityBinding {
+                kind: arkret_core::DeviceEnrollmentAuthorityBindingKind::ServiceAttested,
                 authority_did: authority.clone(),
                 authorization_ref: authorization_ref.clone(),
             }),
             recovery_session_id: None,
         };
-        let mut authorize = arkret_sdk::Event::new(
-            arkret_sdk::events::EventKind::DEVICE_AUTHORIZE,
+        let mut authorize = arkret_core::Event::new(
+            arkret_core::events::EventKind::DEVICE_AUTHORIZE,
             realm_id,
             principal,
             1,
-            arkret_sdk::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),
+            arkret_core::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),
             serde_json::to_value(payload).unwrap(),
         )
         .unwrap();
-        authorize.event_id = arkret_sdk::EventId::new(event_id("000000000002")).unwrap();
+        authorize.event_id = arkret_core::EventId::new(event_id("000000000002")).unwrap();
         authorize.created_at = create.created_at;
         authorize.prev_refs = vec![create.event_id.clone()];
         authorize.executed_by = Some(authority.clone());
@@ -1536,8 +1539,8 @@ mod tests {
     #[test]
     fn managed_agent_create_cannot_get_self_principal_pcr_context() {
         let mut envelopes = sdk_canonical_self_principal_bootstrap_unit();
-        let mut create: arkret_sdk::Event = serde_json::from_value(envelopes[0].clone()).unwrap();
-        create.executed_by = Some(arkret_sdk::Did::new("did:web:controller.example").unwrap());
+        let mut create: arkret_core::Event = serde_json::from_value(envelopes[0].clone()).unwrap();
+        create.executed_by = Some(arkret_core::Did::new("did:web:controller.example").unwrap());
         create.authorization_ref = Some("ak:capability:managed-agent".to_owned());
         create.proofs.clear();
         attach_bootstrap_fixture_proof(
@@ -1550,27 +1553,27 @@ mod tests {
     }
 
     fn sdk_test_envelope(envelope: &Value, actor_seq: u64) -> Value {
-        let actor = arkret_sdk::Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
-        let mut event = arkret_sdk::Event::new(
+        let actor = arkret_core::Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
+        let mut event = arkret_core::Event::new(
             envelope["kind"].as_str().unwrap(),
-            arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000010").unwrap(),
+            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000010").unwrap(),
             actor.clone(),
             actor_seq,
-            arkret_sdk::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),
+            arkret_core::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),
             envelope
                 .get("payload")
                 .cloned()
                 .unwrap_or_else(|| json!({})),
         )
         .unwrap();
-        event.event_id = arkret_sdk::EventId::new(envelope["event_id"].as_str().unwrap()).unwrap();
+        event.event_id = arkret_core::EventId::new(envelope["event_id"].as_str().unwrap()).unwrap();
         event.created_at = "2026-06-03T12:34:56Z".parse().unwrap();
         event.prev_refs = envelope
             .get("prev_refs")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .map(|value| arkret_sdk::EventId::new(value.as_str().unwrap()).unwrap())
+            .map(|value| arkret_core::EventId::new(value.as_str().unwrap()).unwrap())
             .collect();
         if let Some(jws) = envelope
             .get("proofs")
@@ -1579,11 +1582,11 @@ mod tests {
             .and_then(|proof| proof.get("jws"))
             .and_then(Value::as_str)
         {
-            event.proofs.push(arkret_sdk::Proof {
+            event.proofs.push(arkret_core::Proof {
                 kind: "detached_jws".to_owned(),
                 alg: "EdDSA".to_owned(),
                 verification_method: format!("{actor}#key-1"),
-                event_digest: arkret_sdk::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+                event_digest: arkret_core::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
                 created_at: event.created_at,
                 domain: None,
                 audience: None,

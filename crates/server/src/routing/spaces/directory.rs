@@ -24,12 +24,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::models::{
+use arkret_core::models::{
     Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
 };
-use arkret_sdk::{
+use arkret_core::{
     AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, BlobRef,
-    CursorAuthority, CursorAuthorityError, CursorBindingContext, CursorBindingRecord,
     CursorPurpose, DeliveryBindingHint, DeliveryMode, Did, DirectoryActorSearchOutcome,
     DirectoryAgentSelectorResolutionOutcome, DirectoryAnnounceOutcome,
     DirectoryAnnounceRequestBody, DirectoryHandleResolutionOutcome, DirectoryIntent,
@@ -43,14 +42,17 @@ use arkret_sdk::{
     DirectorySearchOrganizationsRequestBody, DirectorySearchRealmsRequestBody,
     DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryTargetResolutionOutcome,
     DirectoryUserSearchOutcome, DirectoryWithdrawOutcome, DirectoryWithdrawRequestBody,
-    Ed25519MoveSigner, HandleClaimKind, HandleHintBindingSource, JoinRule, LinkType, MessageId,
-    MoveSigner, ObjectPreview, ObjectPreviewId, OrganizationPreview, PayloadProof, RealmId,
-    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceType,
-    RealmJoinCandidateSource, RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel,
-    RealmPreview, RealmRef, RecipientServiceType, ServiceDescribe, StrandId, TargetDescriptor,
-    TargetKind, UserSearchOutcome, canonical, parse_address, proof_kind, target_digest,
-    validate_agent_slug,
+    HandleClaimKind, HandleHintBindingSource, JoinRule, LinkType, MessageId, MoveSigner,
+    ObjectPreview, ObjectPreviewId, OrganizationPreview, PayloadProof, RealmId, RealmJoinCandidate,
+    RealmJoinCandidateRole, RealmJoinCandidateServiceType, RealmJoinCandidateSource,
+    RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview, RealmRef,
+    RecipientServiceType, ServiceDescribe, StrandId, TargetDescriptor, TargetKind,
+    UserSearchOutcome, canonical, parse_address, proof_kind, target_digest, validate_agent_slug,
 };
+use arkret_server::{
+    CursorAuthority, CursorAuthorityError, CursorBindingContext, CursorBindingRecord,
+};
+use arkret_signatures::Ed25519MoveSigner;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
@@ -152,7 +154,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_id = Did::new(state.service_id.clone())
         .map_err(|error| AppError::internal(format!("invalid configured service_id: {error}")))?;
-    let trust_domain = arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+    let trust_domain = arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|error| AppError::internal(format!("invalid configured trust_domain: {error}")))?;
     let supported_profiles: Vec<String> = DIRECTORY_DISCOVERY_PROFILES
         .iter()
@@ -166,40 +168,40 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let description = ServiceDescribe {
         service_id,
         trust_domain,
-        service_type: arkret_sdk::ServiceType::DirectoryService,
-        protocol_version: arkret_sdk::PROTOCOL_VERSION.to_owned(),
+        service_type: arkret_core::ServiceType::DirectoryService,
+        protocol_version: arkret_core::PROTOCOL_VERSION.to_owned(),
         supported_profiles: supported_profiles.clone(),
         supported_operations: DIRECTORY_SUPPORTED_OPERATIONS
             .iter()
             .map(|operation| (*operation).to_owned())
             .collect(),
         supported_bindings: vec![
-            arkret_sdk::SupportedBinding::new("http_json")
+            arkret_core::SupportedBinding::new("http_json")
                 .with_base_url(state.config.public_base_url.trim_end_matches('/')),
         ],
         supported_features: supported_features.clone(),
-        auth_metadata: arkret_sdk::AuthMetadata::minimal("public_no_auth"),
+        auth_metadata: arkret_core::AuthMetadata::minimal("public_no_auth"),
         limits: Default::default(),
-        plaintext_visibility: arkret_sdk::PlaintextVisibility::none(),
+        plaintext_visibility: arkret_core::PlaintextVisibility::none(),
         privacy_derivation: None,
         receive_policy_constraints: None,
         implemented_features: supported_features,
         claimed_profiles: supported_profiles
             .iter()
-            .map(arkret_sdk::ClaimedProfileEntry::self_claimed)
+            .map(arkret_core::ClaimedProfileEntry::self_claimed)
             .collect(),
         verified_profiles: Vec::new(),
         experimental_features: Vec::new(),
         compat_surfaces: Vec::new(),
         development_mode: state.config.development_mode,
-        rate_limit_policy: Some(arkret_sdk::RateLimitPolicy::unspecified()),
+        rate_limit_policy: Some(arkret_core::RateLimitPolicy::unspecified()),
         rate_limit_policy_id: None,
-        egress_network_policy: Some(arkret_sdk::EgressNetworkPolicy::deny_private_defaults()),
+        egress_network_policy: Some(arkret_core::EgressNetworkPolicy::deny_private_defaults()),
         resource_types: DIRECTORY_RESOURCE_TYPES.to_vec(),
         discovery_profiles: supported_profiles,
         restricted_query_proof: Some(false),
-        ingest_modes: vec![arkret_sdk::DirectoryIngestMode::Push],
-        accept_policy_kind: Some(arkret_sdk::DirectoryAcceptPolicyKind::Open),
+        ingest_modes: vec![arkret_core::DirectoryIngestMode::Push],
+        accept_policy_kind: Some(arkret_core::DirectoryAcceptPolicyKind::Open),
         accept_policy_ref: None,
         default_ttl_seconds: Some(86_400),
         max_ttl_seconds: Some(604_800),

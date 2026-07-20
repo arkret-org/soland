@@ -31,7 +31,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_sdk::{Did, Operation, OperationId, RealmId};
+use arkret_core::{Did, Operation, OperationId, RealmId};
 use chrono::Utc;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -93,7 +93,7 @@ pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
     let operation = Operation::create(
         operation_id,
         realm_id,
-        arkret_sdk::events::EventKind::AUDIT_ERASURE_RECEIPT,
+        arkret_core::events::EventKind::AUDIT_ERASURE_RECEIPT,
         receipt.payload,
     );
     fanout_erasure_receipt_operation(state, &operation).await;
@@ -248,7 +248,7 @@ fn erasure_push_payload(
     let origin = Did::new(state.service_id.clone()).ok()?;
     let destination = Did::new(peer.did.clone()).ok()?;
     let realm_id = RealmId::new(operation.realm_id.to_string()).ok()?;
-    let body = arkret_sdk::FederationPushOperationsRequestBody {
+    let body = arkret_core::FederationPushOperationsRequestBody {
         origin,
         destination,
         realm_id,
@@ -261,7 +261,7 @@ fn erasure_push_payload(
     };
     serde_json::to_value(&body)
         .ok()
-        .and_then(|value| arkret_sdk::canonical::canonical_json_bytes(&value).ok())
+        .and_then(|value| arkret_core::canonical::canonical_json_bytes(&value).ok())
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(body["destination"], "did:web:peer1.example");
         assert_eq!(
             body["operations"][0]["object_type"],
-            arkret_sdk::events::EventKind::AUDIT_ERASURE_RECEIPT
+            arkret_core::events::EventKind::AUDIT_ERASURE_RECEIPT
         );
     }
 

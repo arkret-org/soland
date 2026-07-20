@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use arkret_sdk::Operation;
-use arkret_sdk::schema::event_payload_validator_catalog;
+use arkret_core::Operation;
+use arkret_core::schema::event_payload_validator_catalog;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -28,7 +28,7 @@ pub fn validate_operation_semantics(
 ) -> Result<(), &'static str> {
     validate_cross_signing_reset_replay_batch(operations)?;
     let mut active_series_heads =
-        BTreeMap::<(String, String), arkret_sdk::KeyBackupActiveSeriesHead>::new();
+        BTreeMap::<(String, String), arkret_core::KeyBackupActiveSeriesHead>::new();
     for operation in operations {
         operation
             .validate_payload_object()
@@ -42,7 +42,7 @@ pub fn validate_operation_semantics(
         // the state-aware pass (issuer anchoring against the current
         // media_service epoch + Ed25519 signature verification); the stateless
         // wire-shape pre-filter still runs inside `validate_operation_kind`.
-        if kind == arkret_sdk::events::EventKind::CALL_STATE {
+        if kind == arkret_core::events::EventKind::CALL_STATE {
             participant_binding::verify_call_state_participant_bindings(state, operation)?;
         }
         // Spec B1.13 / B1.14 — typed payload validators for the
@@ -53,7 +53,7 @@ pub fn validate_operation_semantics(
         validate_operation_patch_semantics(operation)?;
         validate_reaction_target_kind(kind, operation)?;
         validate_operation_payload_schema(kind, operation)?;
-        if kind == arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
+        if kind == arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
             validate_key_backup_active_series_transition(
                 state,
                 operation,
@@ -67,9 +67,9 @@ pub fn validate_operation_semantics(
 fn validate_key_backup_active_series_transition(
     state: &AppState,
     operation: &Operation,
-    heads: &mut BTreeMap<(String, String), arkret_sdk::KeyBackupActiveSeriesHead>,
+    heads: &mut BTreeMap<(String, String), arkret_core::KeyBackupActiveSeriesHead>,
 ) -> Result<(), &'static str> {
-    let record: arkret_sdk::KeyBackupActiveSeries =
+    let record: arkret_core::KeyBackupActiveSeries =
         serde_json::from_value(projection_context_stripped_payload(&operation.payload))
             .map_err(|_| "key_backup_active_series_schema_violation")?;
     let key = (
@@ -82,16 +82,16 @@ fn validate_key_backup_active_series_transition(
             .lock()
             .key_backup_active_series_head(&key.0, &key.1)
     });
-    let next = arkret_sdk::validate_key_backup_active_series_transition(current.as_ref(), &record)
+    let next = arkret_core::validate_key_backup_active_series_transition(current.as_ref(), &record)
         .map_err(active_series_transition_reason)?;
     heads.insert(key, next);
     Ok(())
 }
 
 fn active_series_transition_reason(
-    error: arkret_sdk::KeyBackupActiveSeriesTransitionError,
+    error: arkret_core::KeyBackupActiveSeriesTransitionError,
 ) -> &'static str {
-    use arkret_sdk::KeyBackupActiveSeriesTransitionError as Error;
+    use arkret_core::KeyBackupActiveSeriesTransitionError as Error;
     match error {
         Error::SchemaMismatch => "key_backup_active_series_schema_mismatch",
         Error::SignedFieldsDuplicate => "key_backup_active_series_signed_fields_duplicate",
@@ -119,8 +119,8 @@ pub(crate) fn validate_reaction_target_kind(
 ) -> Result<(), &'static str> {
     if !matches!(
         kind,
-        arkret_sdk::events::EventKind::REACTION_ADD
-            | arkret_sdk::events::EventKind::REACTION_REMOVE
+        arkret_core::events::EventKind::REACTION_ADD
+            | arkret_core::events::EventKind::REACTION_REMOVE
     ) {
         return Ok(());
     }
@@ -134,12 +134,12 @@ pub(crate) fn validate_reaction_target_kind(
     let Some(target) = target else {
         // Missing target is caught by REACTION_REQUIREMENTS; treat here as
         // unsupported so the canonical reason still surfaces.
-        return Err(arkret_sdk::error::ReasonCode::REACTION_TARGET_UNSUPPORTED);
+        return Err(arkret_core::error::ReasonCode::REACTION_TARGET_UNSUPPORTED);
     };
     if target.starts_with("ak:message:") || target.starts_with("ak:event:") {
         Ok(())
     } else {
-        Err(arkret_sdk::error::ReasonCode::REACTION_TARGET_UNSUPPORTED)
+        Err(arkret_core::error::ReasonCode::REACTION_TARGET_UNSUPPORTED)
     }
 }
 
@@ -153,8 +153,8 @@ pub(crate) fn validate_reaction_target_kind(
 /// wire-broken `target_ref` form; producers must emit canonical `space_id`.
 fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<(), &'static str> {
     match kind {
-        arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM => {
-            let payload: arkret_sdk::ContainerMoveItemPayload = typed_payload_fields(
+        arkret_core::events::EventKind::CONTAINER_MOVE_ITEM => {
+            let payload: arkret_core::ContainerMoveItemPayload = typed_payload_fields(
                 operation,
                 &[
                     "item_ref",
@@ -167,10 +167,10 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             )?;
             payload
                 .validate()
-                .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+                .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
         }
-        arkret_sdk::events::EventKind::CONTAINER_REBALANCE => {
-            let payload: arkret_sdk::ContainerRebalancePayload = typed_payload_fields(
+        arkret_core::events::EventKind::CONTAINER_REBALANCE => {
+            let payload: arkret_core::ContainerRebalancePayload = typed_payload_fields(
                 operation,
                 &[
                     "container_ref",
@@ -181,20 +181,20 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             )?;
             payload
                 .validate()
-                .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+                .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
         }
-        arkret_sdk::events::EventKind::REALM_NOTARY => {
-            let payload: arkret_sdk::RealmNotaryPayload =
+        arkret_core::events::EventKind::REALM_NOTARY => {
+            let payload: arkret_core::RealmNotaryPayload =
                 typed_payload_fields(operation, &["realm_id", "notary"])?;
             if payload.realm_id != operation.realm_id {
-                return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+                return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
             }
             payload
                 .validate()
-                .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+                .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
         }
-        arkret_sdk::events::EventKind::REALM_DIGEST_SUITE_TRANSITION => {
-            let payload: arkret_sdk::RealmDigestSuiteTransitionPayload = typed_payload_fields(
+        arkret_core::events::EventKind::REALM_DIGEST_SUITE_TRANSITION => {
+            let payload: arkret_core::RealmDigestSuiteTransitionPayload = typed_payload_fields(
                 operation,
                 &[
                     "from_digest_algorithm",
@@ -205,10 +205,10 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             )?;
             payload
                 .validate()
-                .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+                .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
         }
-        arkret_sdk::events::EventKind::CONSENT_GRANT => {
-            let _: arkret_sdk::ConsentGrantPayload = typed_payload_fields(
+        arkret_core::events::EventKind::CONSENT_GRANT => {
+            let _: arkret_core::ConsentGrantPayload = typed_payload_fields(
                 operation,
                 &[
                     "consent_id",
@@ -247,7 +247,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         }
         // The complete canonical typed shape is required; validating only
         // observed_dots would allow malformed identifiers.
-        arkret_sdk::events::EventKind::CONSENT_REVOKE => {
+        arkret_core::events::EventKind::CONSENT_REVOKE => {
             let mut wire_payload = projection_context_stripped_payload(&operation.payload);
             // Event-to-projection conversion adds actor_seq so the consent
             // reducer can derive its OR-set dot. It is projection context,
@@ -265,7 +265,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         // and new_generation == current_generation + 1. We enforce
         // schema shape here; the actual CAS comparison happens during
         // reducer apply once the cell row is read.
-        arkret_sdk::events::EventKind::CROSS_SIGNING_PUBLISH => {
+        arkret_core::events::EventKind::CROSS_SIGNING_PUBLISH => {
             if operation
                 .payload
                 .get("expected_previous_generation")
@@ -337,9 +337,9 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             // here pins them to `soland_http::error::reasons::*` so a rename
             // would break compilation rather than silently diverge.
             const _SESSION_FOCUS_REASON: &str =
-                arkret_sdk::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED;
+                arkret_core::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED;
             const _PARTICIPANT_BINDING_REASON: &str =
-                arkret_sdk::ReasonCode::PARTICIPANT_BINDING_INVALID;
+                arkret_core::ReasonCode::PARTICIPANT_BINDING_INVALID;
             if let Some(revision) = operation
                 .payload
                 .get("session_focus_revision")
@@ -372,7 +372,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                     // `participant_binding::verify_call_state_participant_bindings`
                     // pass dispatched from `validate_operation_semantics`.
                     let scheme = binding.get("scheme").and_then(|v| v.as_str());
-                    if scheme != Some(arkret_sdk::PARTICIPANT_BINDING_SCHEMA) {
+                    if scheme != Some(arkret_core::PARTICIPANT_BINDING_SCHEMA) {
                         return Err(
                             "participant_binding_invalid: participant_binding.scheme must be \
                              ak.media.participant_binding.v1",
@@ -424,7 +424,7 @@ fn typed_payload_fields<T: DeserializeOwned>(
     fields: &[&str],
 ) -> Result<T, &'static str> {
     let Some(payload) = operation.payload.as_object() else {
-        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+        return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
     };
     let wire_payload = fields
         .iter()
@@ -436,7 +436,7 @@ fn typed_payload_fields<T: DeserializeOwned>(
         })
         .collect();
     serde_json::from_value(Value::Object(wire_payload))
-        .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
 }
 
 pub(crate) fn validate_operation_schema_from_sdk_artifact(
@@ -458,12 +458,12 @@ fn operation_kind_has_sdk_payload_validator(kind: &str) -> Result<bool, &'static
 fn operation_kind_prefers_projection_schema(kind: &str) -> bool {
     matches!(
         kind,
-        arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY
-            | arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES
-            | arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
-            | arkret_sdk::events::EventKind::CIRCLE_ARCHIVE
-            | arkret_sdk::events::EventKind::CIRCLE_RESTORE
-            | arkret_sdk::events::EventKind::CIRCLE_TOMBSTONE
+        arkret_core::events::EventKind::REALM_INHERITANCE_POLICY
+            | arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES
+            | arkret_core::events::EventKind::CIRCLE_MEMBER_STATE
+            | arkret_core::events::EventKind::CIRCLE_ARCHIVE
+            | arkret_core::events::EventKind::CIRCLE_RESTORE
+            | arkret_core::events::EventKind::CIRCLE_TOMBSTONE
     )
 }
 
@@ -515,72 +515,74 @@ pub(crate) fn validate_operation_payload_against_sdk_artifact(
 
 fn operation_extra_validator_for_kind(kind: &str) -> Option<OperationValidator> {
     match kind {
-        arkret_sdk::events::EventKind::MESSAGE_CREATE
-        | arkret_sdk::events::EventKind::MESSAGE_REVISE => Some(validate_message_operation_payload),
-        arkret_sdk::events::EventKind::RELATION_CREATE
-        | arkret_sdk::events::EventKind::RELATION_UPDATE
-        | arkret_sdk::events::EventKind::RELATION_TOMBSTONE => {
+        arkret_core::events::EventKind::MESSAGE_CREATE
+        | arkret_core::events::EventKind::MESSAGE_REVISE => {
+            Some(validate_message_operation_payload)
+        }
+        arkret_core::events::EventKind::RELATION_CREATE
+        | arkret_core::events::EventKind::RELATION_UPDATE
+        | arkret_core::events::EventKind::RELATION_TOMBSTONE => {
             Some(validate_relation_operation_payload)
         }
-        arkret_sdk::events::EventKind::READ_CURSOR_ADVANCE => Some(validate_read_marker_payload),
-        arkret_sdk::events::EventKind::ACCOUNT_DATA_SET => Some(validate_account_data_set_payload),
-        arkret_sdk::events::EventKind::CONSENT_REVOKE => Some(validate_observed_dots_payload),
-        arkret_sdk::events::EventKind::INVITE_CREATE => Some(validate_invite_create_payload),
-        arkret_sdk::events::EventKind::INVITE_THIRD_PARTY => {
+        arkret_core::events::EventKind::READ_CURSOR_ADVANCE => Some(validate_read_marker_payload),
+        arkret_core::events::EventKind::ACCOUNT_DATA_SET => Some(validate_account_data_set_payload),
+        arkret_core::events::EventKind::CONSENT_REVOKE => Some(validate_observed_dots_payload),
+        arkret_core::events::EventKind::INVITE_CREATE => Some(validate_invite_create_payload),
+        arkret_core::events::EventKind::INVITE_THIRD_PARTY => {
             Some(validate_invite_third_party_payload)
         }
-        arkret_sdk::events::EventKind::INVITE_CLAIM => Some(validate_invite_claim_payload),
-        arkret_sdk::events::EventKind::INVITE_CANCEL
-        | arkret_sdk::events::EventKind::INVITE_REVOKE => Some(validate_invite_ref_payload),
-        arkret_sdk::events::EventKind::REALM_HISTORY_VISIBILITY => {
+        arkret_core::events::EventKind::INVITE_CLAIM => Some(validate_invite_claim_payload),
+        arkret_core::events::EventKind::INVITE_CANCEL
+        | arkret_core::events::EventKind::INVITE_REVOKE => Some(validate_invite_ref_payload),
+        arkret_core::events::EventKind::REALM_HISTORY_VISIBILITY => {
             Some(validate_history_visibility_payload)
         }
-        arkret_sdk::events::EventKind::REALM_READ_RECEIPT_POLICY => {
+        arkret_core::events::EventKind::REALM_READ_RECEIPT_POLICY => {
             Some(validate_read_receipt_policy_payload)
         }
-        arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY => {
+        arkret_core::events::EventKind::REALM_INHERITANCE_POLICY => {
             Some(validate_realm_inheritance_policy_payload)
         }
         kinds::CONFLICT_REPAIR => Some(validate_conflict_repair_payload),
-        arkret_sdk::events::EventKind::MORPH_CREATE => Some(validate_morph_create_payload),
-        arkret_sdk::events::EventKind::MORPH_UPDATE => Some(validate_morph_update_payload),
-        arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE => {
+        arkret_core::events::EventKind::MORPH_CREATE => Some(validate_morph_create_payload),
+        arkret_core::events::EventKind::MORPH_UPDATE => Some(validate_morph_update_payload),
+        arkret_core::events::EventKind::MORPH_SCHEMA_MIGRATE => {
             Some(validate_morph_schema_migrate_payload)
         }
-        arkret_sdk::events::EventKind::CROSS_SIGNING_RESET => {
+        arkret_core::events::EventKind::CROSS_SIGNING_RESET => {
             Some(validate_cross_signing_reset_payload)
         }
-        arkret_sdk::events::EventKind::DEVICE_AUTHORIZE => Some(validate_device_authorize_payload),
+        arkret_core::events::EventKind::DEVICE_AUTHORIZE => Some(validate_device_authorize_payload),
         _ => None,
     }
 }
 
 pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
     let schema = match kind {
-        arkret_sdk::events::EventKind::MESSAGE_CREATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::MESSAGE_CREATE => OperationPayloadSchema {
             requirements: MESSAGE_CREATE_REQUIREMENTS,
             validate: Some(validate_message_operation_payload),
         },
-        arkret_sdk::events::EventKind::MESSAGE_REVISE => OperationPayloadSchema {
+        arkret_core::events::EventKind::MESSAGE_REVISE => OperationPayloadSchema {
             requirements: MESSAGE_REVISE_REQUIREMENTS,
             validate: Some(validate_message_operation_payload),
         },
-        arkret_sdk::events::EventKind::MESSAGE_REDACT
-        | arkret_sdk::events::EventKind::REDACTION => OperationPayloadSchema {
+        arkret_core::events::EventKind::MESSAGE_REDACT
+        | arkret_core::events::EventKind::REDACTION => OperationPayloadSchema {
             requirements: REDACTION_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::REACTION_ADD
-        | arkret_sdk::events::EventKind::REACTION_REMOVE => OperationPayloadSchema {
+        arkret_core::events::EventKind::REACTION_ADD
+        | arkret_core::events::EventKind::REACTION_REMOVE => OperationPayloadSchema {
             requirements: REACTION_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::RELATION_CREATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::RELATION_CREATE => OperationPayloadSchema {
             requirements: RELATION_CREATE_REQUIREMENTS,
             validate: Some(validate_relation_operation_payload),
         },
-        arkret_sdk::events::EventKind::RELATION_UPDATE
-        | arkret_sdk::events::EventKind::RELATION_TOMBSTONE => OperationPayloadSchema {
+        arkret_core::events::EventKind::RELATION_UPDATE
+        | arkret_core::events::EventKind::RELATION_TOMBSTONE => OperationPayloadSchema {
             requirements: RELATION_ID_REQUIREMENTS,
             validate: Some(validate_relation_operation_payload),
         },
@@ -591,43 +593,43 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // the SDK artifact validator (whose `realm_id` pattern is
         // stricter than the in-tree fixtures need for testing —
         // existing reducer-level tests use `ak:space:` prefixes).
-        arkret_sdk::events::EventKind::REALM_LINK => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_LINK => OperationPayloadSchema {
             requirements: REALM_LINK_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::CAPABILITY_GRANT
-        | arkret_sdk::events::EventKind::CAPABILITY_REVOKE
-        | arkret_sdk::events::EventKind::CAPABILITY_DELEGATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::CAPABILITY_GRANT
+        | arkret_core::events::EventKind::CAPABILITY_REVOKE
+        | arkret_core::events::EventKind::CAPABILITY_DELEGATE => OperationPayloadSchema {
             requirements: CAPABILITY_GRANT_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::MLS_COMMIT => OperationPayloadSchema {
+        arkret_core::events::EventKind::MLS_COMMIT => OperationPayloadSchema {
             requirements: MLS_COMMIT_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::MLS_GENESIS => OperationPayloadSchema {
+        arkret_core::events::EventKind::MLS_GENESIS => OperationPayloadSchema {
             requirements: MLS_GENESIS_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::MLS_PROPOSAL => OperationPayloadSchema {
+        arkret_core::events::EventKind::MLS_PROPOSAL => OperationPayloadSchema {
             requirements: MLS_PROPOSAL_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::MLS_WELCOME => OperationPayloadSchema {
+        arkret_core::events::EventKind::MLS_WELCOME => OperationPayloadSchema {
             requirements: MLS_WELCOME_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::MLS_KEYPACKAGE => OperationPayloadSchema {
+        arkret_core::events::EventKind::MLS_KEYPACKAGE => OperationPayloadSchema {
             requirements: MLS_KEYPACKAGE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES => OperationPayloadSchema {
+        arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES => OperationPayloadSchema {
             requirements: &[],
             validate: Some(validate_key_backup_active_series_payload),
         },
-        arkret_sdk::events::EventKind::VIEW_CREATE
-        | arkret_sdk::events::EventKind::VIEW_UPDATE
-        | arkret_sdk::events::EventKind::VIEW_RECONCILE => {
+        arkret_core::events::EventKind::VIEW_CREATE
+        | arkret_core::events::EventKind::VIEW_UPDATE
+        | arkret_core::events::EventKind::VIEW_RECONCILE => {
             // `ak.view.*` events route through the `ak.component.view.*.v1`
             // cell families in the lattice registry (see
             // `reducer::lattice_kinds::ViewCreate / ViewUpdate / ViewReconcile`).
@@ -638,82 +640,82 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 validate: Some(validate_view_payload),
             }
         }
-        arkret_sdk::events::EventKind::READ_CURSOR_ADVANCE => OperationPayloadSchema {
+        arkret_core::events::EventKind::READ_CURSOR_ADVANCE => OperationPayloadSchema {
             requirements: READ_MARKER_REQUIREMENTS,
             validate: Some(validate_read_marker_payload),
         },
-        arkret_sdk::events::EventKind::ACCOUNT_DATA_SET => OperationPayloadSchema {
+        arkret_core::events::EventKind::ACCOUNT_DATA_SET => OperationPayloadSchema {
             requirements: ACCOUNT_DATA_SET_REQUIREMENTS,
             validate: Some(validate_account_data_set_payload),
         },
-        arkret_sdk::events::EventKind::RSVP_SET => OperationPayloadSchema {
+        arkret_core::events::EventKind::RSVP_SET => OperationPayloadSchema {
             requirements: RSVP_SET_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
-        arkret_sdk::events::EventKind::PIN_ADD => OperationPayloadSchema {
+        arkret_core::events::EventKind::PIN_ADD => OperationPayloadSchema {
             requirements: PIN_ADD_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
-        arkret_sdk::events::EventKind::PIN_REMOVE => OperationPayloadSchema {
+        arkret_core::events::EventKind::PIN_REMOVE => OperationPayloadSchema {
             requirements: PIN_REMOVE_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
-        arkret_sdk::events::EventKind::PIN_REORDER => OperationPayloadSchema {
+        arkret_core::events::EventKind::PIN_REORDER => OperationPayloadSchema {
             requirements: PIN_REORDER_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
-        arkret_sdk::events::EventKind::CONSENT_GRANT => OperationPayloadSchema {
+        arkret_core::events::EventKind::CONSENT_GRANT => OperationPayloadSchema {
             requirements: CONSENT_GRANT_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::CONSENT_REVOKE => OperationPayloadSchema {
+        arkret_core::events::EventKind::CONSENT_REVOKE => OperationPayloadSchema {
             requirements: CONSENT_REVOKE_REQUIREMENTS,
             validate: Some(validate_observed_dots_payload),
         },
-        arkret_sdk::events::EventKind::INVITE_CREATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::INVITE_CREATE => OperationPayloadSchema {
             requirements: INVITE_CREATE_REQUIREMENTS,
             validate: Some(validate_invite_create_payload),
         },
-        arkret_sdk::events::EventKind::INVITE_THIRD_PARTY => OperationPayloadSchema {
+        arkret_core::events::EventKind::INVITE_THIRD_PARTY => OperationPayloadSchema {
             requirements: INVITE_THIRD_PARTY_REQUIREMENTS,
             validate: Some(validate_invite_third_party_payload),
         },
-        arkret_sdk::events::EventKind::INVITE_CLAIM => OperationPayloadSchema {
+        arkret_core::events::EventKind::INVITE_CLAIM => OperationPayloadSchema {
             requirements: INVITE_CLAIM_REQUIREMENTS,
             validate: Some(validate_invite_claim_payload),
         },
-        arkret_sdk::events::EventKind::INVITE_CANCEL
-        | arkret_sdk::events::EventKind::INVITE_REVOKE => OperationPayloadSchema {
+        arkret_core::events::EventKind::INVITE_CANCEL
+        | arkret_core::events::EventKind::INVITE_REVOKE => OperationPayloadSchema {
             requirements: INVITE_REF_REQUIREMENTS,
             validate: Some(validate_invite_ref_payload),
         },
-        arkret_sdk::events::EventKind::AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
+        arkret_core::events::EventKind::AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
             requirements: ERASURE_RECEIPT_REQUIREMENTS,
             validate: None,
         },
-        kind if arkret_sdk::events::kinds::is_invite_kind(kind) => OperationPayloadSchema {
+        kind if arkret_core::events::kinds::is_invite_kind(kind) => OperationPayloadSchema {
             requirements: INVITE_STATE_REQUIREMENTS,
             validate: None,
         },
-        kind if arkret_sdk::events::kinds::is_membership_kind(kind) => OperationPayloadSchema {
+        kind if arkret_core::events::kinds::is_membership_kind(kind) => OperationPayloadSchema {
             requirements: MEMBERSHIP_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_CREATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_CREATE => OperationPayloadSchema {
             // `ak.realm.create` is technically lifecycle but carries the
             // full Realm `object` rather than a facet payload.
             requirements: REALM_CREATE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_UPDATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_UPDATE => OperationPayloadSchema {
             requirements: REALM_UPDATE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_ARCHIVE => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_ARCHIVE => OperationPayloadSchema {
             requirements: REALM_ARCHIVE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_FREEZE => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_FREEZE => OperationPayloadSchema {
             requirements: REALM_FREEZE_REQUIREMENTS,
             validate: None,
         },
@@ -725,8 +727,8 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // `validate_content_encryption_floor` (previously dead for circles
         // because no Operation was built, so the lock was only caught at
         // projection and the client saw a misleading 200).
-        arkret_sdk::events::EventKind::CIRCLE_CREATE
-        | arkret_sdk::events::EventKind::CIRCLE_UPDATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::CIRCLE_CREATE
+        | arkret_core::events::EventKind::CIRCLE_UPDATE => OperationPayloadSchema {
             requirements: &[],
             validate: None,
         },
@@ -741,94 +743,96 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // otherwise the SDK-artifact fallback rejects them with
         // "operation payload violates SDK artifact schema" before the reducer
         // can run, making Circle membership/archive/tombstone unreachable.
-        arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
-        | arkret_sdk::events::EventKind::CIRCLE_ARCHIVE
-        | arkret_sdk::events::EventKind::CIRCLE_RESTORE
-        | arkret_sdk::events::EventKind::CIRCLE_TOMBSTONE => OperationPayloadSchema {
+        arkret_core::events::EventKind::CIRCLE_MEMBER_STATE
+        | arkret_core::events::EventKind::CIRCLE_ARCHIVE
+        | arkret_core::events::EventKind::CIRCLE_RESTORE
+        | arkret_core::events::EventKind::CIRCLE_TOMBSTONE => OperationPayloadSchema {
             requirements: &[],
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_DESTROY
-        | arkret_sdk::events::EventKind::REALM_TOMBSTONE => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_DESTROY
+        | arkret_core::events::EventKind::REALM_TOMBSTONE => OperationPayloadSchema {
             requirements: REALM_TERMINAL_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_MODERATION_POLICY => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_MODERATION_POLICY => OperationPayloadSchema {
             requirements: REALM_MODERATION_POLICY_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_DISAPPEARING_POLICY => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_DISAPPEARING_POLICY => OperationPayloadSchema {
             requirements: REALM_DISAPPEARING_POLICY_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
-        arkret_sdk::events::EventKind::REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
             requirements: REALM_POLICY_VALUE_REQUIREMENTS,
             validate: Some(validate_history_visibility_payload),
         },
-        arkret_sdk::events::EventKind::REALM_READ_RECEIPT_POLICY => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_READ_RECEIPT_POLICY => OperationPayloadSchema {
             requirements: &[],
             validate: Some(validate_read_receipt_policy_payload),
         },
-        arkret_sdk::events::EventKind::REALM_POLICY_COMPONENTS => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_POLICY_COMPONENTS => OperationPayloadSchema {
             requirements: REALM_POLICY_VALUE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_SEARCH_POLICY => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_SEARCH_POLICY => OperationPayloadSchema {
             requirements: REALM_SEARCH_POLICY_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
-        arkret_sdk::events::EventKind::MODERATION_DECISION => OperationPayloadSchema {
+        arkret_core::events::EventKind::MODERATION_DECISION => OperationPayloadSchema {
             requirements: MODERATION_DECISION_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::MODERATION_DECISION_LIFT => OperationPayloadSchema {
+        arkret_core::events::EventKind::MODERATION_DECISION_LIFT => OperationPayloadSchema {
             requirements: MODERATION_DECISION_LIFT_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::MODERATION_APPEAL_SUBMIT => OperationPayloadSchema {
+        arkret_core::events::EventKind::MODERATION_APPEAL_SUBMIT => OperationPayloadSchema {
             requirements: MODERATION_APPEAL_SUBMIT_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::MODERATION_APPEAL_REVIEW => OperationPayloadSchema {
+        arkret_core::events::EventKind::MODERATION_APPEAL_REVIEW => OperationPayloadSchema {
             requirements: MODERATION_APPEAL_REVIEW_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::MODERATION_APPEAL_DECISION => OperationPayloadSchema {
+        arkret_core::events::EventKind::MODERATION_APPEAL_DECISION => OperationPayloadSchema {
             requirements: MODERATION_APPEAL_DECISION_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::MODERATION_APPEAL_CLOSE => OperationPayloadSchema {
+        arkret_core::events::EventKind::MODERATION_APPEAL_CLOSE => OperationPayloadSchema {
             requirements: MODERATION_APPEAL_CLOSE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_MEDIA_SERVICE => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_MEDIA_SERVICE => OperationPayloadSchema {
             requirements: &[],
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES => OperationPayloadSchema {
-            requirements: &[],
-            validate: None,
-        },
+        arkret_core::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES => {
+            OperationPayloadSchema {
+                requirements: &[],
+                validate: None,
+            }
+        }
         // R1.2 — `ak.realm.delivery_binding_policy` (member-delivery-binding.md
         // §4). The reducer dispatch (`apply_delivery_binding_policy`) projects
         // the whole payload into the `ak.component.realm.delivery_binding_policy.v1`
         // cell; without a projection-operation schema entry the event is never
         // turned into an Operation, the policy cell is never set, and every
         // routable member join fails closed with `delivery_binding_policy_unset`.
-        arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_INHERITANCE_POLICY => OperationPayloadSchema {
             requirements: REALM_INHERITANCE_POLICY_REQUIREMENTS,
             validate: Some(validate_realm_inheritance_policy_payload),
         },
-        arkret_sdk::events::EventKind::REALM_DELIVERY_BINDING_POLICY => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_DELIVERY_BINDING_POLICY => OperationPayloadSchema {
             requirements: &[],
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_HISTORY_SHARING_POLICY
-        | arkret_sdk::events::EventKind::REALM_PREVIEW_POLICY => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_HISTORY_SHARING_POLICY
+        | arkret_core::events::EventKind::REALM_PREVIEW_POLICY => OperationPayloadSchema {
             requirements: REALM_POLICY_VALUE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::REALM_KEY_SHARE => OperationPayloadSchema {
+        arkret_core::events::EventKind::REALM_KEY_SHARE => OperationPayloadSchema {
             requirements: REALM_KEY_SHARE_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
@@ -836,69 +840,69 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: CONFLICT_REPAIR_REQUIREMENTS,
             validate: Some(validate_conflict_repair_payload),
         },
-        kind if arkret_sdk::events::kinds::is_space_lifecycle_kind(kind) => {
+        kind if arkret_core::events::kinds::is_space_lifecycle_kind(kind) => {
             OperationPayloadSchema {
                 requirements: SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS,
                 validate: None,
             }
         }
-        arkret_sdk::events::EventKind::SPACE_CREATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::SPACE_CREATE => OperationPayloadSchema {
             requirements: SPACE_CONTAINER_CREATE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::SPACE_UPDATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::SPACE_UPDATE => OperationPayloadSchema {
             requirements: SPACE_CONTAINER_UPDATE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::SPACE_PARENT => OperationPayloadSchema {
+        arkret_core::events::EventKind::SPACE_PARENT => OperationPayloadSchema {
             requirements: SPACE_CONTAINER_PARENT_REQUIREMENTS,
             validate: None,
         },
-        kind if arkret_sdk::events::kinds::is_strand_lifecycle_kind(kind) => {
+        kind if arkret_core::events::kinds::is_strand_lifecycle_kind(kind) => {
             OperationPayloadSchema {
                 requirements: STRAND_LIFECYCLE_REQUIREMENTS,
                 validate: None,
             }
         }
-        arkret_sdk::events::EventKind::STRAND_CREATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::STRAND_CREATE => OperationPayloadSchema {
             requirements: STRAND_CREATE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::STRAND_UPDATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::STRAND_UPDATE => OperationPayloadSchema {
             requirements: STRAND_UPDATE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::STRAND_MOVE => OperationPayloadSchema {
+        arkret_core::events::EventKind::STRAND_MOVE => OperationPayloadSchema {
             requirements: STRAND_MOVE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::STRAND_REORDER => OperationPayloadSchema {
+        arkret_core::events::EventKind::STRAND_REORDER => OperationPayloadSchema {
             requirements: STRAND_REORDER_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::STRAND_WATCH_SET => OperationPayloadSchema {
+        arkret_core::events::EventKind::STRAND_WATCH_SET => OperationPayloadSchema {
             requirements: STRAND_WATCH_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::STRAND_TRACKS_UPDATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::STRAND_TRACKS_UPDATE => OperationPayloadSchema {
             requirements: STRAND_TRACKS_UPDATE_REQUIREMENTS,
             validate: None,
         },
-        kind if arkret_sdk::events::kinds::is_morph_lifecycle_kind(kind) => {
+        kind if arkret_core::events::kinds::is_morph_lifecycle_kind(kind) => {
             OperationPayloadSchema {
                 requirements: MORPH_LIFECYCLE_REQUIREMENTS,
                 validate: None,
             }
         }
-        arkret_sdk::events::EventKind::MORPH_CREATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::MORPH_CREATE => OperationPayloadSchema {
             requirements: MORPH_CREATE_REQUIREMENTS,
             validate: Some(validate_morph_create_payload),
         },
-        arkret_sdk::events::EventKind::MORPH_UPDATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::MORPH_UPDATE => OperationPayloadSchema {
             requirements: MORPH_UPDATE_REQUIREMENTS,
             validate: Some(validate_morph_update_payload),
         },
-        arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::MORPH_SCHEMA_MIGRATE => OperationPayloadSchema {
             requirements: MORPH_SCHEMA_MIGRATE_REQUIREMENTS,
             validate: Some(validate_morph_schema_migrate_payload),
         },
@@ -908,61 +912,61 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // unknown-event-kind path in `event_log::submit_event` already
         // hard-rejects these kinds; no operation schema branch is needed.
         // Applet protocol family.
-        arkret_sdk::events::EventKind::APPLET_REGISTRATION => OperationPayloadSchema {
+        arkret_core::events::EventKind::APPLET_REGISTRATION => OperationPayloadSchema {
             requirements: APPLET_REGISTRATION_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::APPLET_DISCOVERY => OperationPayloadSchema {
+        arkret_core::events::EventKind::APPLET_DISCOVERY => OperationPayloadSchema {
             requirements: APPLET_DISCOVERY_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::APPLET_BRIDGE_ERROR => OperationPayloadSchema {
+        arkret_core::events::EventKind::APPLET_BRIDGE_ERROR => OperationPayloadSchema {
             requirements: APPLET_BRIDGE_ERROR_REQUIREMENTS,
             validate: None,
         },
         // R3 spec-sync — agent lifecycle FSM kinds.
-        arkret_sdk::events::EventKind::SELF_AGENT_PAUSE => OperationPayloadSchema {
+        arkret_core::events::EventKind::SELF_AGENT_PAUSE => OperationPayloadSchema {
             requirements: AGENT_PAUSE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::SELF_AGENT_RESUME => OperationPayloadSchema {
+        arkret_core::events::EventKind::SELF_AGENT_RESUME => OperationPayloadSchema {
             requirements: AGENT_RESUME_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::SELF_AGENT_DEACTIVATE => OperationPayloadSchema {
+        arkret_core::events::EventKind::SELF_AGENT_DEACTIVATE => OperationPayloadSchema {
             requirements: AGENT_DEACTIVATE_REQUIREMENTS,
             validate: None,
         },
         // Agent runtime keys are reducer inputs backed by the SDK payload
         // schemas. Register both kinds here so accepted Events are converted
         // into Operations and reach the reducer dispatch table.
-        arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE
-        | arkret_sdk::events::EventKind::AGENT_KEY_REVOKE => OperationPayloadSchema {
+        arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE
+        | arkret_core::events::EventKind::AGENT_KEY_REVOKE => OperationPayloadSchema {
             requirements: &[],
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
         // R3 spec-sync — actor_private_event kinds (reducer_input=false).
-        arkret_sdk::events::EventKind::AGENT_DRAFT_PROPOSE => OperationPayloadSchema {
+        arkret_core::events::EventKind::AGENT_DRAFT_PROPOSE => OperationPayloadSchema {
             requirements: AGENT_DRAFT_PROPOSE_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::AGENT_ACTION_REQUEST => OperationPayloadSchema {
+        arkret_core::events::EventKind::AGENT_ACTION_REQUEST => OperationPayloadSchema {
             requirements: AGENT_ACTION_REQUEST_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::AGENT_ACTION_APPROVE => OperationPayloadSchema {
+        arkret_core::events::EventKind::AGENT_ACTION_APPROVE => OperationPayloadSchema {
             requirements: AGENT_ACTION_APPROVE_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
-        arkret_sdk::events::EventKind::AGENT_ACTION_REJECT => OperationPayloadSchema {
+        arkret_core::events::EventKind::AGENT_ACTION_REJECT => OperationPayloadSchema {
             requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
-        arkret_sdk::events::EventKind::CROSS_SIGNING_PUBLISH => OperationPayloadSchema {
+        arkret_core::events::EventKind::CROSS_SIGNING_PUBLISH => OperationPayloadSchema {
             requirements: CROSS_SIGNING_PUBLISH_REQUIREMENTS,
             validate: None,
         },
-        arkret_sdk::events::EventKind::CROSS_SIGNING_RESET => OperationPayloadSchema {
+        arkret_core::events::EventKind::CROSS_SIGNING_RESET => OperationPayloadSchema {
             requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
             validate: Some(validate_cross_signing_reset_payload),
         },
@@ -975,7 +979,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // client falsely shows the "existing device approval" gate). The SDK
         // validator owns payload shape and binding oneOf; policy validation then
         // verifies any cross_signing_binding at ingest.
-        arkret_sdk::events::EventKind::DEVICE_AUTHORIZE => OperationPayloadSchema {
+        arkret_core::events::EventKind::DEVICE_AUTHORIZE => OperationPayloadSchema {
             requirements: DEVICE_AUTHORIZE_REQUIREMENTS,
             validate: Some(validate_device_authorize_payload),
         },
@@ -1033,16 +1037,16 @@ pub fn payload_key_present(payload: &serde_json::Value, field: &str) -> bool {
 /// `observed_dots[]` is `schema_violation` — implicit cascade revoke is
 /// forbidden.
 pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static str, String)> {
-    let parsed: arkret_sdk::ConsentRevokePayload = serde_json::from_value(payload.clone())
+    let parsed: arkret_core::ConsentRevokePayload = serde_json::from_value(payload.clone())
         .map_err(|err| {
             (
-                arkret_sdk::ErrorCode::SCHEMA_VIOLATION,
+                arkret_core::ErrorCode::SCHEMA_VIOLATION,
                 format!("ak.consent.revoke payload shape is invalid: {err}"),
             )
         })?;
     parsed.validate_minimal().map_err(|err| {
         (
-            arkret_sdk::ErrorCode::SCHEMA_VIOLATION,
+            arkret_core::ErrorCode::SCHEMA_VIOLATION,
             format!("ak.consent.revoke payload invariant violation: {err}"),
         )
     })?;
@@ -1057,8 +1061,9 @@ mod tests {
 
     fn operation(kind: &str, payload: Value) -> Operation {
         Operation::create(
-            arkret_sdk::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-            arkret_sdk::RealmId::new(REALM_ID).unwrap(),
+            arkret_core::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+                .unwrap(),
+            arkret_core::RealmId::new(REALM_ID).unwrap(),
             kind,
             payload,
         )
@@ -1067,7 +1072,7 @@ mod tests {
     #[test]
     fn typed_container_payload_rejects_legacy_shape() {
         let legacy = operation(
-            arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM,
+            arkret_core::events::EventKind::CONTAINER_MOVE_ITEM,
             serde_json::json!({
                 "object_ref": "ak:morph:01904100-0000-7000-8000-000000000201",
                 "to_container_id": "ak:morph:01904100-0000-7000-8000-000000000101",
@@ -1077,17 +1082,17 @@ mod tests {
         );
         assert_eq!(
             validate_typed_payload_shapes(
-                arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM,
+                arkret_core::events::EventKind::CONTAINER_MOVE_ITEM,
                 &legacy,
             ),
-            Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+            Err(arkret_core::ErrorCode::SCHEMA_VIOLATION)
         );
     }
 
     #[test]
     fn typed_realm_control_payloads_enforce_realm_and_transition_rules() {
         let wrong_realm = operation(
-            arkret_sdk::events::EventKind::REALM_NOTARY,
+            arkret_core::events::EventKind::REALM_NOTARY,
             serde_json::json!({
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000099",
                 "notary": {"type": "single_did", "did": "did:web:notary.example"}
@@ -1095,14 +1100,14 @@ mod tests {
         );
         assert_eq!(
             validate_typed_payload_shapes(
-                arkret_sdk::events::EventKind::REALM_NOTARY,
+                arkret_core::events::EventKind::REALM_NOTARY,
                 &wrong_realm,
             ),
-            Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+            Err(arkret_core::ErrorCode::SCHEMA_VIOLATION)
         );
 
         let noop = operation(
-            arkret_sdk::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+            arkret_core::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
             serde_json::json!({
                 "from_digest_algorithm": "sha256",
                 "to_digest_algorithm": "sha256",
@@ -1112,10 +1117,10 @@ mod tests {
         );
         assert_eq!(
             validate_typed_payload_shapes(
-                arkret_sdk::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+                arkret_core::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
                 &noop,
             ),
-            Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+            Err(arkret_core::ErrorCode::SCHEMA_VIOLATION)
         );
     }
 }

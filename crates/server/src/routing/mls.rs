@@ -37,7 +37,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::{
+use arkret_core::{
     Did, Failure as KeypackageFailure, Hash, KeyOperationSignature, KeyPackageClaimRecord,
     KeyPackageUploadEntry, KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody,
     KeyPackagesConsumeOutcome, KeyPackagesConsumeRequestBody, KeyPackagesRevokeOutcome,
@@ -389,7 +389,7 @@ async fn upload_keypackage(
             }
         };
         let keypackage_digest = entry.keypackage_digest.to_string();
-        let computed_keypackage_digest = arkret_sdk::canonical::sha256_digest(&key_package_bytes);
+        let computed_keypackage_digest = arkret_core::canonical::sha256_digest(&key_package_bytes);
         if keypackage_digest != computed_keypackage_digest {
             rejected.push(keypackage_failure(
                 &entry,
@@ -457,7 +457,7 @@ async fn upload_keypackage(
         });
         trust_binding.insert_into(&mut publish_payload);
         let op = build_op(
-            arkret_sdk::events::EventKind::MLS_KEYPACKAGE,
+            arkret_core::events::EventKind::MLS_KEYPACKAGE,
             publish_payload,
         );
         let effect = reducer::mls::apply_keypackage_publish(&mut state.projection.lock(), &op);
@@ -662,7 +662,7 @@ pub(crate) async fn claim_keypackages_for_request(
         "intended_realm_id": intended_realm_id.clone()
     });
     claim_binding.insert_into(&mut payload);
-    let op = build_op(arkret_sdk::events::EventKind::MLS_KEYPACKAGE, payload);
+    let op = build_op(arkret_core::events::EventKind::MLS_KEYPACKAGE, payload);
     let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock(), &op);
     let (consumed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
         ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed {
@@ -686,11 +686,11 @@ pub(crate) async fn claim_keypackages_for_request(
                 reducer::mls::REASON_KEYPACKAGE_NOT_FOUND => {
                     AppError::not_found("KeyPackage not found").with_wire_code(reason)
                 }
-                arkret_sdk::ReasonCode::KEYPACKAGE_EXPIRED => {
+                arkret_core::ReasonCode::KEYPACKAGE_EXPIRED => {
                     AppError::new(ErrorCode::FailedPrecondition, "KeyPackage lifetime expired")
                         .with_wire_code(reason)
                 }
-                arkret_sdk::ReasonCode::CLAIM_GENERATION_MISMATCH => AppError::new(
+                arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH => AppError::new(
                     ErrorCode::FailedPrecondition,
                     "KeyPackage cross-signing generation mismatch",
                 )
@@ -1051,8 +1051,8 @@ fn decode_key_package(encoded: &str) -> Result<Vec<u8>, String> {
 }
 
 fn canonical_capabilities_digest(capabilities: &[String]) -> Result<String, String> {
-    arkret_sdk::canonical::canonical_json_bytes(&capabilities.to_vec())
-        .map(arkret_sdk::canonical::sha256_digest)
+    arkret_core::canonical::canonical_json_bytes(&capabilities.to_vec())
+        .map(arkret_core::canonical::sha256_digest)
         .map_err(|_| "capabilities_digest_failed".to_owned())
 }
 
@@ -1095,7 +1095,7 @@ fn capabilities_satisfy(published: &[String], required: &BTreeSet<String>) -> bo
     required.is_subset(&published)
 }
 
-fn current_accepted_ssk_generation(state: &AppState, principal: &arkret_sdk::Did) -> Option<u64> {
+fn current_accepted_ssk_generation(state: &AppState, principal: &arkret_core::Did) -> Option<u64> {
     state
         .cross_signing
         .lock()
@@ -1105,7 +1105,7 @@ fn current_accepted_ssk_generation(state: &AppState, principal: &arkret_sdk::Did
 
 async fn current_keypackage_trust_binding(
     state: &AppState,
-    principal: &arkret_sdk::Did,
+    principal: &arkret_core::Did,
     device_id: &str,
 ) -> Result<KeyPackageTrustBinding, AppError> {
     if let Some(generation) = current_accepted_ssk_generation(state, principal) {
@@ -1134,7 +1134,7 @@ async fn current_keypackage_trust_binding(
 
 async fn current_keypackage_claim_trust_selector(
     state: &AppState,
-    principal: &arkret_sdk::Did,
+    principal: &arkret_core::Did,
     target_device_ids: &BTreeSet<String>,
 ) -> Result<KeyPackageTrustSelector, AppError> {
     if let Some(generation) = current_accepted_ssk_generation(state, principal) {

@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::{Duration as StdDuration, Instant};
 
-use arkret_sdk::{DeviceId, Did, FreshnessState, SessionGrantProofKind};
+use arkret_core::{DeviceId, Did, FreshnessState, SessionGrantProofKind};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
@@ -498,8 +498,8 @@ pub(crate) fn verify_grant_dpop_request(
         req.uri().path()
     );
     let now = crate::wire::now();
-    let verified =
-        arkret_sdk::dpop::verify_dpop_proof(&arkret_sdk::dpop::DpopVerificationRequest {
+    let verified = arkret_signatures::dpop::verify_dpop_proof(
+        &arkret_signatures::dpop::DpopVerificationRequest {
             proof_jwt: &dpop,
             method: req.method().as_str(),
             htu: &expected_htu,
@@ -507,8 +507,9 @@ pub(crate) fn verify_grant_dpop_request(
             now,
             max_age: Duration::seconds(DPOP_MAX_AGE_SECONDS),
             max_future_skew: Duration::seconds(DPOP_MAX_FUTURE_SKEW_SECONDS),
-        })
-        .map_err(|_| unauthenticated("DPoP proof validation failed"))?;
+        },
+    )
+    .map_err(|_| unauthenticated("DPoP proof validation failed"))?;
     if verified.jkt != cnf_jkt {
         return Err(unauthenticated(
             "DPoP proof key thumbprint does not match the grant's cnf.jkt",
@@ -595,7 +596,7 @@ pub(crate) async fn grant_dpop_session(
 
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::{GrantId, RealmId};
+    use arkret_core::{GrantId, RealmId};
 
     use super::*;
 
@@ -691,7 +692,7 @@ mod tests {
         grant.device_id = None;
         grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(arkret_sdk::SessionGrantScopeDetails {
+        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails {
             realm_ids: vec![
                 RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000003".to_owned()).unwrap(),
             ],
@@ -735,7 +736,7 @@ mod tests {
         let mut grant = test_introspection_grant();
         grant.subject = "did:web:agent.example".to_owned();
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(arkret_sdk::SessionGrantScopeDetails::default());
+        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails::default());
         grant.freshness_state = Some(FreshnessState::Fresh);
 
         let err = session_binding_from_introspection(&grant).unwrap_err();
@@ -750,7 +751,7 @@ mod tests {
         let mut grant = test_introspection_grant();
         grant.subject = "did:web:agent.example".to_owned();
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(arkret_sdk::SessionGrantScopeDetails {
+        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails {
             realm_ids: vec![
                 RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000004".to_owned()).unwrap(),
             ],

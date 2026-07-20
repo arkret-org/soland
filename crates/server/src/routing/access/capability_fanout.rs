@@ -1,5 +1,5 @@
-use arkret_sdk::lattice::CellState;
-use arkret_sdk::{CellRef, Did, EventId, GrantId, Operation, OperationId, RealmId};
+use arkret_core::{CellRef, Did, EventId, GrantId, Operation, OperationId, RealmId};
+use arkret_state::lattice::CellState;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -144,7 +144,7 @@ fn validate_header_digest(req: &Request, body: &Value) -> Result<(), AppError> {
     else {
         return Ok(());
     };
-    let actual = arkret_sdk::canonical::canonical_sha256(body)
+    let actual = arkret_core::canonical::canonical_sha256(body)
         .map_err(|error| AppError::invalid_param(format!("fanout body digest failed: {error}")))?;
     if expected != actual {
         return Err(AppError::invalid_param(
@@ -180,8 +180,8 @@ fn build_projectable_operation(
     }
 
     let expected_event_kind = match operation_name.as_str() {
-        "grant" => arkret_sdk::events::EventKind::CAPABILITY_GRANT,
-        "revoke" => arkret_sdk::events::EventKind::CAPABILITY_REVOKE,
+        "grant" => arkret_core::events::EventKind::CAPABILITY_GRANT,
+        "revoke" => arkret_core::events::EventKind::CAPABILITY_REVOKE,
         _ => return Err(AppError::invalid_param("operation must be grant or revoke")),
     };
     if event_kind != expected_event_kind {
@@ -320,7 +320,7 @@ fn validate_grant_payload(
     let registry_digest = match grant.get("capability_action_registry_digest") {
         None => None,
         Some(Value::String(value)) if value.starts_with("sha256:") => {
-            Some(arkret_sdk::Hash::new(value.clone()).map_err(|_| {
+            Some(arkret_core::Hash::new(value.clone()).map_err(|_| {
                 AppError::invalid_param(
                     "payload.grant.capability_action_registry_digest must be sha256",
                 )
@@ -332,7 +332,7 @@ fn validate_grant_payload(
             ));
         }
     };
-    arkret_sdk::validate_capability_action_registry_binding(&actions, registry_digest.as_ref())
+    arkret_core::validate_capability_action_registry_binding(&actions, registry_digest.as_ref())
         .map_err(|_| {
             AppError::invalid_param("payload.grant capability registry basis is unavailable")
         })?;
@@ -491,7 +491,7 @@ mod tests {
             kind: FANOUT_KIND.to_owned(),
             operation: "grant".to_owned(),
             issuer_service_id: ISSUER.to_owned(),
-            event_kind: arkret_sdk::events::EventKind::CAPABILITY_GRANT.to_owned(),
+            event_kind: arkret_core::events::EventKind::CAPABILITY_GRANT.to_owned(),
             event_id: EVENT.to_owned(),
             capability_grant_id: GRANT.to_owned(),
             payload: json!({
@@ -519,7 +519,7 @@ mod tests {
         assert_eq!(draft.event_id, EVENT);
         assert_eq!(
             draft.operation.object_type,
-            arkret_sdk::events::EventKind::CAPABILITY_GRANT
+            arkret_core::events::EventKind::CAPABILITY_GRANT
         );
         assert_eq!(draft.realm_id, REALM);
         assert_eq!(draft.subject.as_deref(), Some(SUBJECT));

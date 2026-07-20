@@ -25,10 +25,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         if staged_events.contains_key(&request.event.event_id) {
             return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
         }
-        if request.event.kind == arkret_sdk::events::EventKind::REALM_CREATE
+        if request.event.kind == arkret_core::events::EventKind::REALM_CREATE
             && request.event.realm_id.is_some()
             && staged_events.values().any(|existing| {
-                existing.kind == arkret_sdk::events::EventKind::REALM_CREATE
+                existing.kind == arkret_core::events::EventKind::REALM_CREATE
                     && existing.realm_id == request.event.realm_id
             })
         {

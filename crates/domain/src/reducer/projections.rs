@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::{
+use arkret_core::{
     ChildScopePolicy, Operation, ReadCursorPosition as ReadCursorPositionWire,
     ReadCursorScope as ReadScopeWire, StrandTrackConfig,
 };
@@ -140,9 +140,9 @@ pub struct SolandKeyBackupActiveSeries {
     pub series_pointer_version: u64,
     pub previous_series_ids: Vec<String>,
     pub record_digest: String,
-    pub frontier_ref: arkret_sdk::KeyBackupActiveSeriesFrontierRef,
+    pub frontier_ref: arkret_core::KeyBackupActiveSeriesFrontierRef,
     pub issued_at: chrono::DateTime<chrono::Utc>,
-    pub auth_data: arkret_sdk::KeyBackupActiveSeriesAuthData,
+    pub auth_data: arkret_core::KeyBackupActiveSeriesAuthData,
     pub extra: BTreeMap<String, Value>,
     pub event_id: String,
 }
@@ -156,7 +156,7 @@ pub struct RealmLinkState {
     pub realm_id: String,
     pub target_realm_id: String,
     /// Canonical link kind string (snake_case, one of the eight values
-    /// in `arkret_sdk::RealmLinkKind`).
+    /// in `arkret_core::RealmLinkKind`).
     pub link_kind: String,
     /// `active` / `rejected` / `tombstoned`.
     pub status: String,
@@ -595,7 +595,7 @@ pub struct StrandProjection {
 
 pub(crate) fn default_strand_tracks() -> BTreeMap<String, StrandTrackConfig> {
     BTreeMap::from([(
-        arkret_sdk::STRAND_TRACK_NAME_SYNTHESIS.to_owned(),
+        arkret_core::STRAND_TRACK_NAME_SYNTHESIS.to_owned(),
         StrandTrackConfig::synthesis(),
     )])
 }
@@ -656,8 +656,8 @@ pub struct SidecarProjection {
     pub realm_id: String,
     pub controller_id: String,
     pub backing_circle_id: String,
-    pub encryption_profile: arkret_sdk::models::AgentSidecarEncryptionProfile,
-    pub state: arkret_sdk::models::AgentSidecarState,
+    pub encryption_profile: arkret_core::models::AgentSidecarEncryptionProfile,
+    pub state: arkret_core::models::AgentSidecarState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -794,7 +794,7 @@ pub struct AgentActionApprovalProjection {
 }
 
 /// State enum shared by Strand and Morph projections (mirrors SDK
-/// `arkret_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
+/// `arkret_core::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
 /// a single `Tombstoned` terminal, Strand / Morph use `Redacted` as their terminal
 /// state per spec §5.1.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

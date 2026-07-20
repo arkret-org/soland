@@ -185,8 +185,8 @@ async fn insert_event_batch_receipt(
         .events
         .iter()
         .filter_map(|event| match event {
-            arkret_sdk::EventBatchReceiptEvent::Item(item) => Some(item.event_id.as_str()),
-            arkret_sdk::EventBatchReceiptEvent::Digest(_) => None,
+            arkret_core::EventBatchReceiptEvent::Item(item) => Some(item.event_id.as_str()),
+            arkret_core::EventBatchReceiptEvent::Digest(_) => None,
         })
         .map(ids::typed_uuid_part_expect_internal)
         .collect::<Vec<_>>();

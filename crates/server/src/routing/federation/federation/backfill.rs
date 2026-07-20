@@ -41,7 +41,7 @@ pub(super) async fn pull_operations_page(
     realm_id: &str,
     after_cursor: Option<&str>,
     limit: usize,
-) -> Result<arkret_sdk::FederationPullOperationsOutcome, AppError> {
+) -> Result<arkret_core::FederationPullOperationsOutcome, AppError> {
     let mut url = reqwest::Url::parse(&format!("{}/_arkret/peer/events", peer.url))
         .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
     {
@@ -74,7 +74,7 @@ pub(super) async fn pull_operations_page(
             "federation pull from {url} returned {status}: {text}"
         )));
     }
-    serde_json::from_str::<arkret_sdk::FederationPullOperationsOutcome>(&text)
+    serde_json::from_str::<arkret_core::FederationPullOperationsOutcome>(&text)
         .map_err(|error| AppError::internal(format!("parse federation pull response: {error}")))
 }
 
@@ -103,7 +103,7 @@ pub(super) async fn operation_frontier_outcome(
         "realm_id": realm_id,
         "operation_ids": operation_ids.clone(),
     });
-    let frontier_digest = arkret_sdk::canonical::canonical_sha256(&digest_payload)
+    let frontier_digest = arkret_core::canonical::canonical_sha256(&digest_payload)
         .map(|digest| {
             if digest.starts_with("sha256:") {
                 digest
@@ -136,11 +136,11 @@ pub(super) fn is_valid_federation_txn_id(value: &str) -> bool {
 }
 
 pub(super) fn federation_request_digest(
-    body: &arkret_sdk::FederationTransactionRequestBody,
+    body: &arkret_core::FederationTransactionRequestBody,
 ) -> Result<String, &'static str> {
     let value =
         serde_json::to_value(body).map_err(|_| "federation transaction must serialize to JSON")?;
-    arkret_sdk::canonical::canonical_sha256(&value)
+    arkret_core::canonical::canonical_sha256(&value)
         .map_err(|_| "federation transaction must be canonical JSON")
 }
 

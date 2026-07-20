@@ -9,11 +9,11 @@ use anyhow::Result;
 ///
 /// Re-exported from the SDK canonical helper instead of carrying a third fork
 /// alongside the conformance harness.
-pub use arkret_sdk::canonical::sha256_digest;
+pub use arkret_core::canonical::sha256_digest;
 use serde_json::Value;
 
 pub fn canonical_json(value: &Value) -> Result<String> {
-    arkret_sdk::canonical::canonical_json_string(value).map_err(Into::into)
+    arkret_core::canonical::canonical_json_string(value).map_err(Into::into)
 }
 
 /// Order a slice of HLC strings lexicographically with `actor_id` tiebreak.
@@ -88,16 +88,16 @@ mod tests {
             .and_hms_opt(0, 0, 0)
             .expect("midnight is valid")
             .and_utc();
-        let cursor = arkret_sdk::Cursor {
+        let cursor = arkret_core::Cursor {
             v: "1".to_owned(),
-            purpose: arkret_sdk::CursorPurpose::Stream,
-            t: arkret_sdk::canonical::format_timestamp_canonical(issued_at),
-            x: issued_at.timestamp_millis() + arkret_sdk::Cursor::STREAM_TTL_MAX_MS,
+            purpose: arkret_core::CursorPurpose::Stream,
+            t: arkret_core::canonical::format_timestamp_canonical(issued_at),
+            x: issued_at.timestamp_millis() + arkret_core::Cursor::STREAM_TTL_MAX_MS,
             h: "abcdefghijklmnopqrstuv".to_owned(),
         };
         let encoded = cursor.encode().unwrap();
         assert!(encoded.starts_with("ak:cursor:"));
-        let decoded = arkret_sdk::Cursor::decode(&encoded).unwrap();
+        let decoded = arkret_core::Cursor::decode(&encoded).unwrap();
         assert_eq!(decoded.v, cursor.v);
         assert_eq!(decoded.purpose, cursor.purpose);
         assert_eq!(decoded.x, cursor.x);

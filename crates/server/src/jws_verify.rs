@@ -1,5 +1,5 @@
 //! Soland thin wrapper over the canonical detached-JWS verifier in
-//! [`arkret_sdk::jws`].
+//! [`arkret_core::jws`].
 //!
 //! All JWS verification semantics (RFC 7515 detached shape, Ed25519
 //! signature check, DID resolution, replay-window timing) live in the
@@ -21,11 +21,11 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::identity::{DidDocument, DidResolver};
-use arkret_sdk::signatures::{
+use arkret_core::{Did, Hash};
+use arkret_identity::{DidDocument, DidResolver};
+use arkret_signatures::{
     Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
 };
-use arkret_sdk::{Did, Hash};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use soland_storage::{
     WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS, WebvhFreshness, verify_did_document_freshness,
@@ -57,7 +57,7 @@ pub struct ResolvedVerificationKey {
 // sites in `notary.rs`, `compactor.rs`, `routing::admin::seal.rs`,
 // `routing::federation::move_seal.rs` and `routing::events::event_log.rs`
 // keep working unchanged.
-pub use arkret_sdk::jws::{
+pub use arkret_identity::jws::{
     effective_window_for_move, physical_millis_from_hlc, verify_replay_window,
     verify_replay_window_at, verify_replay_window_for_move, verify_replay_window_for_move_at,
 };
@@ -86,7 +86,7 @@ pub fn verify_jws_shape(
         return Err("empty canonical bytes".to_owned());
     }
 
-    let payload_digest = Hash::new(arkret_sdk::canonical::sha256_digest(canonical_bytes))
+    let payload_digest = Hash::new(arkret_core::canonical::sha256_digest(canonical_bytes))
         .map_err(|error| error.to_string())?;
     let proof = build_proof_envelope(
         "detached_jws",
@@ -126,7 +126,7 @@ fn dev_shape_only_public_key() -> PublicKeyMaterial {
 /// Production Ed25519 detached-JWS verifier.
 ///
 /// Soland-side adapter: dispatches `state.did_resolver` to
-/// [`arkret_sdk::jws::verify_jws_ed25519`]. See the SDK module docs for
+/// [`arkret_identity::jws::verify_jws_ed25519`]. See the SDK module docs for
 /// the full spec (RFC 7515 detached shape, alg=EdDSA, did:key /
 /// did:web / did:webvh resolution).
 pub fn verify_jws_ed25519(
@@ -136,7 +136,7 @@ pub fn verify_jws_ed25519(
     issuer: &str,
     state: &AppState,
 ) -> Result<(), String> {
-    arkret_sdk::jws::verify_jws_ed25519(
+    arkret_identity::jws::verify_jws_ed25519(
         canonical_bytes,
         jws,
         verification_method,
@@ -157,14 +157,14 @@ pub async fn verify_jws_ed25519_async(
     issuer: &str,
     state: &AppState,
 ) -> Result<(), String> {
-    let did = arkret_sdk::identity::verification_method_did(verification_method)
+    let did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
     let document = if is_local_service_notary_method(state, &did, verification_method) {
         DidDocument {
             id: did.clone(),
             verification_methods: BTreeMap::from([(
                 verification_method.to_owned(),
-                arkret_sdk::ed25519_pubkey_to_did_key_multibase(
+                arkret_core::ed25519_pubkey_to_did_key_multibase(
                     state.notary_verifying_key().as_bytes(),
                 ),
             )]),
@@ -178,7 +178,7 @@ pub async fn verify_jws_ed25519_async(
     let resolver = ResolvedDidDocumentResolver {
         document: &document,
     };
-    arkret_sdk::jws::verify_jws_ed25519(
+    arkret_identity::jws::verify_jws_ed25519(
         canonical_bytes,
         jws,
         verification_method,
@@ -220,7 +220,7 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
     principal_id: &str,
     state: &AppState,
 ) -> Result<(), PrincipalAuthorizedJwsError> {
-    let method_did = arkret_sdk::identity::verification_method_did(verification_method)
+    let method_did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()))?;
     if method_did.as_str() != principal_id {
         return Err(PrincipalAuthorizedJwsError::Verification(
@@ -230,7 +230,7 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
 
     let device_prefix = format!("{principal_id}#");
     if let Some(device_id) = verification_method.strip_prefix(&device_prefix)
-        && arkret_sdk::DeviceId::new(device_id.to_owned()).is_ok()
+        && arkret_core::DeviceId::new(device_id.to_owned()).is_ok()
     {
         let facet =
             crate::routing::identity::cross_signing::try_resolve_device_signing_directory_facet(
@@ -244,7 +244,7 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
                     "device signing directory unavailable: {error}"
                 ))
             })?;
-        if !matches!(facet.status, arkret_sdk::DeviceStatus::Active) {
+        if !matches!(facet.status, arkret_core::DeviceStatus::Active) {
             return Err(PrincipalAuthorizedJwsError::Verification(
                 "device signing key is not active and authorized".to_owned(),
             ));
@@ -285,7 +285,7 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
                 // JWS. Only key discovery is deterministic, and the derivation
                 // lives in the SDK so cotest and every server reconstruct the
                 // same fixture identity without accepting a dev-proof type.
-                let key = arkret_sdk::signatures::development_verifying_key(verification_method);
+                let key = arkret_signatures::development_verifying_key(verification_method);
                 let material = PublicKeyMaterial::Ed25519Raw {
                     bytes: key.to_bytes().to_vec(),
                 };
@@ -323,12 +323,12 @@ pub fn is_local_service_notary_method(
 
 /// Resolve a DID URL to its Ed25519 [`VerifyingKey`] via the AppState
 /// resolver chain. Adapter over
-/// [`arkret_sdk::jws::resolve_ed25519_pubkey`].
+/// [`arkret_identity::jws::resolve_ed25519_pubkey`].
 pub fn resolve_ed25519_pubkey(
     state: &AppState,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    arkret_sdk::jws::resolve_ed25519_pubkey(
+    arkret_identity::jws::resolve_ed25519_pubkey(
         &*state.did_resolver as &dyn DidResolver,
         verification_method,
     )
@@ -339,13 +339,13 @@ pub async fn resolve_ed25519_pubkey_async(
     state: &AppState,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    let did = arkret_sdk::identity::verification_method_did(verification_method)
+    let did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
     let document = resolve_did_document_async(state, &did).await?;
     let resolver = ResolvedDidDocumentResolver {
         document: &document,
     };
-    arkret_sdk::jws::resolve_ed25519_pubkey(&resolver, verification_method)
+    arkret_identity::jws::resolve_ed25519_pubkey(&resolver, verification_method)
         .map_err(|error| error.to_string())
 }
 
@@ -367,7 +367,7 @@ pub async fn resolve_ed25519_verification_key_for_did(
         let resolver = ResolvedDidDocumentResolver {
             document: &document,
         };
-        arkret_sdk::jws::resolve_ed25519_pubkey(&resolver, verification_method)
+        arkret_identity::jws::resolve_ed25519_pubkey(&resolver, verification_method)
             .map_err(|error| error.to_string())?
     };
     let key_log_head = did_document_key_log_head(state, did, &document).await?;
@@ -431,11 +431,11 @@ impl DidResolver for ResolvedDidDocumentResolver<'_> {
         &self.document.id == did
     }
 
-    fn resolve_did(&self, did: &Did) -> arkret_sdk::identity::Result<DidDocument> {
+    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<DidDocument> {
         if self.supports(did) {
             return Ok(self.document.clone());
         }
-        Err(arkret_sdk::identity::IdentityError::Protocol(
+        Err(arkret_identity::IdentityError::Protocol(
             "resolved DID document does not match requested DID".to_owned(),
         ))
     }
@@ -606,7 +606,7 @@ async fn did_document_key_log_head(
     }
     let value = serde_json::to_value(document)
         .map_err(|error| format!("DID document serialization failed: {error}"))?;
-    let digest = arkret_sdk::canonical::canonical_sha256(&value)
+    let digest = arkret_core::canonical::canonical_sha256(&value)
         .map_err(|error| format!("DID document canonical digest failed: {error}"))?;
     Hash::new(digest).map_err(|error| format!("DID document digest invalid: {error}"))
 }

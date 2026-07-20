@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::{
+use arkret_core::{
     CrossSigningPublish, KeyFormat, NonEmptyString, PublishedKey, SubordinateSignedKey,
     SubordinateSignedKeyBinding, TypedTrustDomainId,
 };
@@ -85,7 +85,7 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
             "key_packages": [{
                 "keypackage_id": keypackage_id,
                 "keypackage_ref": keypackage_ref,
-                "keypackage_digest": arkret_sdk::canonical::sha256_digest(keypackage_bytes.as_bytes()),
+                "keypackage_digest": arkret_core::canonical::sha256_digest(keypackage_bytes.as_bytes()),
                 "key_package": URL_SAFE_NO_PAD.encode(keypackage_bytes.as_bytes()),
                 "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
                 "capabilities": capabilities,

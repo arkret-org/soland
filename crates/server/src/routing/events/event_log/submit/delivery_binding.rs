@@ -206,7 +206,7 @@ pub(super) async fn delivery_binding_handover_witness(
 
     if let (Ok(realm_id), Ok(cell_ref)) = (
         RealmId::new(evidence.realm_id.clone()),
-        arkret_sdk::CellRef::new(format!(
+        arkret_core::CellRef::new(format!(
             "ak:cell:ak.component.member.state.v1:{}",
             evidence.actor_id.as_str()
         )),

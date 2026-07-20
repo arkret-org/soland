@@ -5,8 +5,10 @@
 //! signed Event fail closed instead of asking Soland to impersonate a
 //! controller or writing a development-only proof shape into durable history.
 
-use arkret_sdk::{
-    AccountabilityGrantPayload, AgentProvisionEvents, AgentSelectorClaim, Event, LatticeOpType,
+use arkret_core::{AgentProvisionEvents, AgentSelectorClaim, Event, LatticeOpType};
+use arkret_models_collaboration::governance::accountability::{
+    AccountabilityGrantPayload, AccountabilityGrantStatus, AccountabilityScope,
+    AccountabilityScopeKind,
 };
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
@@ -227,13 +229,11 @@ pub(super) async fn fanout_provision_subevents(
         || accountability_payload.subject.as_str() != agent_id
         || !matches!(
             &accountability_payload.accountability_scope,
-            arkret_sdk::AccountabilityScope::Single(
-                arkret_sdk::AccountabilityScopeKind::AgentOperator
-            )
+            AccountabilityScope::Single(AccountabilityScopeKind::AgentOperator)
         )
         || !matches!(
             accountability_payload.grant_status,
-            arkret_sdk::AccountabilityGrantStatus::Active
+            AccountabilityGrantStatus::Active
         )
     {
         return Err(AppError::invalid_param(
@@ -299,11 +299,11 @@ pub(super) async fn fanout_provision_subevents(
         || selector_payload.agent_slug != agent_slug
         || !matches!(
             selector_payload.binding_state,
-            arkret_sdk::HandleBindingState::Pending
+            arkret_core::HandleBindingState::Pending
         )
         || !matches!(
             selector_payload.visibility,
-            arkret_sdk::HandleVisibility::Private
+            arkret_core::HandleVisibility::Private
         )
         || selector_payload.issuer_service_id.is_some()
         || selector_payload.proofs.len() != 1
@@ -389,7 +389,7 @@ pub(super) async fn attach_agent_grant_event(
     state: &AppState,
     session: &SessionRecord,
     agent_id: &str,
-    supplied_grant: &arkret_sdk::CapabilityGrant,
+    supplied_grant: &arkret_core::CapabilityGrant,
 ) -> Result<String, AppError> {
     let realm_id = supplied_grant
         .realm_id
@@ -493,7 +493,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
     if event.kind.as_str() != event_kind
         || event.realm_id.as_str() != realm_id
         || event.actor_id.as_str() != agent_id
-        || event.executed_by.as_ref().map(arkret_sdk::Did::as_str) != Some(session.actor.as_str())
+        || event.executed_by.as_ref().map(arkret_core::Did::as_str) != Some(session.actor.as_str())
         || event.authorization_ref.as_deref() != Some(authorization_ref)
     {
         return Err(AppError::capability_denied(
@@ -709,9 +709,9 @@ mod tests {
 
     #[test]
     fn fanout_event_timestamp_uses_canonical_millisecond_profile() {
-        let created_at = arkret_sdk::canonical::format_timestamp_millis_canonical(Utc::now());
+        let created_at = arkret_core::canonical::format_timestamp_millis_canonical(Utc::now());
 
-        arkret_sdk::canonical::validate_timestamp_millis_canonical(&created_at)
+        arkret_core::canonical::validate_timestamp_millis_canonical(&created_at)
             .expect("fan-out Event Envelope timestamp must pass the shared validator");
         assert_eq!(created_at.len(), "2026-07-18T00:00:00.000Z".len());
         assert!(created_at.ends_with('Z'));

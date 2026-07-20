@@ -2,7 +2,7 @@ use super::{AgentPrincipalRecord, PersistenceResult, Value, async_trait};
 /// AKP-0010 — agent participation policy persistence. Controller
 /// selections (`ak.agent.participation.v1`) and the governance ceiling
 /// projection are stored as JSON records mirroring the
-/// `arkret_sdk::AgentParticipation*` wire shape (keys:
+/// `arkret_core::AgentParticipation*` wire shape (keys:
 /// agent_id, scope, scope_kind, scope_key, realm_id, reply,
 /// accept_third_party_mention, act_on_behalf).
 #[async_trait]

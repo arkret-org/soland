@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::{CellRef, Operation};
+use arkret_core::{CellRef, Operation};
 use serde_json::Value;
 
 use super::{DocumentVersionProjection, PushRouteCellValue, PushRouteSubject, StrandProjection};
@@ -110,7 +110,7 @@ pub(crate) fn conflict_heads_from_payload(payload: &Value) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn bottom_head_ids(bottom: &arkret_sdk::Bottom) -> std::collections::BTreeSet<String> {
+pub(crate) fn bottom_head_ids(bottom: &arkret_core::Bottom) -> std::collections::BTreeSet<String> {
     bottom
         .heads
         .iter()
@@ -147,7 +147,7 @@ pub(crate) fn augment_repair_winner_value(
 }
 
 pub(crate) fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
-    arkret_sdk::canonical::format_timestamp_canonical(now)
+    arkret_core::canonical::format_timestamp_canonical(now)
 }
 
 /// SOL-ORG-01 — parse the `realm_id` out of a `ak.component.realm.metadata.v1`
@@ -174,7 +174,7 @@ pub(crate) fn empty_push_route_cell() -> PushRouteCellValue {
 }
 
 pub(crate) fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef> {
-    let cell_subject = arkret_sdk::composite_subject(&[
+    let cell_subject = arkret_core::composite_subject(&[
         subject.recipient_service_id.as_str(),
         subject.principal_id.as_str(),
         subject.device_id.as_str(),
@@ -307,10 +307,10 @@ pub(crate) fn validate_patch_semantic_safety(
 ) -> Result<(), &'static str> {
     for (path, value) in patch {
         if patch_path_targets_reducer_managed(path) {
-            return Err(arkret_sdk::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
+            return Err(arkret_core::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
         }
         if patch_op_removes_value(value) && patch_path_targets_redactable_unset(path) {
-            return Err(arkret_sdk::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD);
+            return Err(arkret_core::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD);
         }
     }
     Ok(())
@@ -638,8 +638,8 @@ pub(crate) fn document_version_from_operation(
         .and_then(Value::as_str)
         .unwrap_or(operation.operation_id.as_str())
         .to_owned();
-    let body_digest = arkret_sdk::canonical::canonical_sha256(&body)
-        .unwrap_or_else(|_| arkret_sdk::canonical::sha256_digest(body.to_string().as_bytes()));
+    let body_digest = arkret_core::canonical::canonical_sha256(&body)
+        .unwrap_or_else(|_| arkret_core::canonical::sha256_digest(body.to_string().as_bytes()));
     DocumentVersionProjection {
         version_id: format!("{morph_id}:version:{event_id}"),
         event_id,

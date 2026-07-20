@@ -27,19 +27,19 @@ impl ProjectionState {
         // `ak.space.restore` requires Archived.
         // `ak.space.tombstone` requires {Active, Archived}.
         let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
-            arkret_sdk::events::EventKind::SPACE_CREATE => return Ok(()),
-            arkret_sdk::events::EventKind::SPACE_UPDATE
-            | arkret_sdk::events::EventKind::SPACE_PARENT => {
+            arkret_core::events::EventKind::SPACE_CREATE => return Ok(()),
+            arkret_core::events::EventKind::SPACE_UPDATE
+            | arkret_core::events::EventKind::SPACE_PARENT => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
-            arkret_sdk::events::EventKind::SPACE_ARCHIVE => {
+            arkret_core::events::EventKind::SPACE_ARCHIVE => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
-            arkret_sdk::events::EventKind::SPACE_RESTORE => (
+            arkret_core::events::EventKind::SPACE_RESTORE => (
                 &[SpaceContainerLifecycleState::Archived],
                 "space_not_archived",
             ),
-            arkret_sdk::events::EventKind::SPACE_TOMBSTONE => (
+            arkret_core::events::EventKind::SPACE_TOMBSTONE => (
                 &[
                     SpaceContainerLifecycleState::Active,
                     SpaceContainerLifecycleState::Archived,
@@ -88,7 +88,7 @@ impl ProjectionState {
         };
         if object.contains_key("default_scope_circle_id") {
             return ProjectionEffect::Rejected {
-                reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         }
         // The Space's own optional scope MUST reference an active Circle in
@@ -109,7 +109,7 @@ impl ProjectionState {
                 };
             }
         };
-        if let Some(arkret_sdk::ChildScopePolicy::RequireScopeCircleId {
+        if let Some(arkret_core::ChildScopePolicy::RequireScopeCircleId {
             scope_circle_id: policy_scope,
         }) = child_scope_policy.as_ref()
             && let Err(reason) =
@@ -227,7 +227,7 @@ impl ProjectionState {
         if let Some(patch) = patch {
             if patch.contains_key("default_scope_circle_id") {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_sdk::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
             }
             let candidate_kind = patch
@@ -539,7 +539,7 @@ impl ProjectionState {
             None => return Ok(()),
         };
         match kind {
-            arkret_sdk::events::EventKind::STRAND_CREATE => {
+            arkret_core::events::EventKind::STRAND_CREATE => {
                 let Some(object) = operation.payload.get("object").and_then(Value::as_object)
                 else {
                     return Ok(());
@@ -566,8 +566,8 @@ impl ProjectionState {
                 }
                 Ok(())
             }
-            arkret_sdk::events::EventKind::STRAND_MOVE
-            | arkret_sdk::events::EventKind::STRAND_REORDER => {
+            arkret_core::events::EventKind::STRAND_MOVE
+            | arkret_core::events::EventKind::STRAND_REORDER => {
                 let Some((_, list_space_id, _)) =
                     strand_position_from_lifecycle_payload(&operation.payload)
                 else {
@@ -591,7 +591,7 @@ impl ProjectionState {
                     false,
                 )
             }
-            arkret_sdk::events::EventKind::SPACE_PARENT => {
+            arkret_core::events::EventKind::SPACE_PARENT => {
                 let Some(container_space_id) = space_container_id_from_payload(&operation.payload)
                 else {
                     return Ok(());
@@ -614,8 +614,8 @@ impl ProjectionState {
                     false,
                 )
             }
-            arkret_sdk::events::EventKind::CONTAINER_MOVE_ITEM
-            | arkret_sdk::events::EventKind::CONTAINER_REBALANCE => {
+            arkret_core::events::EventKind::CONTAINER_MOVE_ITEM
+            | arkret_core::events::EventKind::CONTAINER_REBALANCE => {
                 let Some(container_space_id) = operation
                     .payload
                     .get("to_container_id")
@@ -666,26 +666,26 @@ impl ProjectionState {
             return Ok(());
         };
         match policy {
-            arkret_sdk::ChildScopePolicy::AllowAny {} => Ok(()),
-            arkret_sdk::ChildScopePolicy::RequireSameScope {} => {
+            arkret_core::ChildScopePolicy::AllowAny {} => Ok(()),
+            arkret_core::ChildScopePolicy::RequireSameScope {} => {
                 if parent.scope_circle_id.as_deref() == child_scope_circle_id {
                     Ok(())
                 } else {
-                    Err(arkret_sdk::ErrorCode::POLICY_VIOLATION)
+                    Err(arkret_core::ErrorCode::POLICY_VIOLATION)
                 }
             }
-            arkret_sdk::ChildScopePolicy::RequireScopeCircleId { scope_circle_id } => {
+            arkret_core::ChildScopePolicy::RequireScopeCircleId { scope_circle_id } => {
                 if Some(scope_circle_id.as_str()) == child_scope_circle_id {
                     Ok(())
                 } else {
-                    Err(arkret_sdk::ErrorCode::POLICY_VIOLATION)
+                    Err(arkret_core::ErrorCode::POLICY_VIOLATION)
                 }
             }
-            arkret_sdk::ChildScopePolicy::RequireE2ee {} => {
+            arkret_core::ChildScopePolicy::RequireE2ee {} => {
                 if self.child_scope_is_e2ee(child_scope_circle_id, child_realm_id) {
                     Ok(())
                 } else {
-                    Err(arkret_sdk::ErrorCode::POLICY_VIOLATION)
+                    Err(arkret_core::ErrorCode::POLICY_VIOLATION)
                 }
             }
         }
@@ -732,13 +732,13 @@ impl ProjectionState {
 
 fn child_scope_policy_from_object(
     object: &serde_json::Map<String, Value>,
-) -> Result<Option<arkret_sdk::ChildScopePolicy>, &'static str> {
+) -> Result<Option<arkret_core::ChildScopePolicy>, &'static str> {
     let Some(policy) = object.get("child_scope_policy") else {
         return Ok(None);
     };
     serde_json::from_value(policy.clone())
         .map(Some)
-        .map_err(|_| arkret_sdk::ErrorCode::SCHEMA_VIOLATION)
+        .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
 }
 
 fn validate_space_wip_policy(
@@ -748,7 +748,7 @@ fn validate_space_wip_policy(
     let limit = fields.get("wip_limit");
     let enforcement = fields.get("wip_limit_enforcement");
     if kind != "list" && (limit.is_some() || enforcement.is_some()) {
-        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+        return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
     }
     if let Some(limit) = limit {
         if !limit
@@ -756,7 +756,7 @@ fn validate_space_wip_policy(
             .is_some_and(|limit| (1..=100_000).contains(&limit))
             || enforcement.is_none()
         {
-            return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+            return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
         }
     }
     if let Some(enforcement) = enforcement
@@ -766,7 +766,7 @@ fn validate_space_wip_policy(
                 Some("warn" | "reject" | "require_review")
             ))
     {
-        return Err(arkret_sdk::ErrorCode::SCHEMA_VIOLATION);
+        return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
     }
     Ok(())
 }

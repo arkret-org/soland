@@ -19,7 +19,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_sdk::{
+use arkret_core::{
     DeviceGenerationStatus, DeviceId, Did, EventBatchReceiptScope, Hash, NonEmptyString, PolicyId,
     ProofSummary, RealmId, ReceiptId, RecoveryIdentityModel, RecoveryPolicy,
     RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyRef,

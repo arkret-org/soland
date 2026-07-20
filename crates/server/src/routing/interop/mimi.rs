@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::{
+use arkret_core::{
     Audience, Base64UrlString, Did, EventId, Hash, MimiDelivery, MimiDeliveryStatus, MimiGroupInfo,
     MimiGroupInfoOutcome, MimiIdentifierMatch, MimiIdentifierQueryOutcome,
     MimiIdentifierQueryRequestBody, MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody,

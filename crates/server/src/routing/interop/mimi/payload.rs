@@ -25,34 +25,34 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .map_err(|error| AppError::internal(format!("MIMI actor frontier lookup: {error}")))?
         .unwrap_or(0)
         + 1;
-    let service_did = arkret_sdk::Did::new(state.service_id.clone())
+    let service_did = arkret_core::Did::new(state.service_id.clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
-    let mut event = arkret_sdk::Event::new_with_id_at(
-        arkret_sdk::EventId::new(event_id.to_owned())
+    let mut event = arkret_core::Event::new_with_id_at(
+        arkret_core::EventId::new(event_id.to_owned())
             .map_err(|error| AppError::internal(format!("MIMI event id invalid: {error}")))?,
-        arkret_sdk::events::EventKind::MESSAGE_CREATE,
-        arkret_sdk::RealmId::new(realm_id.to_owned())
+        arkret_core::events::EventKind::MESSAGE_CREATE,
+        arkret_core::RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("MIMI realm id invalid: {error}")))?,
         service_did.clone(),
         actor_seq,
-        arkret_sdk::Hlc::new(state.hlc.now())
+        arkret_core::Hlc::new(state.hlc.now())
             .map_err(|error| AppError::internal(format!("MIMI HLC invalid: {error}")))?,
         payload,
         created_at,
     )
     .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
     let verification_method = format!("{}#notary-key", state.service_id);
-    let signer = arkret_sdk::Ed25519MoveSigner::new(
+    let signer = arkret_signatures::Ed25519MoveSigner::new(
         state.notary_signing_key().as_ref().clone(),
         service_did,
         verification_method.clone(),
     );
     let canonical_created_at = event.created_at;
-    arkret_sdk::signatures::sign_event(
+    arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_sdk::signatures::SignEventOptions::new().with_created_at(canonical_created_at),
+        arkret_signatures::SignEventOptions::new().with_created_at(canonical_created_at),
     )
     .map_err(|error| AppError::internal(format!("MIMI Event signing failed: {error}")))?;
     let now = chrono::Utc::now();
@@ -128,7 +128,7 @@ pub(super) fn decode_optional_mimi_opaque_json(
         return Ok(None);
     };
     let value =
-        arkret_sdk::canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
+        arkret_core::canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
             AppError::invalid_param(format!("{context} is not canonical JSON: {error}"))
                 .with_wire_code("mimi_payload_invalid")
         })?;
@@ -142,7 +142,7 @@ pub(super) fn decode_required_mimi_opaque_json(
 ) -> Result<Value, AppError> {
     let bytes = decode_mimi_opaque_bytes(opaque, digest_field, context, true)?
         .expect("required opaque payload returns bytes");
-    arkret_sdk::canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
+    arkret_core::canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
         AppError::invalid_param(format!("{context} is not canonical JSON: {error}"))
             .with_wire_code("mimi_payload_invalid")
     })
@@ -171,11 +171,11 @@ pub(super) fn decode_mimi_opaque_bytes(
         }
         _ => return Ok(None),
     };
-    let bytes = arkret_sdk::base64url_decode(payload).map_err(|error| {
+    let bytes = arkret_core::base64url_decode(payload).map_err(|error| {
         AppError::invalid_param(format!("{context} payload is not base64url: {error}"))
             .with_wire_code("mimi_payload_invalid")
     })?;
-    let observed = arkret_sdk::canonical::sha256_digest(&bytes);
+    let observed = arkret_core::canonical::sha256_digest(&bytes);
     if observed != digest {
         return Err(
             AppError::invalid_param(format!("{context} digest mismatch"))
@@ -187,15 +187,15 @@ pub(super) fn decode_mimi_opaque_bytes(
 
 pub(super) fn mimi_provider_directory_value(
     state: &AppState,
-) -> arkret_sdk::models::ProviderDirectory {
-    use arkret_sdk::models::{ProviderDirectory, ProviderDirectoryMimi, ProviderDirectoryProof};
+) -> arkret_core::models::ProviderDirectory {
+    use arkret_core::models::{ProviderDirectory, ProviderDirectoryMimi, ProviderDirectoryProof};
 
     let signature =
         sha256_hex(format!("{}:ak.profile.mimi_interop.v1", state.service_id).as_bytes());
     ProviderDirectory {
         schema: Some("ak.schema.mimi_interop.v1".to_owned()),
         service_id: Some(
-            arkret_sdk::Did::new(state.service_id.clone())
+            arkret_core::Did::new(state.service_id.clone())
                 .expect("validated service_id must be a DID"),
         ),
         service_type: "mimi_provider_facade".to_owned(),
@@ -306,7 +306,7 @@ pub(super) fn mimi_receipt(
         "operation_id": operation_id,
         "service_id": state.service_id,
         "provider_id": mimi_provider_id(state),
-        "request_hash": arkret_sdk::canonical::sha256_digest(body.to_string().as_bytes()),
+        "request_hash": arkret_core::canonical::sha256_digest(body.to_string().as_bytes()),
         "accepted_at": now(),
         "drafts": {
             "protocol": "draft-ietf-mimi-protocol-06",
@@ -398,7 +398,7 @@ pub(super) fn map_mimi_message_content(
             "quarantine_id": quarantine_id,
             "unknown_content_kind": kind,
             "reason": "unknown_mimi_content_kind",
-            "raw_payload_hash": arkret_sdk::canonical::sha256_digest(content.to_string().as_bytes()),
+            "raw_payload_hash": arkret_core::canonical::sha256_digest(content.to_string().as_bytes()),
         });
         let content = json!({
             "kind": "ak.content.text",

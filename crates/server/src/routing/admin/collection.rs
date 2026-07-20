@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::{Operation, OperationId, RealmDestroyPayload, RealmId};
+use arkret_core::{Operation, OperationId, RealmDestroyPayload, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -118,7 +118,7 @@ pub(super) async fn admin_collection(
             AppError::capability_denied(format!("admin scope check failed: {error}"))
                 .with_status(http)
         })?;
-    if !grant.has_admin_scope(arkret_sdk::admin_scopes::ADMIN_READ) {
+    if !grant.has_admin_scope(arkret_core::admin_scopes::ADMIN_READ) {
         return Err(AppError::capability_denied(
             "admin collection API requires admin.read scope",
         ));
@@ -284,7 +284,7 @@ pub(super) async fn admin_create_realm(
     let operation = Operation::create(
         op_id,
         realm_scope,
-        arkret_sdk::events::EventKind::REALM_CREATE,
+        arkret_core::events::EventKind::REALM_CREATE,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
@@ -334,7 +334,7 @@ pub(super) async fn admin_delete_realm(
     let operation = Operation::create(
         op_id,
         realm_scope,
-        arkret_sdk::events::EventKind::REALM_DESTROY,
+        arkret_core::events::EventKind::REALM_DESTROY,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
@@ -603,7 +603,7 @@ pub(super) fn admin_invite_item(
         invitee: invite.invitee.clone(),
         invite_delivery_target: invite.invite_delivery_target.clone(),
         introduction_evidence_digest: invite.introduction_evidence_digest.clone(),
-        token_hash: arkret_sdk::canonical::sha256_digest(invite.invite_token.as_bytes()),
+        token_hash: arkret_core::canonical::sha256_digest(invite.invite_token.as_bytes()),
         status: invite.status.clone(),
         uses_allowed: 1,
         uses_completed: if invite.status == "accepted" { 1 } else { 0 },

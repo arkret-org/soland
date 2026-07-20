@@ -1,4 +1,4 @@
-use arkret_sdk::{Did, Operation, RealmId};
+use arkret_core::{Did, Operation, RealmId};
 use serde_json::{Value, json};
 use soland_domain::kinds;
 use soland_storage::{RealmInviteRecord, RealmMetaRecord};
@@ -189,7 +189,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             }
             if record.encryption_profile.is_none()
                 && kinds::canonical_kind_for_operation(operation)
-                    == Some(arkret_sdk::events::EventKind::REALM_CREATE)
+                    == Some(arkret_core::events::EventKind::REALM_CREATE)
                 && let Some(encryption_profile) = operation_realm_encryption_profile(operation)
             {
                 record.encryption_profile = Some(encryption_profile.to_owned());
@@ -247,7 +247,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         .get("membership")
         .and_then(|value| value.as_str());
     if kinds::canonical_kind_for_operation(operation)
-        == Some(arkret_sdk::events::EventKind::REALM_DESTROY)
+        == Some(arkret_core::events::EventKind::REALM_DESTROY)
     {
         let store = state.realm_meta_store();
         if let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()).await {
@@ -513,8 +513,8 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         );
         return;
     };
-    let payload_digest = match arkret_sdk::canonical::canonical_json_bytes(identity_payload) {
-        Ok(bytes) => arkret_sdk::canonical::sha256_digest(bytes),
+    let payload_digest = match arkret_core::canonical::canonical_json_bytes(identity_payload) {
+        Ok(bytes) => arkret_core::canonical::sha256_digest(bytes),
         Err(err) => {
             tracing::warn!(
                 %err,
@@ -577,7 +577,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     let raw_event = json!({
         "event_id": canonical_event_id,
         "operation_id": operation.operation_id.to_string(),
-        "event_kind": arkret_sdk::events::EventKind::MEMBER_IDENTITY_UPDATE,
+        "event_kind": arkret_core::events::EventKind::MEMBER_IDENTITY_UPDATE,
         "realm_id": operation.realm_id.as_str(),
         "created_at": operation.created_at,
         "payload": operation.payload.clone(),

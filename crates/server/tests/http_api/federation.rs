@@ -44,21 +44,21 @@ fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -
 }
 
 fn resign_federation_event(event: Value) -> Value {
-    let mut event: arkret_sdk::Event =
+    let mut event: arkret_core::Event =
         serde_json::from_value(event).expect("federation fixture is a typed Event");
     let verification_method = format!("{}#cotest", event.actor_id);
-    let signer = arkret_sdk::Ed25519MoveSigner::from_did_key_seed(
-        arkret_sdk::signatures::development_signing_key_seed(&verification_method),
+    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+        arkret_signatures::development_signing_key_seed(&verification_method),
         event.actor_id.clone(),
         verification_method.clone(),
     );
     let created_at = event.created_at;
     event.proofs.clear();
-    arkret_sdk::signatures::sign_event(
+    arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_sdk::signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .expect("federation fixture signs with its development verification method");
     serde_json::to_value(event).expect("federation fixture serializes")
@@ -390,7 +390,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
         .insert(SERVICE_ID.to_owned());
     realm_meta.plaintext_visible_service_classes.insert(
         SERVICE_ID.to_owned(),
-        BTreeSet::from([arkret_sdk::PlaintextDataClassKind::MessageContent]),
+        BTreeSet::from([arkret_core::PlaintextDataClassKind::MessageContent]),
     );
     state
         .test_persistence()
@@ -584,7 +584,7 @@ fn peer_submit_body(event: &Value) -> Value {
             "membership_frontier": [event_id],
             "delivery_binding_frontier": [PEER_DELIVERY_FRONTIER],
             "destination_service_type": "principal_server",
-            "reducer_profile_digest": arkret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
+            "reducer_profile_digest": arkret_core::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
         },
         "events": [wire_event],
         "idempotency_key": format!("ak:outbox:event:{event_id}"),
@@ -652,7 +652,7 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
     meta.plaintext_visible_service_classes
         .entry(source_service_id.to_owned())
         .or_default()
-        .insert(arkret_sdk::PlaintextDataClassKind::MessageContent);
+        .insert(arkret_core::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;
     state
         .test_persistence()
@@ -770,7 +770,7 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
             "requester_did": "did:web:alice.example",
             "ssk_generation": 1,
             "nonce": b64(format!("{claim_id}-nonce-128-bit-material").as_bytes()),
-            "welcome_digest": arkret_sdk::canonical::sha256_digest(ciphertext.as_bytes()),
+            "welcome_digest": arkret_core::canonical::sha256_digest(ciphertext.as_bytes()),
             "created_at": "2026-05-25T00:00:02Z",
             "signature": {
                 "kid": "did:web:alice.example#self-signing",
@@ -838,7 +838,7 @@ async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<
     let kind = event["kind"].as_str().unwrap().to_owned();
     let schema_id = "ak.schema.event_envelope.v1".to_owned();
     let canonical_digest = event_canonical_digest(&event);
-    let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&event).unwrap();
+    let canonical_bytes = arkret_core::canonical::canonical_json_bytes(&event).unwrap();
     state
         .test_persistence()
         .events()

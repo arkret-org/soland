@@ -28,7 +28,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 "DataEvent requires seal_ref to resolve the authorization pre-state",
             )
         })?;
-    let seal_id = arkret_sdk::SealId::new(seal_ref.to_owned()).map_err(|_| {
+    let seal_id = arkret_core::SealId::new(seal_ref.to_owned()).map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -121,7 +121,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         if crate::authz::grant_revoked_upstream(&historical_snapshot, grant_id, auth_time) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
-                arkret_sdk::ReasonCode::GRANT_REVOKED_UPSTREAM,
+                arkret_core::ReasonCode::GRANT_REVOKED_UPSTREAM,
                 format!("DataEvent capability_ref {grant_id} was revoked upstream"),
             ));
         }
@@ -186,7 +186,7 @@ pub(super) fn validate_data_event_joined_capability_view(
     realm_id: &str,
     grant_id: &str,
 ) -> Result<(), EventValidationError> {
-    let cell_ref = arkret_sdk::CellRef::new(format!(
+    let cell_ref = arkret_core::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
     .map_err(|_| {
@@ -211,7 +211,7 @@ pub(super) fn validate_data_event_joined_capability_view(
         )
     })?;
     if !leaves.is_empty() {
-        let joined_state = arkret_sdk::state::effective_state_at(
+        let joined_state = arkret_state::state::effective_state_at(
             &leaves,
             &realm,
             state.seal_store.as_ref(),
@@ -226,7 +226,7 @@ pub(super) fn validate_data_event_joined_capability_view(
             )
         })?;
         match joined_state.get(&cell_ref) {
-            Some(arkret_sdk::lattice::CellState::Bottom(_)) => {
+            Some(arkret_state::lattice::CellState::Bottom(_)) => {
                 return Err(event_validation_error(
                     StatusCode::PRECONDITION_FAILED,
                     "failed_bottom",
@@ -284,19 +284,20 @@ pub(super) fn validate_data_event_joined_capability_view(
 pub(super) fn data_event_state_at_seal_ref(
     state: &AppState,
     realm: &RealmId,
-    seal_id: &arkret_sdk::SealId,
+    seal_id: &arkret_core::SealId,
 ) -> Result<
-    std::collections::BTreeMap<arkret_sdk::CellRef, arkret_sdk::lattice::CellState>,
+    std::collections::BTreeMap<arkret_core::CellRef, arkret_state::lattice::CellState>,
     EventValidationError,
 > {
-    let seal =
-        arkret_sdk::state::SealStore::get(state.seal_store.as_ref(), seal_id).map_err(|error| {
+    let seal = arkret_state::state::SealStore::get(state.seal_store.as_ref(), seal_id).map_err(
+        |error| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
                 format!("DataEvent seal_ref lookup failed: {error}"),
             )
-        })?;
+        },
+    )?;
     let Some(seal) = seal else {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -312,7 +313,7 @@ pub(super) fn data_event_state_at_seal_ref(
         ));
     }
 
-    let state_at_ref = arkret_sdk::state::effective_state_at(
+    let state_at_ref = arkret_state::state::effective_state_at(
         std::slice::from_ref(seal_id),
         realm,
         state.seal_store.as_ref(),
@@ -331,7 +332,10 @@ pub(super) fn data_event_state_at_seal_ref(
 }
 
 pub(super) fn data_event_grants_from_state_at_ref(
-    state_at_ref: &std::collections::BTreeMap<arkret_sdk::CellRef, arkret_sdk::lattice::CellState>,
+    state_at_ref: &std::collections::BTreeMap<
+        arkret_core::CellRef,
+        arkret_state::lattice::CellState,
+    >,
 ) -> std::collections::BTreeMap<String, crate::authz::Grant> {
     let mut grants = std::collections::BTreeMap::new();
     const CAPABILITY_GRANT_CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
@@ -353,9 +357,12 @@ pub(super) fn data_event_grants_from_state_at_ref(
 
 pub(super) fn validate_data_event_covered_seals(
     realm: &RealmId,
-    seal_id: &arkret_sdk::SealId,
+    seal_id: &arkret_core::SealId,
     object: &serde_json::Map<String, Value>,
-    state_at_ref: &std::collections::BTreeMap<arkret_sdk::CellRef, arkret_sdk::lattice::CellState>,
+    state_at_ref: &std::collections::BTreeMap<
+        arkret_core::CellRef,
+        arkret_state::lattice::CellState,
+    >,
 ) -> Result<(), EventValidationError> {
     if !data_event_payload_is_mls_e2ee(object) {
         return Ok(());
@@ -364,14 +371,14 @@ pub(super) fn validate_data_event_covered_seals(
         return Ok(());
     }
 
-    let covered_cell = arkret_sdk::mls_move::covered_seals_cell_id(realm).map_err(|error| {
+    let covered_cell = arkret_state::mls_move::covered_seals_cell_id(realm).map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
             format!("DataEvent covered_seals cell id failed: {error}"),
         )
     })?;
-    let Some(arkret_sdk::lattice::CellState::Value(cell_value)) = state_at_ref.get(&covered_cell)
+    let Some(arkret_state::lattice::CellState::Value(cell_value)) = state_at_ref.get(&covered_cell)
     else {
         return Err(data_event_covered_seals_failed_precondition(
             "covered_seals_cell is missing at seal_ref",
@@ -380,7 +387,7 @@ pub(super) fn validate_data_event_covered_seals(
     let required_governance_seals = std::slice::from_ref(seal_id);
     if required_governance_seals
         .iter()
-        .all(|required| arkret_sdk::mls_move::covered_seals_contains(cell_value, required))
+        .all(|required| arkret_state::mls_move::covered_seals_contains(cell_value, required))
     {
         return Ok(());
     }
@@ -393,13 +400,13 @@ pub(super) fn validate_data_event_covered_seals(
 pub(super) fn data_event_covered_seals_failed_precondition(
     message: impl Into<String>,
 ) -> EventValidationError {
-    let code = arkret_sdk::ErrorCode::FailedPrecondition;
+    let code = arkret_core::ErrorCode::FailedPrecondition;
     event_validation_error(
         error_http_status(code),
         code.as_str(),
         format!(
             "{}: {}",
-            arkret_sdk::ReasonCode::MLS_GOVERNANCE_BINDING_STALE,
+            arkret_core::ReasonCode::MLS_GOVERNANCE_BINDING_STALE,
             message.into()
         ),
     )
@@ -424,15 +431,18 @@ pub(super) fn encrypted_content_is_mls(value: Option<&Value>) -> bool {
 
 pub(super) fn seal_view_declares_relaxed_e2ee(
     realm: &RealmId,
-    state_at_ref: &std::collections::BTreeMap<arkret_sdk::CellRef, arkret_sdk::lattice::CellState>,
+    state_at_ref: &std::collections::BTreeMap<
+        arkret_core::CellRef,
+        arkret_state::lattice::CellState,
+    >,
 ) -> bool {
-    let Ok(policy_cell) = arkret_sdk::CellRef::new(format!(
+    let Ok(policy_cell) = arkret_core::CellRef::new(format!(
         "ak:cell:ak.component.realm.policy_components.v1:{}",
         realm.as_str()
     )) else {
         return false;
     };
-    let Some(arkret_sdk::lattice::CellState::Value(policy_components)) =
+    let Some(arkret_state::lattice::CellState::Value(policy_components)) =
         state_at_ref.get(&policy_cell)
     else {
         return false;
