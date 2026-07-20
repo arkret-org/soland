@@ -338,6 +338,51 @@ pub(super) fn find_sidecar_circle(
         .and_then(|circle| CircleId::new(circle.circle_id.clone()).ok())
 }
 
+fn sidecar_circle_encryption_is_compliant(
+    circle: &soland_domain::reducer::CircleProjection,
+) -> bool {
+    circle.encryption_profile == "mls_rfc9420"
+        && circle.content_encryption_floor.as_deref() == Some("e2ee_required")
+        && circle.metadata_encryption_floor.as_deref() == Some("e2ee_required")
+}
+
+/// Repair the one legacy Sidecar shape created before the reserved aggregate
+/// fixed its encryption fields. This is deliberately limited to the canonical
+/// `(realm, controller, profile, short_name)` singleton: it does not provide a
+/// general bypass for Circle create-locked encryption fields and it preserves
+/// the Circle id/membership instead of creating a second private aggregate.
+fn migrate_legacy_sidecar_circle_encryption(
+    state: &AppState,
+    realm_id: &str,
+    controller: &str,
+    short_name: &str,
+) {
+    let mut projection = state.projection.lock();
+    let Some(circle) = projection.circles.values_mut().find(|circle| {
+        circle.realm_id == realm_id
+            && circle.profile_ref.as_deref() == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+            && circle.created_by == controller
+            && circle.title == short_name
+            && circle.directory_visibility == "members"
+            && circle.state == soland_domain::reducer::CircleLifecycleState::Active
+    }) else {
+        return;
+    };
+    if sidecar_circle_encryption_is_compliant(circle) {
+        return;
+    }
+    tracing::warn!(
+        circle_id = %circle.circle_id,
+        %realm_id,
+        %controller,
+        previous_encryption_profile = %circle.encryption_profile,
+        "migrating legacy Sidecar Circle to the mandatory MLS encryption profile"
+    );
+    circle.encryption_profile = "mls_rfc9420".to_owned();
+    circle.content_encryption_floor = Some("e2ee_required".to_owned());
+    circle.metadata_encryption_floor = Some("e2ee_required".to_owned());
+}
+
 pub(super) fn new_sidecar_operation(
     realm_id: &RealmId,
     kind: &'static str,
@@ -359,7 +404,21 @@ pub(super) async fn ensure_sidecar_circle(
     realm_id: &RealmId,
     short_name: &str,
 ) -> Result<CircleId, AppError> {
+    migrate_legacy_sidecar_circle_encryption(state, realm_id.as_str(), controller, short_name);
     if let Some(circle_id) = find_sidecar_circle(state, realm_id.as_str(), controller, short_name) {
+        let compliant = {
+            let projection = state.projection.lock();
+            projection
+                .circles
+                .get(circle_id.as_str())
+                .is_some_and(sidecar_circle_encryption_is_compliant)
+        };
+        if !compliant {
+            return Err(sidecar_failed_precondition(
+                "sidecar_encryption_profile_invalid",
+                "Sidecar Circle does not satisfy the mandatory MLS encryption profile",
+            ));
+        }
         return Ok(circle_id);
     }
     let circle_id = CircleId::new(ids::generate_circle_id())
