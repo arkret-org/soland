@@ -10,11 +10,15 @@ fn bootstrap_error(
     error: arkret_sdk::realm::bootstrap::RealmBootstrapValidationError,
 ) -> SubmitOneError {
     let reason = error.reason_code();
-    SubmitOneError::new(
-        StatusCode::PRECONDITION_FAILED,
-        "failed_precondition",
-        reason,
-    )
+    if matches!(reason, "effects_payload_mismatch" | "plane_cross_write") {
+        SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", reason)
+    } else {
+        SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            reason,
+        )
+    }
 }
 
 /// Admit an ordinary Realm genesis as the single protocol transaction defined
@@ -137,40 +141,61 @@ pub(super) async fn submit_realm_bootstrap_batch(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    for operation in &operations {
-        validate_operation_semantics(state, std::slice::from_ref(operation)).map_err(
-            |message| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", message),
-        )?;
-    }
+    validate_operation_semantics(state, &operations).map_err(|message| {
+        SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", message)
+    })?;
     // Run the reducer against a clone in wire order. This is the genesis
     // authority boundary: create establishes the staged Realm, then only the
     // exact founding grant and closed facets can be applied.
-    {
+    let (staged_projection, founding_grant_effect) = {
         let mut staged = state.projection.lock().clone();
+        let mut founding_grant_effect = None;
         for (index, operation) in operations.iter().enumerate() {
             let effect = if index == 1
                 && operation.object_type.as_str() == arkret_sdk::events::EventKind::CAPABILITY_GRANT
             {
                 staged.apply_validated_realm_founding_grant(operation, operation.created_at)
+            } else if operation.object_type.as_str().starts_with("ak.realm.")
+                && operation.object_type.as_str() != arkret_sdk::events::EventKind::REALM_CREATE
+            {
+                staged.apply_validated_realm_bootstrap_facet(operation)
             } else {
                 staged.apply(operation, &state.hlc)
             };
-            if let soland_domain::reducer::ProjectionEffect::Rejected { reason } = effect {
-                let code = if operation.object_type.as_str()
-                    == arkret_sdk::events::EventKind::CAPABILITY_GRANT
-                {
-                    "invalid_realm_founding_grant"
-                } else {
-                    "out_of_order_bootstrap"
-                };
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    "failed_precondition",
-                    format!("{code}: {reason}"),
-                ));
+            match effect {
+                soland_domain::reducer::ProjectionEffect::Rejected { reason } => {
+                    let code = if operation.object_type.as_str()
+                        == arkret_sdk::events::EventKind::CAPABILITY_GRANT
+                    {
+                        "invalid_realm_founding_grant"
+                    } else {
+                        "out_of_order_bootstrap"
+                    };
+                    return Err(SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "failed_precondition",
+                        format!("{code}: {reason}"),
+                    ));
+                }
+                soland_domain::reducer::ProjectionEffect::Ignored => {
+                    return Err(SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "failed_precondition",
+                        format!(
+                            "out_of_order_bootstrap: reducer ignored registered event kind {}",
+                            operation.object_type
+                        ),
+                    ));
+                }
+                accepted => {
+                    if index == 1 {
+                        founding_grant_effect = Some(accepted);
+                    }
+                }
             }
         }
-    }
+        (staged, founding_grant_effect)
+    };
 
     let received_at = now();
     let records = validated
@@ -180,7 +205,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .collect::<Vec<_>>();
     state
         .events_store()
-        .put_identity_anchor_batch_atomic(records, None, None, None, None)
+        .put_realm_bootstrap_batch_atomic(records)
         .await
         .map_err(|error| {
             if persistence_error_is_realm_already_exists(&error) {
@@ -204,39 +229,25 @@ pub(super) async fn submit_realm_bootstrap_batch(
             }
         })?;
 
-    for ((parsed, envelope), operation) in validated
-        .iter()
-        .zip(envelopes.iter())
-        .zip(operations.iter())
-    {
-        if operation.object_type.as_str() == arkret_sdk::events::EventKind::CAPABILITY_GRANT {
-            let effect = crate::routing::events::projection::project_validated_realm_founding_grant(
-                state, operation,
-            );
-            debug_assert!(!matches!(
-                effect,
-                soland_domain::reducer::ProjectionEffect::Rejected { .. }
-            ));
-        } else {
-            crate::routing::events::projection::project_accepted_operations_from_device(
-                state,
-                &parsed.actor_id,
-                &parsed.device_id,
-                std::slice::from_ref(operation),
-            )
-            .await;
-        }
+    *state.projection.lock() = staged_projection;
+    if let Some(effect) = founding_grant_effect.as_ref() {
+        crate::routing::events::projection::refresh_authz_index_from_capability_effect(
+            state, effect,
+        );
+    }
+    for operation in &operations {
+        crate::routing::events::projection::ensure_projected_realm(
+            state,
+            &unit.actor_id,
+            operation,
+        )
+        .await;
+    }
+    for (parsed, envelope) in validated.iter().zip(envelopes.iter()) {
         if !session.token_hash.starts_with("federation:") {
             enqueue_peer_event_fanout(state, parsed, envelope).await;
         }
     }
-    bootstrap_realm_member_index(
-        state,
-        &unit.realm_id,
-        &unit.actor_id,
-        envelopes[0].as_object().expect("validated Realm create"),
-    )
-    .await;
     organizations::record_realm_organizations_from_event(state, &unit.realm_id, &envelopes[0])
         .await;
     for parsed in &validated {

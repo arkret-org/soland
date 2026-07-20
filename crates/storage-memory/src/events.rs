@@ -104,6 +104,17 @@ impl EventStore for MemoryEventStore {
         Ok(())
     }
 
+    async fn put_realm_bootstrap_batch_atomic(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+    ) -> PersistenceResult<()> {
+        let mut data = self.data.lock();
+        let mut staged = data.clone();
+        stage_identity_anchor_events(&mut staged, records)?;
+        *data = staged;
+        Ok(())
+    }
+
     async fn put_identity_anchor_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
@@ -264,5 +275,57 @@ impl EventStore for MemoryEventStore {
                 .then_with(|| b.event_id.cmp(&a.event_id))
         });
         Ok(events)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+
+    fn record(event_id: &str, canonical_bytes: &[u8]) -> CanonicalEventRecord {
+        CanonicalEventRecord {
+            event_id: event_id.to_owned(),
+            actor_id: "did:web:founder.example".to_owned(),
+            actor_seq: 1,
+            realm_id: Some("ak:realm:019f9000-0000-7000-8000-000000000001".to_owned()),
+            kind: "ak.realm.join_rule".to_owned(),
+            schema_id: "arkret://events/realm/join-rule/v1".to_owned(),
+            canonical_digest: format!("sha256:{}", "0".repeat(64)),
+            canonical_bytes: canonical_bytes.to_vec(),
+            envelope: serde_json::json!({"event_id": event_id}),
+            received_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn realm_bootstrap_batch_rolls_back_every_prior_insert_on_late_conflict() {
+        let store = MemoryEventStore::with_devices(Arc::new(Mutex::new(BTreeMap::new())));
+        let conflict_id = "ak:event:019f9000-0000-7000-8000-000000000002";
+        store.put(record(conflict_id, b"existing")).await.unwrap();
+
+        let first_id = "ak:event:019f9000-0000-7000-8000-000000000001";
+        let error = store
+            .put_realm_bootstrap_batch_atomic(vec![
+                record(first_id, b"first"),
+                record(conflict_id, b"different"),
+            ])
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            PersistenceError::Conflict(reason) if reason == "duplicate_conflict"
+        ));
+        assert!(!store.contains(first_id).await.unwrap());
+        assert_eq!(
+            store
+                .get(conflict_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .canonical_bytes,
+            b"existing"
+        );
     }
 }

@@ -1261,15 +1261,12 @@ impl AppState {
         .await?;
         {
             let mut proj = self.projection.lock();
-            proj.realm_states.extend(proj_updates.realm_states);
-            proj.space_containers.extend(proj_updates.space_containers);
-            proj.strands.extend(proj_updates.strands);
-            proj.morphs.extend(proj_updates.morphs);
-            proj.mls_key_packages.extend(proj_updates.mls_key_packages);
-            proj.mls_commit_epochs
-                .extend(proj_updates.mls_commit_epochs);
-            proj.key_backup_active_series
-                .extend(proj_updates.key_backup_active_series);
+            // Hydration built one internally consistent snapshot from the
+            // canonical Event log and durable mirrors.  Install it as a
+            // whole: a hand-maintained field copy silently omitted cells,
+            // members and capability state, making a successful Realm
+            // bootstrap disappear after restart.
+            *proj = proj_updates;
             proj.replay_resolved_pending(&self.hlc);
         }
 

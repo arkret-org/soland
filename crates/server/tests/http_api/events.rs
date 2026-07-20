@@ -748,6 +748,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
                     "ak.capability.grant",
                     "ak.capability.revoke"
                 ],
+                "capability_action_registry_digest": arkret_sdk::current_capability_action_registry_digest().unwrap(),
                 "resources": [{
                     "kind": "realm",
                     "realm_id": realm_id,
@@ -759,9 +760,118 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         }),
     );
 
+    let facet = |event_id: &str,
+                 actor_seq: u64,
+                 previous_event_id: &str,
+                 kind: &str,
+                 family: &str,
+                 value: Value| {
+        let cell = format!("ak:cell:{family}:{realm_id}");
+        let mut event = signed_canonical_event(
+            event_id,
+            kind,
+            &actor,
+            "01904100-0000-7000-8000-a11ce0000001",
+            &realm_id,
+            actor_seq,
+            vec![previous_event_id],
+            serde_json::json!({"value": value.clone()}),
+        );
+        event["preconditions"] = serde_json::json!([{
+            "cell": cell,
+            "predicate": {"op": "head_eq", "value": null}
+        }]);
+        event["effects"] = serde_json::json!([{
+            "cell": cell,
+            "op": {"kind": "set", "value": value}
+        }]);
+        resign_canonical_event(&mut event);
+        event
+    };
+    let join_rule = facet(
+        "ak:event:01904100-0000-7000-8000-c7ea7e000003",
+        3,
+        founding["event_id"].as_str().unwrap(),
+        arkret_sdk::events::EventKind::REALM_JOIN_RULE,
+        "ak.component.realm.join_rule.v1",
+        serde_json::json!("invite"),
+    );
+    let history_visibility = facet(
+        "ak:event:01904100-0000-7000-8000-c7ea7e000004",
+        4,
+        join_rule["event_id"].as_str().unwrap(),
+        arkret_sdk::events::EventKind::REALM_HISTORY_VISIBILITY,
+        "ak.component.realm.history_visibility.v1",
+        serde_json::json!("shared"),
+    );
+    let discovery = facet(
+        "ak:event:01904100-0000-7000-8000-c7ea7e000005",
+        5,
+        history_visibility["event_id"].as_str().unwrap(),
+        arkret_sdk::events::EventKind::REALM_DISCOVERY,
+        "ak.component.realm.discovery.v1",
+        serde_json::json!("listed"),
+    );
+
+    // A late bootstrap facet whose signed effect disagrees with its payload
+    // must reject the whole unit. A subsequent byte-identical retry of the
+    // correct unit proves neither canonical history nor reducer state leaked.
+    let mut mismatched_discovery = discovery.clone();
+    mismatched_discovery["effects"][0]["op"]["value"] = serde_json::json!("secret");
+    resign_canonical_event(&mut mismatched_discovery);
+    let mut mismatch_response = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "events": [
+                event.clone(),
+                founding.clone(),
+                join_rule.clone(),
+                history_visibility.clone(),
+                mismatched_discovery
+            ]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(mismatch_response.status_code, Some(StatusCode::BAD_REQUEST));
+    let mismatch_body: Value = mismatch_response.take_json().await.unwrap();
+    assert_eq!(mismatch_body["error"]["code"], "schema_violation");
+    assert!(
+        mismatch_body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("effects_payload_mismatch")),
+        "mismatch response must preserve the normative reason: {mismatch_body}"
+    );
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .iter()
+            .all(|record| record.realm_id.as_deref() != Some(realm_id.as_str())),
+        "rejected bootstrap must leave no canonical Event"
+    );
+    assert!(
+        state
+            .test_projection()
+            .lock()
+            .member(&realm_id, &actor)
+            .is_none(),
+        "rejected bootstrap must leave no creator membership projection"
+    );
+
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"events": [event.clone(), founding.clone()]}))
+        .json(&serde_json::json!({
+            "events": [
+                event.clone(),
+                founding.clone(),
+                join_rule.clone(),
+                history_visibility.clone(),
+                discovery.clone()
+            ]
+        }))
         .send(&app_from_state(state.clone()))
         .await;
     let status = response.status_code.expect("submit status");
@@ -774,12 +884,40 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     assert_eq!(body["status"], "accepted");
     assert_eq!(body["accepted"][0], event["event_id"]);
     assert_eq!(body["accepted"][1], founding["event_id"]);
+    assert_eq!(body["accepted"][4], discovery["event_id"]);
     assert!(
         state
             .test_projection()
             .lock()
             .member(&realm_id, &actor)
             .is_some_and(|member| member.state == "join")
+    );
+    let projection = state.test_projection().lock();
+    assert!(
+        projection.effective_engine_grant(&grant_id).is_some(),
+        "accepted bootstrap must make its founding grant effective before success"
+    );
+    for (family, expected) in [
+        (
+            "ak.component.realm.join_rule.v1",
+            serde_json::json!("invite"),
+        ),
+        (
+            "ak.component.realm.history_visibility.v1",
+            serde_json::json!("shared"),
+        ),
+        (
+            "ak.component.realm.discovery.v1",
+            serde_json::json!("listed"),
+        ),
+    ] {
+        let cell = arkret_sdk::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
+        assert_eq!(projection.cell_value(&cell), Some(&expected));
+    }
+    drop(projection);
+    assert!(
+        state.test_authz().get_grant(&grant_id).is_some(),
+        "accepted bootstrap must refresh the authorization cache before success"
     );
 
     let sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
@@ -813,6 +951,73 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         resolve_body["join_candidates"].as_array().map(Vec::len),
         Some(1),
         "authorized resolution must materialize a join candidate Seal: {resolve_body}"
+    );
+    assert_eq!(
+        resolve_body["realm_preview"]["title"], "Bootstrap effects realm",
+        "Directory/sidebar projection must expose the title, not the Realm id: {resolve_body}"
+    );
+
+    let restarted = AppState::new_with_persistence(
+        test_config(),
+        Db { pool: None },
+        state.test_persistence().clone(),
+    );
+    restarted.hydrate().await.expect("restart hydration");
+    let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
+    assert_eq!(
+        restarted
+            .test_realms()
+            .lock()
+            .get(&typed_realm_id)
+            .map(|entry| entry.title.as_str()),
+        Some("Bootstrap effects realm"),
+        "restart must rebuild the directory title from canonical create"
+    );
+    assert!(
+        restarted
+            .test_projection()
+            .lock()
+            .member(&realm_id, &actor)
+            .is_some_and(|member| member.state == "join"),
+        "restart must rebuild creator membership from canonical create"
+    );
+    let restarted_projection = restarted.test_projection().lock();
+    let grant_cell = arkret_sdk::CellRef::new(format!(
+        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
+    ))
+    .unwrap();
+    let projected_grant_cell = restarted_projection.cell_value(&grant_cell).cloned();
+    assert!(
+        restarted_projection
+            .effective_engine_grant(&grant_id)
+            .is_some(),
+        "restart must rebuild the founding capability grant; cell={projected_grant_cell:?}"
+    );
+    for (family, expected) in [
+        (
+            "ak.component.realm.join_rule.v1",
+            serde_json::json!("invite"),
+        ),
+        (
+            "ak.component.realm.history_visibility.v1",
+            serde_json::json!("shared"),
+        ),
+        (
+            "ak.component.realm.discovery.v1",
+            serde_json::json!("listed"),
+        ),
+    ] {
+        let cell = arkret_sdk::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
+        assert_eq!(
+            restarted_projection.cell_value(&cell),
+            Some(&expected),
+            "restart must rebuild bootstrap cell {family}"
+        );
+    }
+    drop(restarted_projection);
+    assert!(
+        restarted.test_authz().get_grant(&grant_id).is_some(),
+        "restart must refresh the authorization cache from the founding grant"
     );
 
     let proof_request = serde_json::json!({

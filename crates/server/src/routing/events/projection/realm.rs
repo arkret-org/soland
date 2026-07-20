@@ -21,7 +21,25 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
     let directory_public = {
         let mut realms = state.realms.lock();
         if let Some(existing) = realms.get(&realm_id) {
-            let public = existing.public;
+            let mut public = existing.public;
+            if let Some(entry) = realms.get_mut(&realm_id) {
+                if let Some(title) = operation_realm_title(operation) {
+                    entry.title = title.to_owned();
+                }
+                if let Some(summary) = operation_realm_summary(operation) {
+                    entry.description = Some(summary.to_owned());
+                }
+                if let Some(realm_class) = operation_realm_class(operation) {
+                    entry.realm_class = Some(realm_class.to_owned());
+                }
+                if let Some(join_rule) = operation_realm_default_join_rule(operation) {
+                    entry.default_join_rule = Some(join_rule.to_owned());
+                }
+                if let Some(discoverability) = explicit_discoverability {
+                    entry.public = discoverability == "public";
+                    public = entry.public;
+                }
+            }
             // Admin rename: a realm patch may carry a new alias. Re-normalize it
             // under the deployment domain and update if the canonical alias is
             // free (first-writer-wins, disjoint from the handle namespace).

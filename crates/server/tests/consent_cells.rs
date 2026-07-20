@@ -399,6 +399,7 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
                     "ak.capability.grant",
                     "ak.capability.revoke"
                 ],
+                "capability_action_registry_digest": arkret_sdk::current_capability_action_registry_digest().unwrap(),
                 "resources": [{
                     "kind": "realm",
                     "realm_id": realm_id,

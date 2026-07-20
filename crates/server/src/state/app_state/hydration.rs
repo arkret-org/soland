@@ -108,6 +108,179 @@ fn replay_projection_event(
     Ok(())
 }
 
+fn canonical_event_has_genesis_authority_exemption(
+    record: &soland_storage::CanonicalEventRecord,
+) -> bool {
+    record.envelope.get("seal_ref").is_none()
+        && record.envelope.get("seal_basis").is_none()
+        && record.envelope.get("auth_context").is_none()
+}
+
+fn canonical_prev_refers_to(record: &soland_storage::CanonicalEventRecord, event_id: &str) -> bool {
+    record
+        .envelope
+        .get("prev_refs")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|refs| refs.iter().any(|value| value.as_str() == Some(event_id)))
+}
+
+/// Rebuild ordinary Realm genesis from the canonical Event source of truth.
+///
+/// A bootstrap transaction is delimited by the normative authority rule, not
+/// by timestamps: its founding/facet Events are the consecutive same-actor
+/// chain entries that use the genesis no-Seal exception.  The first later
+/// Control Move must carry a Seal basis and therefore cannot be mistaken for
+/// part of genesis.  The resulting unit is passed back through the shared SDK
+/// validator before the same staged reducers used by live admission run.
+async fn hydrate_canonical_realm_bootstraps(
+    persistence: &dyn soland_storage::PersistenceStore,
+    proj: &mut ProjectionState,
+    authz: &SolandAuthzEngine,
+    hydration_hlc: &soland_domain::hlc::ServerHlc,
+) -> soland_storage::PersistenceResult<()> {
+    use soland_domain::reducer::ProjectionEffect;
+
+    let mut records = persistence.events().snapshot_all().await?;
+    records.sort_by(|left, right| {
+        left.actor_id
+            .cmp(&right.actor_id)
+            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+
+    for (create_index, create) in records
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| record.kind == arkret_sdk::events::EventKind::REALM_CREATE)
+    {
+        let mut unit = vec![create];
+        let mut previous_event_id = create.event_id.as_str();
+        let mut expected_seq = create.actor_seq.saturating_add(1);
+        for candidate in records.iter().skip(create_index + 1) {
+            if candidate.actor_id != create.actor_id {
+                break;
+            }
+            if candidate.actor_seq < expected_seq {
+                continue;
+            }
+            if candidate.actor_seq != expected_seq
+                || candidate.realm_id != create.realm_id
+                || !canonical_prev_refers_to(candidate, previous_event_id)
+                || !canonical_event_has_genesis_authority_exemption(candidate)
+            {
+                break;
+            }
+            let expected_kind = if unit.len() == 1 {
+                candidate.kind == arkret_sdk::events::EventKind::CAPABILITY_GRANT
+            } else {
+                arkret_sdk::realm::bootstrap::is_realm_bootstrap_followup_kind(&candidate.kind)
+            };
+            if !expected_kind {
+                break;
+            }
+            unit.push(candidate);
+            previous_event_id = candidate.event_id.as_str();
+            expected_seq = expected_seq.saturating_add(1);
+        }
+
+        // Principal-control genesis is a distinct [create, device.authorize]
+        // unit.  It still needs the create reducer for owner/member recovery,
+        // but must never be interpreted as an ordinary Realm bootstrap.
+        if unit.len() == 1 {
+            let Some(operation) =
+                crate::routing::events::event_log::projection_operation_from_canonical_record(
+                    create,
+                )
+            else {
+                return Err(soland_storage::PersistenceError::Internal(format!(
+                    "Realm create {} cannot rebuild its projection operation",
+                    create.event_id
+                )));
+            };
+            match proj.apply(&operation, hydration_hlc) {
+                ProjectionEffect::Rejected { reason } => {
+                    return Err(soland_storage::PersistenceError::Internal(format!(
+                        "Realm create {} failed deterministic hydration: {reason}",
+                        create.event_id
+                    )));
+                }
+                ProjectionEffect::Ignored => {
+                    return Err(soland_storage::PersistenceError::Internal(format!(
+                        "Realm create {} was ignored during deterministic hydration",
+                        create.event_id
+                    )));
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        let typed_events = unit
+            .iter()
+            .map(|record| serde_json::from_value::<arkret_sdk::Event>(record.envelope.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "canonical Realm bootstrap failed SDK Event decode: {error}"
+                ))
+            })?;
+        arkret_sdk::realm::bootstrap::validate_realm_bootstrap_unit(&typed_events).map_err(
+            |error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "canonical Realm bootstrap failed deterministic validation: {error}"
+                ))
+            },
+        )?;
+
+        let mut staged = proj.clone();
+        let mut founding_grant_id = None;
+        for (index, record) in unit.iter().enumerate() {
+            let Some(operation) =
+                crate::routing::events::event_log::projection_operation_from_canonical_record(
+                    record,
+                )
+            else {
+                return Err(soland_storage::PersistenceError::Internal(format!(
+                    "Realm bootstrap Event {} cannot rebuild its projection operation",
+                    record.event_id
+                )));
+            };
+            let effect = if index == 1 {
+                staged.apply_validated_realm_founding_grant(&operation, operation.created_at)
+            } else if index > 1 && operation.object_type.as_str().starts_with("ak.realm.") {
+                staged.apply_validated_realm_bootstrap_facet(&operation)
+            } else {
+                staged.apply(&operation, hydration_hlc)
+            };
+            match effect {
+                ProjectionEffect::Rejected { reason } => {
+                    return Err(soland_storage::PersistenceError::Internal(format!(
+                        "Realm bootstrap Event {} failed deterministic hydration: {reason}",
+                        record.event_id
+                    )));
+                }
+                ProjectionEffect::Ignored => {
+                    return Err(soland_storage::PersistenceError::Internal(format!(
+                        "Realm bootstrap Event {} was ignored during deterministic hydration",
+                        record.event_id
+                    )));
+                }
+                ProjectionEffect::CapabilityGrantProjected { grant_id, .. } if index == 1 => {
+                    founding_grant_id = Some(grant_id);
+                }
+                _ => {}
+            }
+        }
+        *proj = staged;
+        if let Some(grant_id) = founding_grant_id
+            && let Some(grant) = proj.effective_engine_grant(&grant_id)
+        {
+            authz.upsert_projected_grant(grant);
+        }
+    }
+    Ok(())
+}
+
 /// Read event-backed and mirror-table projections from durable persistence
 /// into the supplied `ProjectionState`. Called at
 /// `AppState::new` so restart picks up the lifecycle state the
@@ -126,6 +299,8 @@ pub(super) async fn hydrate_projections_from_persistence(
     };
 
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
+
+    hydrate_canonical_realm_bootstraps(persistence, proj, authz, &hydration_hlc).await?;
 
     // Agent key authorization is consulted by sidecar eligibility, while
     // `ak.key_backup.active_series` is the canonical selector for every
@@ -170,25 +345,36 @@ pub(super) async fn hydrate_projections_from_persistence(
     // `grant_exceeds_issuer_authority`.
     if let Ok(rows) = persistence.realm_meta().list().await {
         for (realm_id, record) in rows {
-            proj.realm_states.insert(
-                realm_id.clone(),
-                soland_domain::reducer::SolandRealmState {
-                    realm_id,
-                    owner: Some(record.owner),
-                    title: None,
-                    deleted: record.deleted,
-                    archived: false,
-                    frozen: false,
-                    freeze_expires_at: None,
-                    created_at: record.created_at,
-                    updated_at: record.updated_at,
-                    trust_domain: None,
-                    terminal_state: None,
-                    successor_realm_id: None,
-                    default_strand_id: None,
-                    active_profiles: Vec::new(),
-                },
-            );
+            match proj.realm_states.entry(realm_id.clone()) {
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    // Canonical Event replay owns fields that exist on the
+                    // wire (including title and trust-domain).  The durable
+                    // mirror may advance operational flags, but must not
+                    // replace that richer projection with placeholder data.
+                    let realm = entry.get_mut();
+                    realm.owner = Some(record.owner);
+                    realm.deleted = record.deleted;
+                    realm.updated_at = realm.updated_at.max(record.updated_at);
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(soland_domain::reducer::SolandRealmState {
+                        realm_id,
+                        owner: Some(record.owner),
+                        title: None,
+                        deleted: record.deleted,
+                        archived: false,
+                        frozen: false,
+                        freeze_expires_at: None,
+                        created_at: record.created_at,
+                        updated_at: record.updated_at,
+                        trust_domain: None,
+                        terminal_state: None,
+                        successor_realm_id: None,
+                        default_strand_id: None,
+                        active_profiles: Vec::new(),
+                    });
+                }
+            }
         }
     }
 

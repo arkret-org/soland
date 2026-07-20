@@ -143,6 +143,12 @@ pub enum ProjectionEffect {
     RealmPolicyComponentsProjected {
         realm_id: String,
     },
+    /// A registry-validated Realm bootstrap facet was written to its exact
+    /// single-target cas-register cell during the staged genesis transaction.
+    RealmBootstrapFacetProjected {
+        realm_id: String,
+        kind: String,
+    },
     RealmDisappearingPolicyProjected {
         realm_id: String,
     },

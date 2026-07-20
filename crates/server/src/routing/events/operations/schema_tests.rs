@@ -135,6 +135,78 @@ mod invite_create_schema_tests {
     }
 }
 
+mod event_projection_dto_boundary_tests {
+    use arkret_sdk::Operation;
+    use serde_json::json;
+
+    use super::super::*;
+
+    fn join_rule(payload: serde_json::Value) -> Operation {
+        Operation::create(
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000007a1")
+                .unwrap(),
+            arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a1".to_owned())
+                .unwrap(),
+            arkret_sdk::events::EventKind::REALM_JOIN_RULE,
+            payload,
+        )
+    }
+
+    #[test]
+    fn strict_event_schema_is_not_reapplied_to_enriched_projection_dto() {
+        let mut projected = join_rule(json!({
+            "value": "invite",
+            "event_id": "ak:event:01904100-0000-7000-8000-0000000007a1",
+            "sender": "did:web:alice.example",
+            "effects": [{
+                "cell": "ak:cell:ak.component.realm.join_rule.v1:ak:realm:01904100-0000-7000-8000-0000000007a1",
+                "op": {"type": "set", "value": "invite"}
+            }]
+        }));
+        projected.canonical_event_digest = Some(
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_owned(),
+        );
+
+        assert!(
+            validate_operation_payload_schema(
+                arkret_sdk::events::EventKind::REALM_JOIN_RULE,
+                &projected,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn draft_operation_still_uses_closed_sdk_event_payload_schema() {
+        let valid = join_rule(json!({"value": "invite"}));
+        assert!(
+            validate_operation_payload_schema(
+                arkret_sdk::events::EventKind::REALM_JOIN_RULE,
+                &valid,
+            )
+            .is_ok()
+        );
+
+        let extra = join_rule(json!({"value": "invite", "event_id": "ak:event:extra"}));
+        assert_eq!(
+            validate_operation_payload_schema(
+                arkret_sdk::events::EventKind::REALM_JOIN_RULE,
+                &extra,
+            ),
+            Err("operation payload violates SDK artifact schema")
+        );
+
+        let invalid_enum = join_rule(json!({"value": "anything_goes"}));
+        assert_eq!(
+            validate_operation_payload_schema(
+                arkret_sdk::events::EventKind::REALM_JOIN_RULE,
+                &invalid_enum,
+            ),
+            Err("operation payload violates SDK artifact schema")
+        );
+    }
+}
+
 mod key_backup_active_series_schema_tests {
     use arkret_sdk::Operation;
     use serde_json::json;

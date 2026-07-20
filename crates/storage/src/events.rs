@@ -23,6 +23,12 @@ pub trait MessageStore: Send + Sync {
 #[async_trait]
 pub trait EventStore: Send + Sync {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()>;
+    /// Commit one validated ordinary-Realm bootstrap unit. Implementations
+    /// MUST insert every canonical Event in one transaction or insert none.
+    async fn put_realm_bootstrap_batch_atomic(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+    ) -> PersistenceResult<()>;
     /// Commit the closed identity-anchor unit, its signed receipt (for
     /// re-anchor), and the replacement device projection as one durable unit.
     async fn put_identity_anchor_batch_atomic(

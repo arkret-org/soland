@@ -245,7 +245,7 @@ pub fn validate_resource_selector_object(map: &Map<String, Value>) -> Result<(),
     {
         return Err("capability_grant_resources_invalid");
     }
-    if match_scope == "realm_wide" && !matches!(kind, "space" | "circle") {
+    if match_scope == "realm_wide" && !matches!(kind, "realm" | "space" | "circle") {
         return Err("capability_grant_resources_invalid");
     }
     if matches!(kind, "space" | "circle" | "notification" | "read_cursor")
@@ -358,4 +358,22 @@ fn selector_field_missing_or_wildcard(map: &Map<String, Value>, field: &str) -> 
     map.get(field)
         .and_then(Value::as_str)
         .is_none_or(|value| value == "*")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn realm_wide_realm_selector_matches_founding_grant_contract() {
+        let selector = serde_json::json!({
+            "kind": "realm",
+            "realm_id": "ak:realm:019f9000-0000-7000-8000-000000000001",
+            "match_scope": "realm_wide"
+        });
+        assert!(
+            validate_resource_selector_object(selector.as_object().unwrap()).is_ok(),
+            "realm-and-space.md §2.5 requires this exact selector shape"
+        );
+    }
 }

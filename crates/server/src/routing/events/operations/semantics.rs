@@ -467,6 +467,21 @@ pub(crate) fn validate_operation_payload_schema(
     kind: &str,
     operation: &Operation,
 ) -> Result<(), &'static str> {
+    // Event-derived Operations are reducer DTOs, not wire Event payloads.
+    // `projection_operation_from_event` deliberately enriches them with
+    // envelope metadata (`event_id`, `sender`, `hlc`, `effects`, ...). The
+    // signed payload has already passed the SDK artifact validator in Event
+    // envelope admission, so applying an `additionalProperties:false` Event
+    // schema to this enriched DTO would reject every correct strict payload.
+    if operation.canonical_event_digest.is_some() {
+        if let Some(schema) = operation_schema_for_kind(kind) {
+            return validate_operation_schema(operation, schema);
+        }
+        if let Some(validate) = operation_extra_validator_for_kind(kind) {
+            return validate(operation);
+        }
+        return Ok(());
+    }
     if operation_kind_prefers_projection_schema(kind)
         && let Some(schema) = operation_schema_for_kind(kind)
     {

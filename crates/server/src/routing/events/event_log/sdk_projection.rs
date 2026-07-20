@@ -146,8 +146,8 @@ pub(in crate::routing) fn projection_operation_from_event(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) -> Option<Operation> {
-    if super::super::operations::operation_schema_for_kind(&parsed.kind).is_none() {
-        tracing::debug!(kind = %parsed.kind, "projection: no schema for kind");
+    if arkret_sdk::events::EventKind::try_new(&parsed.kind).is_none() {
+        tracing::debug!(kind = %parsed.kind, "projection: kind is not registered");
         return None;
     }
     let realm_id_raw = parsed.realm_id.clone();
@@ -289,6 +289,58 @@ pub(in crate::routing) fn projection_operation_from_event(
     Some(operation)
 }
 
+/// Rebuild the exact internal projection DTO used at admission from one
+/// canonical Event record.  Hydration must not invent a second Event ->
+/// Operation mapping: the accepted wire envelope is the source of truth and
+/// this delegates to the same mapper used by the live submit path.
+pub(crate) fn projection_operation_from_canonical_record(
+    record: &CanonicalEventRecord,
+) -> Option<Operation> {
+    let object = record.envelope.as_object()?;
+    let realm_id = record
+        .envelope
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| record.realm_id.clone())?;
+    let prev_refs = record
+        .envelope
+        .get("prev_refs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect();
+    let authorized_refs = object
+        .get("refs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|reference| reference.get("role").and_then(Value::as_str) == Some("authorized_by"))
+        .filter_map(|reference| reference.get("id").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect();
+    let parsed = ValidatedEventEnvelope {
+        event_id: record.event_id.clone(),
+        actor_id: record.actor_id.clone(),
+        device_id: object
+            .get("device_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        actor_seq: record.actor_seq,
+        realm_id,
+        kind: record.kind.clone(),
+        schema_id: record.schema_id.clone(),
+        prev_refs,
+        authorized_refs,
+        canonical_digest: record.canonical_digest.clone(),
+        canonical_bytes: record.canonical_bytes.clone(),
+    };
+    projection_operation_from_event(&parsed, &record.envelope)
+}
+
 fn normalize_relation_create_payload(
     payload_object: &mut serde_json::Map<String, Value>,
     parsed: &ValidatedEventEnvelope,
@@ -360,7 +412,7 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
 }
 
 #[cfg(test)]
-mod accepted_event_id_projection_tests {
+mod projection_operation_tests {
     use serde_json::json;
 
     use super::*;
@@ -409,6 +461,25 @@ mod accepted_event_id_projection_tests {
         )
         .unwrap();
         assert!(agent_key_revoke.payload.get("accepted_event_id").is_none());
+    }
+
+    #[test]
+    fn realm_bootstrap_join_and_discovery_facets_are_projectable() {
+        for (kind, value) in [
+            (arkret_sdk::events::EventKind::REALM_JOIN_RULE, "invite"),
+            (arkret_sdk::events::EventKind::REALM_DISCOVERY, "listed"),
+        ] {
+            let operation = projection_operation_from_event(
+                &parsed(kind),
+                &json!({ "payload": { "value": value } }),
+            )
+            .unwrap_or_else(|| panic!("{kind} must build a projection Operation"));
+
+            assert_eq!(
+                operation.payload.get("value").and_then(Value::as_str),
+                Some(value)
+            );
+        }
     }
 }
 

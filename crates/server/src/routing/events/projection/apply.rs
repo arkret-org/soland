@@ -18,18 +18,6 @@ pub async fn project_accepted_operations_from_device(
     project_accepted_operations_inner(state, origin, source_device_id, operations).await;
 }
 
-pub(in crate::routing) fn project_validated_realm_founding_grant(
-    state: &AppState,
-    operation: &Operation,
-) -> soland_domain::reducer::ProjectionEffect {
-    let effect = state
-        .projection
-        .lock()
-        .apply_validated_realm_founding_grant(operation, operation.created_at);
-    refresh_authz_index_from_capability_effect(state, &effect);
-    effect
-}
-
 pub(super) fn apply_via_lattice_registry(
     state: &AppState,
     proj: &mut soland_domain::reducer::ProjectionState,
@@ -1171,7 +1159,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
 /// (`ak.component.capability.grant.v1`) is the source of truth; this keeps
 /// the engine's in-memory index (read by `SolandAuthzEngine::check`) in sync
 /// with the projection without HTTP handlers writing it directly.
-fn refresh_authz_index_from_capability_effect(
+pub(in crate::routing) fn refresh_authz_index_from_capability_effect(
     state: &AppState,
     effect: &soland_domain::reducer::ProjectionEffect,
 ) {

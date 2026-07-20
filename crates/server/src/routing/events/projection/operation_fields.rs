@@ -50,10 +50,14 @@ pub(super) fn operation_realm_alias_input(operation: &Operation) -> Option<&str>
 }
 
 pub(super) fn operation_realm_discoverability(operation: &Operation) -> Option<&str> {
-    first_string_field(&operation.payload, &["discoverability"])
-        .or_else(|| object_string_field(operation, &["default_discoverability", "discoverability"]))
-        .or_else(|| patch_string_field(operation, "default_discoverability"))
-        .or_else(|| patch_string_field(operation, "discoverability"))
+    (kinds::canonical_kind_for_operation(operation)
+        == Some(arkret_sdk::events::EventKind::REALM_DISCOVERY))
+    .then(|| operation.payload.get("value").and_then(Value::as_str))
+    .flatten()
+    .or_else(|| first_string_field(&operation.payload, &["discoverability"]))
+    .or_else(|| object_string_field(operation, &["default_discoverability", "discoverability"]))
+    .or_else(|| patch_string_field(operation, "default_discoverability"))
+    .or_else(|| patch_string_field(operation, "discoverability"))
 }
 
 pub(super) fn operation_realm_class(operation: &Operation) -> Option<&str> {
@@ -62,8 +66,12 @@ pub(super) fn operation_realm_class(operation: &Operation) -> Option<&str> {
 }
 
 pub(super) fn operation_realm_default_join_rule(operation: &Operation) -> Option<&str> {
-    object_string_field(operation, &["default_join_rule"])
-        .or_else(|| patch_string_field(operation, "default_join_rule"))
+    (kinds::canonical_kind_for_operation(operation)
+        == Some(arkret_sdk::events::EventKind::REALM_JOIN_RULE))
+    .then(|| operation.payload.get("value").and_then(Value::as_str))
+    .flatten()
+    .or_else(|| object_string_field(operation, &["default_join_rule"]))
+    .or_else(|| patch_string_field(operation, "default_join_rule"))
 }
 
 pub(super) fn operation_realm_history_visibility(operation: &Operation) -> Option<&str> {

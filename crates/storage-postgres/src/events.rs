@@ -262,6 +262,23 @@ impl EventStore for PgEventStore {
         .map_err(map_canonical_event_put_error)
     }
 
+    async fn put_realm_bootstrap_batch_atomic(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            for record in records {
+                insert_canonical_event(conn, &record).await?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn put_identity_anchor_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,

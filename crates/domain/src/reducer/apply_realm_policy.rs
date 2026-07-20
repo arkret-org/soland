@@ -3,6 +3,68 @@ use serde::de::DeserializeOwned;
 use super::*;
 
 impl ProjectionState {
+    /// Apply one closed Realm-bootstrap cas-register facet after the shared
+    /// SDK Event cell-contract validator has recomputed family, subject, plane,
+    /// op and payload equality. This function deliberately consumes the exact
+    /// wire effect carried on the projection Operation instead of maintaining a
+    /// second event-kind -> cell-family table in Soland.
+    pub fn apply_validated_realm_bootstrap_facet(
+        &mut self,
+        operation: &Operation,
+    ) -> ProjectionEffect {
+        let kind = operation.object_type.as_str();
+        if kind == arkret_sdk::events::EventKind::REALM_POLICY_COMPONENTS {
+            return self.apply_realm_policy_components(operation);
+        }
+        if !matches!(
+            kind,
+            arkret_sdk::events::EventKind::REALM_JOIN_RULE
+                | arkret_sdk::events::EventKind::REALM_HISTORY_VISIBILITY
+                | arkret_sdk::events::EventKind::REALM_HISTORY_SHARING_POLICY
+                | arkret_sdk::events::EventKind::REALM_DISCOVERY
+                | arkret_sdk::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: "out_of_order_bootstrap".to_owned(),
+            };
+        }
+        let Some(effect) = operation
+            .payload
+            .get("effects")
+            .and_then(Value::as_array)
+            .and_then(|effects| (effects.len() == 1).then(|| &effects[0]))
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+            };
+        };
+        let Some(cell) = effect.get("cell").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+            };
+        };
+        let Some(value) = effect.pointer("/op/value").cloned() else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+            };
+        };
+        let Ok(cell) = CellRef::new(cell.to_owned()) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+            };
+        };
+        if self.cells.contains_key(&cell) {
+            return ProjectionEffect::Rejected {
+                reason: arkret_sdk::ErrorCode::CAS_CONFLICT.to_owned(),
+            };
+        }
+        self.cells.insert(cell, CellState::Value(value));
+        ProjectionEffect::RealmBootstrapFacetProjected {
+            realm_id: operation.realm_id.to_string(),
+            kind: kind.to_owned(),
+        }
+    }
+
     pub(crate) fn apply_realm_notary(&mut self, operation: &Operation) -> ProjectionEffect {
         let payload: arkret_sdk::RealmNotaryPayload =
             match typed_realm_control_payload::<arkret_sdk::RealmNotaryPayload>(
