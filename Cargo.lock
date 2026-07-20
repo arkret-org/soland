@@ -503,6 +503,8 @@ dependencies = [
 name = "arkret-schema"
 version = "0.3.0"
 dependencies = [
+ "arkret-canonical",
+ "arkret-identifiers",
  "arkret-wire",
  "chrono",
  "regex",

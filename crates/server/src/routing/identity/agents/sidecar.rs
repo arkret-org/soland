@@ -3,6 +3,31 @@ use super::*;
 pub(super) const ADDRESSED_AGENT_NOT_ELIGIBLE: &str = "addressed_agent_not_eligible";
 pub(super) const CONTROLLER_IN_ADDRESSED_AGENTS: &str = "controller_in_addressed_agents";
 
+const SIDECAR_ENSURE_LOCK_SHARDS: usize = 256;
+
+/// Serialize one controller's per-Realm sidecar aggregate.
+///
+/// Both the Circle reuse key and every private Strand reuse key are derived
+/// below this `(realm_id, controller_id)` scope. Holding the same lane across
+/// the complete find-or-create sequence makes concurrent ensures converge as
+/// required by circle.md §11.1.
+async fn lock_sidecar_ensure(realm_id: &str, controller: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    use std::hash::{Hash as _, Hasher as _};
+    use std::sync::{Arc, OnceLock};
+
+    static LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
+    let locks = LOCKS.get_or_init(|| {
+        (0..SIDECAR_ENSURE_LOCK_SHARDS)
+            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+            .collect()
+    });
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    realm_id.hash(&mut hasher);
+    controller.hash(&mut hasher);
+    let shard = (hasher.finish() as usize) % SIDECAR_ENSURE_LOCK_SHARDS;
+    locks[shard].clone().lock_owned().await
+}
+
 pub(super) fn sidecar_create_denied(message: impl Into<String>) -> AppError {
     AppError::capability_denied(message)
         .with_wire_code(arkret_sdk::ReasonCode::SIDECAR_CREATE_DENIED)
@@ -626,6 +651,7 @@ pub(super) async fn ensure_sidecar_thread_impl(
     );
     let eligible_agents =
         eligible_sidecar_agents(state, realm_id.as_str(), controller, &addressed_agents).await?;
+    let _ensure_guard = lock_sidecar_ensure(realm_id.as_str(), controller).await;
     let controller_agent_circle_key = controller_agent_circle_key(realm_id.as_str(), controller);
     let short_name = sidecar_short_name(&controller_agent_circle_key);
     let private_circle_id =
