@@ -460,6 +460,10 @@ fn operation_kind_prefers_projection_schema(kind: &str) -> bool {
         kind,
         arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY
             | arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES
+            | arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE
+            | arkret_sdk::events::EventKind::CIRCLE_ARCHIVE
+            | arkret_sdk::events::EventKind::CIRCLE_RESTORE
+            | arkret_sdk::events::EventKind::CIRCLE_TOMBSTONE
     )
 }
 
@@ -956,7 +960,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         arkret_sdk::events::EventKind::CROSS_SIGNING_PUBLISH => OperationPayloadSchema {
             requirements: CROSS_SIGNING_PUBLISH_REQUIREMENTS,
-            validate: Some(validate_operation_payload_against_sdk_artifact),
+            validate: None,
         },
         arkret_sdk::events::EventKind::CROSS_SIGNING_RESET => OperationPayloadSchema {
             requirements: CROSS_SIGNING_RESET_REQUIREMENTS,

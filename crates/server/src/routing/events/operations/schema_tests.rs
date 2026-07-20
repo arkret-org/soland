@@ -205,6 +205,35 @@ mod event_projection_dto_boundary_tests {
             Err("operation payload violates SDK artifact schema")
         );
     }
+
+    #[test]
+    fn circle_member_convenience_dto_uses_projection_schema() {
+        let operation = Operation::create(
+            arkret_sdk::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000007a2")
+                .unwrap(),
+            arkret_sdk::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a2".to_owned())
+                .unwrap(),
+            arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
+            json!({
+                "circle_id": "ak:circle:01904100-0000-7000-8000-0000000007a2",
+                "actor_id": "did:web:bob.example",
+                "membership": "member",
+                "sender": "did:web:alice.example",
+                "manage_capability_verified": true,
+                "actor_capability": {
+                    "action": "ak.circle.member.manage",
+                    "circle_id": "ak:circle:01904100-0000-7000-8000-0000000007a2",
+                    "allowed": true
+                }
+            }),
+        );
+
+        validate_operation_payload_schema(
+            arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
+            &operation,
+        )
+        .unwrap();
+    }
 }
 
 mod key_backup_active_series_schema_tests {
@@ -970,6 +999,22 @@ mod sdk_artifact_schema_tests {
             operation_schema_for_kind("ak.cross_signing.publish").unwrap(),
         )
         .unwrap();
+
+        let mut projected = operation.clone();
+        let projected_payload = projected
+            .payload
+            .as_object_mut()
+            .expect("cross-signing payload object");
+        projected_payload.insert(
+            "event_id".to_owned(),
+            json!("ak:event:01904100-0000-7000-8000-57d7d85564c6"),
+        );
+        projected_payload.insert("sender".to_owned(), json!("did:web:alice.example"));
+        projected_payload.insert("hlc".to_owned(), json!("01970e589d21-0001-a13f9c2e"));
+        projected.canonical_event_digest = Some(
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_owned(),
+        );
+        validate_operation_payload_schema("ak.cross_signing.publish", &projected).unwrap();
     }
 
     #[test]

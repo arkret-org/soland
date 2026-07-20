@@ -242,6 +242,22 @@ pub(super) async fn submit_realm_bootstrap_batch(
             operation,
         )
         .await;
+        let projected = crate::routing::events::projection::projection_event_from_operation(
+            operation,
+            Some(&unit.actor_id),
+        );
+        if let Err(error) =
+            crate::routing::events::projection::persist_and_publish_projection_event(
+                state, projected,
+            )
+            .await
+        {
+            tracing::error!(
+                %error,
+                operation_id = %operation.operation_id,
+                "failed to persist accepted Realm bootstrap projection event"
+            );
+        }
     }
     for (parsed, envelope) in validated.iter().zip(envelopes.iter()) {
         if !session.token_hash.starts_with("federation:") {
