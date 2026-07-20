@@ -81,11 +81,18 @@ pub(crate) async fn validate_event_envelope_with_context(
             "actor_id must be a DID",
         ));
     }
+    let managed_agent_founding_grant = kind == arkret_sdk::events::EventKind::CAPABILITY_GRANT
+        && realm_bootstrap_contexts.iter().any(|context| {
+            context.ordinary_realm_bootstrap
+                && object.get("realm_id").and_then(Value::as_str) == Some(context.realm_id.as_str())
+                && context.actor_id == actor_id
+        });
     let managed_agent_delegation = if actor_id != session.actor {
         crate::routing::identity::managed_agent_pcr::validate_delegated_agent_envelope(
             state,
             object,
             &session.actor,
+            managed_agent_founding_grant,
         )
         .await
         .is_ok()
