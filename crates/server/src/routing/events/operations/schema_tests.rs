@@ -391,7 +391,7 @@ mod read_receipt_policy_schema_tests {
         let schema =
             operation_schema_for_kind(arkret_sdk::events::EventKind::REALM_READ_RECEIPT_POLICY)
                 .unwrap();
-        let operation = op(json!({
+        let mut operation = op(json!({
             "disclosure": "required",
             "event_id": "ak:event:01904100-0000-7000-8000-000000000702",
             "accepted_event_id": "ak:event:01904100-0000-7000-8000-000000000702",
@@ -399,6 +399,9 @@ mod read_receipt_policy_schema_tests {
             "hlc": "2026-06-14T10:00:00Z/node/1",
             "seal_ref": "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
         }));
+        operation.canonical_event_digest = Some(
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_owned(),
+        );
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
         validate_operation_payload_schema(

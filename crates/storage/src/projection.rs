@@ -172,14 +172,31 @@ pub fn patch_string_field<'a>(operation: &'a Operation, field: &str) -> Option<&
         _ => None,
     }
 }
+
+fn operation_updates_realm_metadata(operation: &Operation) -> bool {
+    matches!(
+        soland_domain::kinds::canonical_kind_for_operation(operation),
+        Some(
+            arkret_sdk::events::EventKind::REALM_CREATE
+                | arkret_sdk::events::EventKind::REALM_UPDATE
+        )
+    )
+}
+
 #[doc(hidden)]
 pub fn projected_operation_realm_title(operation: &Operation) -> Option<&str> {
+    if !operation_updates_realm_metadata(operation) {
+        return None;
+    }
     first_string_field(&operation.payload, &["realm_title", "title"])
         .or_else(|| object_string_field(operation, &["title"]))
         .or_else(|| patch_string_field(operation, "title"))
 }
 #[doc(hidden)]
 pub fn projected_operation_realm_summary(operation: &Operation) -> Option<&str> {
+    if !operation_updates_realm_metadata(operation) {
+        return None;
+    }
     first_string_field(&operation.payload, &["realm_summary", "summary"])
         .or_else(|| object_string_field(operation, &["summary"]))
         .or_else(|| patch_string_field(operation, "summary"))
@@ -190,4 +207,62 @@ pub fn projected_operation_realm_discoverability(operation: &Operation) -> Optio
         .or_else(|| object_string_field(operation, &["default_discoverability", "discoverability"]))
         .or_else(|| patch_string_field(operation, "default_discoverability"))
         .or_else(|| patch_string_field(operation, "discoverability"))
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_sdk::{OperationId, RealmId};
+    use serde_json::json;
+
+    use super::*;
+
+    fn operation(kind: &str, payload: Value) -> Operation {
+        Operation::create(
+            OperationId::new("ak:operation:01904100-0000-7000-8000-000000000002").unwrap(),
+            RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    #[test]
+    fn child_object_metadata_is_not_realm_metadata() {
+        for operation in [
+            operation(
+                arkret_sdk::events::EventKind::SPACE_CREATE,
+                json!({"object": {"title": "List", "summary": "List summary"}}),
+            ),
+            operation(
+                arkret_sdk::events::EventKind::STRAND_UPDATE,
+                json!({
+                    "patch": {
+                        "title": {"$op": "set", "value": "Thread"},
+                        "summary": {"$op": "set", "value": "Thread summary"}
+                    }
+                }),
+            ),
+        ] {
+            assert_eq!(projected_operation_realm_title(&operation), None);
+            assert_eq!(projected_operation_realm_summary(&operation), None);
+        }
+    }
+
+    #[test]
+    fn realm_update_metadata_is_still_projected() {
+        let operation = operation(
+            arkret_sdk::events::EventKind::REALM_UPDATE,
+            json!({
+                "patch": {
+                    "title": {"$op": "set", "value": "Realm"},
+                    "summary": {"$op": "set", "value": "Realm summary"}
+                }
+            }),
+        );
+
+        assert_eq!(projected_operation_realm_title(&operation), Some("Realm"));
+        assert_eq!(
+            projected_operation_realm_summary(&operation),
+            Some("Realm summary")
+        );
+    }
 }

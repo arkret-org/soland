@@ -15,7 +15,7 @@ pub async fn project_accepted_operations_from_device(
     source_device_id: &str,
     operations: &[Operation],
 ) {
-    project_accepted_operations_inner(state, origin, source_device_id, operations).await;
+    project_accepted_operations_inner(state, origin, source_device_id, operations, None).await;
 }
 
 pub(super) fn apply_via_lattice_registry(
@@ -25,6 +25,15 @@ pub(super) fn apply_via_lattice_registry(
 ) -> soland_domain::reducer::ProjectionEffect {
     let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
     proj.apply_via_lattice_registry(operation, &state.hlc, &registry)
+}
+
+fn trusted_sidecar_member_reducer_operation(operation: &Operation, controller: &str) -> Operation {
+    let mut contextual = operation.clone();
+    if let Some(payload) = contextual.payload.as_object_mut() {
+        payload.insert("sender".to_owned(), Value::String(controller.to_owned()));
+        payload.insert("manage_capability_verified".to_owned(), Value::Bool(true));
+    }
+    contextual
 }
 
 pub(crate) async fn mirror_mls_effect_to_persistence(
@@ -563,7 +572,22 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
 }
 
 pub async fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
-    project_accepted_operations_inner(state, origin, "", operations).await;
+    project_accepted_operations_inner(state, origin, "", operations, None).await;
+}
+
+pub async fn project_trusted_sidecar_member_operation(
+    state: &AppState,
+    controller: &str,
+    operation: &Operation,
+) {
+    project_accepted_operations_inner(
+        state,
+        controller,
+        "",
+        std::slice::from_ref(operation),
+        Some(controller),
+    )
+    .await;
 }
 
 async fn project_accepted_operations_inner(
@@ -571,6 +595,7 @@ async fn project_accepted_operations_inner(
     origin: &str,
     source_device_id: &str,
     operations: &[Operation],
+    trusted_sidecar_member_controller: Option<&str>,
 ) {
     for operation in operations {
         tracing::debug!(
@@ -656,11 +681,27 @@ async fn project_accepted_operations_inner(
             project_device_authorize(state, operation).await;
         }
         // Also apply to the deterministic reducer.
+        // The canonical `ak.circle.member.state` payload is closed and does
+        // not carry executor/capability verdict fields. For the already
+        // authenticated sidecar aggregate only, supply those values to the
+        // reducer on an internal clone. Persistence, sync, and projection
+        // events below continue to use the untouched wire-clean operation.
+        let reducer_context_operation = trusted_sidecar_member_controller
+            .filter(|_| {
+                kinds::canonical_kind_for_operation(operation)
+                    == Some(arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE)
+            })
+            .map(|controller| trusted_sidecar_member_reducer_operation(operation, controller));
+        let reducer_operation = reducer_context_operation.as_ref().unwrap_or(operation);
         let reducer_effect =
             if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
                 {
                     let mut proj = state.projection.lock();
-                    Some(apply_via_lattice_registry(state, &mut proj, operation))
+                    Some(apply_via_lattice_registry(
+                        state,
+                        &mut proj,
+                        reducer_operation,
+                    ))
                 }
             } else {
                 None
@@ -1318,5 +1359,36 @@ mod tests {
         assert_eq!(delivered[0].content["realm_id"], realm_id);
         assert_eq!(delivered[0].content["operation_id"], operation_id);
         assert_eq!(delivered[0].content["payload"], payload);
+    }
+
+    #[test]
+    fn trusted_sidecar_member_context_does_not_mutate_wire_operation() {
+        let operation = Operation::create(
+            arkret_sdk::OperationId::new(
+                "ak:operation:0196419b-1000-7000-8000-000000000202".to_owned(),
+            )
+            .unwrap(),
+            arkret_sdk::RealmId::new("ak:realm:0196419b-1000-7000-8000-000000000201".to_owned())
+                .unwrap(),
+            arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
+            json!({
+                "circle_id": "ak:circle:0196419b-1000-7000-8000-000000000203",
+                "actor_id": "did:web:agent.example",
+                "membership": "join"
+            }),
+        );
+
+        let contextual =
+            trusted_sidecar_member_reducer_operation(&operation, "did:web:controller.example");
+
+        assert!(operation.payload.get("sender").is_none());
+        assert!(
+            operation
+                .payload
+                .get("manage_capability_verified")
+                .is_none()
+        );
+        assert_eq!(contextual.payload["sender"], "did:web:controller.example");
+        assert_eq!(contextual.payload["manage_capability_verified"], true);
     }
 }

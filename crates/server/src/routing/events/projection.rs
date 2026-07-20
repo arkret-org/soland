@@ -185,6 +185,36 @@ mod tests {
     }
 
     #[test]
+    fn child_space_metadata_does_not_overwrite_realm_metadata() {
+        let create = op(
+            arkret_sdk::events::EventKind::SPACE_CREATE,
+            json!({
+                "object": {
+                    "id": "ak:space:01904100-0000-7000-8000-000000000003",
+                    "kind": "list",
+                    "title": "ee",
+                    "summary": "List summary"
+                }
+            }),
+        );
+        let update = op(
+            arkret_sdk::events::EventKind::SPACE_UPDATE,
+            json!({
+                "space_id": "ak:space:01904100-0000-7000-8000-000000000003",
+                "patch": {
+                    "title": { "$op": "set", "value": "renamed list" },
+                    "summary": { "$op": "set", "value": "renamed summary" }
+                }
+            }),
+        );
+
+        for operation in [&create, &update] {
+            assert_eq!(operation_realm_title(operation), None);
+            assert_eq!(operation_realm_summary(operation), None);
+        }
+    }
+
+    #[test]
     fn invite_acceptance_ref_reads_canonical_invite_ref() {
         let invite_id = "ak:invite:01904100-0000-7000-8000-000000000003";
         let operation = op(

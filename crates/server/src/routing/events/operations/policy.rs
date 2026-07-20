@@ -22,11 +22,45 @@ use message_rules::*;
 pub(crate) use message_rules::{message_window_permits, realm_ids_match};
 use realm_circle::*;
 
+pub(crate) async fn validate_trusted_sidecar_circle_operation(
+    state: &AppState,
+    operation: &Operation,
+    controller: &str,
+) -> Result<(), &'static str> {
+    if !sidecar_circle_object_shape_is_constrained(operation, controller) {
+        return Err("sidecar_create_denied");
+    }
+    // Reconstruct the trusted aggregate context only for the policy check.
+    // It must never enter the closed `ak.circle.create` wire payload.
+    let mut policy_operation = operation.clone();
+    let payload = policy_operation
+        .payload
+        .as_object_mut()
+        .ok_or("sidecar_create_denied")?;
+    payload.insert("sender".to_owned(), Value::String(controller.to_owned()));
+    payload.insert(
+        "controller_agent_circle_key".to_owned(),
+        Value::String(arkret_sdk::agent_sidecar_circle_key(
+            operation.realm_id.as_str(),
+            controller,
+        )),
+    );
+    payload.insert(
+        "sidecar_ensure_capability_verified".to_owned(),
+        Value::Bool(true),
+    );
+    // Run the same complete policy chain as every other accepted operation.
+    // Keeping a sidecar-only subset here would silently bypass any policy
+    // added to the standard chain later (including Realm lifecycle gates).
+    validate_operation_policy(state, std::slice::from_ref(&policy_operation)).await
+}
+
 pub(crate) async fn validate_trusted_sidecar_member_operation(
     state: &AppState,
     operation: &Operation,
     controller: &str,
 ) -> Result<(), &'static str> {
+    validate_realm_lifecycle_write_gate(state, operation)?;
     let Some(circle_id) = operation_circle_id(operation) else {
         return Err("sidecar_create_denied");
     };
@@ -239,6 +273,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soland_storage_postgres::Db;
 
     fn circle_create_with_payload(payload: Value) -> Operation {
         Operation::create(
@@ -301,6 +336,97 @@ mod tests {
             &invalid_op,
             actor
         ));
+    }
+
+    #[test]
+    fn trusted_sidecar_circle_payload_stays_sdk_schema_clean() {
+        let actor = "did:web:example.com:users:alice";
+        let realm_id = "ak:realm:01964137-0000-7000-8000-000000000030";
+        let key = arkret_sdk::agent_sidecar_circle_key(realm_id, actor);
+        let short_name = arkret_sdk::agent_sidecar_short_name(&key);
+        let payload = serde_json::json!({
+            "object": {
+                "id": "ak:circle:01964137-0000-7000-8000-000000000041",
+                "schema": "ak.schema.circle.v1",
+                "realm_id": realm_id,
+                "profile_ref": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+                "title": short_name,
+                "summary": "Controller-private AI sidecar scope",
+                "display": {
+                    "short_name": short_name,
+                    "color_token": "slate",
+                    "symbol": { "glyph": "spark" },
+                },
+                "directory_visibility": "members",
+                "join_rule": "invite",
+                "history_visibility": "joined",
+                "content_encryption_floor": "e2ee_required",
+                "metadata_encryption_floor": "e2ee_required",
+                "encryption_profile": "mls_rfc9420",
+                "state": "active",
+                "created_by": actor,
+                "created_at": "2026-07-20T00:00:00Z",
+            },
+        });
+        let operation = circle_create_with_payload(payload);
+
+        assert_eq!(
+            validate_operation_payload_schema(
+                arkret_sdk::events::EventKind::CIRCLE_CREATE,
+                &operation,
+            ),
+            Ok(())
+        );
+        assert!(sidecar_circle_object_shape_is_constrained(
+            &operation, actor
+        ));
+
+        let mut polluted = operation;
+        polluted.payload["sidecar_ensure_capability_verified"] = Value::Bool(true);
+        assert_eq!(
+            validate_operation_payload_schema(
+                arkret_sdk::events::EventKind::CIRCLE_CREATE,
+                &polluted,
+            ),
+            Err("operation payload violates SDK artifact schema")
+        );
+    }
+
+    #[tokio::test]
+    async fn ordinary_circle_create_cannot_claim_reserved_sidecar_profile() {
+        let actor = "did:web:example.com:users:alice";
+        let realm_id = "ak:realm:01964137-0000-7000-8000-000000000030";
+        let key = arkret_sdk::agent_sidecar_circle_key(realm_id, actor);
+        let short_name = arkret_sdk::agent_sidecar_short_name(&key);
+        let operation = circle_create_with_payload(serde_json::json!({
+            "object": {
+                "id": "ak:circle:01964137-0000-7000-8000-000000000041",
+                "schema": "ak.schema.circle.v1",
+                "realm_id": realm_id,
+                "profile_ref": arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD,
+                "title": short_name,
+                "display": {
+                    "short_name": short_name,
+                    "color_token": "slate",
+                    "symbol": { "glyph": "spark" },
+                },
+                "directory_visibility": "members",
+                "join_rule": "invite",
+                "history_visibility": "joined",
+                "content_encryption_floor": "e2ee_required",
+                "metadata_encryption_floor": "e2ee_required",
+                "encryption_profile": "mls_rfc9420",
+                "state": "active",
+                "created_by": actor,
+                "created_at": "2026-07-20T00:00:00Z",
+            },
+        }));
+        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+
+        assert_eq!(
+            validate_circle_create_policy(&state, &operation).await,
+            Err("sidecar_create_denied")
+        );
     }
 }
 
