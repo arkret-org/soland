@@ -52,7 +52,6 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "message_id": "ak:message:01904100-0000-7000-8000-79a90338768b",
                 "strand_id": "ak:strand:01904100-0000-7000-8000-6c663fa0205f",
                 "track_name": "discussion",
-                "sender": "did:web:alice.example",
                 "content": {"kind": "ak.content.text", "body": "hello"}
             }),
             valid: true,

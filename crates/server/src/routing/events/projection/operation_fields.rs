@@ -31,13 +31,32 @@ pub(super) fn patch_string_field<'a>(operation: &'a Operation, field: &str) -> O
     }
 }
 
+fn operation_updates_realm_metadata(operation: &Operation) -> bool {
+    matches!(
+        kinds::canonical_kind_for_operation(operation),
+        Some(
+            arkret_sdk::events::EventKind::REALM_CREATE
+                | arkret_sdk::events::EventKind::REALM_UPDATE
+        )
+    )
+}
+
 pub(super) fn operation_realm_title(operation: &Operation) -> Option<&str> {
+    // `ensure_projected_realm` runs for every accepted event in a Realm. Space,
+    // Strand, and other child-object events also carry `object.title` or a
+    // `patch.title`; those titles must never be interpreted as Realm metadata.
+    if !operation_updates_realm_metadata(operation) {
+        return None;
+    }
     first_string_field(&operation.payload, &["realm_title", "title"])
         .or_else(|| object_string_field(operation, &["title"]))
         .or_else(|| patch_string_field(operation, "title"))
 }
 
 pub(super) fn operation_realm_summary(operation: &Operation) -> Option<&str> {
+    if !operation_updates_realm_metadata(operation) {
+        return None;
+    }
     first_string_field(&operation.payload, &["realm_summary", "summary"])
         .or_else(|| object_string_field(operation, &["summary"]))
         .or_else(|| patch_string_field(operation, "summary"))

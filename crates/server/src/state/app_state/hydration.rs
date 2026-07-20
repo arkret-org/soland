@@ -66,12 +66,10 @@ pub(super) async fn hydrate_cross_signing_from_persistence(
     Ok(manager)
 }
 
-fn replay_projection_event(
-    proj: &mut ProjectionState,
-    event: soland_storage::ProjectionEventRecord,
-    hydration_hlc: &soland_domain::hlc::ServerHlc,
+fn operation_from_projection_event(
+    event: &soland_storage::ProjectionEventRecord,
     projection_name: &str,
-) -> soland_storage::PersistenceResult<()> {
+) -> soland_storage::PersistenceResult<arkret_sdk::Operation> {
     let operation_id = event.operation_id.as_deref().ok_or_else(|| {
         soland_storage::PersistenceError::Internal(format!(
             "{projection_name} projection event {} has no operation_id",
@@ -94,9 +92,19 @@ fn replay_projection_event(
         operation_id,
         realm_id,
         event.event_kind.clone(),
-        event.payload,
+        event.payload.clone(),
     );
     operation.created_at = event.created_at;
+    Ok(operation)
+}
+
+fn replay_projection_event(
+    proj: &mut ProjectionState,
+    event: soland_storage::ProjectionEventRecord,
+    hydration_hlc: &soland_domain::hlc::ServerHlc,
+    projection_name: &str,
+) -> soland_storage::PersistenceResult<()> {
+    let operation = operation_from_projection_event(&event, projection_name)?;
     if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
         proj.apply(&operation, hydration_hlc)
     {
@@ -104,6 +112,233 @@ fn replay_projection_event(
             "{projection_name} projection event {} failed deterministic hydration: {reason}",
             event.event_id
         )));
+    }
+    Ok(())
+}
+
+pub(super) async fn hydrate_sidecar_circle_projections(
+    persistence: &dyn soland_storage::PersistenceStore,
+    proj: &mut ProjectionState,
+    hydration_hlc: &soland_domain::hlc::ServerHlc,
+) -> soland_storage::PersistenceResult<()> {
+    use soland_domain::reducer::ProjectionEffect;
+
+    let realm_member_removals = persistence
+        .events()
+        .snapshot_all()
+        .await?
+        .into_iter()
+        .filter(|record| record.kind == arkret_sdk::events::EventKind::MEMBER_STATE)
+        .filter_map(|record| {
+            let payload = record.envelope.get("payload")?;
+            if !matches!(
+                payload.get("membership").and_then(Value::as_str),
+                Some("leave" | "ban")
+            ) {
+                return None;
+            }
+            Some((
+                record.realm_id?,
+                payload.get("actor_id")?.as_str()?.to_owned(),
+                record.received_at,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut events = persistence.projection_events().snapshot_all().await?;
+    events.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+
+    for event in events {
+        match event.event_kind.as_str() {
+            arkret_sdk::events::EventKind::CIRCLE_CREATE
+                if event
+                    .payload
+                    .pointer("/object/profile_ref")
+                    .and_then(Value::as_str)
+                    == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD) =>
+            {
+                let object = event.payload.get("object").and_then(Value::as_object);
+                let creator = object
+                    .and_then(|object| object.get("created_by"))
+                    .and_then(Value::as_str);
+                let title = object
+                    .and_then(|object| object.get("title"))
+                    .and_then(Value::as_str);
+                let already_restored = creator.zip(title).is_some_and(|(creator, title)| {
+                    proj.circles.values().any(|circle| {
+                        circle.realm_id == event.realm_id
+                            && circle.created_by == creator
+                            && circle.title == title
+                            && circle.profile_ref.as_deref()
+                                == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+                    })
+                });
+                if !already_restored {
+                    replay_projection_event(proj, event, hydration_hlc, "sidecar-circle")?;
+                }
+            }
+            arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE => {
+                let Some(circle_id) = event.payload.get("circle_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let target = event.payload.get("actor_id").and_then(Value::as_str);
+                let is_join =
+                    event.payload.get("membership").and_then(Value::as_str) == Some("join");
+                let Some(circle) = proj.circles.get(circle_id) else {
+                    continue;
+                };
+                if circle.profile_ref.as_deref() != Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD) {
+                    continue;
+                }
+                let Some(controller) = event.sender.as_deref() else {
+                    return Err(soland_storage::PersistenceError::Internal(format!(
+                        "sidecar Circle membership projection Event {} has no sender",
+                        event.event_id
+                    )));
+                };
+                if circle.created_by != controller {
+                    return Err(soland_storage::PersistenceError::Internal(format!(
+                        "sidecar Circle membership projection Event {} has a non-controller sender",
+                        event.event_id
+                    )));
+                }
+                // Realm removal cascades are derived and therefore have no
+                // separate Circle Event to replay. Never resurrect a stale
+                // sidecar join when the parent member left/banned later, even
+                // if that principal subsequently rejoined the Realm.
+                if is_join
+                    && target.is_some_and(|target| {
+                        realm_member_removals
+                            .iter()
+                            .any(|(realm_id, actor, removed_at)| {
+                                realm_id == &event.realm_id
+                                    && actor == target
+                                    && removed_at >= &event.received_at
+                            })
+                    })
+                {
+                    continue;
+                }
+                let mut operation = operation_from_projection_event(&event, "sidecar-member")?;
+                let Some(payload) = operation.payload.as_object_mut() else {
+                    return Err(soland_storage::PersistenceError::Internal(format!(
+                        "sidecar Circle membership projection Event {} has a non-object payload",
+                        event.event_id
+                    )));
+                };
+                payload.insert("sender".to_owned(), Value::String(controller.to_owned()));
+                payload.insert("manage_capability_verified".to_owned(), Value::Bool(true));
+                if let ProjectionEffect::Rejected { reason } = proj.apply(&operation, hydration_hlc)
+                {
+                    return Err(soland_storage::PersistenceError::Internal(format!(
+                        "sidecar Circle membership projection Event {} failed deterministic hydration: {reason}",
+                        event.event_id
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Restore the reducer-only identity fields used to reuse private sidecar
+/// Strands and Relations after restart.
+///
+/// The durable Strand mirror intentionally stores only common metadata, so it
+/// cannot answer the `(controller_id, normalized_context_ref_digest)` lookup.
+/// Relations currently have no mirror-table hydration at all. Their accepted
+/// projection Events therefore remain the durable source for this aggregate.
+pub(super) async fn hydrate_sidecar_thread_projections(
+    persistence: &dyn soland_storage::PersistenceStore,
+    proj: &mut ProjectionState,
+    hydration_hlc: &soland_domain::hlc::ServerHlc,
+) -> soland_storage::PersistenceResult<()> {
+    use std::collections::BTreeSet;
+
+    let mut events = persistence.projection_events().snapshot_all().await?;
+    events.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let mut sidecar_relation_ids = BTreeSet::new();
+
+    for event in events {
+        match event.event_kind.as_str() {
+            arkret_sdk::events::EventKind::STRAND_CREATE
+                if event
+                    .payload
+                    .pointer("/object/metadata/fields/sidecar_profile")
+                    .and_then(Value::as_str)
+                    == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD) =>
+            {
+                let object = event.payload.get("object").and_then(Value::as_object);
+                let strand_id = object
+                    .and_then(|object| object.get("id"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        soland_storage::PersistenceError::Internal(format!(
+                            "sidecar Strand projection Event {} has no object id",
+                            event.event_id
+                        ))
+                    })?;
+                let fields = object
+                    .and_then(|object| object.get("metadata"))
+                    .and_then(|metadata| metadata.get("fields"))
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| {
+                        soland_storage::PersistenceError::Internal(format!(
+                            "sidecar Strand projection Event {} has no metadata fields",
+                            event.event_id
+                        ))
+                    })?;
+                if let Some(strand) = proj.strands.get_mut(strand_id) {
+                    // Preserve the durable mirror's later lifecycle/title
+                    // values; only restore the fields that mirror omits.
+                    strand.fields.extend(
+                        fields
+                            .iter()
+                            .map(|(key, value)| (key.clone(), value.clone())),
+                    );
+                } else {
+                    replay_projection_event(proj, event, hydration_hlc, "sidecar-strand")?;
+                }
+            }
+            arkret_sdk::events::EventKind::RELATION_CREATE => {
+                let relation = event.payload.get("relation").unwrap_or(&event.payload);
+                if relation
+                    .pointer("/fields/sidecar_profile")
+                    .and_then(Value::as_str)
+                    != Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+                {
+                    continue;
+                }
+                let relation_id = relation.get("id").and_then(Value::as_str).ok_or_else(|| {
+                    soland_storage::PersistenceError::Internal(format!(
+                        "sidecar Relation projection Event {} has no relation id",
+                        event.event_id
+                    ))
+                })?;
+                sidecar_relation_ids.insert(relation_id.to_owned());
+                replay_projection_event(proj, event, hydration_hlc, "sidecar-relation")?;
+            }
+            arkret_sdk::events::EventKind::RELATION_UPDATE
+            | arkret_sdk::events::EventKind::RELATION_TOMBSTONE => {
+                let relation_id = event
+                    .payload
+                    .get("relation_id")
+                    .or_else(|| event.payload.get("id"))
+                    .and_then(Value::as_str);
+                if relation_id.is_some_and(|id| sidecar_relation_ids.contains(id)) {
+                    replay_projection_event(proj, event, hydration_hlc, "sidecar-relation")?;
+                }
+            }
+            _ => {}
+        }
     }
     Ok(())
 }
@@ -281,6 +516,62 @@ async fn hydrate_canonical_realm_bootstraps(
     Ok(())
 }
 
+/// Rebuild the reducer's Realm membership cache from canonical
+/// `ak.member.state` Events.
+///
+/// The Realm directory has its own replay path because it is a query index,
+/// but Circle admission and the sidecar membership predicate read
+/// `ProjectionState::member`. Replaying only the directory leaves those two
+/// views disagreeing after every restart: the member is visible in Realm
+/// rosters while the Circle reducer rejects it as a non-member.
+pub(super) async fn hydrate_canonical_realm_memberships(
+    persistence: &dyn soland_storage::PersistenceStore,
+    proj: &mut ProjectionState,
+) -> soland_storage::PersistenceResult<()> {
+    use soland_domain::reducer::ProjectionEffect;
+
+    let mut records = persistence
+        .events()
+        .snapshot_all()
+        .await?
+        .into_iter()
+        .filter(|record| record.kind == arkret_sdk::events::EventKind::MEMBER_STATE)
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+
+    for record in records {
+        let Some(operation) =
+            crate::routing::events::event_log::projection_operation_from_canonical_record(&record)
+        else {
+            return Err(soland_storage::PersistenceError::Internal(format!(
+                "Realm membership Event {} cannot rebuild its projection operation",
+                record.event_id
+            )));
+        };
+        match proj.restore_accepted_membership(&operation, operation.created_at) {
+            ProjectionEffect::Rejected { reason } => {
+                return Err(soland_storage::PersistenceError::Internal(format!(
+                    "Realm membership Event {} failed deterministic hydration: {reason}",
+                    record.event_id
+                )));
+            }
+            ProjectionEffect::Ignored => {
+                return Err(soland_storage::PersistenceError::Internal(format!(
+                    "Realm membership Event {} was ignored during deterministic hydration",
+                    record.event_id
+                )));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Read event-backed and mirror-table projections from durable persistence
 /// into the supplied `ProjectionState`. Called at
 /// `AppState::new` so restart picks up the lifecycle state the
@@ -301,6 +592,8 @@ pub(super) async fn hydrate_projections_from_persistence(
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
 
     hydrate_canonical_realm_bootstraps(persistence, proj, authz, &hydration_hlc).await?;
+    hydrate_canonical_realm_memberships(persistence, proj).await?;
+    hydrate_sidecar_circle_projections(persistence, proj, &hydration_hlc).await?;
 
     // Agent key authorization is consulted by sidecar eligibility, while
     // `ak.key_backup.active_series` is the canonical selector for every
@@ -657,6 +950,10 @@ pub(super) async fn hydrate_projections_from_persistence(
             );
         }
     }
+    // Run after object mirrors: sidecar Relation scope validation needs both
+    // endpoint projections, and Strand field restoration must not be replaced
+    // by the common-field-only Strand mirror that loaded above.
+    hydrate_sidecar_thread_projections(persistence, proj, &hydration_hlc).await?;
     Ok(())
 }
 

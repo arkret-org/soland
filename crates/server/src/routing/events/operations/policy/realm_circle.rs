@@ -76,7 +76,13 @@ pub(super) async fn validate_circle_create_policy(
     {
         return Ok(());
     }
-    if payload_asserts_agent_sidecar_ensure(&operation.payload) {
+    if payload_declares_agent_sidecar_profile(&operation.payload) {
+        // The profile id is reserved to the authenticated aggregate ensure
+        // operation. A regular `ak.circle.create` must not turn an ordinary
+        // Circle grant into sidecar access merely by selecting the profile.
+        if !payload_asserts_agent_sidecar_ensure(&operation.payload) {
+            return Err("sidecar_create_denied");
+        }
         let Some(actor) = policy_operation_sender(operation) else {
             return Err("sidecar_create_denied");
         };
@@ -181,6 +187,11 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
     controller: &str,
     circle_id: &str,
 ) -> bool {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE)
+    {
+        return false;
+    }
     if operation.payload.get("membership").and_then(Value::as_str) != Some("join") {
         return false;
     }
@@ -308,13 +319,7 @@ pub(super) fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor
 }
 
 pub(super) fn payload_asserts_agent_sidecar_ensure(payload: &Value) -> bool {
-    let profile_matches = payload.get("profile").and_then(Value::as_str).or_else(|| {
-        payload
-            .get("object")
-            .and_then(|object| object.get("profile_ref"))
-            .and_then(Value::as_str)
-    }) == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD);
-    if !profile_matches {
+    if !payload_declares_agent_sidecar_profile(payload) {
         return false;
     }
     if payload
@@ -334,15 +339,23 @@ pub(super) fn payload_asserts_agent_sidecar_ensure(payload: &Value) -> bool {
         })
 }
 
+pub(super) fn payload_declares_agent_sidecar_profile(payload: &Value) -> bool {
+    payload.get("profile").and_then(Value::as_str).or_else(|| {
+        payload
+            .get("object")
+            .and_then(|object| object.get("profile_ref"))
+            .and_then(Value::as_str)
+    }) == Some(arkret_sdk::PROFILE_AGENT_SIDECAR_THREAD)
+}
+
 pub(super) fn sidecar_circle_create_shape_is_constrained(
     payload: &Value,
     operation: &Operation,
     actor: &str,
 ) -> bool {
-    let Some(object) = payload.get("object").and_then(Value::as_object) else {
+    if !sidecar_circle_object_shape_is_constrained(operation, actor) {
         return false;
-    };
-    let realm_id = operation.realm_id.as_str();
+    }
     let controller = payload
         .get("controller_id")
         .and_then(Value::as_str)
@@ -350,6 +363,28 @@ pub(super) fn sidecar_circle_create_shape_is_constrained(
     if controller != actor {
         return false;
     }
+    let realm_id = operation.realm_id.as_str();
+    let expected_key = arkret_sdk::agent_sidecar_circle_key(realm_id, actor);
+    payload
+        .get("controller_agent_circle_key")
+        .and_then(Value::as_str)
+        == Some(expected_key.as_str())
+}
+
+pub(super) fn sidecar_circle_object_shape_is_constrained(
+    operation: &Operation,
+    actor: &str,
+) -> bool {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(arkret_sdk::events::EventKind::CIRCLE_CREATE)
+    {
+        return false;
+    }
+    let payload = &operation.payload;
+    let Some(object) = payload.get("object").and_then(Value::as_object) else {
+        return false;
+    };
+    let realm_id = operation.realm_id.as_str();
     if object.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
         return false;
     }
@@ -371,13 +406,6 @@ pub(super) fn sidecar_circle_create_shape_is_constrained(
         return false;
     }
     let expected_key = arkret_sdk::agent_sidecar_circle_key(realm_id, actor);
-    if payload
-        .get("controller_agent_circle_key")
-        .and_then(Value::as_str)
-        != Some(expected_key.as_str())
-    {
-        return false;
-    }
     let expected_short_name = arkret_sdk::agent_sidecar_short_name(&expected_key);
     object.get("title").and_then(Value::as_str) == Some(expected_short_name.as_str())
         && object

@@ -94,6 +94,55 @@ impl ProjectionState {
             }
         }
 
+        self.project_accepted_membership(operation, now, new_state.to_owned(), member, realm_id)
+    }
+
+    /// Restore an already-accepted canonical membership Event into the
+    /// reducer's structured cache.
+    ///
+    /// Admission policy, delivery binding and gate checks ran before the Event
+    /// became canonical. Hydration must materialize that accepted truth rather
+    /// than re-evaluate it against a partially rebuilt policy projection.
+    pub fn restore_accepted_membership(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(new_state) = operation
+            .payload
+            .get("membership")
+            .and_then(Value::as_str)
+            .filter(|state| matches!(*state, "invite" | "join" | "leave" | "ban" | "knock"))
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Ignored;
+        };
+        let Some(member) = operation
+            .payload
+            .get("actor_id")
+            .and_then(Value::as_str)
+            .filter(|member| !member.is_empty())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Ignored;
+        };
+        self.project_accepted_membership(
+            operation,
+            now,
+            new_state,
+            member,
+            operation.realm_id.to_string(),
+        )
+    }
+
+    fn project_accepted_membership(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+        new_state: String,
+        member: String,
+        realm_id: String,
+    ) -> ProjectionEffect {
         // Side-band data: `role` lives outside the FSM cell and is captured
         // here for the structured cache. `joined_at` is set on the first
         // `join` transition; subsequent transitions preserve the original.
@@ -105,7 +154,7 @@ impl ProjectionState {
             .to_owned();
         let key = (realm_id.clone(), member.clone());
         let previous = self.members.get(&key);
-        let invited_at = match new_state {
+        let invited_at = match new_state.as_str() {
             "invite" => previous.and_then(|m| m.invited_at).or(Some(now)),
             "join" => previous.and_then(|m| {
                 m.invited_at
@@ -113,7 +162,7 @@ impl ProjectionState {
             }),
             _ => previous.and_then(|m| m.invited_at),
         };
-        let joined_at = match (new_state, previous) {
+        let joined_at = match (new_state.as_str(), previous) {
             ("join", Some(previous)) if previous.state == "join" => previous.joined_at,
             ("join", _) => now,
             (_, Some(previous)) => previous.joined_at,
@@ -161,7 +210,7 @@ impl ProjectionState {
             } else {
                 None
             };
-        let remove_membership_frontier = matches!(new_state, "leave" | "ban").then(|| {
+        let remove_membership_frontier = matches!(new_state.as_str(), "leave" | "ban").then(|| {
             vec![
                 event_ref
                     .clone()
@@ -192,7 +241,7 @@ impl ProjectionState {
                     .map(ToOwned::to_owned),
             },
         );
-        if matches!(new_state, "leave" | "ban") {
+        if matches!(new_state.as_str(), "leave" | "ban") {
             let updated_by = operation
                 .payload
                 .get("sender")
@@ -201,7 +250,7 @@ impl ProjectionState {
             self.cascade_realm_member_removal_to_circles(
                 &realm_id,
                 &member,
-                new_state,
+                new_state.as_str(),
                 updated_by,
                 remove_membership_frontier.unwrap_or_default(),
                 now,
