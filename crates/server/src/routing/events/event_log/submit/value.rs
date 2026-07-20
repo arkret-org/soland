@@ -16,7 +16,7 @@ pub(super) fn stored_prev_frontier_digest(
 }
 
 pub(super) fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> {
-    arkret_sdk::prev_frontier_digest(prev_refs).map_err(|error| {
+    arkret_core::prev_frontier_digest(prev_refs).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -40,10 +40,10 @@ async fn validate_active_series_authority_before_commit(
     parsed: &ValidatedEventEnvelope,
     operation: &Operation,
 ) -> Result<(), SubmitOneError> {
-    if parsed.kind != arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
+    if parsed.kind != arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
         return Ok(());
     }
-    let record: arkret_sdk::KeyBackupActiveSeries = serde_json::from_value(
+    let record: arkret_core::KeyBackupActiveSeries = serde_json::from_value(
         crate::routing::events::projection_context_stripped_payload(&operation.payload),
     )
     .map_err(|error| {
@@ -90,7 +90,7 @@ pub(in crate::routing) async fn submit_event_value(
     envelope: Value,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
-        == Some(arkret_sdk::events::EventKind::REALM_CREATE)
+        == Some(arkret_core::events::EventKind::REALM_CREATE)
     {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
@@ -145,7 +145,7 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
     idempotency: EventCommitIdempotency,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
-        == Some(arkret_sdk::events::EventKind::REALM_CREATE)
+        == Some(arkret_core::events::EventKind::REALM_CREATE)
     {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
@@ -178,7 +178,7 @@ pub(super) async fn submit_event_value_with_context(
             "event envelope cannot be encoded",
         )
     })?;
-    if arkret_sdk::validate_event_envelope_byte_len(raw_bytes.len()).is_err() {
+    if arkret_core::validate_event_envelope_byte_len(raw_bytes.len()).is_err() {
         return Err(SubmitOneError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
@@ -237,9 +237,9 @@ pub(super) async fn submit_event_value_with_context(
             format!("events store unavailable: {error}"),
         )
     })?;
-    if parsed.kind == arkret_sdk::events::EventKind::REALM_CREATE
+    if parsed.kind == arkret_core::events::EventKind::REALM_CREATE
         && existing_records.iter().any(|record| {
-            record.kind == arkret_sdk::events::EventKind::REALM_CREATE
+            record.kind == arkret_core::events::EventKind::REALM_CREATE
                 && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
         })
     {
@@ -697,7 +697,7 @@ pub(super) async fn submit_event_value_with_context(
     // MUST emit a `schema_migration_breaking` audit record carrying issuer,
     // from/to schema sets, compatibility class, the capability action used, and
     // the opt-in profile ref. (additive migrations need no audit-grade record.)
-    if parsed.kind == arkret_sdk::events::EventKind::MORPH_SCHEMA_MIGRATE {
+    if parsed.kind == arkret_core::events::EventKind::MORPH_SCHEMA_MIGRATE {
         let migrate_payload = envelope.get("payload");
         let compatibility_class = migrate_payload
             .and_then(|payload| payload.get("compatibility_class"))
@@ -745,14 +745,14 @@ pub(super) async fn submit_event_value_with_context(
     let scope_strand_id: Option<String> = envelope
         .get("payload")
         .and_then(|payload| match parsed.kind.as_str() {
-            arkret_sdk::events::EventKind::MESSAGE_CREATE
-            | arkret_sdk::events::EventKind::STRAND_MOVE
-            | arkret_sdk::events::EventKind::STRAND_REORDER => {
+            arkret_core::events::EventKind::MESSAGE_CREATE
+            | arkret_core::events::EventKind::STRAND_MOVE
+            | arkret_core::events::EventKind::STRAND_REORDER => {
                 payload.get("strand_id").and_then(Value::as_str)
             }
-            arkret_sdk::events::EventKind::STRAND_UPDATE
-            | arkret_sdk::events::EventKind::STRAND_ARCHIVE
-            | arkret_sdk::events::EventKind::STRAND_RESTORE => {
+            arkret_core::events::EventKind::STRAND_UPDATE
+            | arkret_core::events::EventKind::STRAND_ARCHIVE
+            | arkret_core::events::EventKind::STRAND_RESTORE => {
                 payload.get("target_ref").and_then(Value::as_str)
             }
             _ => None,
@@ -854,7 +854,7 @@ pub(super) async fn submit_event_value_with_context(
         .commit_accepted_event(command)
         .await
     {
-        if parsed.kind == arkret_sdk::events::EventKind::REALM_CREATE
+        if parsed.kind == arkret_core::events::EventKind::REALM_CREATE
             && persistence_error_is_realm_already_exists(&error)
         {
             return Err(realm_already_exists_error());

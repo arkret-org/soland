@@ -1,6 +1,6 @@
 //! Wire and storage types for the applet bridge surface.
 
-use arkret_sdk::{
+use arkret_core::{
     AppletInstallOutcome, AppletPackage, AppletRegistrationEpochEvidence, AppletWireNamespaces,
 };
 use salvo::oapi::ToSchema;
@@ -181,5 +181,5 @@ pub struct AppletGhostIngressOutcome {
 #[derive(Clone)]
 pub(super) struct FormalAppletEvent {
     pub(super) event_id: String,
-    pub(super) event: arkret_sdk::Event,
+    pub(super) event: arkret_core::Event,
 }

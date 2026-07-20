@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
-pub use arkret_sdk::DeviceGenerationStatus;
-use arkret_sdk::{MoveId, RealmId, SealId};
+pub use arkret_core::DeviceGenerationStatus;
+use arkret_core::{MoveId, RealmId, SealId};
 use serde_json::Value;
 use soland_storage::{CanonicalEventRecord, PersistenceError};
 
@@ -115,7 +115,7 @@ async fn bootstrap_generation_ref(
 ) -> Result<Option<String>, PersistenceError> {
     let bootstrap = records.iter().find(|record| {
         record.actor_id == principal_id
-            && record.kind == arkret_sdk::events::EventKind::REALM_CREATE
+            && record.kind == arkret_core::events::EventKind::REALM_CREATE
             && record
                 .envelope
                 .pointer("/payload/object/fields/purpose")
@@ -136,7 +136,7 @@ async fn bootstrap_generation_ref(
     };
     let paired = records.iter().any(|record| {
         record.actor_id == principal_id
-            && record.kind == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
+            && record.kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
             && record
                 .envelope
                 .get("prev_refs")
@@ -164,7 +164,7 @@ async fn bootstrap_generation_ref(
             .is_some_and(|services| {
                 services.iter().any(|service| {
                     service.get("type").and_then(Value::as_str)
-                        == Some(arkret_sdk::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY)
+                        == Some(arkret_core::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY)
                         && service
                             .get("serviceEndpoint")
                             .and_then(Value::as_str)
@@ -196,7 +196,7 @@ fn reanchor_unit_fingerprint(
         .and_then(Value::as_str)?;
     let authorize = records.iter().find(|record| {
         record.event_id == authorize_id
-            && record.kind == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
+            && record.kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
             && record.canonical_digest == authorize_digest
             && record
                 .envelope
@@ -385,14 +385,14 @@ pub async fn accepted_device_generation_seal_leaves(
         if !visited.insert(seal_id.clone()) {
             continue;
         }
-        let coverage =
-            arkret_sdk::leaf_union_proof(std::slice::from_ref(&seal_id), state.seal_store.as_ref())
-                .map_err(|error| {
-                    PersistenceError::Internal(format!("Seal coverage unavailable: {error}"))
-                })?
-                .into_iter()
-                .flat_map(|proof| proof.covered_event_digests)
-                .collect::<BTreeSet<_>>();
+        let coverage = arkret_state::leaf_union_proof(
+            std::slice::from_ref(&seal_id),
+            state.seal_store.as_ref(),
+        )
+        .map_err(|error| PersistenceError::Internal(format!("Seal coverage unavailable: {error}")))?
+        .into_iter()
+        .flat_map(|proof| proof.covered_event_digests)
+        .collect::<BTreeSet<_>>();
         if coverage.is_disjoint(&quarantined) {
             accepted.insert(seal_id);
             continue;

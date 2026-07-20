@@ -1,8 +1,8 @@
 //! Inbound transaction-push per-delivery RFC 9421 source-signature
 //! verification (`applet-integration.md` §7.3.1).
 
-use arkret_sdk::applet::WebhookSignatureAlg;
-use arkret_sdk::canonical;
+use arkret_core::applet::WebhookSignatureAlg;
+use arkret_core::canonical;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use soland_http::error::AppError;

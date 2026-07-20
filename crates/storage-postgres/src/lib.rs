@@ -1,6 +1,6 @@
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) use arkret_sdk::{BlobRef, EventBatchReceipt, Operation};
+pub(crate) use arkret_core::{BlobRef, EventBatchReceipt, Operation};
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
 pub(crate) use diesel::sql_types::{

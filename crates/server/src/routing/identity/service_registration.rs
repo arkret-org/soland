@@ -1,6 +1,6 @@
 //! Standard Service Identity Provider operations.
 
-use arkret_sdk::{
+use arkret_core::{
     CanonicalServiceUrl, Did, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
     ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceType,
     ServiceWebvhDataIntegrityProof,
@@ -67,7 +67,7 @@ pub(crate) async fn ensure(
         seq: 1,
         method_evidence: json!({
             "mode": "service_registration_provider",
-            "operation": arkret_sdk::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
+            "operation": arkret_core::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
             "service_type": key.service_type().as_str(),
             "public_base": key.public_base().as_str(),
             "version_id": outcome.version_id,
@@ -182,7 +182,7 @@ fn sign_registration_receipt(
         "issued_at": issued_at,
         "provider_service_id": provider_service_id,
     });
-    let receipt_digest = arkret_sdk::canonical::canonical_sha256(&receipt_claims)
+    let receipt_digest = arkret_core::canonical::canonical_sha256(&receipt_claims)
         .map_err(|error| AppError::internal(error.to_string()))?;
     let receipt_id = format!(
         "ak:service_registration_receipt:{}",
@@ -208,12 +208,12 @@ fn sign_registration_receipt(
         "provider_service_id": provider_service_id,
     });
     let mut signing_input = Vec::with_capacity(64);
-    let proof_config_bytes = arkret_sdk::canonical::canonical_json_bytes(&proof_config)
+    let proof_config_bytes = arkret_core::canonical::canonical_json_bytes(&proof_config)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let receipt_bytes = arkret_sdk::canonical::canonical_json_bytes(&signed_receipt)
+    let receipt_bytes = arkret_core::canonical::canonical_json_bytes(&signed_receipt)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    signing_input.extend_from_slice(&arkret_sdk::canonical::sha256_bytes(&proof_config_bytes));
-    signing_input.extend_from_slice(&arkret_sdk::canonical::sha256_bytes(&receipt_bytes));
+    signing_input.extend_from_slice(&arkret_core::canonical::sha256_bytes(&proof_config_bytes));
+    signing_input.extend_from_slice(&arkret_core::canonical::sha256_bytes(&receipt_bytes));
     let signature = state.notary_signing_key().sign(&signing_input);
     let proof = ServiceWebvhDataIntegrityProof {
         proof_type: "DataIntegrityProof".to_owned(),

@@ -1,4 +1,4 @@
-use arkret_sdk::Operation;
+use arkret_core::Operation;
 use soland_domain::kinds;
 use soland_storage::ProjectionEventRecord;
 

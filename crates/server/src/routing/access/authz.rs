@@ -12,14 +12,14 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::models::{
+use arkret_core::models::{
     AuthzDecision, CapabilityGrant, CapabilitySubject, Facet,
     GrantConstraint as WireGrantConstraint, GrantConstraintEffect as WireGrantConstraintEffect,
     GrantConstraintExtensionKey, GrantConstraintSubtype as WireGrantConstraintSubtype,
     GrantConstraintType as WireGrantConstraintType, GrantList, Invite, InviteDeliveryTarget,
     InviteState,
 };
-use arkret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
+use arkret_core::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -77,7 +77,7 @@ async fn authz_check(
             .flatten()
             .map(|m| m.owner);
         let realms = state.realms.lock();
-        let members = arkret_sdk::RealmId::new(realm_id.clone())
+        let members = arkret_core::RealmId::new(realm_id.clone())
             .ok()
             .and_then(|realm_id| realms.get(&realm_id))
             .map(|realm| {
@@ -594,7 +594,7 @@ async fn session_owns_realm(state: &AppState, actor: &str, realm_id: &str) -> bo
 fn capability_resource_selector(
     realm_id: &str,
     resource: &str,
-) -> Result<arkret_sdk::WireResourceSelector, AppError> {
+) -> Result<arkret_core::WireResourceSelector, AppError> {
     let value = if resource == "*" {
         json!({
             "kind": "realm",

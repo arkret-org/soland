@@ -1,4 +1,4 @@
-use arkret_sdk::Operation;
+use arkret_core::Operation;
 use serde_json::{Value, json};
 use soland_application::delivery::DeviceMessageState;
 use soland_domain::kinds;
@@ -320,34 +320,34 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     // Space-container lifecycle: 6 event kinds → space_containers map.
     let is_space_container_kind = matches!(
         kind,
-        arkret_sdk::events::EventKind::SPACE_CREATE
-            | arkret_sdk::events::EventKind::SPACE_UPDATE
-            | arkret_sdk::events::EventKind::SPACE_PARENT
-            | arkret_sdk::events::EventKind::SPACE_ARCHIVE
-            | arkret_sdk::events::EventKind::SPACE_RESTORE
-            | arkret_sdk::events::EventKind::SPACE_TOMBSTONE
+        arkret_core::events::EventKind::SPACE_CREATE
+            | arkret_core::events::EventKind::SPACE_UPDATE
+            | arkret_core::events::EventKind::SPACE_PARENT
+            | arkret_core::events::EventKind::SPACE_ARCHIVE
+            | arkret_core::events::EventKind::SPACE_RESTORE
+            | arkret_core::events::EventKind::SPACE_TOMBSTONE
     );
     // Strand lifecycle (state-affecting + position-touching).
     let is_strand_kind = matches!(
         kind,
-        arkret_sdk::events::EventKind::STRAND_CREATE
-            | arkret_sdk::events::EventKind::STRAND_UPDATE
-            | arkret_sdk::events::EventKind::STRAND_ARCHIVE
-            | arkret_sdk::events::EventKind::STRAND_RESTORE
-            | arkret_sdk::events::EventKind::STRAND_MOVE
-            | arkret_sdk::events::EventKind::STRAND_REORDER
-            | arkret_sdk::events::EventKind::STRAND_TRACKS_UPDATE
+        arkret_core::events::EventKind::STRAND_CREATE
+            | arkret_core::events::EventKind::STRAND_UPDATE
+            | arkret_core::events::EventKind::STRAND_ARCHIVE
+            | arkret_core::events::EventKind::STRAND_RESTORE
+            | arkret_core::events::EventKind::STRAND_MOVE
+            | arkret_core::events::EventKind::STRAND_REORDER
+            | arkret_core::events::EventKind::STRAND_TRACKS_UPDATE
     );
     let is_morph_kind = matches!(
         kind,
-        arkret_sdk::events::EventKind::MORPH_CREATE
-            | arkret_sdk::events::EventKind::MORPH_UPDATE
-            | arkret_sdk::events::EventKind::MORPH_ARCHIVE
-            | arkret_sdk::events::EventKind::MORPH_RESTORE
+        arkret_core::events::EventKind::MORPH_CREATE
+            | arkret_core::events::EventKind::MORPH_UPDATE
+            | arkret_core::events::EventKind::MORPH_ARCHIVE
+            | arkret_core::events::EventKind::MORPH_RESTORE
     );
     // ak.redaction with an `object_ref` may have flipped a Strand or
     // Morph to Redacted. Pick up either by attempting both.
-    let is_redaction = kind == arkret_sdk::events::EventKind::REDACTION;
+    let is_redaction = kind == arkret_core::events::EventKind::REDACTION;
     if !(is_space_container_kind || is_strand_kind || is_morph_kind || is_redaction) {
         return;
     }
@@ -409,13 +409,13 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
                 None
             }
         } else if is_strand_kind {
-            let id = if kind == arkret_sdk::events::EventKind::STRAND_CREATE {
+            let id = if kind == arkret_core::events::EventKind::STRAND_CREATE {
                 strand_id_from_object
             } else if matches!(
                 kind,
-                arkret_sdk::events::EventKind::STRAND_UPDATE
-                    | arkret_sdk::events::EventKind::STRAND_ARCHIVE
-                    | arkret_sdk::events::EventKind::STRAND_RESTORE
+                arkret_core::events::EventKind::STRAND_UPDATE
+                    | arkret_core::events::EventKind::STRAND_ARCHIVE
+                    | arkret_core::events::EventKind::STRAND_RESTORE
             ) {
                 strand_id_from_target_ref
             } else {
@@ -424,7 +424,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             id.and_then(|i| proj.strands.get(&i))
                 .map(return_snapshot_strand)
         } else if is_morph_kind {
-            let id = if kind == arkret_sdk::events::EventKind::MORPH_CREATE {
+            let id = if kind == arkret_core::events::EventKind::MORPH_CREATE {
                 morph_id_from_object
             } else {
                 morph_id_from_target_ref
@@ -454,23 +454,23 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     fn return_snapshot_space_container(
         p: &soland_domain::reducer::SpaceContainerProjection,
     ) -> Option<ProjectionWriteThroughSnapshot> {
-        let (child_scope_policy, child_scope_policy_scope_circle_id) = match p
-            .child_scope_policy
-            .as_ref()
-        {
-            None => (None, None),
-            Some(arkret_sdk::ChildScopePolicy::AllowAny {}) => (Some("allow_any".to_owned()), None),
-            Some(arkret_sdk::ChildScopePolicy::RequireE2ee {}) => {
-                (Some("require_e2ee".to_owned()), None)
-            }
-            Some(arkret_sdk::ChildScopePolicy::RequireSameScope {}) => {
-                (Some("require_same_scope".to_owned()), None)
-            }
-            Some(arkret_sdk::ChildScopePolicy::RequireScopeCircleId { scope_circle_id }) => (
-                Some("require_scope_circle_id".to_owned()),
-                Some(scope_circle_id.as_str().to_owned()),
-            ),
-        };
+        let (child_scope_policy, child_scope_policy_scope_circle_id) =
+            match p.child_scope_policy.as_ref() {
+                None => (None, None),
+                Some(arkret_core::ChildScopePolicy::AllowAny {}) => {
+                    (Some("allow_any".to_owned()), None)
+                }
+                Some(arkret_core::ChildScopePolicy::RequireE2ee {}) => {
+                    (Some("require_e2ee".to_owned()), None)
+                }
+                Some(arkret_core::ChildScopePolicy::RequireSameScope {}) => {
+                    (Some("require_same_scope".to_owned()), None)
+                }
+                Some(arkret_core::ChildScopePolicy::RequireScopeCircleId { scope_circle_id }) => (
+                    Some("require_scope_circle_id".to_owned()),
+                    Some(scope_circle_id.as_str().to_owned()),
+                ),
+            };
         Some(ProjectionWriteThroughSnapshot::SpaceContainer(
             SpaceContainerProjectionRecord {
                 container_space_id: p.container_space_id.clone(),
@@ -619,11 +619,11 @@ async fn project_accepted_operations_inner(
         } else if kinds::canonical_kind_string(operation) == "ak.invite.accept" {
             project_invite_accept_operation(state, origin, operation).await;
         } else if kinds::canonical_kind_string(operation)
-            == arkret_sdk::events::EventKind::INVITE_CANCEL
+            == arkret_core::events::EventKind::INVITE_CANCEL
         {
             project_invite_cancel_operation(state, origin, operation).await;
         } else if kinds::canonical_kind_string(operation)
-            == arkret_sdk::events::EventKind::INVITE_REVOKE
+            == arkret_core::events::EventKind::INVITE_REVOKE
         {
             project_invite_revoke_operation(state, origin, operation).await;
         } else if kinds::canonical_kind_string(operation) == "ak.realm.plaintext_visible_services" {
@@ -640,7 +640,7 @@ async fn project_accepted_operations_inner(
         // plaintext Ed25519 proof verification has already run at event
         // ingest, and unsupported proof forms fail closed there.
         if kinds::canonical_kind_string(operation)
-            == arkret_sdk::events::EventKind::MEMBER_IDENTITY_UPDATE
+            == arkret_core::events::EventKind::MEMBER_IDENTITY_UPDATE
         {
             project_member_identity_update(state, operation);
         }
@@ -656,7 +656,7 @@ async fn project_accepted_operations_inner(
         }
         crate::routing::identity::consent::project_consent_operation(state, operation).await;
         // Phase 4 — materialize accepted cross-signing publishes into the
-        // DeviceManager (CAS bookkeeping). Validation already ran pre-acceptance.
+        // cross-signing registry (CAS bookkeeping). Validation already ran pre-acceptance.
         if kinds::canonical_kind_string(operation) == "ak.cross_signing.publish" {
             crate::routing::identity::cross_signing::project_cross_signing_publish(
                 state,
@@ -676,7 +676,7 @@ async fn project_accepted_operations_inner(
         // authorized but never opened a session (previously the key only
         // landed via the session-grant exchange path).
         if kinds::canonical_kind_string(operation)
-            == arkret_sdk::events::EventKind::DEVICE_AUTHORIZE
+            == arkret_core::events::EventKind::DEVICE_AUTHORIZE
         {
             project_device_authorize(state, operation).await;
         }
@@ -689,7 +689,7 @@ async fn project_accepted_operations_inner(
         let reducer_context_operation = trusted_sidecar_member_controller
             .filter(|_| {
                 kinds::canonical_kind_for_operation(operation)
-                    == Some(arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE)
+                    == Some(arkret_core::events::EventKind::CIRCLE_MEMBER_STATE)
             })
             .map(|controller| trusted_sidecar_member_reducer_operation(operation, controller));
         let reducer_operation = reducer_context_operation.as_ref().unwrap_or(operation);
@@ -708,7 +708,7 @@ async fn project_accepted_operations_inner(
             };
         if let Some(effect) = reducer_effect {
             if kinds::canonical_kind_string(operation)
-                == arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES
+                == arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES
                 && let soland_domain::reducer::ProjectionEffect::Rejected { reason } = &effect
             {
                 tracing::error!(
@@ -747,12 +747,14 @@ async fn project_accepted_operations_inner(
         // Mirrors the canonical wire kinds the reducer dispatches into
         // `ProjectionState::{space_containers,strands,morphs}`.
         write_through_projection(state, operation).await;
-        if kinds::canonical_kind_string(operation) == arkret_sdk::events::EventKind::RELATION_CREATE
+        if kinds::canonical_kind_string(operation)
+            == arkret_core::events::EventKind::RELATION_CREATE
         {
             crate::routing::events::notify::dispatch_assignment_notifications(state, operation)
                 .await;
         }
-        if kinds::canonical_kind_string(operation) == arkret_sdk::events::EventKind::STRAND_UPDATE {
+        if kinds::canonical_kind_string(operation) == arkret_core::events::EventKind::STRAND_UPDATE
+        {
             crate::routing::events::notify::dispatch_schedule_notifications(state, operation).await;
         }
         // AKP-0016 — mirror agent_participation ceiling changes into the
@@ -983,7 +985,7 @@ async fn project_realm_key_share_to_device(
     let wire_payload =
         crate::routing::events::operations::projection_context_stripped_payload(&operation.payload);
     let Ok(share) =
-        serde_json::from_value::<arkret_sdk::RealmKeySharePayload>(wire_payload.clone())
+        serde_json::from_value::<arkret_core::RealmKeySharePayload>(wire_payload.clone())
     else {
         return;
     };
@@ -1040,7 +1042,7 @@ fn realm_key_share_device_message_content(
     payload: &Value,
 ) -> Value {
     json!({
-        "kind": arkret_sdk::events::EventKind::REALM_KEY_SHARE,
+        "kind": arkret_core::events::EventKind::REALM_KEY_SHARE,
         "sender_device_id": sender_device_id,
         "content": {
             "realm_id": realm_id,
@@ -1067,7 +1069,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     // into the typed SDK counterpart so field access is checked, not stringly.
     let wire_payload =
         crate::routing::identity::cross_signing::device_authorize_wire_payload(payload);
-    let typed: arkret_sdk::DeviceAuthorizePayload = match serde_json::from_value(wire_payload) {
+    let typed: arkret_core::DeviceAuthorizePayload = match serde_json::from_value(wire_payload) {
         Ok(typed) => typed,
         Err(error) => {
             tracing::warn!(%error, "accepted ak.device.authorize payload is not the typed wire shape; skipping projection");
@@ -1238,10 +1240,10 @@ mod tests {
             soland_storage_postgres::Db { pool: None },
         );
         let realm_id =
-            arkret_sdk::RealmId::new("ak:realm:0196419b-1000-7000-8000-000000000101".to_owned())
+            arkret_core::RealmId::new("ak:realm:0196419b-1000-7000-8000-000000000101".to_owned())
                 .unwrap();
         let operation_id =
-            arkret_sdk::OperationId::new("ak:operation:0196419b-1000-7000-8000-000000000102")
+            arkret_core::OperationId::new("ak:operation:0196419b-1000-7000-8000-000000000102")
                 .unwrap();
         let sender = "did:web:alice.example";
         let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000101";
@@ -1269,7 +1271,7 @@ mod tests {
         let operation = Operation::create(
             operation_id.clone(),
             realm_id,
-            arkret_sdk::events::EventKind::REALM_KEY_SHARE,
+            arkret_core::events::EventKind::REALM_KEY_SHARE,
             payload,
         );
 
@@ -1283,7 +1285,7 @@ mod tests {
         assert_eq!(queued.len(), 1);
         assert_eq!(
             queued[0].content["kind"],
-            arkret_sdk::events::EventKind::REALM_KEY_SHARE
+            arkret_core::events::EventKind::REALM_KEY_SHARE
         );
         assert_eq!(
             queued[0].content["content"]["payload"]["ciphertext"],
@@ -1354,7 +1356,7 @@ mod tests {
         assert_eq!(delivered.len(), 1);
         assert_eq!(
             delivered[0].kind,
-            arkret_sdk::events::EventKind::REALM_KEY_SHARE
+            arkret_core::events::EventKind::REALM_KEY_SHARE
         );
         assert_eq!(delivered[0].content["realm_id"], realm_id);
         assert_eq!(delivered[0].content["operation_id"], operation_id);
@@ -1364,13 +1366,13 @@ mod tests {
     #[test]
     fn trusted_sidecar_member_context_does_not_mutate_wire_operation() {
         let operation = Operation::create(
-            arkret_sdk::OperationId::new(
+            arkret_core::OperationId::new(
                 "ak:operation:0196419b-1000-7000-8000-000000000202".to_owned(),
             )
             .unwrap(),
-            arkret_sdk::RealmId::new("ak:realm:0196419b-1000-7000-8000-000000000201".to_owned())
+            arkret_core::RealmId::new("ak:realm:0196419b-1000-7000-8000-000000000201".to_owned())
                 .unwrap(),
-            arkret_sdk::events::EventKind::CIRCLE_MEMBER_STATE,
+            arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
             json!({
                 "circle_id": "ak:circle:0196419b-1000-7000-8000-000000000203",
                 "actor_id": "did:web:agent.example",

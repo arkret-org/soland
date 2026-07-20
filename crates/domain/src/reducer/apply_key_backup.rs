@@ -7,13 +7,13 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+            != Some(arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
         {
             return ProjectionEffect::Ignored;
         }
 
         let wire_payload = projection_context_stripped_payload(&operation.payload);
-        let record: arkret_sdk::KeyBackupActiveSeries =
+        let record: arkret_core::KeyBackupActiveSeries =
             match serde_json::from_value(wire_payload.clone()) {
                 Ok(record) => record,
                 Err(_) => {
@@ -30,7 +30,7 @@ impl ProjectionState {
             .key_backup_active_series
             .get(&pointer_key)
             .and_then(soland_active_series_head);
-        let head = match arkret_sdk::validate_key_backup_active_series_transition(
+        let head = match arkret_core::validate_key_backup_active_series_transition(
             current_head.as_ref(),
             &record,
         ) {
@@ -64,7 +64,7 @@ impl ProjectionState {
             event_id: operation.operation_id.to_string(),
         };
         let subject = active_series_subject(&actor_id, &backup_class);
-        if let Ok(cell_id) = arkret_sdk::CellRef::new(format!(
+        if let Ok(cell_id) = arkret_core::CellRef::new(format!(
             "ak:cell:{KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY}:{subject}"
         )) {
             self.cells.insert(cell_id, CellState::Value(wire_payload));
@@ -92,7 +92,7 @@ impl ProjectionState {
         &self,
         actor_id: &str,
         backup_class: &str,
-    ) -> Option<arkret_sdk::KeyBackupActiveSeriesHead> {
+    ) -> Option<arkret_core::KeyBackupActiveSeriesHead> {
         self.key_backup_active_series(actor_id, backup_class)
             .and_then(soland_active_series_head)
     }
@@ -100,16 +100,17 @@ impl ProjectionState {
 
 fn soland_active_series_head(
     current: &SolandKeyBackupActiveSeries,
-) -> Option<arkret_sdk::KeyBackupActiveSeriesHead> {
-    Some(arkret_sdk::KeyBackupActiveSeriesHead {
-        actor_id: arkret_sdk::Did::new(current.actor_id.clone()).ok()?,
-        backup_class: arkret_sdk::BackupClass::try_from(current.backup_class.as_str()).ok()?,
-        active_series_id: arkret_sdk::BackupSeriesId::new(current.active_series_id.clone()).ok()?,
+) -> Option<arkret_core::KeyBackupActiveSeriesHead> {
+    Some(arkret_core::KeyBackupActiveSeriesHead {
+        actor_id: arkret_core::Did::new(current.actor_id.clone()).ok()?,
+        backup_class: arkret_core::BackupClass::try_from(current.backup_class.as_str()).ok()?,
+        active_series_id: arkret_core::BackupSeriesId::new(current.active_series_id.clone())
+            .ok()?,
         series_pointer_version: current.series_pointer_version,
         previous_series_ids: current
             .previous_series_ids
             .iter()
-            .map(|series_id| arkret_sdk::BackupSeriesId::new(series_id.clone()))
+            .map(|series_id| arkret_core::BackupSeriesId::new(series_id.clone()))
             .collect::<std::result::Result<Vec<_>, _>>()
             .ok()?,
         record_digest: current.record_digest.clone(),
@@ -122,15 +123,15 @@ fn rejected(reason: &str) -> ProjectionEffect {
     }
 }
 
-fn backup_class_wire(backup_class: arkret_sdk::BackupClass) -> &'static str {
+fn backup_class_wire(backup_class: arkret_core::BackupClass) -> &'static str {
     match backup_class {
-        arkret_sdk::BackupClass::DidRecovery => "did_recovery",
-        arkret_sdk::BackupClass::SecretStorage => "secret_storage",
-        arkret_sdk::BackupClass::MlsHistory => "mls_history",
+        arkret_core::BackupClass::DidRecovery => "did_recovery",
+        arkret_core::BackupClass::SecretStorage => "secret_storage",
+        arkret_core::BackupClass::MlsHistory => "mls_history",
     }
 }
 
 fn active_series_subject(actor_id: &str, backup_class: &str) -> String {
-    arkret_sdk::composite_subject(&[actor_id, backup_class])
+    arkret_core::composite_subject(&[actor_id, backup_class])
         .expect("string cell-subject parts always have canonical JSON encoding")
 }

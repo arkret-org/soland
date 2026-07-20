@@ -26,11 +26,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_sdk::identity::{
+use arkret_core::{Did, Error};
+use arkret_identity::{
     CompositeDidResolver, DidDocument, DidKeyResolver, DidResolver, DidWebResolver,
     DidWebvhResolver,
 };
-use arkret_sdk::{Did, Error};
 use parking_lot::RwLock;
 use serde_json::Value;
 use soland_storage::PersistenceStore;
@@ -201,7 +201,7 @@ impl DidResolver for SolandDidResolver {
         self.cached_document(did).is_some() || self.fallback.supports(did)
     }
 
-    fn resolve_did(&self, did: &Did) -> arkret_sdk::identity::Result<DidDocument> {
+    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<DidDocument> {
         if let Some(document) = self.cached_document(did) {
             return Ok(document);
         }
@@ -350,8 +350,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use arkret_sdk::Did;
-    use arkret_sdk::identity::DidResolver;
+    use arkret_core::Did;
+    use arkret_identity::DidResolver;
     use serde_json::json;
     use soland_storage::{DeliveryPolicyStoreRegistry, WebvhDocumentRecord};
     use soland_storage_memory::SolandMemoryPersistenceStore;
@@ -497,7 +497,7 @@ mod tests {
         let mut verification_methods = BTreeMap::new();
         verification_methods.insert(
             verification_method,
-            arkret_sdk::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]),
+            arkret_core::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]),
         );
         let document = DidDocument {
             id: did.clone(),
@@ -546,7 +546,7 @@ mod tests {
                 id: did.clone(),
                 verification_methods: BTreeMap::from([(
                     verification_method.clone(),
-                    arkret_sdk::ed25519_pubkey_to_did_key_multibase(&[key_byte; 32]),
+                    arkret_core::ed25519_pubkey_to_did_key_multibase(&[key_byte; 32]),
                 )]),
                 also_known_as: Vec::new(),
                 updated_at: Some(chrono::Utc::now()),
@@ -575,7 +575,7 @@ mod tests {
         let resolved = resolver.resolve_did(&did).expect("snapshot resolve");
         assert_eq!(
             resolved.verification_methods[&verification_method],
-            arkret_sdk::ed25519_pubkey_to_did_key_multibase(&[2u8; 32])
+            arkret_core::ed25519_pubkey_to_did_key_multibase(&[2u8; 32])
         );
     }
 
@@ -584,7 +584,7 @@ mod tests {
         let config = base_config();
         let resolver = build_soland_did_resolver(&config, None);
         let now = chrono::Utc::now();
-        let public_key = arkret_sdk::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]);
+        let public_key = arkret_core::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]);
         for index in 0..=LOCAL_DID_SNAPSHOT_CAPACITY {
             let did = Did::new(format!("did:web:cache-{index}.example")).expect("valid DID");
             let document =

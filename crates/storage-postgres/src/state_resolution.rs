@@ -2,12 +2,12 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Arc;
 
-use arkret_sdk::lattice::{CellState, SealedOp};
-use arkret_sdk::state::{
+use arkret_core::{Bottom, CellRef, Hash, LatticeOp, Move, MoveId, RealmId, Seal, SealId};
+use arkret_state::lattice::{CellState, SealedOp};
+use arkret_state::state::{
     CellRegistry, CellStore, MoveStore, SealStore, SealedMoveRecord, StoreError, StoreResult,
     compute_state_root,
 };
-use arkret_sdk::{Bottom, CellRef, Hash, LatticeOp, Move, MoveId, RealmId, Seal, SealId};
 use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::pooled_connection::deadpool::Object;
@@ -51,10 +51,10 @@ pub fn build_state_resolution_stores(
         };
     }
 
-    let seal_store = Arc::new(arkret_sdk::state::MemorySealStore::default());
-    let cell_store = Arc::new(arkret_sdk::state::MemoryCellStore::default());
+    let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
+    let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
     StateResolutionStores {
-        move_store: Arc::new(arkret_sdk::state::MemoryMoveStore::default()),
+        move_store: Arc::new(arkret_state::state::MemoryMoveStore::default()),
         seal_store: seal_store.clone(),
         cell_store: cell_store.clone(),
         event_seal_committer: Arc::new(MemoryEventSealCommitStore {
@@ -86,8 +86,8 @@ struct PgEventSealCommitStore {
 
 struct MemoryEventSealCommitStore {
     lock: parking_lot::Mutex<()>,
-    seal_store: Arc<arkret_sdk::state::MemorySealStore>,
-    cell_store: Arc<arkret_sdk::state::MemoryCellStore>,
+    seal_store: Arc<arkret_state::state::MemorySealStore>,
+    cell_store: Arc<arkret_state::state::MemoryCellStore>,
     cell_registry: Arc<dyn CellRegistry>,
 }
 
@@ -1189,7 +1189,8 @@ impl CellStore for PgCellStore {
 mod event_seal_commit_tests {
     use std::sync::{Arc, Barrier};
 
-    use arkret_sdk::{Hlc, LatticeOpType, MoveSignature, NotarySig, SealKind, SealStore};
+    use arkret_core::{Hlc, LatticeOpType, MoveSignature, NotarySig, SealKind};
+    use arkret_state::SealStore;
     use chrono::Utc;
     use serde_json::json;
 
@@ -1230,7 +1231,7 @@ mod event_seal_commit_tests {
         let state =
             effective_state_with_new_ops(cell_store, registry, realm, &covered, &ops).unwrap();
         let state_root = compute_state_root(&state).unwrap();
-        let control_root = arkret_sdk::state::control_event_set_root(&covered).unwrap();
+        let control_root = arkret_state::state::control_event_set_root(&covered).unwrap();
         let placeholder_hash = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
         let mut seal = Seal {
             id: SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
@@ -1265,8 +1266,8 @@ mod event_seal_commit_tests {
 
     #[test]
     fn memory_composite_commit_never_exposes_loser_effects() {
-        let seal_store = Arc::new(arkret_sdk::state::MemorySealStore::default());
-        let cell_store = Arc::new(arkret_sdk::state::MemoryCellStore::default());
+        let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
+        let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
         let registry: Arc<dyn CellRegistry> =
             Arc::new(soland_domain::reducer::lattice_kinds::build_sdk_cell_registry());
         let committer = Arc::new(MemoryEventSealCommitStore {

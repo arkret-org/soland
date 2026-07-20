@@ -46,7 +46,7 @@ fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value
 }
 
 fn sign_reset_payload(payload: &mut Value, signing: &SigningKey) {
-    let content: arkret_sdk::CrossSigningResetPayload =
+    let content: arkret_core::CrossSigningResetPayload =
         serde_json::from_value(payload.clone()).expect("reset content");
     let input = content.reset_signing_input().expect("reset signing input");
     let signature = URL_SAFE_NO_PAD.encode(signing.sign(&input).to_bytes());
@@ -54,7 +54,7 @@ fn sign_reset_payload(payload: &mut Value, signing: &SigningKey) {
 }
 
 fn sign_device_quorum_reset_payload(payload: &mut Value, signings: &[SigningKey]) {
-    let content: arkret_sdk::CrossSigningResetPayload =
+    let content: arkret_core::CrossSigningResetPayload =
         serde_json::from_value(payload.clone()).expect("reset content");
     let input = content.reset_signing_input().expect("reset signing input");
     for (idx, signing) in signings.iter().enumerate() {
@@ -64,7 +64,7 @@ fn sign_device_quorum_reset_payload(payload: &mut Value, signings: &[SigningKey]
 }
 
 fn bind_recovery_unlock_commitment(payload: &mut Value) {
-    let content: arkret_sdk::CrossSigningResetPayload =
+    let content: arkret_core::CrossSigningResetPayload =
         serde_json::from_value(payload.clone()).expect("reset content");
     let commitment = content
         .recovery_unlock_commitment()
@@ -197,7 +197,7 @@ async fn seed_verified_reset_recovery_session(
             trust_domain: "ak:trust_domain:soland.local".to_owned(),
             policy_id: policy_id.to_owned(),
             policy_version: 1,
-            identity_model: arkret_sdk::RecoveryIdentityModel::CrossSigning,
+            identity_model: arkret_core::RecoveryIdentityModel::CrossSigning,
             ssk_generation: Some(1),
             current_device_generation_ref: None,
             device_generation_status: None,
@@ -322,7 +322,7 @@ async fn recovery_session_derives_enrollment_authority_model_and_rejects_a_model
             }),
         ),
     ] {
-        let canonical_bytes = arkret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
+        let canonical_bytes = arkret_core::canonical::canonical_json_bytes(&envelope).unwrap();
         bootstrap_records.push(CanonicalEventRecord {
             event_id: event_id.to_owned(),
             actor_id: principal_id.to_owned(),
@@ -1399,7 +1399,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
         "proof": { "kind": "principal_signing", "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXI" },
         "issued_at": "2026-05-30T00:00:00Z",
     });
-    let content: arkret_sdk::CrossSigningResetPayload =
+    let content: arkret_core::CrossSigningResetPayload =
         serde_json::from_value(reset).expect("reset content");
     state
         .test_cross_signing()

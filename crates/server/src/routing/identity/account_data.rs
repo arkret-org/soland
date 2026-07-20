@@ -10,7 +10,7 @@
 //! opaque encrypted blob; clients own canonical encoding, schema validation,
 //! and (where applicable) encryption.
 
-use arkret_sdk::{
+use arkret_core::{
     AccountDataDeleteOutcome, AccountDataEntry, AccountDataList, AccountDataReplaceRequestBody,
     Did, Event, EventId, Hlc, RealmId,
 };
@@ -47,39 +47,39 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
+        data_type: arkret_core::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
+        data_type: arkret_core::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
+        data_type: arkret_core::ACCOUNT_DATA_TYPE_REMINDER,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
+        data_type: arkret_core::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
+        data_type: arkret_core::ACCOUNT_DATA_TYPE_SNOOZE,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_SAVED,
+        data_type: arkret_core::ACCOUNT_DATA_TYPE_SAVED,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
+        data_type: arkret_core::ACCOUNT_DATA_TYPE_DRAFT,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
+        data_type: arkret_core::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
+        data_type: arkret_core::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
         controller_private: true,
     },
     AccountDataTypeSpec {
@@ -227,10 +227,10 @@ async fn persist_account_data_event(
     ))
     .map_err(|error| AppError::internal(format!("account_data realm invalid: {error}")))?;
     let mut event = Event::new_with_id_at(
-        EventId::new(arkret_sdk::new_prefixed_uuid7("ak:event:")).map_err(|error| {
+        EventId::new(arkret_core::new_prefixed_uuid7("ak:event:")).map_err(|error| {
             AppError::internal(format!("account_data Event id invalid: {error}"))
         })?,
-        arkret_sdk::events::EventKind::ACCOUNT_DATA_SET,
+        arkret_core::events::EventKind::ACCOUNT_DATA_SET,
         realm_id.clone(),
         service_did.clone(),
         actor_seq,
@@ -248,16 +248,16 @@ async fn persist_account_data_event(
             })?);
     }
     let verification_method = format!("{}#notary-key", state.service_id);
-    let signer = arkret_sdk::Ed25519MoveSigner::new(
+    let signer = arkret_signatures::Ed25519MoveSigner::new(
         state.notary_signing_key().as_ref().clone(),
         service_did,
         verification_method.clone(),
     );
-    arkret_sdk::signatures::sign_event(
+    arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_sdk::signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .map_err(|error| AppError::internal(format!("account_data Event signing failed: {error}")))?;
     let mut service_session = session.clone();
@@ -608,7 +608,7 @@ mod tests {
 
     fn encrypted_envelope(data_type: &str) -> Value {
         serde_json::to_value(
-            arkret_sdk::account_data_crypto::seal_account_data_value_with_nonce(
+            arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                 &[7u8; 32],
                 "did:web:alice.example",
                 data_type,

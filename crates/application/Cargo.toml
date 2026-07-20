@@ -10,7 +10,7 @@ authors.workspace = true
 description = "Transport- and adapter-independent Soland application use cases."
 
 [dependencies]
-arkret-sdk = { workspace = true, features = ["full-surface", "mls"] }
+arkret-core.workspace = true
 async-trait.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 serde_json.workspace = true

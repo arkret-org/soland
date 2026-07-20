@@ -45,7 +45,7 @@ pub use soland_http::result::{
 /// cannot drift across call sites. Returns `None` when canonicalization
 /// fails (e.g. non-finite floats).
 pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String> {
-    arkret_sdk::canonical::canonical_sha256(value).ok()
+    arkret_core::canonical::canonical_sha256(value).ok()
 }
 
 /// Test-support re-exports for the integration test crate. These projection /

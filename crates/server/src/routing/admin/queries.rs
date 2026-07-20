@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_sdk::{AccountStatus, Did};
+use arkret_core::{AccountStatus, Did};
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};

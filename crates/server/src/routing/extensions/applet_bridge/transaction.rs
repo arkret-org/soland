@@ -1,4 +1,4 @@
-use arkret_sdk::{
+use arkret_core::{
     AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionRequestBody, Event, EventId,
     RejectedItem, namespace_pattern_matches,
 };

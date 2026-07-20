@@ -136,7 +136,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::EventKind::MEMBER_STATE)
+            != Some(arkret_core::events::EventKind::MEMBER_STATE)
         {
             return Ok(());
         }
@@ -227,7 +227,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::EventKind::INVITE_CREATE)
+            != Some(arkret_core::events::EventKind::INVITE_CREATE)
         {
             return Ok(());
         }
@@ -453,7 +453,7 @@ impl ProjectionState {
     /// second invite cannot replay the same authorisation (§7.5 #3).
     pub(crate) fn consume_join_authorisation(&mut self, operation: &Operation) {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::EventKind::INVITE_CREATE)
+            != Some(arkret_core::events::EventKind::INVITE_CREATE)
         {
             return;
         }
@@ -521,7 +521,7 @@ fn join_authorised_by_refs(operation: &Operation) -> Vec<String> {
     join_authorised_by_refs_from_payload(&operation.payload)
 }
 
-fn join_authorised_by_refs_from_event_refs(refs: &[arkret_sdk::EventRef]) -> Vec<String> {
+fn join_authorised_by_refs_from_event_refs(refs: &[arkret_core::EventRef]) -> Vec<String> {
     refs.iter()
         .filter(|reference| reference.role == "join_authorised_by")
         .filter_map(|reference| {

@@ -1,10 +1,10 @@
-#[cfg(test)]
-use arkret_sdk::identity::DidResolver;
-use arkret_sdk::{
+use arkret_core::{
     Did, INVITE_CLAIM_AUDIENCE, INVITE_SUBJECT_PROOF_ALG, InviteClaimBindingProof,
     InviteSubjectProof, InviteSubjectProofBody, Operation, canonical,
     invite_binding_proof_transcript_bytes,
 };
+#[cfg(test)]
+use arkret_identity::DidResolver;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
@@ -391,7 +391,7 @@ fn resolve_current_ed25519_key(
         return Err("resolved DID document id does not match requested DID".to_owned());
     }
     crate::jws_verify::require_verification_method_in_document(&document, verification_method)?;
-    arkret_sdk::jws::resolve_ed25519_pubkey(resolver, verification_method)
+    arkret_identity::jws::resolve_ed25519_pubkey(resolver, verification_method)
         .map_err(|error| error.to_string())
 }
 
@@ -409,7 +409,7 @@ async fn resolve_current_ed25519_key_for_state(
 }
 
 fn decode_ed25519_multibase_key(value: &str) -> Result<VerifyingKey, String> {
-    let key = arkret_sdk::decode_ed25519_multibase(value)
+    let key = arkret_core::decode_ed25519_multibase(value)
         .map_err(|error| format!("verification_public_key is not Ed25519 multibase: {error}"))?;
     VerifyingKey::from_bytes(&key).map_err(|error| format!("Ed25519 key invalid: {error}"))
 }
@@ -435,7 +435,7 @@ fn trimmed_string(value: Option<&Value>) -> Option<&str> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use arkret_sdk::identity::DidDocument;
+    use arkret_identity::DidDocument;
     use base64::Engine as _;
     use ed25519_dalek::{Signer as _, SigningKey};
 
@@ -474,7 +474,7 @@ mod tests {
                 });
             entry.verification_methods.insert(
                 method.to_owned(),
-                arkret_sdk::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes()),
+                arkret_core::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes()),
             );
             self
         }
@@ -485,9 +485,9 @@ mod tests {
             self.docs.contains_key(did.as_str())
         }
 
-        fn resolve_did(&self, did: &Did) -> arkret_sdk::identity::Result<DidDocument> {
+        fn resolve_did(&self, did: &Did) -> arkret_identity::Result<DidDocument> {
             self.docs.get(did.as_str()).cloned().ok_or_else(|| {
-                arkret_sdk::identity::IdentityError::Protocol(format!(
+                arkret_identity::IdentityError::Protocol(format!(
                     "stub resolver does not handle {did}"
                 ))
             })

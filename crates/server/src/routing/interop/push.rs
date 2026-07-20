@@ -47,19 +47,19 @@ const PUSH_TARGET_RETAIN_SECONDS: i64 = 24 * 60 * 60;
 
 pub(crate) fn push_target_privacy_derivation_claim(
     now: chrono::DateTime<chrono::Utc>,
-) -> arkret_sdk::PrivacyDerivation {
-    arkret_sdk::PrivacyDerivation {
-        push_target_id: Some(arkret_sdk::PushTargetPrivacyDerivation {
-            derivation_profile: arkret_sdk::PushTargetDerivationProfile::HmacSha256V1,
-            secret_scope: arkret_sdk::PushTargetSecretScope::PerService,
+) -> arkret_core::PrivacyDerivation {
+    arkret_core::PrivacyDerivation {
+        push_target_id: Some(arkret_core::PushTargetPrivacyDerivation {
+            derivation_profile: arkret_core::PushTargetDerivationProfile::HmacSha256V1,
+            secret_scope: arkret_core::PushTargetSecretScope::PerService,
             salt_epoch_id: push_target_salt_epoch_id_at(now),
             salt_rotation_seconds: PUSH_TARGET_SALT_ROTATION_SECONDS as u64,
             input_binding: Some(vec![
-                arkret_sdk::PushTargetInputBinding::RecipientServiceId,
-                arkret_sdk::PushTargetInputBinding::PrincipalId,
-                arkret_sdk::PushTargetInputBinding::DeviceId,
-                arkret_sdk::PushTargetInputBinding::PushRouteId,
-                arkret_sdk::PushTargetInputBinding::SaltEpochId,
+                arkret_core::PushTargetInputBinding::RecipientServiceId,
+                arkret_core::PushTargetInputBinding::PrincipalId,
+                arkret_core::PushTargetInputBinding::DeviceId,
+                arkret_core::PushTargetInputBinding::PushRouteId,
+                arkret_core::PushTargetInputBinding::SaltEpochId,
             ]),
         }),
     }
@@ -87,7 +87,7 @@ fn derive_push_target_id(
         "push_route_id": push_route_id,
         "salt_epoch_id": salt_epoch_id,
     });
-    let canonical = arkret_sdk::canonical::canonical_json_bytes(&input)
+    let canonical = arkret_core::canonical::canonical_json_bytes(&input)
         .map_err(|error| AppError::internal(format!("push target canonicalize: {error}")))?;
     let epoch_key = hmac_sha256(root_key, salt_epoch_id.as_bytes());
     let tag = hmac_sha256(&epoch_key, &canonical);
@@ -103,7 +103,7 @@ pub(super) async fn push_register(
     body: JsonBody<PushRegisterDeviceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<arkret_sdk::PushRegisterDeviceOutcome> {
+) -> JsonResult<arkret_core::PushRegisterDeviceOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let auth_result = authenticated_session(state, req);
     let body = body.into_inner();
@@ -205,7 +205,7 @@ pub(super) async fn push_register(
     {
         tracing::error!(%error, "failed to persist push device registration");
     }
-    json_ok(arkret_sdk::PushRegisterDeviceOutcome {
+    json_ok(arkret_core::PushRegisterDeviceOutcome {
         ok: true,
         registration_id: Some(registration_id),
         expires_at: None,
@@ -334,7 +334,7 @@ pub(super) async fn push_unregister(
     body: JsonBody<PushUnregisterDeviceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<arkret_sdk::PushUnregisterDeviceOutcome> {
+) -> JsonResult<arkret_core::PushUnregisterDeviceOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -363,7 +363,7 @@ pub(super) async fn push_unregister(
         if removed == 0 { "no_match" } else { "accepted" },
     )
     .await;
-    json_ok(arkret_sdk::PushUnregisterDeviceOutcome { ok: true })
+    json_ok(arkret_core::PushUnregisterDeviceOutcome { ok: true })
 }
 
 #[endpoint(
@@ -382,7 +382,7 @@ pub(super) async fn push_notify(
         .notification
         .push_target_id
         .as_deref()
-        .filter(|value| arkret_sdk::is_valid_push_target_id(value))
+        .filter(|value| arkret_core::is_valid_push_target_id(value))
         .ok_or_else(|| AppError::invalid_param("notification.push_target_id is required"))?;
     let notification = serde_json::to_value(&body.notification).map_err(|error| {
         AppError::internal(format!("push notification request serialize: {error}"))
@@ -672,12 +672,12 @@ fn push_rejection(
     device: Value,
     reason: &str,
     _detail: Option<String>,
-) -> arkret_sdk::PushNotifyRejection {
+) -> arkret_core::PushNotifyRejection {
     let device_id = device
         .get("device_id")
         .and_then(Value::as_str)
-        .and_then(|value| arkret_sdk::DeviceId::new(value.to_owned()).ok());
-    arkret_sdk::PushNotifyRejection {
+        .and_then(|value| arkret_core::DeviceId::new(value.to_owned()).ok());
+    arkret_core::PushNotifyRejection {
         push_target_id: push_target_id.to_owned(),
         device_id,
         reason_code: reason.to_owned(),
@@ -733,7 +733,7 @@ mod tests {
         assert_eq!(first, again);
         assert_ne!(first, other_route);
         assert_ne!(first, other_service);
-        assert!(arkret_sdk::is_valid_push_target_id(&first));
+        assert!(arkret_core::is_valid_push_target_id(&first));
         assert!(!first.contains("alice"));
         assert!(!first.contains("device"));
     }

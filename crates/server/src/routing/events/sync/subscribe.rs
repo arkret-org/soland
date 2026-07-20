@@ -9,7 +9,7 @@ use crate::routing::spaces::space::presence_visible_to_session;
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
 pub(super) async fn account_describe(
     depot: &mut Depot,
-) -> soland_http::result::JsonResult<arkret_sdk::ServiceDescribe> {
+) -> soland_http::result::JsonResult<arkret_core::ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     soland_http::result::json_ok(crate::routing::system::describe::build_server_description(
         state,
@@ -36,7 +36,7 @@ const SUBSCRIBE_REBUILD_DEBOUNCE_MS: u64 = 150;
 pub(crate) fn auth_material_present(authorization: Option<&str>, query: Option<&str>) -> bool {
     let header_bearer = authorization
         .is_some_and(|value| value.starts_with("Bearer ") || value.starts_with("bearer "));
-    let query_token = query.is_some_and(arkret_sdk::contains_query_auth_material);
+    let query_token = query.is_some_and(arkret_core::contains_query_auth_material);
     header_bearer || query_token
 }
 
@@ -321,9 +321,9 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     res.stream(body_stream.boxed());
 }
 
-fn account_frontier_frame(cursor: Option<String>) -> arkret_sdk::AccountSubscribeFrame {
-    arkret_sdk::AccountSubscribeFrame {
-        kind: arkret_sdk::AccountSubscribeFrameKind::Frontier,
+fn account_frontier_frame(cursor: Option<String>) -> arkret_core::AccountSubscribeFrame {
+    arkret_core::AccountSubscribeFrame {
+        kind: arkret_core::AccountSubscribeFrameKind::Frontier,
         cursor,
         realms: None,
         to_device: None,
@@ -337,9 +337,9 @@ fn account_frontier_frame(cursor: Option<String>) -> arkret_sdk::AccountSubscrib
     }
 }
 
-fn account_catchup_complete_frame(cursor: Option<String>) -> arkret_sdk::AccountSubscribeFrame {
-    arkret_sdk::AccountSubscribeFrame {
-        kind: arkret_sdk::AccountSubscribeFrameKind::CatchupComplete,
+fn account_catchup_complete_frame(cursor: Option<String>) -> arkret_core::AccountSubscribeFrame {
+    arkret_core::AccountSubscribeFrame {
+        kind: arkret_core::AccountSubscribeFrameKind::CatchupComplete,
         cursor,
         realms: None,
         to_device: None,
@@ -358,7 +358,7 @@ fn account_catchup_complete_frame(cursor: Option<String>) -> arkret_sdk::Account
 /// and no presence ticks. `account_data` is intentionally excluded — it
 /// is always emitted in full for authenticated sessions today, so it
 /// would defeat long-poll entirely.
-fn delta_is_empty(response: &arkret_sdk::AccountSubscribeFrame) -> bool {
+fn delta_is_empty(response: &arkret_core::AccountSubscribeFrame) -> bool {
     response
         .realms
         .as_ref()
@@ -426,7 +426,7 @@ fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
     }
 }
 
-pub(crate) fn sync_filter_value(filter: Option<&arkret_sdk::SyncFilter>) -> Option<Value> {
+pub(crate) fn sync_filter_value(filter: Option<&arkret_core::SyncFilter>) -> Option<Value> {
     filter.and_then(|filter| serde_json::to_value(filter).ok())
 }
 
@@ -434,15 +434,15 @@ fn account_reconnect_control_frame(
     after: Option<&str>,
     _reason: impl Into<String>,
     reconnect_after_ms: u64,
-) -> arkret_sdk::AccountSubscribeFrame {
+) -> arkret_core::AccountSubscribeFrame {
     let (kind, cursor) = match after {
         Some(cursor) if !cursor.is_empty() => (
-            arkret_sdk::AccountSubscribeFrameKind::Dropped,
+            arkret_core::AccountSubscribeFrameKind::Dropped,
             Some(cursor.to_owned()),
         ),
-        _ => (arkret_sdk::AccountSubscribeFrameKind::ResyncRequired, None),
+        _ => (arkret_core::AccountSubscribeFrameKind::ResyncRequired, None),
     };
-    arkret_sdk::AccountSubscribeFrame {
+    arkret_core::AccountSubscribeFrame {
         kind,
         cursor,
         realms: None,
@@ -485,7 +485,7 @@ pub(crate) async fn presence_events_for_actors(
     state: &AppState,
     actors: BTreeSet<String>,
     session: Option<&SessionRecord>,
-) -> Vec<arkret_sdk::EphemeralEnvelope> {
+) -> Vec<arkret_core::EphemeralEnvelope> {
     let now = Utc::now();
     let mut events = Vec::new();
     for actor in actors {
@@ -539,9 +539,9 @@ pub(crate) fn aggregate_presence_records(
             updated_at: newest_updated_at,
         });
     }
-    let status = arkret_sdk::aggregate_presence_states(
+    let status = arkret_core::aggregate_presence_states(
         live.iter()
-            .filter_map(|record| arkret_sdk::PresenceStatus::parse_wire(&record.status)),
+            .filter_map(|record| arkret_core::PresenceStatus::parse_wire(&record.status)),
     );
     let mut by_recency: Vec<&&PresenceRecord> = live.iter().collect();
     by_recency.sort_by_key(|record| std::cmp::Reverse(record.updated_at));

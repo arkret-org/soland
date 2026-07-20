@@ -199,7 +199,7 @@ fn engine_grant_from_cell_body(
     let capability_action_registry_digest = body
         .get("capability_action_registry_digest")
         .and_then(Value::as_str)
-        .and_then(|value| arkret_sdk::Hash::new(value.to_owned()).ok());
+        .and_then(|value| arkret_core::Hash::new(value.to_owned()).ok());
     let constraints = engine_constraints_from_body(body);
     let created_at = body
         .get("issued_at")
@@ -267,12 +267,12 @@ fn validate_capability_registry_binding(
     let digest = match body.get("capability_action_registry_digest") {
         None => None,
         Some(Value::String(value)) if value.starts_with("sha256:") => Some(
-            arkret_sdk::Hash::new(value.clone())
+            arkret_core::Hash::new(value.clone())
                 .map_err(|_| "capability_grant_registry_digest_invalid")?,
         ),
         Some(_) => return Err("capability_grant_registry_digest_invalid"),
     };
-    arkret_sdk::validate_capability_action_registry_binding(actions, digest.as_ref())
+    arkret_core::validate_capability_action_registry_binding(actions, digest.as_ref())
         .map_err(|_| "capability_registry_basis_unavailable")
 }
 
@@ -286,7 +286,7 @@ fn validate_agent_subject_grant_constraints(
     body: &Value,
     subject_is_agent: impl Fn(&str) -> bool,
 ) -> Result<(), &'static str> {
-    use arkret_sdk::schema::CapabilityRiskTier;
+    use arkret_core::schema::CapabilityRiskTier;
 
     let Some(subject) = body.get("subject").and_then(Value::as_str) else {
         return Ok(());
@@ -299,7 +299,7 @@ fn validate_agent_subject_grant_constraints(
     };
     let has_finite_expiry = body_effective_expires_at(body).is_some();
     for action in actions.iter().filter_map(Value::as_str) {
-        let descriptor = arkret_sdk::schema::embedded_capability_action(action)
+        let descriptor = arkret_core::schema::embedded_capability_action(action)
             .ok()
             .flatten();
         let (risk_tier, required_constraints) = match descriptor {
@@ -974,7 +974,7 @@ impl ProjectionState {
     /// the delegate cell / authz index.
     pub fn check_delegation_cycle(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::EventKind::CAPABILITY_DELEGATE)
+            != Some(arkret_core::events::EventKind::CAPABILITY_DELEGATE)
         {
             return Ok(());
         }
@@ -1287,8 +1287,8 @@ impl ProjectionState {
 
 #[cfg(test)]
 mod agent_key_tests {
-    use arkret_sdk::models::{Operation, OperationType};
-    use arkret_sdk::{OperationId, RealmId};
+    use arkret_core::models::{Operation, OperationType};
+    use arkret_core::{OperationId, RealmId};
     use serde_json::json;
 
     use crate::reducer::{ProjectionState, SolandRealmState};
@@ -1375,7 +1375,7 @@ mod agent_key_tests {
 
     #[test]
     fn aggregate_admin_grant_accepts_current_registry_basis() {
-        let digest = arkret_sdk::current_capability_action_registry_digest().unwrap();
+        let digest = arkret_core::current_capability_action_registry_digest().unwrap();
         let body = json!({
             "actions": ["ak.realm.admin"],
             "resources": [{ "kind": "realm", "realm_id": REALM }],
@@ -1547,6 +1547,10 @@ mod agent_key_tests {
             ),
             chrono::Utc::now(),
         );
+        assert!(matches!(
+            effect,
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
         let allowed = state.apply_capability_grant(
             &op(
                 "capability_grant",
@@ -1671,10 +1675,10 @@ mod agent_key_tests {
 
 #[cfg(test)]
 mod delegation_cycle_tests {
-    use arkret_sdk::{Operation, OperationId, RealmId};
+    use arkret_core::{Operation, OperationId, RealmId};
     use serde_json::json;
 
-    use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
+    use crate::reducer::{ProjectionState, SolandRealmState};
 
     const REALM: &str = "ak:realm:01970000-0000-7000-8000-000000000000";
     const G_A: &str = "ak:grant:01970000-0000-7000-8000-00000000a001";
@@ -1693,7 +1697,7 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_sdk::events::EventKind::CAPABILITY_DELEGATE,
+            arkret_core::events::EventKind::CAPABILITY_DELEGATE,
             json!({
                 "grant_id": grant_id,
                 "grant": {
@@ -1720,7 +1724,7 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fd").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_sdk::events::EventKind::CAPABILITY_GRANT,
+            arkret_core::events::EventKind::CAPABILITY_GRANT,
             json!({
                 "grant_id": grant_id,
                 "grant": {
@@ -1860,7 +1864,7 @@ mod delegation_cycle_tests {
 
 #[cfg(test)]
 mod federation_revoke_fanout_tests {
-    use arkret_sdk::{Operation, OperationId, RealmId};
+    use arkret_core::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
@@ -1904,7 +1908,7 @@ mod federation_revoke_fanout_tests {
     }
 
     fn delivery_binding_grant_payload() -> serde_json::Value {
-        let registry_digest = arkret_sdk::current_capability_action_registry_digest()
+        let registry_digest = arkret_core::current_capability_action_registry_digest()
             .expect("embedded capability action registry");
         json!({
             "grant_id": GRANT,
@@ -1939,7 +1943,7 @@ mod federation_revoke_fanout_tests {
         let effect = state.apply_capability_grant(
             &capability_op(
                 "ak:operation:01970000-0000-7000-8000-0000000000a1",
-                arkret_sdk::events::EventKind::CAPABILITY_GRANT,
+                arkret_core::events::EventKind::CAPABILITY_GRANT,
                 delivery_binding_grant_payload(),
             ),
             now,
@@ -1957,7 +1961,7 @@ mod federation_revoke_fanout_tests {
         let effect = state.apply_capability_revoke(
             &capability_op(
                 "ak:operation:01970000-0000-7000-8000-0000000000a2",
-                arkret_sdk::events::EventKind::CAPABILITY_REVOKE,
+                arkret_core::events::EventKind::CAPABILITY_REVOKE,
                 json!({ "grant_id": GRANT, "realm_id": REALM }),
             ),
             now,

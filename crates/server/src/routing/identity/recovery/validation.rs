@@ -133,7 +133,7 @@ pub(super) fn validate_recovery_receipt(
         .unwrap_or("");
     let parsed = uuid::Uuid::parse_str(session_uuid).map_err(|_| {
         AppError::invalid_param("recovery_session_id MUST be ak:recovery_session:<uuidv7> per spec")
-            .with_wire_code(arkret_sdk::ReasonCode::CURSOR_INTEGRITY_INVALID)
+            .with_wire_code(arkret_core::ReasonCode::CURSOR_INTEGRITY_INVALID)
     })?;
     if parsed.get_version_num() != 7 {
         return Err(AppError::invalid_param(
@@ -388,7 +388,7 @@ pub(super) fn recovery_signature_transcript(
 pub(super) fn recovery_signature_error(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::InvalidSignature, message.into())
         .with_status(StatusCode::UNAUTHORIZED)
-        .with_wire_code(arkret_sdk::ReasonCode::PROOF_INVALID)
+        .with_wire_code(arkret_core::ReasonCode::PROOF_INVALID)
 }
 
 /// A recovery proof is not bound to the expected (recovery policy, session,

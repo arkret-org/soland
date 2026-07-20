@@ -104,8 +104,8 @@ pub(super) fn recovery_proof_summary(record: &RecoverySessionApplicationState) -
     let kind = proof.get("kind").and_then(Value::as_str)?;
     let verification_method = proof.get("verification_method").and_then(Value::as_str);
     let transcript = recovery_proof_summary_transcript(record, proof)?;
-    let transcript_bytes = arkret_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
-    let proof_digest = arkret_sdk::canonical::sha256_digest(&transcript_bytes);
+    let transcript_bytes = arkret_core::canonical::canonical_json_bytes(&transcript).ok()?;
+    let proof_digest = arkret_core::canonical::sha256_digest(&transcript_bytes);
     let mut summary = json!({ "kind": kind, "proof_digest": proof_digest });
     if let Some(vm) = verification_method {
         summary["verification_method"] = json!(vm);
@@ -336,7 +336,7 @@ pub(super) async fn recovery_session_create(
         let accepted_seal_frontier = if leaves.is_empty() {
             None
         } else {
-            let view = arkret_sdk::effective_seal_view(
+            let view = arkret_state::effective_seal_view(
                 &leaves,
                 &realm_id,
                 state.seal_store.as_ref(),
@@ -347,7 +347,7 @@ pub(super) async fn recovery_session_create(
                 AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
                     .with_wire_code("device_reanchor_frontier_mismatch")
             })?;
-            Some(arkret_sdk::SealBasis {
+            Some(arkret_core::SealBasis {
                 leaves,
                 control_event_set_root: view.control_event_set_root,
                 state_root: view.state_root,
@@ -665,7 +665,7 @@ pub(super) async fn verify_principal_signing_proof(
 
     let transcript = recovery_proof_transcript(record, "principal_signing");
     let transcript_bytes =
-        arkret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        arkret_core::canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery proof transcript failed: {error}"))
         })?;
 
@@ -751,7 +751,7 @@ pub(super) async fn verify_trusted_recovery_service_proof(
     let transcript =
         generic_recovery_proof_transcript(record, "trusted_recovery_service", proof_body);
     let transcript_bytes =
-        arkret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        arkret_core::canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery proof transcript failed: {error}"))
         })?;
     let signature_b64 = required_proof_string(proof, "signature")?;
@@ -833,7 +833,7 @@ pub(super) async fn verify_recovery_unlock_proof(
     let transcript =
         generic_recovery_proof_transcript(record, "recovery_unlock", Value::Object(proof_body));
     let transcript_bytes =
-        arkret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        arkret_core::canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery_unlock transcript failed: {error}"))
         })?;
 
@@ -1169,7 +1169,7 @@ pub(super) async fn recovery_session_complete(
             AppError::conflict("recovery authorization Event is not accepted")
                 .with_wire_code("recovery_control_event_not_found")
         })?;
-    if authorization_record.kind != arkret_sdk::events::EventKind::DEVICE_AUTHORIZE {
+    if authorization_record.kind != arkret_core::events::EventKind::DEVICE_AUTHORIZE {
         return Err(
             AppError::conflict("recovery authorization Event has the wrong kind")
                 .with_wire_code("recovery_control_event_kind_mismatch"),
@@ -1202,7 +1202,7 @@ pub(super) async fn recovery_session_complete(
                 .with_wire_code("recovery_authorization_session_mismatch"),
         );
     }
-    let typed_authorize: arkret_sdk::DeviceAuthorizePayload = serde_json::from_value(
+    let typed_authorize: arkret_core::DeviceAuthorizePayload = serde_json::from_value(
         crate::routing::identity::cross_signing::device_authorize_wire_payload(&authorize_payload),
     )
     .map_err(|error| {
@@ -1318,7 +1318,7 @@ pub(super) async fn recovery_session_complete(
                     AppError::conflict("re-anchor Event is not atomically accepted")
                         .with_wire_code("recovery_control_event_not_found")
                 })?;
-            let reanchor_payload: arkret_sdk::DeviceReanchorPayload = serde_json::from_value(
+            let reanchor_payload: arkret_core::DeviceReanchorPayload = serde_json::from_value(
                 reanchor_record
                     .envelope
                     .get("payload")
@@ -1370,7 +1370,7 @@ pub(super) async fn recovery_session_complete(
             let receipt = receipts
                 .into_iter()
                 .map(|receipt| {
-                    serde_json::from_value::<arkret_sdk::EventBatchReceipt>(receipt.value).map_err(
+                    serde_json::from_value::<arkret_core::EventBatchReceipt>(receipt.value).map_err(
                         |error| {
                             AppError::internal(format!(
                                 "stored re-anchor receipt is invalid: {error}"

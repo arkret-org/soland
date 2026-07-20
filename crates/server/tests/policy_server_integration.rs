@@ -20,12 +20,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use arkret_sdk::identity::{DidDocument, DidResolver, DidWebResolver};
-use arkret_sdk::models::AuthzDecision;
-use arkret_sdk::{
+use arkret_core::models::AuthzDecision;
+use arkret_core::{
     Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
     PolicyCheckSignature, PolicyCheckSource, RealmId,
 };
+use arkret_identity::{DidDocument, DidResolver, DidWebResolver};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey};
@@ -187,7 +187,7 @@ fn policy_decision_transcript_bytes(
         expires_at: expires_at.as_str(),
         obligations: &response.obligations,
     };
-    arkret_sdk::canonical::canonical_json_bytes(&transcript).unwrap()
+    arkret_core::canonical::canonical_json_bytes(&transcript).unwrap()
 }
 
 /// G3.S2 — soland calls coauth's `/policy/check` end-to-end. Asserts

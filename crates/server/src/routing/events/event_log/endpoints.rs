@@ -90,7 +90,7 @@ async fn submit_event_seal(
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "events_describe"))]
-async fn events_describe(depot: &mut Depot) -> JsonResult<arkret_sdk::ServiceDescribe> {
+async fn events_describe(depot: &mut Depot) -> JsonResult<arkret_core::ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut description = describe(
         &state.service_id,
@@ -173,7 +173,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     };
     if let Err(error) = super::super::require_agent_session_scope(
         &session,
-        arkret_sdk::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
+        arkret_core::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
     ) {
         render_error(res, error.http_status(), error.wire_code(), &error.message);
         return;
@@ -185,7 +185,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     // canonical body is a `duplicate_conflict`. Event-ID idempotency below
     // still applies independently (a write with no header relies on it).
     if let Some(key) = idempotency_key.as_deref() {
-        let request_hash = match arkret_sdk::canonical::canonical_sha256(&submit) {
+        let request_hash = match arkret_core::canonical::canonical_sha256(&submit) {
             Ok(hash) => hash,
             Err(error) => {
                 render_error(
@@ -339,7 +339,7 @@ async fn submit_event_dispatch(
     }
 }
 
-fn submit_outcome_value(outcome: &arkret_sdk::EventsSubmitOutcome) -> Value {
+fn submit_outcome_value(outcome: &arkret_core::EventsSubmitOutcome) -> Value {
     serde_json::to_value(outcome).unwrap_or_else(|_| json!({"status": "accepted"}))
 }
 
@@ -349,7 +349,7 @@ fn submit_outcome_value(outcome: &arkret_sdk::EventsSubmitOutcome) -> Value {
 fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
     if let Some(event_id) = error.quarantine_event_id {
         let outcome = events_submit_outcome(
-            arkret_sdk::EventsSubmitStatus::Partial,
+            arkret_core::EventsSubmitStatus::Partial,
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -359,7 +359,7 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
         return (StatusCode::OK, submit_outcome_value(&outcome));
     }
     let mut body = json!(
-        arkret_sdk::ErrorEnvelope::new(error.code.clone(), error.message.clone())
+        arkret_core::ErrorEnvelope::new(error.code.clone(), error.message.clone())
             .with_request_id(crate::ids::generate_request_id())
     );
     if error.status == StatusCode::PRECONDITION_FAILED

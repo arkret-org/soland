@@ -248,7 +248,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     let body_string = response.take_string().await.expect("response body");
     notifier.await.expect("notifier task");
 
-    let live_frames: Vec<arkret_sdk::EventsSubscribeFrame> = body_string
+    let live_frames: Vec<arkret_core::EventsSubscribeFrame> = body_string
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).expect("typed events subscribe frame"))
@@ -296,7 +296,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     let catchup_frames = body2
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str::<arkret_sdk::EventsSubscribeFrame>(line).unwrap())
+        .map(|line| serde_json::from_str::<arkret_core::EventsSubscribeFrame>(line).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(
         catchup_frames
@@ -307,7 +307,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     );
     let catchup = catchup_frames
         .iter()
-        .find(|frame| frame.kind == arkret_sdk::EventsSubscribeFrameKind::CatchupComplete)
+        .find(|frame| frame.kind == arkret_core::EventsSubscribeFrameKind::CatchupComplete)
         .expect("a catchup_complete frame");
     let resume_cursor = catchup
         .cursor
@@ -348,15 +348,15 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     let empty_catchup_frames = body3
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str::<arkret_sdk::EventsSubscribeFrame>(line).unwrap())
+        .map(|line| serde_json::from_str::<arkret_core::EventsSubscribeFrame>(line).unwrap())
         .collect::<Vec<_>>();
     let frontier_index = empty_catchup_frames
         .iter()
-        .position(|frame| frame.kind == arkret_sdk::EventsSubscribeFrameKind::Frontier)
+        .position(|frame| frame.kind == arkret_core::EventsSubscribeFrameKind::Frontier)
         .expect("empty catch-up emits a frontier baseline");
     let completion_index = empty_catchup_frames
         .iter()
-        .position(|frame| frame.kind == arkret_sdk::EventsSubscribeFrameKind::CatchupComplete)
+        .position(|frame| frame.kind == arkret_core::EventsSubscribeFrameKind::CatchupComplete)
         .expect("empty catch-up emits catchup_complete");
     assert!(frontier_index < completion_index);
     assert_eq!(

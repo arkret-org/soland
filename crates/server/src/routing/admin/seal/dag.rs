@@ -1,6 +1,6 @@
 //! Seal DAG admin endpoints — snapshot, compaction, prune.
 
-use arkret_sdk::{RealmId, SealId};
+use arkret_core::{RealmId, SealId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -56,13 +56,13 @@ pub(crate) async fn admin_get_seal_dag(
             continue;
         };
         let signers: Vec<String> = match &seal.notary_signature {
-            arkret_sdk::NotarySig::Single(sig) => vec![sig.verification_method.clone()],
-            arkret_sdk::NotarySig::Multi(multi) => multi
+            arkret_core::NotarySig::Single(sig) => vec![sig.verification_method.clone()],
+            arkret_core::NotarySig::Multi(multi) => multi
                 .signatures
                 .iter()
                 .map(|s| s.verification_method.clone())
                 .collect(),
-            arkret_sdk::NotarySig::Threshold(threshold) => threshold
+            arkret_core::NotarySig::Threshold(threshold) => threshold
                 .signers
                 .iter()
                 .map(|d| d.as_str().to_owned())
@@ -124,7 +124,7 @@ pub(crate) async fn admin_compact_seal_dag(
         state,
         req,
         &admin_session,
-        arkret_sdk::admin_scopes::SEAL_COMPACT,
+        arkret_core::admin_scopes::SEAL_COMPACT,
     )
     .await?;
     let realm_id = realm_id.into_inner();
@@ -170,7 +170,7 @@ pub(crate) async fn admin_compact_seal_dag(
         )
         .with_status(StatusCode::CONFLICT));
     }
-    let view = arkret_sdk::effective_seal_view(
+    let view = arkret_state::effective_seal_view(
         &leaves,
         &realm,
         state.seal_store.as_ref(),
@@ -189,13 +189,13 @@ pub(crate) async fn admin_compact_seal_dag(
     // operator attribution (falls back to the service signer when no
     // per-admin key is provisioned).
     let signer = admin_signer_for(state, &admin_session.actor)?;
-    let compaction = arkret_sdk::Seal::sign_single_kind(
+    let compaction = arkret_core::Seal::sign_single_kind(
         realm.clone(),
         view.predecessor_refs.clone(),
         Vec::new(),
         view.state_root.clone(),
         fresh_hlc(state)?,
-        arkret_sdk::SealKind::Compaction,
+        arkret_core::SealKind::Compaction,
         &signer,
     )
     .map_err(|e| {
@@ -206,7 +206,7 @@ pub(crate) async fn admin_compact_seal_dag(
     })?;
 
     let verifier = crate::routing::federation::move_seal::select_jws_verifier(state);
-    let effect = arkret_sdk::apply_seal(
+    let effect = arkret_state::apply_seal(
         &compaction,
         state.move_store.as_ref(),
         state.seal_store.as_ref(),
@@ -231,7 +231,7 @@ pub(crate) async fn admin_compact_seal_dag(
 
 /// `POST /_soland/admin/realms/{realm_id}/seal-dag/prune` — evaluate a
 /// historical Seal for prune-eligibility against
-/// [`arkret_sdk::CompactionPolicy`] and, when eligible, remove it via
+/// [`arkret_state::CompactionPolicy`] and, when eligible, remove it via
 /// [`SealStore::prune_predecessor`].
 ///
 /// Gates the structural prune walk on the operator's configured policy
@@ -258,7 +258,7 @@ pub(crate) async fn admin_prune_seal_dag(
         state,
         req,
         &admin_session,
-        arkret_sdk::admin_scopes::SEAL_PRUNE,
+        arkret_core::admin_scopes::SEAL_PRUNE,
     )
     .await?;
     let realm_id_str = realm_id.into_inner();
@@ -359,7 +359,7 @@ pub(crate) async fn admin_prune_seal_dag(
         None => 0,
     };
 
-    let prune_candidate = arkret_sdk::PruneCandidate {
+    let prune_candidate = arkret_state::PruneCandidate {
         candidate: &candidate,
         age_seconds,
         compaction_witnesses,
@@ -370,12 +370,12 @@ pub(crate) async fn admin_prune_seal_dag(
     let policy = state.config.compaction_policy();
     let eligibility = policy.is_eligible(&prune_candidate);
     let eligibility_wire = match &eligibility {
-        arkret_sdk::PruneEligibility::Eligible => "eligible",
-        arkret_sdk::PruneEligibility::TooYoung { .. } => "too_young",
-        arkret_sdk::PruneEligibility::InsufficientWitnesses { .. } => "insufficient_witnesses",
-        arkret_sdk::PruneEligibility::PreservedGenesis => "preserved_genesis",
-        arkret_sdk::PruneEligibility::ForkPoint { .. } => "fork_point",
-        arkret_sdk::PruneEligibility::CompactionItself => "compaction_itself",
+        arkret_state::PruneEligibility::Eligible => "eligible",
+        arkret_state::PruneEligibility::TooYoung { .. } => "too_young",
+        arkret_state::PruneEligibility::InsufficientWitnesses { .. } => "insufficient_witnesses",
+        arkret_state::PruneEligibility::PreservedGenesis => "preserved_genesis",
+        arkret_state::PruneEligibility::ForkPoint { .. } => "fork_point",
+        arkret_state::PruneEligibility::CompactionItself => "compaction_itself",
     };
     let kind_wire = if candidate.kind.is_compaction() {
         "compaction"

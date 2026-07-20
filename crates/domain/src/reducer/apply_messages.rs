@@ -475,7 +475,7 @@ impl ProjectionState {
                 };
             }
         };
-        let occurrence_key = match arkret_sdk::canonical_calendar_rsvp_occurrence_key(
+        let occurrence_key = match arkret_core::canonical_calendar_rsvp_occurrence_key(
             &strand.fields,
             occurrence_value,
         ) {
@@ -551,7 +551,7 @@ impl ProjectionState {
         }
         let map_key = (pin_scope_key.clone(), target_ref.to_owned());
         let operation_kind = crate::kinds::canonical_kind_for_operation(operation);
-        if operation_kind == Some(arkret_sdk::events::EventKind::PIN_REMOVE) {
+        if operation_kind == Some(arkret_core::events::EventKind::PIN_REMOVE) {
             if let Some(pin) = self.pins.get_mut(&map_key) {
                 pin.active = false;
                 pin.updated_at = now;
@@ -568,7 +568,7 @@ impl ProjectionState {
             };
         };
         let previous = self.pins.get(&map_key);
-        let note = if operation_kind == Some(arkret_sdk::events::EventKind::PIN_REORDER) {
+        let note = if operation_kind == Some(arkret_core::events::EventKind::PIN_REORDER) {
             previous.and_then(|pin| pin.note.clone())
         } else {
             operation.payload.get("note").cloned()
@@ -594,7 +594,7 @@ impl ProjectionState {
 
     pub fn check_pin_scope_safety(&self, operation: &Operation) -> Result<(), &'static str> {
         if !crate::kinds::canonical_kind_for_operation(operation)
-            .is_some_and(arkret_sdk::events::kinds::is_pin_kind)
+            .is_some_and(arkret_core::events::kinds::is_pin_kind)
         {
             return Ok(());
         }
@@ -982,7 +982,8 @@ fn encrypted_projection_field_matches_operation(value: &Value, operation: &Opera
     let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) else {
         return false;
     };
-    let Ok(envelope) = arkret_sdk::mls::parse_and_validate_encrypted_envelope(value.clone()) else {
+    let Ok(envelope) = arkret_models_crypto::parse_and_validate_encrypted_envelope(value.clone())
+    else {
         return false;
     };
     envelope.aad.realm_id == operation.realm_id && envelope.aad.event_kind == kind
@@ -993,7 +994,7 @@ fn rsvp_lww_hlc(operation: &Operation) -> String {
         .payload
         .get("hlc")
         .and_then(Value::as_str)
-        .filter(|value| arkret_sdk::Hlc::new((*value).to_owned()).is_ok())
+        .filter(|value| arkret_core::Hlc::new((*value).to_owned()).is_ok())
     {
         return hlc.to_owned();
     }
@@ -1002,7 +1003,7 @@ fn rsvp_lww_hlc(operation: &Operation) -> String {
         .timestamp_millis()
         .clamp(0, 0xFFFF_FFFF_FFFF);
     let operation_hash =
-        arkret_sdk::canonical::sha256_hex(operation.operation_id.as_str().as_bytes());
+        arkret_core::canonical::sha256_hex(operation.operation_id.as_str().as_bytes());
     format!("{millis:012x}-0000-{}", &operation_hash[..8])
 }
 

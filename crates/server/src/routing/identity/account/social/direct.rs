@@ -13,13 +13,13 @@ pub(crate) async fn ensure_direct_peer_resolvable(
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
         return Err(direct_resolve_precondition(
-            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_core::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation peer is not resolvable on this Principal Server",
         ));
     }
     let peer_did = Did::new(peer.to_owned()).map_err(|_| {
         direct_resolve_precondition(
-            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_core::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation peer DID is invalid",
         )
     })?;
@@ -30,7 +30,7 @@ pub(crate) async fn ensure_direct_peer_resolvable(
         .is_some();
     if !has_cross_signing_control {
         return Err(direct_resolve_precondition(
-            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_core::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation peer has no accepted cross-signing control state",
         ));
     }
@@ -42,11 +42,11 @@ pub(crate) fn direct_pair_key(
     left: &str,
     right: &str,
 ) -> Result<String, AppError> {
-    let trust_domain = arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+    let trust_domain = arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     let left = direct_pair_key_participant(left, "actor")?;
     let right = direct_pair_key_participant(right, "peer")?;
-    arkret_sdk::direct_conversation_pair_key(trust_domain, left, right)
+    arkret_core::direct_conversation_pair_key(trust_domain, left, right)
         .map(|pair_key| pair_key.into_string())
         .map_err(|error| {
             AppError::internal(format!("direct pair key construction failed: {error}"))
@@ -56,7 +56,7 @@ pub(crate) fn direct_pair_key(
 pub(super) fn direct_pair_key_participant(
     did: &str,
     role: &str,
-) -> Result<arkret_sdk::DirectConversationPairKeyParticipant, AppError> {
+) -> Result<arkret_core::DirectConversationPairKeyParticipant, AppError> {
     let did = Did::new(did.to_owned()).map_err(|error| {
         AppError::internal(format!(
             "stored direct conversation {role} DID invalid: {error}"
@@ -68,11 +68,11 @@ pub(super) fn direct_pair_key_participant(
         .any(|prefix| did_str.starts_with(prefix))
     {
         return Err(direct_resolve_precondition(
-            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_core::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation pairwise DID requires a verified stable-subject identity link",
         ));
     }
-    Ok(arkret_sdk::DirectConversationPairKeyParticipant::unmapped(
+    Ok(arkret_core::DirectConversationPairKeyParticipant::unmapped(
         did,
     ))
 }
@@ -284,44 +284,44 @@ pub(crate) async fn create_direct_binding_with_realm(
         return Err(error);
     }
 
-    let binding_fact = arkret_sdk::DirectConversationBoundPayload {
-        pair_key: arkret_sdk::Hash::new(pair_key.to_owned())
+    let binding_fact = arkret_core::DirectConversationBoundPayload {
+        pair_key: arkret_core::Hash::new(pair_key.to_owned())
             .map_err(|error| AppError::internal(format!("stored pair key is invalid: {error}")))?,
         participants_unordered: active_binding
             .participants_unordered
             .iter()
-            .map(|participant| arkret_sdk::Did::new(participant.clone()))
+            .map(|participant| arkret_core::Did::new(participant.clone()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 AppError::internal(format!("stored direct participant is invalid: {error}"))
             })?,
-        realm_id: arkret_sdk::RealmId::new(realm_id.clone())
+        realm_id: arkret_core::RealmId::new(realm_id.clone())
             .map_err(|error| AppError::internal(format!("stored realm id is invalid: {error}")))?,
-        main_strand_id: arkret_sdk::StrandId::new(main_strand_id.clone()).map_err(|error| {
+        main_strand_id: arkret_core::StrandId::new(main_strand_id.clone()).map_err(|error| {
             AppError::internal(format!("stored main strand id is invalid: {error}"))
         })?,
         contact_refs: contact_fact_refs(contact)
             .into_iter()
-            .map(arkret_sdk::EventId::new)
+            .map(arkret_core::EventId::new)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 AppError::internal(format!("stored contact event ref is invalid: {error}"))
             })?,
         member_event_refs: member_event_refs
             .into_iter()
-            .map(arkret_sdk::EventId::new)
+            .map(arkret_core::EventId::new)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 AppError::internal(format!("stored member event ref is invalid: {error}"))
             })?,
-        main_strand_create_ref: arkret_sdk::EventId::new(main_strand_create_ref).map_err(
+        main_strand_create_ref: arkret_core::EventId::new(main_strand_create_ref).map_err(
             |error| AppError::internal(format!("stored strand event ref is invalid: {error}")),
         )?,
         created_at: active_binding.created_at,
         binding_state: None,
         supersedes_binding_ref: None,
     };
-    let trust_domain = arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+    let trust_domain = arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     binding_fact
         .validate_pair_key(trust_domain)
@@ -504,20 +504,20 @@ pub(super) async fn claim_direct_keypackage(
     realm_id: &str,
     main_strand_id: &str,
     mls_group_id: &str,
-) -> Result<arkret_sdk::KeyPackageClaimRecord, AppError> {
+) -> Result<arkret_core::KeyPackageClaimRecord, AppError> {
     let target_principal_id = Did::new(peer.to_owned()).map_err(|_| {
         direct_resolve_precondition(
-            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_core::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation peer DID is invalid",
         )
     })?;
     let requester = Did::new(actor.to_owned()).map_err(|_| {
         direct_resolve_precondition(
-            arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_core::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation requester DID is invalid",
         )
     })?;
-    let body = arkret_sdk::KeyPackagesClaimRequestBody {
+    let body = arkret_core::KeyPackagesClaimRequestBody {
         target_principal_id,
         intended_realm_id: RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("generated realm_id invalid: {error}")))?,
@@ -538,7 +538,7 @@ pub(super) async fn claim_direct_keypackage(
         .await
         .map_err(|error| match error.wire_code_override.as_deref() {
             Some("claim_generation_mismatch") => direct_resolve_precondition(
-                arkret_sdk::ErrorCode::PEER_UNRESOLVABLE,
+                arkret_core::ErrorCode::PEER_UNRESOLVABLE,
                 "direct conversation peer has no accepted cross-signing control state",
             ),
             _ => error,
@@ -552,7 +552,7 @@ pub(super) async fn claim_direct_keypackage(
 
 pub(super) fn direct_keypackage_unknown() -> AppError {
     direct_resolve_precondition(
-        arkret_sdk::ErrorCode::KEYPACKAGE_UNKNOWN,
+        arkret_core::ErrorCode::KEYPACKAGE_UNKNOWN,
         "direct conversation peer has no claimable KeyPackage",
     )
 }
@@ -574,15 +574,15 @@ pub(super) async fn submit_direct_mls_genesis(
         "creator_principal_id": actor,
         "creator_device_id": actor_device_id,
         "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-        "group_info_digest": arkret_sdk::canonical::sha256_digest(format!("direct-group-info:{realm_id}:{mls_group_id}")),
-        "ratchet_tree_digest": arkret_sdk::canonical::sha256_digest(format!("direct-ratchet-tree:{realm_id}:{mls_group_id}")),
+        "group_info_digest": arkret_core::canonical::sha256_digest(format!("direct-group-info:{realm_id}:{mls_group_id}")),
+        "ratchet_tree_digest": arkret_core::canonical::sha256_digest(format!("direct-ratchet-tree:{realm_id}:{mls_group_id}")),
         "covered_seals": member_event_refs,
         "governance_binding": governance_binding,
         "created_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
     });
     let op = direct_mls_operation(
         realm_id,
-        arkret_sdk::events::EventKind::MLS_GENESIS,
+        arkret_core::events::EventKind::MLS_GENESIS,
         payload,
     )?;
     let effect =
@@ -617,7 +617,7 @@ pub(super) async fn submit_direct_mls_welcome(
     peer: &str,
     realm_id: &str,
     mls_group_id: &str,
-    claim: &arkret_sdk::KeyPackageClaimRecord,
+    claim: &arkret_core::KeyPackageClaimRecord,
     governance_binding: &Value,
 ) -> Result<(), AppError> {
     let welcome_bytes = format!(
@@ -625,9 +625,9 @@ pub(super) async fn submit_direct_mls_welcome(
         claim.claim_id
     )
     .into_bytes();
-    let welcome_digest = arkret_sdk::canonical::sha256_digest(&welcome_bytes);
+    let welcome_digest = arkret_core::canonical::sha256_digest(&welcome_bytes);
     let created_at = now();
-    let signature_seed = arkret_sdk::canonical::sha256_digest(format!(
+    let signature_seed = arkret_core::canonical::sha256_digest(format!(
         "direct-welcome-signature:{realm_id}:{mls_group_id}:{}",
         claim.claim_id
     ));
@@ -663,14 +663,16 @@ pub(super) async fn submit_direct_mls_welcome(
             "sig": URL_SAFE_NO_PAD.encode(signature_seed.as_bytes()),
         }
     });
-    let requester_ssk_generation = arkret_sdk::Did::new(actor.to_owned()).ok().and_then(|did| {
-        let manager = state.cross_signing.lock();
-        {
-            manager
-                .current_cross_signing(&did)
-                .map(|publish| publish.generation.get())
-        }
-    });
+    let requester_ssk_generation = arkret_core::Did::new(actor.to_owned())
+        .ok()
+        .and_then(|did| {
+            let manager = state.cross_signing.lock();
+            {
+                manager
+                    .current_cross_signing(&did)
+                    .map(|publish| publish.generation.get())
+            }
+        });
     if let Some(generation) = requester_ssk_generation {
         claim_envelope["ssk_generation"] = json!(generation);
     } else {
@@ -687,14 +689,14 @@ pub(super) async fn submit_direct_mls_welcome(
         "claim_id": claim.claim_id.as_str(),
         "claim_ref": claim_ref,
         "claim_envelope": claim_envelope,
-        "welcome_ref": format!("ak:blob:{}", arkret_sdk::canonical::sha256_digest(&welcome_bytes)),
+        "welcome_ref": format!("ak:blob:{}", arkret_core::canonical::sha256_digest(&welcome_bytes)),
         "welcome_bytes_b64": URL_SAFE_NO_PAD.encode(&welcome_bytes),
         "expires_at": (created_at + chrono::Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
         "governance_binding": governance_binding,
     });
     let op = direct_mls_operation(
         realm_id,
-        arkret_sdk::events::EventKind::MLS_WELCOME,
+        arkret_core::events::EventKind::MLS_WELCOME,
         payload,
     )?;
     let effect =
@@ -737,7 +739,7 @@ pub(super) fn direct_mls_governance_binding(
         "previous_epoch": 0,
         "next_epoch": 0,
         "membership_frontier": member_event_refs,
-        "policy_root": arkret_sdk::canonical::sha256_digest(format!("direct-policy:{realm_id}:{mls_group_id}")),
+        "policy_root": arkret_core::canonical::sha256_digest(format!("direct-policy:{realm_id}:{mls_group_id}")),
         "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
         "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1,
     })
@@ -747,12 +749,12 @@ pub(super) fn direct_mls_operation(
     realm_id: &str,
     object_type: &str,
     payload: Value,
-) -> Result<arkret_sdk::Operation, AppError> {
+) -> Result<arkret_core::Operation, AppError> {
     let operation_id = direct_operation_id()
         .map_err(|error| AppError::internal(format!("direct MLS operation id failed: {error}")))?;
     let realm_id = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::internal(format!("direct MLS realm id failed: {error}")))?;
-    Ok(arkret_sdk::Operation::create(
+    Ok(arkret_core::Operation::create(
         operation_id,
         realm_id,
         object_type,
@@ -776,7 +778,7 @@ pub(super) async fn submit_direct_realm_genesis(
     actor: &str,
     peer: &str,
 ) -> Result<(), &'static str> {
-    let realm_scope = arkret_sdk::RealmId::new(realm_id.to_owned())
+    let realm_scope = arkret_core::RealmId::new(realm_id.to_owned())
         .map_err(|_| "generated invalid direct conversation realm id")?;
 
     // ak.realm.create — DM Realm well-known shape (spec §7): mls_rfc9420
@@ -799,8 +801,8 @@ pub(super) async fn submit_direct_realm_genesis(
     Ok(())
 }
 
-pub(super) fn direct_operation_id() -> Result<arkret_sdk::OperationId, &'static str> {
-    arkret_sdk::OperationId::new(crate::ids::generate_operation_id())
+pub(super) fn direct_operation_id() -> Result<arkret_core::OperationId, &'static str> {
+    arkret_core::OperationId::new(crate::ids::generate_operation_id())
         .map_err(|_| "generated invalid operation id")
 }
 
@@ -811,30 +813,30 @@ pub(super) fn direct_now_seconds() -> chrono::DateTime<chrono::Utc> {
 
 pub(super) fn direct_realm_create_payload(
     state: &AppState,
-    realm_scope: arkret_sdk::RealmId,
+    realm_scope: arkret_core::RealmId,
     creator: &str,
     created_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, &'static str> {
-    let creator_did =
-        arkret_sdk::Did::new(creator.to_owned()).map_err(|_| "invalid direct realm creator DID")?;
-    let trust_domain = arkret_sdk::TypedTrustDomainId::new(state.config.trust_domain.clone())
+    let creator_did = arkret_core::Did::new(creator.to_owned())
+        .map_err(|_| "invalid direct realm creator DID")?;
+    let trust_domain = arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|_| "invalid direct realm trust domain")?;
-    let mut realm = arkret_sdk::models::Realm::new(
+    let mut realm = arkret_core::models::Realm::new(
         realm_scope,
         "Direct conversation",
         creator_did.clone(),
         trust_domain,
-        arkret_sdk::NotaryProfile::SingleDid,
-        arkret_sdk::NotaryValue::single_did(creator_did),
+        arkret_core::NotaryProfile::SingleDid,
+        arkret_core::NotaryValue::single_did(creator_did),
     );
-    realm.security_class = Some(arkret_sdk::SecurityClass::Standard);
-    realm.default_discoverability = arkret_sdk::Discoverability::InviteOnly;
-    realm.default_join_rule = arkret_sdk::JoinRule::Closed;
-    realm.history_visibility = arkret_sdk::HistoryVisibility::Joined;
-    realm.encryption_profile = arkret_sdk::EncryptionProfile::MlsRfc9420;
-    realm.federation_policy = Some(arkret_sdk::FederationPolicy::Restricted);
+    realm.security_class = Some(arkret_core::SecurityClass::Standard);
+    realm.default_discoverability = arkret_core::Discoverability::InviteOnly;
+    realm.default_join_rule = arkret_core::JoinRule::Closed;
+    realm.history_visibility = arkret_core::HistoryVisibility::Joined;
+    realm.encryption_profile = arkret_core::EncryptionProfile::MlsRfc9420;
+    realm.federation_policy = Some(arkret_core::FederationPolicy::Restricted);
     realm.created_at = created_at;
-    serde_json::to_value(arkret_sdk::models::RealmCreatePayload {
+    serde_json::to_value(arkret_core::models::RealmCreatePayload {
         object: realm,
         initial_relations: None,
     })
@@ -843,15 +845,15 @@ pub(super) fn direct_realm_create_payload(
 
 pub(super) fn direct_realm_create_operation(
     state: &AppState,
-    realm_scope: arkret_sdk::RealmId,
+    realm_scope: arkret_core::RealmId,
     creator: &str,
-) -> Result<arkret_sdk::Operation, &'static str> {
+) -> Result<arkret_core::Operation, &'static str> {
     let created_at = direct_now_seconds();
     let payload = direct_realm_create_payload(state, realm_scope.clone(), creator, created_at)?;
-    let mut operation = arkret_sdk::Operation::create(
+    let mut operation = arkret_core::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        arkret_sdk::events::EventKind::REALM_CREATE,
+        arkret_core::events::EventKind::REALM_CREATE,
         payload,
     );
     operation.created_at = created_at;
@@ -859,15 +861,15 @@ pub(super) fn direct_realm_create_operation(
 }
 
 pub(super) fn direct_member_join_operation(
-    realm_scope: arkret_sdk::RealmId,
+    realm_scope: arkret_core::RealmId,
     member: &str,
-) -> Result<arkret_sdk::Operation, &'static str> {
+) -> Result<arkret_core::Operation, &'static str> {
     let created_at = direct_now_seconds();
     let payload = direct_member_join_payload(realm_scope.clone(), member)?;
-    let mut operation = arkret_sdk::Operation::create(
+    let mut operation = arkret_core::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        arkret_sdk::events::EventKind::MEMBER_STATE,
+        arkret_core::events::EventKind::MEMBER_STATE,
         payload,
     );
     operation.created_at = created_at;
@@ -875,15 +877,15 @@ pub(super) fn direct_member_join_operation(
 }
 
 pub(super) fn direct_member_join_payload(
-    realm_scope: arkret_sdk::RealmId,
+    realm_scope: arkret_core::RealmId,
     member: &str,
 ) -> Result<Value, &'static str> {
     let member_did =
-        arkret_sdk::Did::new(member.to_owned()).map_err(|_| "invalid direct peer member DID")?;
-    arkret_sdk::models::MembershipPayload::join(
+        arkret_core::Did::new(member.to_owned()).map_err(|_| "invalid direct peer member DID")?;
+    arkret_core::models::MembershipPayload::join(
         realm_scope,
         member_did,
-        arkret_sdk::models::DeliveryStatus::Unroutable,
+        arkret_core::models::DeliveryStatus::Unroutable,
         "direct_conversation_peer_bootstrap",
     )
     .to_value()
@@ -891,23 +893,23 @@ pub(super) fn direct_member_join_payload(
 }
 
 pub(super) fn direct_strand_create_payload(
-    realm_scope: arkret_sdk::RealmId,
+    realm_scope: arkret_core::RealmId,
     main_strand_id: &str,
     creator: &str,
     created_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, &'static str> {
-    let strand_id = arkret_sdk::StrandId::new(main_strand_id.to_owned())
+    let strand_id = arkret_core::StrandId::new(main_strand_id.to_owned())
         .map_err(|_| "generated invalid direct conversation strand id")?;
-    let creator_did = arkret_sdk::Did::new(creator.to_owned())
+    let creator_did = arkret_core::Did::new(creator.to_owned())
         .map_err(|_| "invalid direct strand creator DID")?;
-    let mut strand = arkret_sdk::models::Strand::discussion(
+    let mut strand = arkret_core::models::Strand::discussion(
         strand_id,
         realm_scope,
         "Direct conversation",
         creator_did,
     );
     strand.created_at = created_at;
-    serde_json::to_value(arkret_sdk::models::StrandCreatePayload {
+    serde_json::to_value(arkret_core::models::StrandCreatePayload {
         object: strand,
         initial_relations: None,
     })
@@ -915,17 +917,17 @@ pub(super) fn direct_strand_create_payload(
 }
 
 pub(super) fn direct_strand_create_operation(
-    realm_scope: arkret_sdk::RealmId,
+    realm_scope: arkret_core::RealmId,
     main_strand_id: &str,
     creator: &str,
-) -> Result<arkret_sdk::Operation, &'static str> {
+) -> Result<arkret_core::Operation, &'static str> {
     let created_at = direct_now_seconds();
     let payload =
         direct_strand_create_payload(realm_scope.clone(), main_strand_id, creator, created_at)?;
-    let mut operation = arkret_sdk::Operation::create(
+    let mut operation = arkret_core::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        arkret_sdk::events::EventKind::STRAND_CREATE,
+        arkret_core::events::EventKind::STRAND_CREATE,
         payload,
     );
     operation.created_at = created_at;

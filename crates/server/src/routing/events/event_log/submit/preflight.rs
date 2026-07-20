@@ -5,26 +5,26 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
     actor_id: &str,
     operation: &Operation,
 ) -> Option<String> {
-    if kinds::canonical_kind_string(operation) != arkret_sdk::events::EventKind::MLS_WELCOME {
+    if kinds::canonical_kind_string(operation) != arkret_core::events::EventKind::MLS_WELCOME {
         return None;
     }
     let envelope_value = match operation.payload.get("claim_envelope") {
         Some(value) => value.clone(),
         None => {
-            return Some(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
+            return Some(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
         }
     };
     let envelope =
-        match serde_json::from_value::<arkret_sdk::MlsWelcomeClaimEnvelope>(envelope_value) {
+        match serde_json::from_value::<arkret_core::MlsWelcomeClaimEnvelope>(envelope_value) {
             Ok(envelope) => envelope,
             Err(_) => {
                 return Some(
-                    arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned(),
+                    arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned(),
                 );
             }
         };
     if envelope.requester_did.as_str() != actor_id {
-        return Some(arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
+        return Some(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
     }
     let sender_device_id = operation
         .payload
@@ -46,7 +46,7 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
     state: &AppState,
     operation: &Operation,
 ) -> Option<String> {
-    if kinds::canonical_kind_string(operation) != arkret_sdk::events::EventKind::MLS_WELCOME {
+    if kinds::canonical_kind_string(operation) != arkret_core::events::EventKind::MLS_WELCOME {
         return None;
     }
     let Some(recipient_actor_id) = operation

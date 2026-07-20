@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_sdk::{Did, EventId, Hash, RealmId, canonical};
+use arkret_core::{Did, EventId, Hash, RealmId, canonical};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
@@ -129,7 +129,7 @@ pub(crate) fn sign_frontier_root(
     let canonical_bytes =
         canonical::canonical_json_bytes(&signed_payload).map_err(|error| error.to_string())?;
     let payload_digest = canonical::sha256_digest(&canonical_bytes);
-    let jws = arkret_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key)
+    let jws = arkret_signatures::jws::sign_jws_ed25519(&canonical_bytes, signing_key)
         .map_err(|error| error.to_string())?;
 
     Ok(json!({

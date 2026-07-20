@@ -30,7 +30,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use arkret_sdk::{Cursor, CursorPurpose};
+use arkret_core::{Cursor, CursorPurpose};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
@@ -456,7 +456,7 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
     let shape = Cursor {
         v: "1".to_owned(),
         purpose: CursorPurpose::Stream,
-        t: arkret_sdk::canonical::format_timestamp_canonical(cursor_issued_at),
+        t: arkret_core::canonical::format_timestamp_canonical(cursor_issued_at),
         x: cursor_issued_at.timestamp_millis() + Cursor::STREAM_TTL_MAX_MS,
         h: URL_SAFE_NO_PAD.encode(digest),
     };

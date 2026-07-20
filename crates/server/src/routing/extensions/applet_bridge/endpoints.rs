@@ -1,6 +1,6 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
-use arkret_sdk::{
+use arkret_core::{
     AppletActorView, AppletId, AppletInstallOutcome, AppletInstallPlan,
     AppletInstallPreviewRequestBody, AppletInstallRequestBody, AppletPingOutcome,
     AppletProtocolMetadata, AppletRealmView, AppletRevokeMode, AppletRevokeOutcome,
@@ -471,15 +471,15 @@ fn session_revoke_body_for_applet(
             AppError::internal(format!("stored applet_id is invalid: {error}"))
         })?),
         effective_scope: Some(match &revoke.effective_scope {
-            arkret_sdk::EffectiveScope::Realm { realm_id } => {
-                arkret_sdk::models::EffectiveScope::Realm {
+            arkret_core::EffectiveScope::Realm { realm_id } => {
+                arkret_core::models::EffectiveScope::Realm {
                     realm_id: realm_id.clone(),
                 }
             }
-            arkret_sdk::EffectiveScope::Circle {
+            arkret_core::EffectiveScope::Circle {
                 realm_id,
                 circle_id,
-            } => arkret_sdk::models::EffectiveScope::Circle {
+            } => arkret_core::models::EffectiveScope::Circle {
                 realm_id: realm_id.clone(),
                 circle_id: circle_id.clone(),
             },

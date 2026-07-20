@@ -1,10 +1,25 @@
-use arkret_sdk::mls::{
-    AuthorGroupStateView, MinimalMetadataAuthorClaim, author_leaf_from_key_package_bytes,
-    verify_minimal_metadata_author,
+use arkret_policy::{
+    AuthorGroupStateView, AuthorLeaf, MinimalMetadataAuthorClaim, verify_minimal_metadata_author,
 };
-use arkret_sdk::signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
+use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 
 use super::*;
+
+#[cfg(feature = "openmls-keypackage-validation")]
+fn author_leaf_from_key_package_bytes(
+    bytes: &[u8],
+    leaf_index: u32,
+) -> std::result::Result<AuthorLeaf, arkret_mls::MlsError> {
+    arkret_mls::author_leaf_from_key_package_bytes(bytes, leaf_index)
+}
+
+#[cfg(not(feature = "openmls-keypackage-validation"))]
+fn author_leaf_from_key_package_bytes(
+    _bytes: &[u8],
+    _leaf_index: u32,
+) -> std::result::Result<AuthorLeaf, &'static str> {
+    Err("OpenMLS KeyPackage validation is not enabled")
+}
 
 // SPI-SOL-002 — minimal-metadata content author admission
 // (encryption-and-audit.md §2.10.3).
@@ -84,11 +99,11 @@ pub(crate) async fn minimal_metadata_author_context(
 /// The single canonical rejection for every §2.10.3 failure mode.
 fn author_credential_invalid(detail: impl std::fmt::Display) -> EventValidationError {
     tracing::debug!(%detail, "minimal-metadata author credential admission failed");
-    let code = arkret_sdk::ErrorCode::FailedPrecondition;
+    let code = arkret_core::ErrorCode::FailedPrecondition;
     event_validation_error(
         error_http_status(code),
         code.as_str(),
-        arkret_sdk::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID,
+        arkret_core::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID,
     )
 }
 
@@ -120,8 +135,8 @@ async fn validate_accepted_group_state(
         .await
         .map_err(|error| author_credential_invalid(format!("group_state_ref lookup: {error}")))?
         .ok_or_else(|| author_credential_invalid("group_state_ref is not an accepted event"))?;
-    let is_genesis = record.kind == arkret_sdk::events::EventKind::MLS_GENESIS;
-    if !is_genesis && record.kind != arkret_sdk::events::EventKind::MLS_COMMIT {
+    let is_genesis = record.kind == arkret_core::events::EventKind::MLS_GENESIS;
+    if !is_genesis && record.kind != arkret_core::events::EventKind::MLS_COMMIT {
         return Err(author_credential_invalid(
             "group_state_ref is not an MLS genesis/commit event",
         ));
@@ -206,7 +221,7 @@ async fn validate_accepted_group_state(
 async fn active_author_leaves(
     state: &AppState,
     coordinates: &MinimalMetadataAuthorCoordinates,
-) -> Result<Vec<arkret_sdk::mls::AuthorLeaf>, EventValidationError> {
+) -> Result<Vec<AuthorLeaf>, EventValidationError> {
     let rows = state
         .mls_key_packages_store()
         .list_claimed_by_group(&coordinates.group_id)
@@ -272,7 +287,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
     .ed25519_bytes()
     .map_err(|error| author_credential_invalid(format!("proof key decode: {error}")))?;
 
-    let actor_did = arkret_sdk::Did::new(actor_id.to_owned())
+    let actor_did = arkret_core::Did::new(actor_id.to_owned())
         .map_err(|error| author_credential_invalid(format!("actor_id: {error}")))?;
     let view = AuthorGroupStateView {
         group_id: context.coordinates.group_id.clone(),
@@ -291,11 +306,11 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
 
     // The LeafNode signature_key (byte-equal to the proof key after the
     // claim admission) verifies the detached JWS over the proof binding.
-    let proof = arkret_sdk::Proof {
+    let proof = arkret_core::Proof {
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method: verification_method.to_owned(),
-        event_digest: arkret_sdk::Hash::new(arkret_sdk::canonical::sha256_digest(
+        event_digest: arkret_core::Hash::new(arkret_core::canonical::sha256_digest(
             proof_binding_bytes,
         ))
         .map_err(|error| author_credential_invalid(format!("binding digest: {error}")))?,
@@ -314,7 +329,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
 
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::mls::{AuthorLeaf, AuthorLeafCredential};
+    use arkret_policy::{AuthorLeaf, AuthorLeafCredential};
 
     use super::*;
 
@@ -345,7 +360,7 @@ mod tests {
     // no resolver or directory parameter to call.
     #[test]
     fn admission_maps_every_failure_to_the_canonical_reason() {
-        let actor = arkret_sdk::Did::new("did:key:z6MkpairwiseAlice").unwrap();
+        let actor = arkret_core::Did::new("did:key:z6MkpairwiseAlice").unwrap();
         let proof_key = vec![0xA1u8; 32];
         let base_claim = MinimalMetadataAuthorClaim {
             group_id: "Zml4dHVyZS1yZWFsbQ",
@@ -383,7 +398,7 @@ mod tests {
             assert_eq!(error.code, "failed_precondition");
             assert_eq!(
                 error.message,
-                arkret_sdk::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID
+                arkret_core::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID
             );
         }
     }

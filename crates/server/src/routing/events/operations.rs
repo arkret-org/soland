@@ -31,7 +31,7 @@
 //! - `content` — canonical-JSON, content-block, mention, and device-message shape checks.
 //! - `payload_schemas` — the static `PayloadRequirement` tables.
 
-use arkret_sdk::Operation;
+use arkret_core::Operation;
 use serde_json::Value;
 use soland_domain::kinds;
 
@@ -60,7 +60,7 @@ pub(crate) async fn lock_active_series_operations(
     let mut shards = BTreeSet::new();
     for operation in operations {
         if kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_sdk::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+            != Some(arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
         {
             continue;
         }

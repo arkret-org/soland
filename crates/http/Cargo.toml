@@ -10,7 +10,9 @@ authors.workspace = true
 description = "Soland HTTP transport, middleware, routing, and OpenAPI surface."
 
 [dependencies]
-arkret-sdk = { workspace = true, features = ["full-surface", "salvo"] }
+arkret-core = { workspace = true, features = ["salvo"] }
+arkret-server = { workspace = true }
+arkret-signatures = { workspace = true }
 base64.workspace = true
 chrono.workspace = true
 ed25519-dalek.workspace = true

@@ -184,11 +184,11 @@ pub(super) fn key_backup_idempotent_retry(
         return Ok(false);
     };
     let existing_bytes =
-        arkret_sdk::canonical::canonical_json_bytes(existing).map_err(|error| {
+        arkret_core::canonical::canonical_json_bytes(existing).map_err(|error| {
             AppError::internal(format!("stored key backup is not canonical: {error}"))
         })?;
     let incoming_bytes =
-        arkret_sdk::canonical::canonical_json_bytes(incoming).map_err(|error| {
+        arkret_core::canonical::canonical_json_bytes(incoming).map_err(|error| {
             AppError::internal(format!("key backup canonicalization failed: {error}"))
         })?;
     if existing_bytes != incoming_bytes {
@@ -224,7 +224,7 @@ pub(super) fn key_backup_metadata_for_list(mut backup: Value) -> Value {
 
 pub(super) fn key_backup_summary_for_list(
     backup: Value,
-) -> Result<arkret_sdk::models::KeyBackupSummary, AppError> {
+) -> Result<arkret_core::models::KeyBackupSummary, AppError> {
     serde_json::from_value(key_backup_metadata_for_list(backup)).map_err(|error| {
         AppError::internal(format!(
             "stored key backup metadata does not match SDK summary: {error}"
@@ -271,7 +271,7 @@ pub(super) async fn put_key_backup(
     // Spec `keys-operations.schema.json#/$defs/backup_id` pins the id to
     // `ak:backup:<uuidv7>`; parse into the SDK typed id up front so a
     // non-conforming id fails before any persistence side effect.
-    let typed_backup_id = arkret_sdk::BackupId::new(backup_id.clone()).map_err(|error| {
+    let typed_backup_id = arkret_core::BackupId::new(backup_id.clone()).map_err(|error| {
         AppError::invalid_param(format!(
             "backup_id must be a ak:backup:<uuidv7> typed id: {error}"
         ))

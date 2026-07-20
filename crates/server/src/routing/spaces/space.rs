@@ -11,7 +11,7 @@
 //! directory, mimi, …) calls into to resolve "is this actor allowed to see /
 //! write in this Realm?".
 
-use arkret_sdk::{
+use arkret_core::{
     Did, HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
     HistorySharingPolicyPayloadValue, HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
     HistoryVisibility, Operation, OperationId, PlaintextDataClassKind, RealmArchivePayload,
@@ -132,7 +132,7 @@ fn operation_reject_to_app_error(reason: &'static str) -> AppError {
     let error = AppError::new(ErrorCode::FailedPrecondition, reason.to_owned())
         .with_status(status)
         .with_wire_code(wire_code);
-    if reason == arkret_sdk::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
+    if reason == arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
         error.with_reason_code(reason)
     } else if wire_code == "failed_precondition" && reason != wire_code {
         error.with_top_level_reason(reason)
@@ -182,7 +182,7 @@ async fn archive_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        arkret_sdk::events::EventKind::REALM_ARCHIVE,
+        arkret_core::events::EventKind::REALM_ARCHIVE,
         payload,
     )
     .await
@@ -212,7 +212,7 @@ async fn freeze_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        arkret_sdk::events::EventKind::REALM_FREEZE,
+        arkret_core::events::EventKind::REALM_FREEZE,
         payload,
     )
     .await
@@ -242,7 +242,7 @@ async fn tombstone_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        arkret_sdk::events::EventKind::REALM_TOMBSTONE,
+        arkret_core::events::EventKind::REALM_TOMBSTONE,
         payload,
     )
     .await
@@ -272,7 +272,7 @@ async fn destroy_realm(
         state,
         &session.actor,
         realm_id.into_inner(),
-        arkret_sdk::events::EventKind::REALM_DESTROY,
+        arkret_core::events::EventKind::REALM_DESTROY,
         payload,
     )
     .await
@@ -399,7 +399,7 @@ async fn get_space_cell(
         cell_family: CHILD_ORDER_CELL_FAMILY.to_owned(),
         space_id,
         state: "value".to_owned(),
-        lattice: arkret_sdk::lattice::LatticeKind::OrderedLog
+        lattice: arkret_state::lattice::LatticeKind::OrderedLog
             .as_wire_str()
             .to_owned(),
         value,
@@ -920,7 +920,7 @@ pub async fn realm_recovery_recipient_principal(
     realm_id: &str,
     actor: &str,
 ) -> bool {
-    use arkret_sdk::models::DurabilityMode;
+    use arkret_core::models::DurabilityMode;
     let Some(realm_id) = realm_scope_to_realm_id(realm_id) else {
         return false;
     };
@@ -949,7 +949,7 @@ pub fn realm_recovery_event_visible(
     recipient_principal_id: Option<&str>,
     actor: &str,
 ) -> bool {
-    event_kind == arkret_sdk::events::EventKind::REALM_KEY_SHARE
+    event_kind == arkret_core::events::EventKind::REALM_KEY_SHARE
         && recipient_principal_id == Some(actor)
 }
 
@@ -1071,7 +1071,7 @@ async fn realm_restricted_history_policy_allows(
     else {
         return false;
     };
-    if arkret_sdk::validate_history_sharing_policy(&policy).is_err() {
+    if arkret_core::validate_history_sharing_policy(&policy).is_err() {
         return false;
     }
     let active_member = realm_active_member_at_read_time(state, &realm_id, actor).await;
@@ -1418,7 +1418,7 @@ mod tests {
 
     #[test]
     fn operation_rejection_keeps_organization_approval_as_reason_code() {
-        let reason = arkret_sdk::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL;
+        let reason = arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL;
         let error = operation_reject_to_app_error(reason);
 
         assert_eq!(error.http_status(), salvo::http::StatusCode::CONFLICT);

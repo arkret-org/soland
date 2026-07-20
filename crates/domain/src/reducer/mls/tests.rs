@@ -1,4 +1,4 @@
-use arkret_sdk::{Operation, OperationId, RealmId};
+use arkret_core::{Operation, OperationId, RealmId};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{TimeZone, Utc};
@@ -103,7 +103,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
             "requester_did": "did:web:alice.example",
             "ssk_generation": 7,
             "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
-            "welcome_digest": arkret_sdk::canonical::sha256_digest(b"opaque-welcome-bytes"),
+            "welcome_digest": arkret_core::canonical::sha256_digest(b"opaque-welcome-bytes"),
             "created_at": "2026-05-25T00:00:02Z",
             "signature": {
                 "kid": "did:web:alice.example#self-signing",
@@ -421,7 +421,7 @@ fn keypackage_claim_rejects_stale_cross_signing_generation() {
     let effect = apply_keypackage_claim(&mut state, &claim);
     match effect {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, arkret_sdk::ReasonCode::CLAIM_GENERATION_MISMATCH);
+            assert_eq!(reason, arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH);
         }
         other => panic!("expected Rejected, got {other:?}"),
     }
@@ -538,7 +538,7 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { reason }
-            if reason == arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
+            if reason == arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
     ));
 }
 
@@ -552,7 +552,7 @@ fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
     object.remove("key_package_id");
     object.insert("ciphertext".to_owned(), Value::String(b64(raw_welcome)));
     payload["claim_envelope"]["welcome_digest"] =
-        Value::String(arkret_sdk::canonical::sha256_digest(raw_welcome));
+        Value::String(arkret_core::canonical::sha256_digest(raw_welcome));
 
     let enqueue = op_at(300, "ak.mls.welcome", payload);
     let effect = apply_welcome_enqueue(&mut state, &enqueue);
@@ -594,7 +594,7 @@ fn welcome_enqueue_rejects_missing_claim_envelope() {
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { reason }
-            if reason == arkret_sdk::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
+            if reason == arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
     ));
     assert!(state.mls_welcomes.is_empty());
 }
@@ -1049,7 +1049,7 @@ fn commit_rejects_policy_root_mismatch() {
     );
     match effect {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, arkret_sdk::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
+            assert_eq!(reason, arkret_core::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
         }
         other => panic!("expected governance_binding_mismatch, got {other:?}"),
     }
@@ -1108,7 +1108,7 @@ fn concurrent_commits_contend_then_resolve() {
     );
     assert!(matches!(
         pending,
-        ProjectionEffect::Rejected { reason } if reason == arkret_sdk::ReasonCode::DECRYPTION_PENDING
+        ProjectionEffect::Rejected { reason } if reason == arkret_core::ReasonCode::DECRYPTION_PENDING
     ));
 
     // A resolving commit at the current epoch advances and clears ⊥. The

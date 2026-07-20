@@ -33,7 +33,7 @@
 //!   [`crate::state::AppState::verified_profiles`].
 //! - `describe.rs::apply_claim_level_partition` reads that vector and emits a `verified_profiles[]`
 //!   array matching the wire schema `service-describe.schema.json#/properties/verified_profiles`
-//!   (via the SDK's typed [`arkret_sdk::VerifiedProfileEntry`]).
+//!   (via the SDK's typed [`arkret_core::VerifiedProfileEntry`]).
 //!
 //! Dev-mode invariant (service-surface.md §3.0): when the env var is unset
 //! OR the file is missing OR malformed, the loaded vector is empty and the
@@ -104,7 +104,7 @@ struct RawVerifiedEntry {
 
 /// In-memory representation of a loaded verified-profile entry, owned by
 /// [`crate::state::AppState`]. The handler converts each entry into an SDK
-/// [`arkret_sdk::VerifiedProfileEntry`] on the way out.
+/// [`arkret_core::VerifiedProfileEntry`] on the way out.
 #[derive(Debug, Clone)]
 pub struct VerifiedProfileDescriptor {
     pub profile_id: String,
@@ -112,7 +112,7 @@ pub struct VerifiedProfileDescriptor {
     pub verification_run_id: String,
     pub artifact_digest: String,
     pub artifact_ref: String,
-    pub verifier_did: arkret_sdk::Did,
+    pub verifier_did: arkret_core::Did,
     pub signature: String,
     pub timestamp: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
@@ -226,7 +226,7 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
         else {
             continue;
         };
-        let verifier_did = match arkret_sdk::Did::new(verifier_did_raw) {
+        let verifier_did = match arkret_core::Did::new(verifier_did_raw) {
             Ok(did) => did,
             Err(error) => {
                 tracing::warn!(

@@ -8,8 +8,9 @@ use super::{
 pub(crate) struct MemoryWebvhStore {
     documents: Mutex<BTreeMap<String, WebvhDocumentRecord>>,
     log: Mutex<BTreeMap<String, Vec<WebvhLogRecord>>>,
-    service_registrations:
-        Mutex<BTreeMap<arkret_sdk::ServiceRegistrationKey, arkret_sdk::ServiceRegistrationOutcome>>,
+    service_registrations: Mutex<
+        BTreeMap<arkret_core::ServiceRegistrationKey, arkret_core::ServiceRegistrationOutcome>,
+    >,
     submission_lock: Mutex<()>,
 }
 impl MemoryWebvhStore {
@@ -139,8 +140,8 @@ impl WebvhStore for MemoryWebvhStore {
 
     async fn get_service_registration(
         &self,
-        key: &arkret_sdk::ServiceRegistrationKey,
-    ) -> PersistenceResult<Option<arkret_sdk::ServiceRegistrationOutcome>> {
+        key: &arkret_core::ServiceRegistrationKey,
+    ) -> PersistenceResult<Option<arkret_core::ServiceRegistrationOutcome>> {
         Ok(self
             .service_registrations
             .lock()
@@ -151,8 +152,8 @@ impl WebvhStore for MemoryWebvhStore {
 
     async fn commit_service_registration(
         &self,
-        key: arkret_sdk::ServiceRegistrationKey,
-        outcome: arkret_sdk::ServiceRegistrationOutcome,
+        key: arkret_core::ServiceRegistrationKey,
+        outcome: arkret_core::ServiceRegistrationOutcome,
         mut document: WebvhDocumentRecord,
         event: WebvhLogRecord,
     ) -> PersistenceResult<ServiceRegistrationCommitOutcome> {

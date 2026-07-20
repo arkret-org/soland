@@ -20,7 +20,7 @@ pub(super) fn key_backup_delete_proof_canonical_bytes(
         action: "DELETE /_arkret/self/keys/backups/{backup_id}",
         audience: "soland.key_backup.delete",
     };
-    arkret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+    arkret_core::canonical::canonical_json_bytes(&transcript).map_err(|error| {
         AppError::internal(format!(
             "key backup delete proof transcript failed: {error}"
         ))
@@ -55,7 +55,7 @@ pub(super) async fn verify_key_backup_delete_jws_proof(
     let canonical = key_backup_delete_proof_canonical_bytes(actor_id, backup_id)?;
     // High-risk path: enforce DID document freshness before key-backup delete
     // proof verification (fail-closed-on-stale).
-    let actor_id = arkret_sdk::Did::new(actor_id.to_owned()).map_err(|error| {
+    let actor_id = arkret_core::Did::new(actor_id.to_owned()).map_err(|error| {
         AppError::capability_denied(format!(
             "key backup delete proof actor_id is not a valid DID: {error}"
         ))

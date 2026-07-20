@@ -39,7 +39,7 @@ pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 struct PreparedDeviceMessageTarget {
     recipient: String,
     device_id: String,
-    target: arkret_sdk::DeviceMessageTarget,
+    target: arkret_core::DeviceMessageTarget,
     message_key: String,
     intent_digest: String,
 }
@@ -90,23 +90,23 @@ async fn send_device_messages(
     }
     let idempotency_key = idempotency_key.to_owned();
     let body = body.into_inner();
-    let request_digest = arkret_sdk::canonical::canonical_sha256(&body)
+    let request_digest = arkret_core::canonical::canonical_sha256(&body)
         .map_err(|error| AppError::internal(error.to_string()))?;
     let request_key =
-        arkret_sdk::canonical::canonical_sha256(&json!([session.actor, idempotency_key,]))
+        arkret_core::canonical::canonical_sha256(&json!([session.actor, idempotency_key,]))
             .map_err(|error| AppError::internal(error.to_string()))?;
     let mut prepared_targets = Vec::new();
     let mut idempotency_expires_at = now();
     for (recipient, devices) in body.messages {
         for (device_id, target) in devices {
             idempotency_expires_at = idempotency_expires_at.max(target.expires_at);
-            let message_key = arkret_sdk::canonical::canonical_sha256(&json!({
+            let message_key = arkret_core::canonical::canonical_sha256(&json!({
                 "sender_principal_id": session.actor,
                 "sender_device_id": session.device_id,
                 "message_id": target.message_id,
             }))
             .map_err(|error| AppError::internal(error.to_string()))?;
-            let intent_digest = arkret_sdk::canonical::canonical_sha256(&json!({
+            let intent_digest = arkret_core::canonical::canonical_sha256(&json!({
                 "message_id": target.message_id,
                 "kind": target.kind,
                 "sender_principal_id": session.actor,
@@ -549,7 +549,7 @@ fn note_unknown_device(
 fn device_message_envelope_from_record(
     message: &DeviceMessageState,
 ) -> Option<DeviceMessageEnvelope> {
-    let kind = arkret_sdk::ProtocolKind::new(
+    let kind = arkret_core::ProtocolKind::new(
         message
             .content
             .get("kind")
@@ -580,13 +580,13 @@ fn device_message_envelope_from_record(
         None => None,
     };
     Some(DeviceMessageEnvelope {
-        message_id: arkret_sdk::DeviceMessageId::new(
+        message_id: arkret_core::DeviceMessageId::new(
             message.content.get("message_id")?.as_str()?.to_owned(),
         )
         .ok()?,
         kind,
-        sender_principal_id: arkret_sdk::Did::new(message.sender.clone()).ok()?,
-        sender_device_id: arkret_sdk::DeviceId::new(
+        sender_principal_id: arkret_core::Did::new(message.sender.clone()).ok()?,
+        sender_device_id: arkret_core::DeviceId::new(
             message
                 .content
                 .get("sender_device_id")
@@ -594,8 +594,8 @@ fn device_message_envelope_from_record(
                 .to_owned(),
         )
         .ok()?,
-        recipient_principal_id: arkret_sdk::Did::new(message.recipient.clone()).ok()?,
-        recipient_device_id: arkret_sdk::DeviceId::new(message.device_id.clone()).ok()?,
+        recipient_principal_id: arkret_core::Did::new(message.recipient.clone()).ok()?,
+        recipient_device_id: arkret_core::DeviceId::new(message.device_id.clone()).ok()?,
         sent_at: message.created_at,
         expires_at,
         content,

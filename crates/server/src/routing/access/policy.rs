@@ -22,8 +22,8 @@
 //! Production note: see `_todos.md` B9 (merge `policy_check` and `authz_check`
 //! into a single evaluator), B10 (obligation execution), B12 (cache TTL).
 
-use arkret_sdk::schema::{CapabilityRiskTier, embedded_capability_action};
-use arkret_sdk::{
+use arkret_core::schema::{CapabilityRiskTier, embedded_capability_action};
+use arkret_core::{
     AuthzDecision, Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome,
     PolicyCheckRequestBody, PolicyCheckSignature, RealmId,
 };
@@ -436,13 +436,13 @@ async fn policy_check(
 
 /// Canonical-JSON sha256 digest helper used to build each of the four
 /// Policy-check frontier hashes. Delegates to the SDK
-/// [`arkret_sdk::canonical::canonical_sha256`] so the digest is computed over
+/// [`arkret_core::canonical::canonical_sha256`] so the digest is computed over
 /// canonical JSON bytes and emitted in the wire `sha256:<hex>` form. There is
 /// **no** non-canonical fallback: if canonicalization fails the error is
 /// surfaced to the caller rather than silently hashing a non-canonical
 /// `serde_json::to_vec` byte stream.
 fn canonical_hash(value: &Value) -> Result<Hash, AppError> {
-    let digest = arkret_sdk::canonical::canonical_sha256(value)
+    let digest = arkret_core::canonical::canonical_sha256(value)
         .map_err(|e| AppError::internal(format!("canonical digest failed: {e}")))?;
     Hash::new(digest).map_err(|e| AppError::internal(format!("digest shape failed: {e}")))
 }
@@ -796,7 +796,7 @@ mod tests {
             device_id: None,
             action: "ak.message.create".to_owned(),
             request_canonical_digest: test_hash(),
-            source: arkret_sdk::PolicyCheckSource {
+            source: arkret_core::PolicyCheckSource {
                 service_id: Did::new(source_service.to_owned()).unwrap(),
                 service_type: "soland".to_owned(),
                 source_ip_digest: Some(test_hash()),

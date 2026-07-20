@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use arkret_sdk::{Operation, OperationId};
+use arkret_core::{Operation, OperationId};
 use soland_domain::kinds;
 use soland_storage::ProjectionEventRecord;
 
@@ -185,15 +185,15 @@ pub async fn load_projected_events_from_pg(
 
 pub struct FederationIngestResult {
     pub accepted: Vec<OperationId>,
-    pub rejected: Vec<arkret_sdk::EventsSubmitRejectedItem>,
+    pub rejected: Vec<arkret_core::EventsSubmitRejectedItem>,
 }
 
 fn federation_rejection(
     operation_id: &OperationId,
     reason_code: impl Into<String>,
     detail: Option<String>,
-) -> arkret_sdk::EventsSubmitRejectedItem {
-    arkret_sdk::EventsSubmitRejectedItem {
+) -> arkret_core::EventsSubmitRejectedItem {
+    arkret_core::EventsSubmitRejectedItem {
         id: operation_id.to_string(),
         reason_code: reason_code.into(),
         detail,
@@ -316,11 +316,11 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
     } else if kinds::canonical_kind_string(operation) == "ak.invite.accept" {
         project_invite_accept_operation(state, origin, operation).await;
     } else if kinds::canonical_kind_string(operation)
-        == arkret_sdk::events::EventKind::INVITE_CANCEL
+        == arkret_core::events::EventKind::INVITE_CANCEL
     {
         project_invite_cancel_operation(state, origin, operation).await;
     } else if kinds::canonical_kind_string(operation)
-        == arkret_sdk::events::EventKind::INVITE_REVOKE
+        == arkret_core::events::EventKind::INVITE_REVOKE
     {
         project_invite_revoke_operation(state, origin, operation).await;
     } else if kinds::operation_is_membership(operation)
@@ -360,7 +360,7 @@ pub async fn accept_local_operations(
 pub async fn accept_trusted_sidecar_circle_operation(
     state: &AppState,
     controller: &str,
-    sidecar_id: &arkret_sdk::SidecarId,
+    sidecar_id: &arkret_core::SidecarId,
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let _active_series_guards = crate::routing::events::operations::lock_active_series_operations(
@@ -380,7 +380,7 @@ pub async fn accept_trusted_sidecar_circle_operation(
 pub async fn accept_trusted_sidecar_create_operation(
     state: &AppState,
     controller: &str,
-    backing_circle_id: &arkret_sdk::CircleId,
+    backing_circle_id: &arkret_core::CircleId,
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let _active_series_guards = crate::routing::events::operations::lock_active_series_operations(

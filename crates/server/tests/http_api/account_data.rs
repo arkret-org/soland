@@ -385,7 +385,7 @@ fn account_data_encrypted_value(
     nonce_byte: u8,
 ) -> Value {
     serde_json::to_value(
-        arkret_sdk::account_data_crypto::seal_account_data_value_with_nonce(
+        arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
             &[7u8; 32],
             actor_id,
             data_type,

@@ -4,8 +4,8 @@
 //! diagnostic-only `internal_reason`) on top of the SDK's protocol-level
 //! watch-state decision.
 
-pub use arkret_sdk::push_rule_core::{EventContext, WatchLevel, reason_code};
-use arkret_sdk::push_rule_core::{ShouldNotify as CoreShouldNotify, evaluate_watch_level};
+pub use arkret_core::push_rule_core::{EventContext, WatchLevel, reason_code};
+use arkret_core::push_rule_core::{ShouldNotify as CoreShouldNotify, evaluate_watch_level};
 
 /// Internal diagnostic strings. These are deliberately *not* a stable wire
 /// contract: they exist for soland logs, metrics, and audit rows only.

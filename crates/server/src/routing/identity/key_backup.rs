@@ -1,6 +1,6 @@
 //! Encrypted key-backup CRUD.
 
-use arkret_sdk::{
+use arkret_core::{
     BackupClass, BackupId, DeviceId, Did, EventId, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND,
     KeyBackup, KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupKdfName,
     KeyBackupRecipientMethod, KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(value["actor_id"], ACTOR);
         assert_eq!(value["backup_id"], BACKUP_ID);
         assert_eq!(
-            arkret_sdk::canonical::sha256_digest(&canonical),
+            arkret_core::canonical::sha256_digest(&canonical),
             "sha256:0488d1f92328d1c7f0261963d88ac2705904456fffa7a3113fe23cad044ac34c"
         );
     }

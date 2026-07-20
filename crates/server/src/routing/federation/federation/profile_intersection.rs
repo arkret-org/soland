@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use arkret_sdk::{
+use arkret_core::{
     Operation, ProfileSemanticRequirements, ServiceDescribe, collect_profile_semantic_requirements,
 };
 use serde_json::Value;

@@ -1,4 +1,4 @@
-pub use arkret_sdk::authz::delegation::{
+pub use arkret_core::authz::delegation::{
     Grant, GrantConstraint as Constraint, grant_effective_expiry, is_grant_expired,
     max_delegation_depth,
 };
@@ -164,7 +164,7 @@ fn validate_capability_action(action: &str) -> Result<(), &'static str> {
     if !saw_segment {
         return Err("capability_grant_action_invalid");
     }
-    match arkret_sdk::schema::embedded_capability_action(action) {
+    match arkret_core::schema::embedded_capability_action(action) {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err("capability_grant_action_unknown"),
         Err(_) => Err("capability_action_registry_unavailable"),

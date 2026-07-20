@@ -78,7 +78,7 @@ pub(super) fn enforce_mimi_submit_binding(
             return Err(AppError::invalid_param(
                 "MIMI room binding is not writable in its current state",
             )
-            .with_wire_code(arkret_sdk::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE));
+            .with_wire_code(arkret_core::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE));
         }
     }
     match binding_payload
@@ -89,13 +89,13 @@ pub(super) fn enforce_mimi_submit_binding(
         Some("observer") => {
             return Err(
                 AppError::capability_denied("MIMI observer binding cannot submit writes")
-                    .with_wire_code(arkret_sdk::ReasonCode::MIMI_OBSERVER_WRITE_FORBIDDEN),
+                    .with_wire_code(arkret_core::ReasonCode::MIMI_OBSERVER_WRITE_FORBIDDEN),
             );
         }
         _ => {
             return Err(
                 AppError::invalid_param("MIMI room binding has no writable provider role")
-                    .with_wire_code(arkret_sdk::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE),
+                    .with_wire_code(arkret_core::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE),
             );
         }
     }
@@ -109,22 +109,22 @@ pub(super) fn enforce_mimi_submit_binding(
     };
     let submit_group_id = mimi_submit_mls_group_id(body, message).ok_or_else(|| {
         AppError::invalid_param("MIMI submit_message is missing mls_group_id")
-            .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
+            .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
     })?;
     if submit_group_id != binding_group_id {
         return Err(AppError::invalid_param(
             "MIMI submit_message mls_group_id does not match room binding",
         )
-        .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
+        .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
     }
     let epoch = mimi_submit_epoch(body, message).ok_or_else(|| {
         AppError::invalid_param("MIMI submit_message is missing MLS epoch")
-            .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
+            .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
     })?;
     let governance_binding = mimi_governance_binding_candidate(binding_payload, body, message)
         .ok_or_else(|| {
             AppError::invalid_param("MIMI submit_message lacks governance_binding")
-                .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
+                .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
         })?;
     validate_mimi_submit_governance_binding(
         governance_binding,
@@ -140,7 +140,7 @@ pub(super) fn enforce_mimi_submit_binding(
         return Err(AppError::invalid_param(
             "MIMI submit_message lacks covered_seals_cell evidence",
         )
-        .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
+        .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
     }
     Ok(())
 }
@@ -154,7 +154,7 @@ pub(super) fn validate_mimi_room_binding_payload(binding: &Value) -> Result<(), 
     {
         return Err(
             AppError::invalid_param("MIMI room binding requires hub_provider")
-                .with_wire_code(arkret_sdk::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE),
+                .with_wire_code(arkret_core::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE),
         );
     }
     match payload.get("local_provider_role").and_then(Value::as_str) {
@@ -163,14 +163,14 @@ pub(super) fn validate_mimi_room_binding_payload(binding: &Value) -> Result<(), 
             return Err(AppError::invalid_param(
                 "MIMI room binding requires a known local_provider_role",
             )
-            .with_wire_code(arkret_sdk::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE));
+            .with_wire_code(arkret_core::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE));
         }
     }
     match payload.get("status").and_then(Value::as_str) {
         Some("proposed" | "accepted" | "revoked" | "migrating") => Ok(()),
         _ => Err(
             AppError::invalid_param("MIMI room binding requires a lifecycle status")
-                .with_wire_code(arkret_sdk::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE),
+                .with_wire_code(arkret_core::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE),
         ),
     }
 }
@@ -194,7 +194,7 @@ pub(super) async fn enforce_mimi_room_binding_transition(
         .unwrap_or_else(|| format!("from=<none>;to={next_status}"));
     Err(
         AppError::invalid_param("MIMI room binding status transition is not allowed")
-            .with_wire_code(arkret_sdk::ReasonCode::MIMI_ROOM_BINDING_STATUS_TRANSITION_INVALID)
+            .with_wire_code(arkret_core::ReasonCode::MIMI_ROOM_BINDING_STATUS_TRANSITION_INVALID)
             .with_reason_detail(detail),
     )
 }
@@ -207,7 +207,7 @@ pub(super) fn mimi_room_binding_status(binding: &Value) -> Result<&str, AppError
         .filter(|status| matches!(*status, "proposed" | "accepted" | "revoked" | "migrating"))
         .ok_or_else(|| {
             AppError::invalid_param("MIMI room binding requires a lifecycle status")
-                .with_wire_code(arkret_sdk::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE)
+                .with_wire_code(arkret_core::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE)
         })
 }
 
@@ -280,7 +280,7 @@ pub(super) fn validate_mimi_submit_governance_binding(
 ) -> Result<(), AppError> {
     let error = |reason: &'static str| {
         AppError::invalid_param("MIMI submit_message governance_binding is not valid")
-            .with_wire_code(arkret_sdk::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
+            .with_wire_code(arkret_core::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
             .with_reason_detail(reason)
     };
     if binding.get("binding_version").and_then(Value::as_u64) != Some(1) {
@@ -474,7 +474,7 @@ pub(super) fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &s
         "hub_provider": state.service_id.clone(),
         "local_provider_role": "hub",
         "mls_group_id": format!("mls:{}", room_id),
-        "policy_root": arkret_sdk::canonical::sha256_digest(format!("{realm_id}:{room_id}:policy").as_bytes()),
+        "policy_root": arkret_core::canonical::sha256_digest(format!("{realm_id}:{room_id}:policy").as_bytes()),
         "status": "accepted",
         "canonical_truth": "arkret_signed_event_reducer"
     })

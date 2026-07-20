@@ -15,8 +15,8 @@
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use arkret_sdk::lattice::CellState;
-use arkret_sdk::{CellRef, Operation};
+use arkret_core::{CellRef, Operation};
+use arkret_state::lattice::CellState;
 use serde_json::Value;
 use url::Url;
 
@@ -175,7 +175,7 @@ fn validate_policy_server_url(raw_url: &str) -> Result<(), &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::{Operation, OperationId, RealmId};
+    use arkret_core::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use super::*;
@@ -188,7 +188,7 @@ mod tests {
         Operation::create(
             OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
-            arkret_sdk::events::EventKind::REALM_POLICY_SERVER,
+            arkret_core::events::EventKind::REALM_POLICY_SERVER,
             payload,
         )
     }

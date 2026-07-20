@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 pub fn generate(kind: &str) -> String {
-    arkret_sdk::new_prefixed_uuid7(&format!("ak:{kind}:"))
+    arkret_core::new_prefixed_uuid7(&format!("ak:{kind}:"))
 }
 
 pub fn parse_typed_uuid(typed: &str, expected_kind: &str) -> Option<Uuid> {

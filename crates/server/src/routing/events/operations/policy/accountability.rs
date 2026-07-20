@@ -5,7 +5,7 @@ pub(super) fn validate_pin_scope_safety(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if !kinds::canonical_kind_for_operation(operation)
-        .is_some_and(arkret_sdk::events::kinds::is_pin_kind)
+        .is_some_and(arkret_core::events::kinds::is_pin_kind)
     {
         return Ok(());
     }
@@ -29,7 +29,7 @@ pub(super) async fn validate_accountability_profile_policy(
         return Ok(());
     }
     let Some(principal_id) = profile_principal_id(operation) else {
-        return Err(arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
+        return Err(arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
     };
     let now = chrono::Utc::now();
     let accepted_events = state
@@ -61,7 +61,7 @@ pub(super) async fn validate_accountability_profile_policy(
             accountability_grant_value_active_for(payload, &issuer, &principal_id, now)
         });
         if !in_batch && !accepted {
-            return Err(arkret_sdk::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
+            return Err(arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
         }
     }
     Ok(())
@@ -208,7 +208,7 @@ pub(super) fn accountability_grant_time(
 /// discriminator on an encrypted envelope) is rejected so message-id exposure
 /// cannot widen reaction-frequency correlation from per-`target_ref` to
 /// per-message. The fail-closed decision is delegated to the SDK helper
-/// [`arkret_sdk::mls::enforce_minimal_metadata_aad`] so the wire enum mapping
+/// [`arkret_policy::enforce_minimal_metadata_aad`] so the wire enum mapping
 /// stays single-sourced.
 ///
 /// Scope notes (honest boundary): soland holds no MLS group key and is not the
@@ -225,9 +225,9 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
     let is_message_or_reaction = matches!(
         kind,
         Some(
-            arkret_sdk::events::EventKind::MESSAGE_CREATE
-                | arkret_sdk::events::EventKind::REACTION_ADD
-                | arkret_sdk::events::EventKind::REACTION_REMOVE
+            arkret_core::events::EventKind::MESSAGE_CREATE
+                | arkret_core::events::EventKind::REACTION_ADD
+                | arkret_core::events::EventKind::REACTION_REMOVE
         )
     );
     if !is_message_or_reaction {
@@ -258,12 +258,12 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
             "minimal_metadata_realm encrypted envelope requires aad_visibility_event_id=hidden",
         );
     };
-    arkret_sdk::mls::enforce_minimal_metadata_aad(&visibility, true)
+    arkret_policy::enforce_minimal_metadata_aad(&visibility, true)
         .map_err(|_| "minimal_metadata_realm requires aad_visibility_event_id=hidden")
 }
 
 /// SEC-08 — map the wire `aad_visibility_event_id` discriminator on an encrypted
-/// envelope to the SDK [`arkret_sdk::EncryptedEnvelopeAadVisibility`] enum. Returns `None`
+/// envelope to the SDK [`arkret_core::EncryptedEnvelopeAadVisibility`] enum. Returns `None`
 /// when the field is missing or carries an unknown value, which the caller
 /// treats as fail-closed for a minimal-metadata Realm.
 pub(super) fn validate_disappearing_message_policy(
@@ -330,8 +330,8 @@ pub(super) fn validate_disappearing_message_policy(
 
 pub(in crate::routing::events::operations) fn minimal_metadata_aad_visibility(
     envelope: &Value,
-) -> Option<arkret_sdk::EncryptedEnvelopeAadVisibility> {
-    use arkret_sdk::EncryptedEnvelopeAadVisibility;
+) -> Option<arkret_core::EncryptedEnvelopeAadVisibility> {
+    use arkret_core::EncryptedEnvelopeAadVisibility;
     // The discriminator lives at the envelope root; tolerate a nested
     // `envelope` wrapper as shown in the spec wire example.
     let raw = envelope

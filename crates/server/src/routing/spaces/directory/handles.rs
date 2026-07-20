@@ -138,7 +138,7 @@ pub(super) async fn membership_builder_resolve_allowed(
     };
     if !matches!(
         request.intent,
-        Some(arkret_sdk::DirectoryIntent::Invite | arkret_sdk::DirectoryIntent::MemberAdd)
+        Some(arkret_core::DirectoryIntent::Invite | arkret_core::DirectoryIntent::MemberAdd)
     ) {
         return false;
     }
@@ -159,7 +159,7 @@ pub(super) async fn contact_request_resolve_allowed(
     let Some(session) = session else {
         return false;
     };
-    if request.intent != Some(arkret_sdk::DirectoryIntent::ContactRequest) {
+    if request.intent != Some(arkret_core::DirectoryIntent::ContactRequest) {
         return false;
     }
     matches!(
@@ -662,7 +662,7 @@ pub(super) async fn signed_handle_claim(
         policy_event_ref: None,
     };
     let mut claim = SdkHandleClaim {
-        schema: arkret_sdk::HANDLE_CLAIM_SCHEMA.to_owned(),
+        schema: arkret_core::HANDLE_CLAIM_SCHEMA.to_owned(),
         handle: Some(handle),
         handle_aliases: vec![format!("acct:{localpart}@{handle_domain}")],
         subject: Some(subject),
@@ -747,7 +747,7 @@ pub(super) async fn list_handles_for_subject(
     }
 
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
-    let filter_digest = arkret_sdk::cursor_filter_digest(&json!({
+    let filter_digest = arkret_server::cursor_filter_digest(&json!({
         "operation": "ak.find.directory.query.list_handles_for_subject",
         "realm_id": body.realm_id.as_ref(),
         "intent": body.intent.as_deref(),
@@ -965,7 +965,7 @@ fn cursor_binding_record(
 fn cursor_app_error(error: CursorAuthorityError) -> AppError {
     match error {
         CursorAuthorityError::InvalidParam(message) => AppError::invalid_param(message)
-            .with_reason_code(arkret_sdk::ReasonCode::INVALID_CURSOR),
+            .with_reason_code(arkret_core::ReasonCode::INVALID_CURSOR),
         CursorAuthorityError::Expired => AppError::new(
             soland_http::error::ErrorCode::CursorExpired,
             "cursor has expired",

@@ -46,10 +46,10 @@ pub fn realm_link_projection_cell_ref(
     source_realm_id: &str,
     target_realm_id: &str,
     link_kind: &str,
-) -> Option<arkret_sdk::CellRef> {
+) -> Option<arkret_core::CellRef> {
     let subject =
-        arkret_sdk::composite_subject(&[source_realm_id, target_realm_id, link_kind]).ok()?;
-    arkret_sdk::CellRef::new(format!("ak:cell:ak.component.realm.link.v1:{subject}")).ok()
+        arkret_core::composite_subject(&[source_realm_id, target_realm_id, link_kind]).ok()?;
+    arkret_core::CellRef::new(format!("ak:cell:ak.component.realm.link.v1:{subject}")).ok()
 }
 
 /// Inheritance mode emitted on the effective-policy response.
@@ -382,13 +382,13 @@ pub fn check_realm_link_admissible(
     link_kind: &str,
     status: &str,
 ) -> Result<(), &'static str> {
-    if arkret_sdk::RealmLinkKind::parse(link_kind).is_none() {
+    if arkret_core::RealmLinkKind::parse(link_kind).is_none() {
         return Err("realm_link_kind_invalid");
     }
     if source_realm_id == target_realm_id {
         return Err("realm_link_self_reference");
     }
-    let Some(next_status) = arkret_sdk::RealmLinkStatus::parse(status) else {
+    let Some(next_status) = arkret_core::RealmLinkStatus::parse(status) else {
         return Err("realm_link_status_invalid");
     };
     let current_status = state
@@ -399,16 +399,16 @@ pub fn check_realm_link_admissible(
                 .iter()
                 .find(|link| link.target_realm_id == target_realm_id && link.link_kind == link_kind)
         })
-        .and_then(|link| arkret_sdk::RealmLinkStatus::parse(&link.status));
+        .and_then(|link| arkret_core::RealmLinkStatus::parse(&link.status));
     if current_status.is_some_and(|current| !current.can_transition_to(next_status)) {
-        return Err(arkret_sdk::ReasonCode::REALM_LINK_INVALID_TRANSITION);
+        return Err(arkret_core::ReasonCode::REALM_LINK_INVALID_TRANSITION);
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use arkret_sdk::{Operation, OperationId, RealmId};
+    use arkret_core::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use super::*;
@@ -430,7 +430,7 @@ mod tests {
 
     fn link_op(source: &str, target: &str, link_kind: &str, status: &str) -> Operation {
         op(
-            arkret_sdk::events::EventKind::REALM_LINK,
+            arkret_core::events::EventKind::REALM_LINK,
             source,
             json!({
                 "target_realm_id": target,
@@ -442,7 +442,7 @@ mod tests {
 
     fn inherit_op(child: &str, parent: &str, allowed_policies: &[&str]) -> Operation {
         op(
-            arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_core::events::EventKind::REALM_INHERITANCE_POLICY,
             child,
             json!({
                 "source_realm_id": parent,
@@ -454,7 +454,7 @@ mod tests {
 
     fn inherit_op_spec_payload(child: &str, parent: &str, policy_rules: &[&str]) -> Operation {
         op(
-            arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_core::events::EventKind::REALM_INHERITANCE_POLICY,
             child,
             json!({
                 "source_realm_id": parent,
@@ -553,14 +553,14 @@ mod tests {
         assert!(matches!(
             effect,
             crate::reducer::ProjectionEffect::Rejected { reason }
-                if reason == arkret_sdk::ReasonCode::REALM_LINK_INVALID_TRANSITION
+                if reason == arkret_core::ReasonCode::REALM_LINK_INVALID_TRANSITION
         ));
     }
 
     #[test]
     fn apply_link_accepts_the_sdk_fsm_matrix() {
         let hlc = ServerHlc::new("test");
-        for initial in arkret_sdk::REALM_LINK_INITIAL_STATES {
+        for initial in arkret_core::REALM_LINK_INITIAL_STATES {
             let mut state = ProjectionState::new();
             let effect = state.apply(
                 &link_op(REALM_A, REALM_B, "governed_by", initial.as_str()),
@@ -572,7 +572,7 @@ mod tests {
             ));
         }
 
-        for (from, to) in arkret_sdk::REALM_LINK_ALLOWED_TRANSITIONS {
+        for (from, to) in arkret_core::REALM_LINK_ALLOWED_TRANSITIONS {
             let mut state = ProjectionState::new();
             state.apply(
                 &link_op(REALM_A, REALM_B, "governed_by", from.as_str()),

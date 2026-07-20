@@ -95,7 +95,7 @@ pub struct MemberIdentityReplacementEdge {
     pub payload_digest: String,
 }
 
-pub type EffectiveIdentityEntry = arkret_sdk::EffectiveIdentityEntry;
+pub type EffectiveIdentityEntry = arkret_core::EffectiveIdentityEntry;
 
 /// Per-`(realm_id, actor_id)` snapshot derived on demand by
 /// [`MemberIdentityRegistry::snapshot_for_actor`]. Drives the sync
@@ -319,9 +319,9 @@ impl MemberIdentityRegistry {
             .iter()
             .map(|r| {
                 Some(EffectiveIdentityEntry {
-                    event_id: arkret_sdk::EventId::new(r.event_id.clone()).ok()?,
-                    segment: arkret_sdk::MemberIdentitySegment::MemberIdentity,
-                    payload_digest: arkret_sdk::Hash::new(r.payload_digest.clone()).ok()?,
+                    event_id: arkret_core::EventId::new(r.event_id.clone()).ok()?,
+                    segment: arkret_core::MemberIdentitySegment::MemberIdentity,
+                    payload_digest: arkret_core::Hash::new(r.payload_digest.clone()).ok()?,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -391,12 +391,12 @@ fn effective_set_digest(
     actor_id: &str,
     entries: &[EffectiveIdentityEntry],
 ) -> Option<String> {
-    let realm_id = arkret_sdk::RealmId::new(realm_id.to_owned()).ok()?;
-    let actor_id = arkret_sdk::Did::new(actor_id.to_owned()).ok()?;
-    arkret_sdk::member_identity_effective_set_digest(
+    let realm_id = arkret_core::RealmId::new(realm_id.to_owned()).ok()?;
+    let actor_id = arkret_core::Did::new(actor_id.to_owned()).ok()?;
+    arkret_core::member_identity_effective_set_digest(
         &realm_id,
         &actor_id,
-        arkret_sdk::MemberIdentitySegment::MemberIdentity,
+        arkret_core::MemberIdentitySegment::MemberIdentity,
         entries,
     )
     .ok()
@@ -415,11 +415,11 @@ pub(crate) fn display_state_digest(
     entries: &[EffectiveIdentityEntry],
     handle_claims: &[HandleClaimDigestInput],
 ) -> Option<String> {
-    let handle_claims: Vec<arkret_sdk::RosterHandleClaimDigestEntry> = handle_claims
+    let handle_claims: Vec<arkret_core::RosterHandleClaimDigestEntry> = handle_claims
         .iter()
         .map(|claim| {
-            Some(arkret_sdk::RosterHandleClaimDigestEntry {
-                claim_digest: arkret_sdk::Hash::new(claim.claim_digest.clone()).ok()?,
+            Some(arkret_core::RosterHandleClaimDigestEntry {
+                claim_digest: arkret_core::Hash::new(claim.claim_digest.clone()).ok()?,
                 binding_state: serde_json::from_value(Value::String(claim.binding_state.clone()))
                     .ok()?,
                 expires_at: match claim.expires_at.as_deref() {
@@ -433,9 +433,9 @@ pub(crate) fn display_state_digest(
             })
         })
         .collect::<Option<Vec<_>>>()?;
-    let realm_id = arkret_sdk::RealmId::new(realm_id.to_owned()).ok()?;
-    let actor_id = arkret_sdk::Did::new(actor_id.to_owned()).ok()?;
-    arkret_sdk::member_display_state_digest(&realm_id, &actor_id, entries, &handle_claims).ok()
+    let realm_id = arkret_core::RealmId::new(realm_id.to_owned()).ok()?;
+    let actor_id = arkret_core::Did::new(actor_id.to_owned()).ok()?;
+    arkret_core::member_display_state_digest(&realm_id, &actor_id, entries, &handle_claims).ok()
 }
 
 fn canonical_digest(
@@ -444,8 +444,8 @@ fn canonical_digest(
     actor_id: &str,
     label: &str,
 ) -> Option<String> {
-    match arkret_sdk::canonical::canonical_json_bytes(projection) {
-        Ok(bytes) => Some(arkret_sdk::canonical::sha256_digest(bytes)),
+    match arkret_core::canonical::canonical_json_bytes(projection) {
+        Ok(bytes) => Some(arkret_core::canonical::sha256_digest(bytes)),
         Err(err) => {
             tracing::warn!(%err, %realm_id, %actor_id, %label, "member identity digest canonicalization failed");
             None

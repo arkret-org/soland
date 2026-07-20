@@ -21,7 +21,7 @@
 //! Bearer session validation itself still runs in the per-handler
 //! `AuthArgs::authenticated_session`; this hoop only adds the PoP layer.
 
-use arkret_sdk::http_signature::{
+use arkret_signatures::http_signature::{
     Component, Ed25519PublicKey, SignatureVerificationPolicy, public_key_from_bytes,
     verify_signed_http_message,
 };

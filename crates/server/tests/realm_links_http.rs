@@ -58,11 +58,11 @@ fn project_inheritance_policy(
     source_realm_id: &str,
     allowed_policies: &[&str],
 ) {
-    use arkret_sdk::{Operation, OperationId, RealmId};
+    use arkret_core::{Operation, OperationId, RealmId};
     let op = Operation::create(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        arkret_sdk::events::EventKind::REALM_INHERITANCE_POLICY,
+        arkret_core::events::EventKind::REALM_INHERITANCE_POLICY,
         json!({
             "source_realm_id": source_realm_id,
             "allowed_policies": allowed_policies,
