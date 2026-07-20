@@ -936,6 +936,51 @@ pub(super) async fn list_sidecars(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone as _, Timelike as _};
+
+    #[test]
+    fn freshly_created_sidecar_passes_the_canonical_operation_timestamp_gate() {
+        let created_at = chrono::Utc
+            .with_ymd_and_hms(2026, 7, 20, 12, 34, 56)
+            .unwrap()
+            .with_nanosecond(987_654_321)
+            .unwrap();
+        let realm_id =
+            RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030".to_owned()).unwrap();
+        let sidecar = AgentSidecar {
+            id: SidecarId::new("ak:sidecar:01964137-0000-7000-8000-000000000031".to_owned())
+                .unwrap(),
+            schema: AgentSidecarSchema::V1,
+            realm_id: realm_id.clone(),
+            controller_id: Did::new("did:web:example.com:users:alice".to_owned()).unwrap(),
+            backing_circle_id: CircleId::new(
+                "ak:circle:01964137-0000-7000-8000-000000000032".to_owned(),
+            )
+            .unwrap(),
+            encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
+            state: AgentSidecarState::Active,
+            state_changed_at: Some(created_at),
+            created_at,
+            updated_at: Some(created_at),
+        };
+
+        let operation = new_sidecar_operation(
+            &realm_id,
+            arkret_sdk::events::EventKind::SIDECAR_CREATE,
+            json!({"object": sidecar}),
+        )
+        .unwrap();
+
+        crate::routing::events::operations::validate_canonical_json_value(&operation.payload)
+            .unwrap();
+        let object = operation.payload.get("object").unwrap();
+        assert_eq!(object.get("created_at").unwrap(), "2026-07-20T12:34:56Z");
+        assert_eq!(
+            object.get("state_changed_at").unwrap(),
+            "2026-07-20T12:34:56Z"
+        );
+        assert_eq!(object.get("updated_at").unwrap(), "2026-07-20T12:34:56Z");
+    }
 
     #[test]
     fn private_context_strand_preserves_all_tracks_without_plaintext_metadata() {

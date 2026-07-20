@@ -464,6 +464,46 @@ mod projection_operation_tests {
     }
 
     #[test]
+    fn agent_key_authorize_projection_passes_reducer_schema_validation() {
+        let kind = arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE;
+        let operation = projection_operation_from_event(
+            &parsed(kind),
+            &json!({
+                "payload": {
+                    "agent_id": "did:web:agent.example",
+                    "key_id": "did:web:agent.example#runtime-1",
+                    "verification_method": "did:web:agent.example#runtime-1",
+                    "accountable_principal_id": "did:web:controller.example",
+                    "agent_key_scope": {
+                        "actions": ["ak.self.events.command.submit"],
+                        "resources": [{
+                            "kind": "operation",
+                            "operation": "ak.self.events.command.submit"
+                        }]
+                    },
+                    "audience": ["did:web:principal.example"],
+                    "issued_at": "2026-07-20T15:09:03.628Z",
+                    "approval_evidence": {
+                        "kind": "pairing_request",
+                        "request_canonical_digest": concat!(
+                            "sha256:",
+                            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        ),
+                        "pairing_request_id": "agent_pairing_request:test",
+                        "approved_by": "did:web:controller.example"
+                    }
+                }
+            }),
+        )
+        .expect("valid Agent key Event must build its canonical projection Operation");
+
+        assert_eq!(
+            crate::routing::events::operations::validate_operation_payload_schema(kind, &operation),
+            Ok(())
+        );
+    }
+
+    #[test]
     fn realm_bootstrap_join_and_discovery_facets_are_projectable() {
         for (kind, value) in [
             (arkret_sdk::events::EventKind::REALM_JOIN_RULE, "invite"),
