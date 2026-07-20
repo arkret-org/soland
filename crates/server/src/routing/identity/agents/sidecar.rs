@@ -935,8 +935,9 @@ pub(super) async fn list_sidecars(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::{TimeZone as _, Timelike as _};
+
+    use super::*;
 
     #[test]
     fn freshly_created_sidecar_passes_the_canonical_operation_timestamp_gate() {

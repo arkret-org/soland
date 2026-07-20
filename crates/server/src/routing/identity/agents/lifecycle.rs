@@ -153,7 +153,11 @@ pub(super) async fn provision_agent(
         .map(ToOwned::to_owned);
     let agent_slug = agent_slug.trim().to_owned();
     let avatar_blob_ref = avatar_blob_ref.map(|value| value.to_string());
-    let now_utc = chrono::Utc::now();
+    let now_utc =
+        chrono::DateTime::<chrono::Utc>::from_timestamp(chrono::Utc::now().timestamp(), 0)
+            .ok_or_else(|| {
+                AppError::internal("current agent provision timestamp is out of range")
+            })?;
     validate_agent_slug(&agent_slug)
         .map_err(|err| AppError::invalid_param(format!("slug is invalid: {err}")))?;
     let requested_scope = serde_json::to_value(&requested_scope_typed)
@@ -512,7 +516,9 @@ pub(super) async fn renew_agent_pairing(
         )
         .with_wire_code("agent_provision_fanout_unavailable"));
     }
-    let now_utc = chrono::Utc::now();
+    let now_utc =
+        chrono::DateTime::<chrono::Utc>::from_timestamp(chrono::Utc::now().timestamp(), 0)
+            .ok_or_else(|| AppError::internal("current agent pairing timestamp is out of range"))?;
     // `pairing_expired` does not reserve the slug, so a replacement agent may
     // have claimed it since. Renewing would then produce two open agents with
     // the same selector slug for one controller — reject like provision does.
