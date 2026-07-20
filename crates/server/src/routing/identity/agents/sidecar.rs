@@ -966,7 +966,7 @@ mod tests {
 
         let operation = new_sidecar_operation(
             &realm_id,
-            arkret_sdk::events::EventKind::SIDECAR_CREATE,
+            arkret_core::events::EventKind::SIDECAR_CREATE,
             json!({"object": sidecar}),
         )
         .unwrap();

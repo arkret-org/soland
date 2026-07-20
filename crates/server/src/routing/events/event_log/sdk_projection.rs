@@ -465,7 +465,7 @@ mod projection_operation_tests {
 
     #[test]
     fn agent_key_authorize_projection_passes_reducer_schema_validation() {
-        let kind = arkret_sdk::events::EventKind::AGENT_KEY_AUTHORIZE;
+        let kind = arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE;
         let operation = projection_operation_from_event(
             &parsed(kind),
             &json!({

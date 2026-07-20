@@ -10,7 +10,7 @@ authors.workspace = true
 description = "Pure deterministic domain rules and projections for Soland."
 
 [dependencies]
-arkret-core = {workspace = true}
+arkret-core = {workspace = true,features = ["embedded-artifacts"]}
 arkret-lattice-registry = {workspace = true}
 arkret-models-crypto = {workspace = true}
 arkret-state = {workspace = true}
