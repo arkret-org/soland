@@ -131,7 +131,9 @@ mod sync_token_tests {
         let stream = Cursor::new_at(chrono::Utc::now(), 60_000)
             .expect("stream cursor")
             .with_stateful_handle("a".repeat(22));
-        assert!(is_valid_sync_token(&stream.encode().expect("encoded stream cursor")));
+        assert!(is_valid_sync_token(
+            &stream.encode().expect("encoded stream cursor")
+        ));
 
         let barrier = stream.with_barrier();
         assert!(is_valid_sync_token(

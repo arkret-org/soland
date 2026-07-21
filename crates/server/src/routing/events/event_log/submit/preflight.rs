@@ -2,8 +2,11 @@ use super::*;
 
 pub(super) async fn preflight_mls_welcome_claim_signature_reject(
     state: &AppState,
+    session: &SessionRecord,
+    object: &serde_json::Map<String, Value>,
     actor_id: &str,
     operation: &Operation,
+    internal_admission: Option<&InternalEventAdmission>,
 ) -> Option<String> {
     if kinds::canonical_kind_string(operation) != arkret_core::events::EventKind::MLS_WELCOME {
         return None;
@@ -32,10 +35,14 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let signer_key_evidence = internal_admission.and_then(|admission| {
+        admission.signer_key_evidence(session, object, envelope.signature.kid.as_str())
+    });
     crate::routing::identity::cross_signing::verify_mls_welcome_claim_envelope_signature(
         state,
         &envelope,
         sender_device_id,
+        signer_key_evidence,
     )
     .await
     .err()
