@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use arkret_core::{ReadReceipt, ReadScopeKind};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use soland_http::error::AppError;
 use soland_storage::{CanonicalEventRecord, ReadReceiptRelayRecord, SessionRecord};
@@ -49,9 +49,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
         projection.observe_message_read_for_expiry(
             &session.actor,
             &normalized.event_id,
-            &normalized
-                .created_at
-                .to_rfc3339_opts(SecondsFormat::Millis, true),
+            &arkret_core::canonical::format_timestamp_canonical(normalized.created_at),
             normalized.created_at,
         );
     }

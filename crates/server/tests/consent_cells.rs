@@ -1,4 +1,4 @@
-use chrono::{Duration, SecondsFormat, Utc};
+use chrono::{Duration, Utc};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
@@ -538,7 +538,9 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
             "consent_id": consent_id,
             "peer": bob,
             "consent_scope": "direct_message",
-            "expires_at": (Utc::now() + Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+            "expires_at": arkret_core::canonical::format_timestamp_canonical(
+                Utc::now() + Duration::days(1)
+            ),
         }),
     )
     .await;
@@ -564,7 +566,9 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
     let revoke_payload = serde_json::json!({
         "consent_id": consent_id,
         "observed_dots": [grant_dot],
-        "revoked_at": (Utc::now() + Duration::seconds(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        "revoked_at": arkret_core::canonical::format_timestamp_canonical(
+            Utc::now() + Duration::seconds(1)
+        ),
     });
     let typed_revoke: arkret_core::ConsentRevokePayload =
         serde_json::from_value(revoke_payload.clone()).unwrap_or_else(|error| {
@@ -612,7 +616,8 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
     let pairwise_token = dev_token(&app, pairwise_bob).await;
 
     request_contact(&app, &bob_token, alice, "invite").await;
-    let expired_at = (Utc::now() - Duration::seconds(1)).to_rfc3339();
+    let expired_at =
+        arkret_core::canonical::format_timestamp_canonical(Utc::now() - Duration::seconds(1));
     let expired = grant_cell(&app, &alice_token, alice, bob, "invite", Some(expired_at)).await;
     assert_eq!(expired["state"], "pending");
     assert!(expired["active_grant_dots"].as_array().unwrap().is_empty());
@@ -687,7 +692,9 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
             "consent_id": consent_id,
             "peer": alice,
             "consent_scope": "invite",
-            "expires_at": (Utc::now() + Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+            "expires_at": arkret_core::canonical::format_timestamp_canonical(
+                Utc::now() + Duration::days(1)
+            ),
         }),
     )
     .await;

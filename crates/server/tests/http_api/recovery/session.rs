@@ -22,7 +22,7 @@ fn cross_signing_reset_event(
     let realm_id = soland_test_support::principal_control_realm_for_did(actor);
     signed_canonical_event(
         event_id,
-        "ak.test_cross_signing().reset",
+        "ak.cross_signing.reset",
         actor,
         device_id,
         &realm_id,
@@ -41,7 +41,7 @@ fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value
         "new_generation": 2,
         "reset_reason_code": "rotation",
         "proof": proof,
-        "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "issued_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
     })
 }
 
@@ -109,8 +109,8 @@ async fn seed_reset_recovery_policy(
         "version": 1,
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": [allowed_kind],
-        "issued_at": issued_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "issued_at": arkret_core::canonical::format_timestamp_canonical(issued_at),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
     });
     if let (Some(target), Some(extra)) = (raw_payload.as_object_mut(), extra.as_object()) {
         for (key, value) in extra {
@@ -176,7 +176,7 @@ async fn seed_verified_recovery_session_for_reset_test(
         .unwrap();
     session["state"] = serde_json::json!("verified");
     session["updated_at"] =
-        serde_json::json!(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        serde_json::json!(arkret_core::canonical::format_timestamp_canonical(now));
     (session, session_id)
 }
 
@@ -1278,8 +1278,9 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
                 content: serde_json::json!({
                     "kind": kind,
                     "content": content,
-                    "expires_at": (now + chrono::Duration::hours(1))
-                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    "expires_at": arkret_core::canonical::format_timestamp_canonical(
+                        now + chrono::Duration::hours(1)
+                    ),
                 }),
                 created_at: now,
             })
@@ -1397,7 +1398,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
         "new_generation": 2,
         "reset_reason_code": "rotation",
         "proof": { "kind": "principal_signing", "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXI" },
-        "issued_at": "2026-05-30T00:00:00Z",
+        "issued_at": "2026-05-30T00:00:00.000Z",
     });
     let content: arkret_core::CrossSigningResetPayload =
         serde_json::from_value(reset).expect("reset content");

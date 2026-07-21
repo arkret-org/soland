@@ -224,6 +224,7 @@ struct TrustedEnclaveBody {
     server_id: String,
     base_url: String,
     trust_chain: Vec<String>,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     registered_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -285,6 +286,7 @@ struct RealmInfoResponseBody {
     hosted_on: String,
     external_invite_policy: String,
     created_by: String,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     created_at: chrono::DateTime<chrono::Utc>,
     frontier: RealmFrontierBody,
 }
@@ -377,9 +379,19 @@ struct StoreForwardOperationBody {
     content: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     state: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     created_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     forwarded_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -413,6 +425,7 @@ struct AuditEntryBody {
     realm_id: Option<String>,
     status: String,
     detail: Value,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     created_at: chrono::DateTime<chrono::Utc>,
 }
 

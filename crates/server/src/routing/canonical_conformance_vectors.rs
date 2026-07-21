@@ -56,7 +56,7 @@ fn validator_rejects_double_underscore() {
 
 #[test]
 fn validator_accepts_rfc3339_utc_z_timestamp() {
-    let value = json!({"created_at": "2026-04-29T12:00:00Z"});
+    let value = json!({"created_at": "2026-04-29T12:00:00.000Z"});
     assert!(validate_canonical_json_value(&value).is_ok());
 }
 

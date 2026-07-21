@@ -380,63 +380,6 @@ pub(crate) fn payload_asserts_circle_manage(payload: &Value, circle_id: &str) ->
     action_ok && allowed_ok && circle_ok
 }
 
-pub(crate) fn grants_for_realm(
-    state: &ProjectionState,
-    realm_id: &str,
-) -> Vec<CapabilityGrantSnapshot> {
-    let mut grants = Vec::new();
-    for (_cell_ref, value) in capability_grant_cells(state) {
-        if let Some(items) = value.as_array() {
-            for item in items {
-                let candidate = item.get("value").unwrap_or(item);
-                let grant = grant_snapshot_from_value(candidate);
-                if grant.realm_id.as_deref() == Some(realm_id) && !grant.revoked {
-                    grants.push(grant);
-                }
-            }
-        } else {
-            let grant = grant_snapshot_from_value(value);
-            if grant.realm_id.as_deref() == Some(realm_id) && !grant.revoked {
-                grants.push(grant);
-            }
-        }
-    }
-    grants
-}
-
-pub(crate) fn parent_capability_grants_allow(
-    state: &ProjectionState,
-    source_realm_id: &str,
-    allowed_policies: &[String],
-    allowed_capability_bundles: &[String],
-) -> Result<(), &'static str> {
-    let grants = grants_for_realm(state, source_realm_id);
-    if grants.is_empty() {
-        return Ok(());
-    }
-    let granted_actions: BTreeSet<String> = grants
-        .iter()
-        .flat_map(|grant| grant.actions.iter().cloned())
-        .collect();
-    let granted_bundles: BTreeSet<String> = grants
-        .iter()
-        .flat_map(|grant| grant.capability_bundles.iter().cloned())
-        .collect();
-    if allowed_policies
-        .iter()
-        .any(|policy| !granted_actions.contains(policy))
-    {
-        return Err("realm_inheritance_parent_policy_not_granted");
-    }
-    if allowed_capability_bundles
-        .iter()
-        .any(|bundle| !granted_bundles.contains(bundle))
-    {
-        return Err("realm_inheritance_parent_bundle_not_granted");
-    }
-    Ok(())
-}
-
 pub(crate) fn validate_derived_capability(
     grant: &CapabilityGrantSnapshot,
     policy: &RealmInheritancePolicyState,

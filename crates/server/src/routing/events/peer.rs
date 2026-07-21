@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_core::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
 use arkret_core::{
     Did, EventId, EventsFrontierFederationPeerState, EventsQueryPostRequestBody,
-    EventsSubmitFederationRequestBody, RealmId, canonical,
+    EventsSubmitFederationRequestBody, RealmId,
 };
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
@@ -104,6 +104,10 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.command.submit"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    if let Err(error) = validate_peer_request(state, req, true).await {
+        render_app_error(res, error);
+        return;
+    }
     let body_value = match req.parse_json::<Value>().await {
         Ok(body) => body,
         Err(_) => {
@@ -127,10 +131,6 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
         );
         return;
     }
-    if let Err(error) = validate_peer_request(state, req, Some(&body_value)).await {
-        render_app_error(res, error);
-        return;
-    }
     super::event_log::submit_federation_events(state, req, body_value, res).await;
 }
 
@@ -142,7 +142,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.scan"))]
 async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<EventsQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    validate_peer_request(state, req, None).await?;
+    validate_peer_request(state, req, false).await?;
     let source_service_id = source_service_id_from_request(req)?;
     let parts = PeerEventsQueryParts::from_query(req)?;
     peer_events_query_response(state, source_service_id, parts).await
@@ -159,15 +159,12 @@ async fn peer_events_query_post(
     req: &mut Request,
 ) -> JsonResult<EventsQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<EventsQueryPostRequestBody>(
         req,
         "invalid ak.peer.events.query.scan request body",
     )
     .await?;
-    let body = serde_json::to_value(&request).map_err(|error| {
-        AppError::internal(format!("peer events query request serialize: {error}"))
-    })?;
-    validate_peer_request(state, req, Some(&body)).await?;
     let source_service_id = source_service_id_from_request(req)?;
     let parts = PeerEventsQueryParts::from_body(request)?;
     peer_events_query_response(state, source_service_id, parts).await
@@ -184,15 +181,12 @@ async fn peer_events_resolve(
     req: &mut Request,
 ) -> JsonResult<EventsResolveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<EventsResolveRequestBody>(
         req,
         "invalid ak.peer.events.query.resolve request body",
     )
     .await?;
-    let body = serde_json::to_value(&request).map_err(|error| {
-        AppError::internal(format!("peer events resolve request serialize: {error}"))
-    })?;
-    validate_peer_request(state, req, Some(&body)).await?;
     let source_service_id = source_service_id_from_request(req)?;
     if request.event_ids.len() + request.event_digests.len() > MAX_PEER_EVENTS_RESOLVE {
         return Err(AppError::new(
@@ -275,7 +269,7 @@ async fn peer_events_frontier(
     req: &mut Request,
 ) -> JsonResult<EventsFrontierFederationPeerState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    validate_peer_request(state, req, None).await?;
+    validate_peer_request(state, req, false).await?;
     let source_service_id = source_service_id_from_request(req)?;
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
@@ -365,7 +359,7 @@ async fn peer_events_frontier(
         frontier_root,
         actor_seq_upper_bounds: typed_actor_frontier,
         witness_receipts: Vec::new(),
-        observed_at: observed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        observed_at: arkret_core::canonical::format_timestamp_canonical(observed_at),
         issuer: service_id,
         signature: signature
             .as_object()
@@ -397,7 +391,7 @@ async fn peer_snapshot_head(
     req: &mut Request,
 ) -> JsonResult<PeerSnapshotHeadOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    validate_peer_request(state, req, None).await?;
+    validate_peer_request(state, req, false).await?;
     Err(AppError::new(
         soland_http::error::ErrorCode::NotImplemented,
         "ak.peer.snapshot.query.manifest_head is not implemented: this deployment cannot \
@@ -1388,13 +1382,13 @@ where
 
 pub(in crate::routing) async fn validate_peer_request(
     state: &AppState,
-    req: &Request,
-    body: Option<&Value>,
+    req: &mut Request,
+    has_body: bool,
 ) -> Result<(), AppError> {
     let expected_destination =
         arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
             .map_err(|_| AppError::internal("service trust_domain is invalid"))?;
-    if let Some(body) = body {
+    if has_body {
         let trust_headers =
             crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(req)
                 .map_err(|violation| {
@@ -1405,15 +1399,6 @@ pub(in crate::routing) async fn validate_peer_request(
             .map_err(|_| {
                 cross_domain_replay("Destination-Trust-Domain header does not match this service")
             })?;
-        let request_hash = canonical::canonical_sha256(body).map_err(|error| {
-            schema_violation(format!("request body is not canonical-hashable: {error}"))
-        })?;
-        if request_hash != trust_headers.request_canonical_digest.as_str() {
-            crate::metrics::record_digest_mismatch("peer_request_binding");
-            return Err(cross_domain_replay(
-                "Request-Canonical-Digest does not match the canonical request body",
-            ));
-        }
     } else {
         if req.headers().contains_key("content-digest")
             || req.headers().contains_key("request-canonical-digest")
@@ -1468,8 +1453,10 @@ pub(in crate::routing) async fn validate_peer_request(
     // The bare trust-header checks above are necessary but not sufficient; the
     // signature verification (which also re-binds POST body digests and runs
     // the deny policy) is the authoritative gate.
-    crate::routing::federation::federation::verify_inbound_peer_http_signature(state, req, body)
-        .await?;
+    crate::routing::federation::federation::verify_inbound_peer_http_signature(
+        state, req, has_body,
+    )
+    .await?;
     Ok(())
 }
 

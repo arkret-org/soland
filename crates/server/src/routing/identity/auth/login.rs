@@ -57,7 +57,7 @@ pub(crate) fn account_new_session_tuple(
 /// which credential failed, only that the actor is currently locked.
 pub(super) fn account_lockout_error(state: &AppState, actor: &str) -> Option<AppError> {
     let until = state.account_lockout_active_until(actor)?;
-    let until_wire = until.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let until_wire = arkret_core::canonical::format_timestamp_canonical(until);
     Some(
         AppError::capability_denied(format!(
             "account temporarily locked due to repeated failed auth attempts; \

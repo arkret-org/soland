@@ -20,7 +20,7 @@ fn active_series_payload() -> Value {
             "seal_ref": "ak:seal:sha256:4444444444444444444444444444444444444444444444444444444444444444",
             "ssk_generation": 2
         },
-        "issued_at": "2026-04-27T00:00:00Z",
+        "issued_at": "2026-04-27T00:00:00.000Z",
         "auth_data": {
             "verification_method": "did:web:alice.example#ak_device_01964137",
             "signature_algorithm": "Ed25519",
@@ -216,7 +216,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
     assert!(matches!(duplicate, ProjectionEffect::Ignored));
 
     let mut fork = active_series_payload();
-    fork["issued_at"] = json!("2026-07-18T00:00:01Z");
+    fork["issued_at"] = json!("2026-07-18T00:00:01.000Z");
     let fork = state.apply(
         &make_operation(
             arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,

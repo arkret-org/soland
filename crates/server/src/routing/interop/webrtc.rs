@@ -16,8 +16,10 @@
 use std::collections::BTreeSet;
 
 use arkret_core::{
-    CellRef, DeviceId, Did, MediaIceConfigRequestBody, MediaIceMode, Operation, OperationId,
-    RealmId,
+    CellRef, DeviceId, Did, Hash, MediaIceConfigOutcome, MediaIceConfigRequestBody,
+    MediaIceConfigSignature, MediaIceCredentialType, MediaIceMode, MediaIceServer,
+    MediaIceSignatureAlgorithm, MediaIceSignatureInput, Operation, OperationId, RealmId,
+    XExtensionMap,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -26,7 +28,6 @@ use ed25519_dalek::Signer as _;
 use salvo::http::HeaderValue;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde::Serialize;
 use serde_json::{Value, json};
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
 use soland_http::error::{AppError, ErrorCode};
@@ -68,91 +69,6 @@ struct IceConfigRequestContext {
     pub force_turn: bool,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct IceServerDescriptor {
-    pub urls: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct UnsignedIceConfigOutcome {
-    pub realm_id: RealmId,
-    pub call_id: String,
-    pub actor_id: Did,
-    pub device_id: DeviceId,
-    pub ice_servers: Vec<IceServerDescriptor>,
-    pub ttl_seconds: u32,
-    pub refresh_lead_seconds: u32,
-    pub issued_at: DateTime<Utc>,
-    pub issued_at_bucket: DateTime<Utc>,
-    pub bucket_seconds: u32,
-    pub expires_at: DateTime<Utc>,
-    pub force_turn: bool,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct IceConfigSignature {
-    pub alg: String,
-    pub kid: String,
-    pub signature_input: String,
-    pub payload_digest: String,
-    pub sig: String,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct SolandIceConfigOutcome {
-    pub realm_id: RealmId,
-    pub call_id: String,
-    pub actor_id: Did,
-    pub device_id: DeviceId,
-    pub ice_servers: Vec<IceServerDescriptor>,
-    pub ttl_seconds: u32,
-    pub refresh_lead_seconds: u32,
-    pub issued_at: DateTime<Utc>,
-    pub issued_at_bucket: DateTime<Utc>,
-    pub bucket_seconds: u32,
-    pub expires_at: DateTime<Utc>,
-    pub force_turn: bool,
-    pub signature: IceConfigSignature,
-}
-
-impl SolandIceConfigOutcome {
-    fn signed(
-        state: &AppState,
-        unsigned: UnsignedIceConfigOutcome,
-    ) -> Result<SolandIceConfigOutcome, AppError> {
-        let (sig, payload_digest) = ice_config_signature(state, &unsigned);
-        Ok(SolandIceConfigOutcome {
-            realm_id: unsigned.realm_id,
-            call_id: unsigned.call_id,
-            actor_id: unsigned.actor_id,
-            device_id: unsigned.device_id,
-            ice_servers: unsigned.ice_servers,
-            ttl_seconds: unsigned.ttl_seconds,
-            refresh_lead_seconds: unsigned.refresh_lead_seconds,
-            issued_at: unsigned.issued_at,
-            issued_at_bucket: unsigned.issued_at_bucket,
-            bucket_seconds: unsigned.bucket_seconds,
-            expires_at: unsigned.expires_at,
-            force_turn: unsigned.force_turn,
-            signature: IceConfigSignature {
-                alg: "EdDSA".to_owned(),
-                kid: format!("{}#notary-key", state.service_id),
-                signature_input: ICE_CONFIG_SIGNING_LABEL.to_owned(),
-                payload_digest,
-                sig,
-            },
-        })
-    }
-}
-
 #[endpoint(
     operation_id = "ak.self.media.query.ice_config",
     tags("media"),
@@ -165,7 +81,7 @@ async fn arkret_ice_config(
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-) -> JsonResult<SolandIceConfigOutcome> {
+) -> JsonResult<MediaIceConfigOutcome> {
     set_ice_config_cache_headers(res);
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -188,7 +104,7 @@ async fn issue_ice_config(
     state: &AppState,
     session: &SessionRecord,
     body: IceConfigRequestContext,
-) -> JsonResult<SolandIceConfigOutcome> {
+) -> JsonResult<MediaIceConfigOutcome> {
     let realm_id = body.realm_id.as_str();
     let call_id = body.call_id.as_str();
     if call_id.is_empty() {
@@ -259,25 +175,23 @@ async fn issue_ice_config(
     // credential = base64( HMAC-SHA256(turn_shared_secret, username) ) — the
     // HMAC is taken over the full REST-style username (SHA256, never SHA1).
     let turn_credential = turn_rest_credential(state, &turn_username);
-    let turn_server = IceServerDescriptor {
+    let turn_server = MediaIceServer {
         urls: state.config.ice.turn_urls.clone(),
         username: Some(turn_username.clone()),
         credential: Some(turn_credential),
-        credential_type: Some("password".to_owned()),
-        expires_at: Some(expires_at),
+        credential_type: Some(MediaIceCredentialType::Password),
     };
-    let mut ice_servers = vec![IceServerDescriptor {
+    let mut ice_servers = vec![MediaIceServer {
         urls: state.config.ice.stun_urls.clone(),
         username: None,
         credential: None,
         credential_type: None,
-        expires_at: None,
     }];
     ice_servers.push(turn_server.clone());
     if force_turn {
         ice_servers = vec![turn_server.clone()];
     }
-    let response = UnsignedIceConfigOutcome {
+    let mut response = MediaIceConfigOutcome {
         realm_id: body.realm_id,
         call_id: call_id.to_owned(),
         actor_id: body.actor_id,
@@ -288,10 +202,22 @@ async fn issue_ice_config(
         issued_at,
         issued_at_bucket,
         bucket_seconds,
-        expires_at,
+        expires_at: Some(expires_at),
         force_turn,
+        constraints: None,
+        next_retry_at: None,
+        signature: MediaIceConfigSignature {
+            kid: format!("{}#notary-key", state.service_id),
+            alg: MediaIceSignatureAlgorithm::EdDsa,
+            signature_input: MediaIceSignatureInput::IceConfigV1,
+            payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .map_err(|error| AppError::internal(format!("ICE config digest: {error}")))?,
+            sig: String::new(),
+        },
+        extensions: XExtensionMap::default(),
     };
-    json_ok(SolandIceConfigOutcome::signed(state, response)?)
+    sign_ice_config_outcome(state, &mut response)?;
+    json_ok(response)
 }
 
 fn set_ice_config_cache_headers(res: &mut Response) {
@@ -404,37 +330,24 @@ fn turn_rest_credential(state: &AppState, username: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(hmac_sha256(secret, username.as_bytes()))
 }
 
-/// `media-service-binding.md` §3.1 / `webrtc-signaling.md` §4.1 — the ICE config
-/// response signature domain-separation label. MUST be byte-for-byte
-/// `ak.media.ice_config.v1` and MUST differ from
-/// `ak.media.participant_binding.v1` so an issuer key's ICE-config signature can
-/// never be re-interpreted under the participant_binding verify path (or vice
-/// versa).
-const ICE_CONFIG_SIGNING_LABEL: &str = "ak.media.ice_config.v1";
-
-/// `webrtc-signaling.md` §4.1 (normative) — construct the ICE config signing
-/// input as `label || 0x00 || canonical_json(<response minus signature>)`. The
-/// `payload` is the unsigned outcome (the response object before the
-/// `signature` field is attached), serialized as RFC 8785 JCS canonical JSON.
-fn ice_config_payload_bytes<T: Serialize>(payload: &T) -> Vec<u8> {
-    arkret_core::canonical::canonical_json_bytes(payload)
-        .unwrap_or_else(|_| serde_json::to_vec(payload).unwrap_or_default())
-}
-
-fn ice_config_signing_input(payload: &[u8]) -> Vec<u8> {
-    let mut signing_input = Vec::with_capacity(ICE_CONFIG_SIGNING_LABEL.len() + payload.len() + 1);
-    signing_input.extend_from_slice(ICE_CONFIG_SIGNING_LABEL.as_bytes());
-    signing_input.push(0);
-    signing_input.extend_from_slice(payload);
-    signing_input
-}
-
-fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> (String, String) {
-    let payload_bytes = ice_config_payload_bytes(payload);
+/// Sign the typed SDK response using its single protocol-owned canonical
+/// payload and domain-separated transcript implementation.
+fn sign_ice_config_outcome(
+    state: &AppState,
+    outcome: &mut MediaIceConfigOutcome,
+) -> Result<(), AppError> {
+    let payload_bytes = outcome
+        .canonical_signature_payload()
+        .map_err(|error| AppError::internal(format!("ICE config canonicalize: {error}")))?;
     let payload_digest = arkret_core::canonical::sha256_digest(&payload_bytes);
-    let signing_input = ice_config_signing_input(&payload_bytes);
+    let signing_input = outcome
+        .signature_input()
+        .map_err(|error| AppError::internal(format!("ICE config transcript: {error}")))?;
     let signature = state.notary_signing_key().sign(&signing_input);
-    (URL_SAFE_NO_PAD.encode(signature.to_bytes()), payload_digest)
+    outcome.signature.payload_digest = Hash::new(payload_digest)
+        .map_err(|error| AppError::internal(format!("ICE config digest: {error}")))?;
+    outcome.signature.sig = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+    Ok(())
 }
 
 // ── AKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
@@ -1475,7 +1388,7 @@ mod tests {
                         "audio_muted": false,
                         "video_muted": false,
                         "muted_by": "did:web:mod.example",
-                        "muted_at": "2026-06-16T00:00:00Z"
+                        "muted_at": "2026-06-16T00:00:00.000Z"
                     },
                     {
                         "actor_id": "did:web:alice.example",
@@ -1483,7 +1396,7 @@ mod tests {
                         "audio_muted": true,
                         "video_muted": false,
                         "muted_by": "did:web:mod.example",
-                        "muted_at": "2026-06-16T00:00:01Z"
+                        "muted_at": "2026-06-16T00:00:01.000Z"
                     },
                     {
                         "actor_id": "did:web:alice.example",
@@ -1491,7 +1404,7 @@ mod tests {
                         "audio_muted": false,
                         "video_muted": true,
                         "muted_by": "did:web:mod.example",
-                        "muted_at": "2026-06-16T00:00:02Z"
+                        "muted_at": "2026-06-16T00:00:02.000Z"
                     }
                 ]
             })),

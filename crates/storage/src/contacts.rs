@@ -125,7 +125,9 @@ pub fn encode_grant_dots(dots: &BTreeMap<String, ConsentGrantDot>) -> Value {
 pub fn json_for_grant_dot(grant: &ConsentGrantDot) -> Value {
     serde_json::json!({
         "dot": grant.dot,
-        "granted_at": grant.granted_at.to_rfc3339(),
-        "expires_at": grant.expires_at.map(|dt| dt.to_rfc3339()),
+        "granted_at": arkret_core::canonical::format_timestamp_canonical(grant.granted_at),
+        "expires_at": grant
+            .expires_at
+            .map(arkret_core::canonical::format_timestamp_canonical),
     })
 }

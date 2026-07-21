@@ -96,7 +96,8 @@ async fn get_covered_seals(
             Some((epoch, covered, committed_at)) => (
                 epoch,
                 covered,
-                chrono::DateTime::from_timestamp(committed_at, 0).map(|ts| ts.to_rfc3339()),
+                chrono::DateTime::from_timestamp(committed_at, 0)
+                    .map(arkret_core::canonical::format_timestamp_canonical),
             ),
             None => (0, Vec::new(), None),
         };

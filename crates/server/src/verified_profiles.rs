@@ -350,7 +350,7 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         let payload = r#"{
             "version": "1",
-            "generated_at": "2026-05-20T00:00:00Z",
+            "generated_at": "2026-05-20T00:00:00.000Z",
             "run_id": "test-run",
             "verified": [
                  {
@@ -364,8 +364,8 @@ mod tests {
                      "artifact_ref": "file:///tmp/verified-profiles.json",
                      "verifier_did": "did:web:cotest.example",
                      "signature": "eddsa-jcs-b64url:test-principal-signature",
-                     "timestamp": "2026-05-20T00:00:00Z",
-                     "expires_at": "2026-06-20T00:00:00Z"
+                     "timestamp": "2026-05-20T00:00:00.000Z",
+                     "expires_at": "2026-06-20T00:00:00.000Z"
                  },
                  {
                      "profile_id": "ak.profile.auth_server.v1",
@@ -378,7 +378,7 @@ mod tests {
                      "artifact_ref": "file:///tmp/verified-profiles.json",
                      "verifier_did": "did:web:cotest.example",
                      "signature": "eddsa-jcs-b64url:test-auth-signature",
-                     "timestamp": "2026-05-20T00:00:00Z"
+                     "timestamp": "2026-05-20T00:00:00.000Z"
                  }
             ]
         }"#;
@@ -396,8 +396,8 @@ mod tests {
         assert_eq!(v[0].verifier_did.as_str(), "did:web:cotest.example");
         assert_eq!(v[0].signature, "eddsa-jcs-b64url:test-principal-signature");
         assert_eq!(
-            v[0].expires_at.unwrap().to_rfc3339(),
-            "2026-06-20T00:00:00+00:00"
+            arkret_core::canonical::format_timestamp_canonical(v[0].expires_at.unwrap()),
+            "2026-06-20T00:00:00.000Z"
         );
     }
 

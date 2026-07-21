@@ -238,24 +238,6 @@ pub(super) fn verify_with_federated_signer_evidence(
     canonical_bytes: &[u8],
     jws: &str,
 ) -> Result<bool, EventValidationError> {
-    if let Some(multibase) = internal_admission.and_then(|admission| {
-        admission.applet_signer_key_multibase(session, object, verification_method)
-    }) {
-        let material = arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
-            value: multibase.to_owned(),
-        };
-        arkret_signatures::Ed25519DetachedJwsVerifier::new()
-            .verify_detached_jws(jws, canonical_bytes, &material)
-            .map_err(|error| {
-                tracing::debug!(%error, "applet formal Event proof JWS verification failed");
-                event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proof",
-                    "applet formal Event proof JWS verification failed",
-                )
-            })?;
-        return Ok(true);
-    }
     let Some(evidence) = internal_admission
         .and_then(|admission| admission.signer_key_evidence(session, object, verification_method))
     else {
@@ -305,7 +287,7 @@ pub(super) fn event_proof_binding_bytes(
         })?;
     if proof.event_digest.as_str() != event_digest
         || proof.verification_method != verification_method
-        || arkret_core::canonical::format_timestamp_millis_canonical(proof.created_at) != created_at
+        || arkret_core::canonical::format_timestamp_canonical(proof.created_at) != created_at
     {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,

@@ -445,7 +445,7 @@ mod tests {
                 "key": private_key(),
                 "owner": "did:web:alice.example",
                 "body": encrypted_envelope(private_key()),
-                "updated_at": "2026-06-18T00:00:00Z"
+                "updated_at": "2026-06-18T00:00:00.000Z"
             }),
         )
         .unwrap();
@@ -456,7 +456,7 @@ mod tests {
                 "key": private_key(),
                 "owner": "did:web:alice.example",
                 "body": {"collection_title": "Leaks"},
-                "updated_at": "2026-06-18T00:00:00Z"
+                "updated_at": "2026-06-18T00:00:00.000Z"
             }),
         )
         .unwrap_err();
@@ -474,7 +474,7 @@ mod tests {
             &json!({
                 "kind": "reminder",
                 "target_ref": "ak:message:01904100-0000-7000-8000-000000000001",
-                "remind_at": "2026-06-19T08:00:00Z",
+                "remind_at": "2026-06-19T08:00:00.000Z",
                 "note": "private reminder note",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
                 "encrypted_payload": encrypted_envelope(key)
@@ -496,7 +496,7 @@ mod tests {
             &json!({
                 "kind": "snooze",
                 "target_ref": "ak:strand:01904100-0000-7000-8000-000000000001",
-                "snooze_expires_at": "2026-06-19T09:00:00Z",
+                "snooze_expires_at": "2026-06-19T09:00:00.000Z",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
                 "encrypted_payload": encrypted_envelope(key)
             }),
@@ -517,7 +517,7 @@ mod tests {
             &json!({
                 "kind": "scheduled_send",
                 "planned_message_id": "ak:message:01904100-0000-7000-8000-000000000001",
-                "send_at": "2026-06-19T08:00:00Z",
+                "send_at": "2026-06-19T08:00:00.000Z",
                 "message_payload": {
                     "message_id": "ak:message:01904100-0000-7000-8000-000000000001",
                     "content": {"kind": "ak.content.text", "body": "secret"}

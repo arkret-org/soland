@@ -20,7 +20,7 @@ use arkret_core::{
     InviteReceiveAction, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
     Proof, RealmId, canonical, proof_kind,
 };
-use chrono::{Duration, SecondsFormat};
+use chrono::Duration;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -38,7 +38,6 @@ use super::consent::{
 use super::now;
 use crate::state::AppState;
 
-const HEADER_CONTENT_DIGEST: &str = "content-digest";
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]";
 
@@ -295,16 +294,11 @@ async fn peer_contacts_submit(
     req: &mut Request,
 ) -> JsonResult<PeerContactDeliveryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    super::super::events::peer::validate_peer_request(state, req, true).await?;
     let delivery = req
         .parse_json::<PeerContactDeliveryRequest>()
         .await
         .map_err(|_| AppError::bad_json("invalid ak.peer.contacts.command.submit request body"))?;
-    let body = serde_json::to_value(&delivery).map_err(|error| {
-        AppError::internal(format!("contact delivery request serialize: {error}"))
-    })?;
-    super::super::events::peer::validate_peer_request(state, req, Some(&body)).await?;
-    validate_content_digest(req, &body)?;
-
     delivery.validate_minimal().map_err(|error| {
         super::super::events::peer::schema_violation(format!(
             "invalid contact delivery request: {error}"
@@ -382,7 +376,7 @@ async fn peer_contacts_submit(
             return json_ok(PeerContactDeliveryOutcome {
                 status: "deferred".to_owned(),
                 disclosed_outcome: decision.disclosed_outcome.map(disclosed_outcome_str),
-                received_at: Some(now().to_rfc3339_opts(SecondsFormat::Secs, true)),
+                received_at: Some(arkret_core::canonical::format_timestamp_canonical(now())),
                 retry_after_ms: None,
             });
         }
@@ -428,7 +422,7 @@ async fn peer_contacts_submit(
     json_ok(PeerContactDeliveryOutcome {
         status: outcome.to_owned(),
         disclosed_outcome: None,
-        received_at: Some(now().to_rfc3339_opts(SecondsFormat::Secs, true)),
+        received_at: Some(arkret_core::canonical::format_timestamp_canonical(now())),
         retry_after_ms: None,
     })
 }
@@ -1058,33 +1052,6 @@ fn event_ref_strings(payload: &Value, field: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// RFC 9530 `Content-Digest` check, matching `peer/invites` (the federation
-/// outbox dispatcher emits `sha-256=:<base64(sha256(canonical_body))>:`).
-fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> {
-    let header = req
-        .headers()
-        .get(HEADER_CONTENT_DIGEST)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            super::super::events::peer::schema_violation("required header content-digest missing")
-        })?;
-    let canonical_bytes = arkret_core::canonical::canonical_json_bytes(body).map_err(|error| {
-        super::super::events::peer::schema_violation(format!(
-            "request body is not canonical-hashable: {error}"
-        ))
-    })?;
-    let expected = crate::routing::federation::rfc9530_content_digest(&canonical_bytes);
-    if header != expected {
-        crate::metrics::record_digest_mismatch("peer_contacts_content_digest");
-        return Err(super::super::events::peer::cross_domain_replay(
-            "Content-Digest does not match the canonical request body",
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

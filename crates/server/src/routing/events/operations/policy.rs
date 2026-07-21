@@ -345,7 +345,7 @@ mod tests {
                 "encryption_profile": "mls_rfc9420",
                 "state": "active",
                 "created_by": actor,
-                "created_at": "2026-07-20T00:00:00Z"
+                "created_at": "2026-07-20T00:00:00.000Z"
             }
         }));
         let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });

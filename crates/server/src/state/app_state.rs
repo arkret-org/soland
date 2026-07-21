@@ -4449,14 +4449,14 @@ mod membership_hydration_tests {
                     "actor_seq": 2,
                     "realm_id": realm_id,
                     "kind": arkret_core::events::EventKind::MEMBER_STATE,
-                    "created_at": "2026-07-20T00:00:00Z",
+                    "created_at": "2026-07-20T00:00:00.000Z",
                     "payload": {
                         "actor_id": member,
                         "membership": "join",
                         "delivery_status": "unroutable",
                     },
                 }),
-                received_at: chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:01Z")
+                received_at: chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:01.000Z")
                     .unwrap()
                     .with_timezone(&chrono::Utc),
             })
@@ -4632,7 +4632,7 @@ mod membership_hydration_tests {
                         "seal_ref": "ak:seal:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "ssk_generation": 1
                     },
-                    "issued_at": "2026-07-18T00:00:00Z",
+                    "issued_at": "2026-07-18T00:00:00.000Z",
                     "auth_data": {
                         "verification_method": "did:web:alice.example#device-key",
                         "signature_algorithm": "Ed25519",
@@ -4690,7 +4690,7 @@ mod membership_hydration_tests {
                         "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "ssk_generation": 1
                     },
-                    "issued_at": "2026-07-18T00:01:00Z",
+                    "issued_at": "2026-07-18T00:01:00.000Z",
                     "auth_data": {
                         "verification_method": "did:web:alice.example#device-key",
                         "signature_algorithm": "Ed25519",

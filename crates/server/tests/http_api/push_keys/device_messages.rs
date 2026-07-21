@@ -310,10 +310,10 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
         "ak.mls.welcome",
         encrypted_envelope("ak.mls.welcome", "expired"),
     );
-    expired_target["expires_at"] = serde_json::json!(
-        (chrono::Utc::now() - chrono::Duration::minutes(1))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-    );
+    expired_target["expires_at"] =
+        serde_json::json!(arkret_core::canonical::format_timestamp_canonical(
+            chrono::Utc::now() - chrono::Duration::minutes(1)
+        ));
 
     TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -359,10 +359,10 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
         "ak.mls.welcome",
         encrypted_envelope("ak.mls.welcome", "expired-subscribe"),
     );
-    expired_for_subscribe["expires_at"] = serde_json::json!(
-        (chrono::Utc::now() - chrono::Duration::minutes(1))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-    );
+    expired_for_subscribe["expires_at"] =
+        serde_json::json!(arkret_core::canonical::format_timestamp_canonical(
+            chrono::Utc::now() - chrono::Duration::minutes(1)
+        ));
     TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "expired-lost-subscribe", true)

@@ -178,7 +178,7 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
 
 #[test]
 fn timeline_position_disambiguates_same_second_events() {
-    let created_at = DateTime::parse_from_rfc3339("2026-05-22T16:18:24Z")
+    let created_at = DateTime::parse_from_rfc3339("2026-05-22T16:18:24.000Z")
         .unwrap()
         .with_timezone(&Utc);
     let realm_create = timestamp_position_with_tie_breaker(
@@ -208,9 +208,9 @@ fn test_presence_envelope(
     // Event Envelope timestamps must be canonical millisecond wire form
     // (`YYYY-MM-DDTHH:MM:SS.sssZ`); serializing a `DateTime<Utc>` directly
     // emits sub-millisecond precision the SDK deserializer rejects.
-    let sent_at_wire = sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    let expires_at_wire = (sent_at + ChronoDuration::seconds(60))
-        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let sent_at_wire = arkret_core::canonical::format_timestamp_canonical(sent_at);
+    let expires_at_wire =
+        arkret_core::canonical::format_timestamp_canonical(sent_at + ChronoDuration::seconds(60));
     serde_json::from_value(serde_json::json!({
         "kind": "ak.presence",
         "realm_id": "ak:realm:01964137-0000-7000-8000-000000000001",
@@ -535,7 +535,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     state.realms.lock().upsert(roster_realm(false, true));
     let session = roster_session(&state, ROSTER_CALLER);
-    let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
+    let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
     let pre_join_received_at = created_at + ChronoDuration::milliseconds(100);
@@ -575,7 +575,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
             "actor_id": ROSTER_CALLER,
             "membership": "join",
             "delivery_status": "unroutable",
-            "event_received_at": joined_at.to_rfc3339()
+            "event_received_at": arkret_core::canonical::format_timestamp_canonical(joined_at)
         }),
         created_at,
     );
@@ -686,7 +686,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     state.realms.lock().upsert(roster_realm(false, true));
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
-    let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
+    let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
     let pre_join_received_at = created_at + ChronoDuration::milliseconds(100);
@@ -727,7 +727,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
             "actor_id": ROSTER_CALLER,
             "membership": "join",
             "delivery_status": "unroutable",
-            "event_received_at": joined_at.to_rfc3339()
+            "event_received_at": arkret_core::canonical::format_timestamp_canonical(joined_at)
         }),
         created_at,
     );
@@ -870,8 +870,10 @@ fn handle_claim(
         "claim_kind": "handle_binding",
         "visibility": "public",
         "audience": audience,
-        "created_at": (now() - ChronoDuration::minutes(1)).to_rfc3339_opts(SecondsFormat::Millis, true),
-        "expires_at": expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(
+            now() - ChronoDuration::minutes(1)
+        ),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
         "proofs": [{
             "kind": "detached_jws",
             "alg": "EdDSA",
@@ -1218,7 +1220,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     let session = roster_session(&state, ROSTER_CALLER);
     state.realms.lock().upsert(roster_realm(false, true));
 
-    let created_at = DateTime::parse_from_rfc3339("2026-06-18T00:00:00Z")
+    let created_at = DateTime::parse_from_rfc3339("2026-06-18T00:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
     let updated_at = created_at + ChronoDuration::seconds(1);
@@ -1332,7 +1334,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     let session = roster_session(&state, ROSTER_CALLER);
     state.realms.lock().upsert(roster_realm(false, true));
 
-    let first_created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
+    let first_created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
     let second_created_at = first_created_at + ChronoDuration::seconds(1);
@@ -1486,7 +1488,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
     let message_event_id = "ak:event:01904100-0000-7000-8000-0000000000d1";
     let message_id = "ak:message:01904100-0000-7000-8000-0000000000d1";
-    let base = DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
+    let base = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
     let realm_create = sync_test_operation_at(
@@ -1631,7 +1633,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     let revision_event_id = "ak:event:01904100-0000-7000-8000-0000000001d2";
     let redaction_event_id = "ak:event:01904100-0000-7000-8000-0000000001d3";
     let message_id = "ak:message:01904100-0000-7000-8000-0000000001d1";
-    let base = DateTime::parse_from_rfc3339("2026-06-24T11:00:00Z")
+    let base = DateTime::parse_from_rfc3339("2026-06-24T11:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
     let realm_create = sync_test_operation_at(

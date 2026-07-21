@@ -10,7 +10,7 @@ use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityGrantStatus, AccountabilityScope,
     AccountabilityScopeKind,
 };
-use chrono::{SecondsFormat, Utc};
+use chrono::Utc;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 
@@ -423,7 +423,7 @@ pub(super) async fn materialize_capability_grant(
     resource: Value,
     grant_id: &str,
 ) -> Result<String, AppError> {
-    let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let issued_at = arkret_core::canonical::format_timestamp_canonical(Utc::now());
     let grant = json!({
         "id": grant_id,
         "schema": "ak.schema.capability.v1",
@@ -555,7 +555,7 @@ pub(super) async fn submit_revoke_agent_keys(
     key_ids: &[String],
     reason: Option<&str>,
 ) -> Result<(), AppError> {
-    let revoked_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let revoked_at = arkret_core::canonical::format_timestamp_canonical(Utc::now());
     for key_id in key_ids {
         let mut payload = json!({
             "agent_id": agent_id,
@@ -709,9 +709,9 @@ mod tests {
 
     #[test]
     fn fanout_event_timestamp_uses_canonical_millisecond_profile() {
-        let created_at = arkret_core::canonical::format_timestamp_millis_canonical(Utc::now());
+        let created_at = arkret_core::canonical::format_timestamp_canonical(Utc::now());
 
-        arkret_core::canonical::validate_timestamp_millis_canonical(&created_at)
+        arkret_core::canonical::validate_timestamp_canonical(&created_at)
             .expect("fan-out Event Envelope timestamp must pass the shared validator");
         assert_eq!(created_at.len(), "2026-07-18T00:00:00.000Z".len());
         assert!(created_at.ends_with('Z'));

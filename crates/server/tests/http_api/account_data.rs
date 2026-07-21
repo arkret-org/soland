@@ -11,8 +11,11 @@ async fn account_data_accepts_fresh_principal_control_realm() {
     const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000010";
 
     let state = AppState::new(test_config(), Db { pool: None });
-    let fresh = dev_token_for_device(state.clone(), FRESH_DID, FRESH_DEVICE, "Fresh").await;
-    let bob = dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob").await;
+    let fresh =
+        verified_dev_token_for_device(state.clone(), FRESH_DID, FRESH_DEVICE, "Fresh").await;
+    let bob =
+        verified_dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob")
+            .await;
 
     let principal_realm = soland_test_support::principal_control_realm_for_did(FRESH_DID);
     assert!(
@@ -36,7 +39,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
             "key": "ak.client.ui_state",
             "owner": FRESH_DID,
             "body": body.clone(),
-            "updated_at": "2026-06-08T00:00:00Z"
+            "updated_at": "2026-06-08T00:00:00.000Z"
         }),
     )
     .await;
@@ -70,7 +73,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
                 &serde_json::json!({"theme": "light"}),
                 2,
             ),
-            "updated_at": "2026-06-08T00:01:00Z"
+            "updated_at": "2026-06-08T00:01:00.000Z"
         }),
     )
     .await;
@@ -83,14 +86,16 @@ async fn encrypted_account_data_realm_remark_round_trip() {
     const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001";
 
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice = dev_token_for_device(
+    let alice = verified_dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
         ALICE_DEVICE,
         "Alice",
     )
     .await;
-    let bob = dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob").await;
+    let bob =
+        verified_dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob")
+            .await;
 
     let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
     let key = format!("ak.contacts.realm.{realm_id}");
@@ -112,7 +117,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
             "key": key.as_str(),
             "owner": "did:web:alice.example",
             "encrypted_payload": remark.clone(),
-            "updated_at": "2026-05-08T10:00:00Z"
+            "updated_at": "2026-05-08T10:00:00.000Z"
         }),
     )
     .await;
@@ -148,7 +153,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
             "key": key.as_str(),
             "owner": "did:web:alice.example",
             "encrypted_payload": updated_remark.clone(),
-            "updated_at": "2026-05-09T10:00:00Z"
+            "updated_at": "2026-05-09T10:00:00.000Z"
         }),
     )
     .await;
@@ -195,7 +200,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
             "key": key.as_str(),
             "owner": "did:web:alice.example",
             "tombstone": true,
-            "updated_at": "2026-05-10T10:00:00Z"
+            "updated_at": "2026-05-10T10:00:00.000Z"
         }),
     )
     .await;
@@ -224,7 +229,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
     const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice = dev_token_for_device(
+    let alice = verified_dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
         ALICE_DEVICE,
@@ -250,7 +255,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
             "key": key,
             "owner": "did:web:alice.example",
             "encrypted_payload": envelope.clone(),
-            "updated_at": "2026-06-18T00:00:00Z"
+            "updated_at": "2026-06-18T00:00:00.000Z"
         }),
     )
     .await;
@@ -279,7 +284,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
             "key": key,
             "owner": "did:web:alice.example",
             "encrypted_payload": {"ciphertext": "opaque"},
-            "updated_at": "2026-06-18T00:01:00Z"
+            "updated_at": "2026-06-18T00:01:00.000Z"
         }),
     )
     .await;
@@ -314,7 +319,7 @@ async fn encrypted_realm_remark_rejects_plaintext_carrier() {
     const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
     let state = AppState::new(test_config(), Db { pool: None });
-    let alice = dev_token_for_device(
+    let alice = verified_dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
         ALICE_DEVICE,
@@ -337,7 +342,7 @@ async fn encrypted_realm_remark_rejects_plaintext_carrier() {
                 "local_name": "Acme",
                 "note": "plaintext remark"
             },
-            "updated_at": "2026-06-18T00:01:00Z"
+            "updated_at": "2026-06-18T00:01:00.000Z"
         }),
     )
     .await;
@@ -359,7 +364,7 @@ async fn account_data_requires_auth() {
             "key": "ak.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000",
             "owner": "did:web:alice.example",
             "body": {"local_name": "x"},
-            "updated_at": "2026-05-08T10:00:00Z"
+            "updated_at": "2026-05-08T10:00:00.000Z"
         }),
     );
     let resp = TestClient::post("http://server/_arkret/self/events")

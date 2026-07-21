@@ -479,7 +479,7 @@ async fn events_describe_and_single_event_submit_work() {
                 }
             },
             "created_by": "did:web:alice.example",
-            "created_at": "2026-05-17T00:00:00Z"
+            "created_at": "2026-05-17T00:00:00.000Z"
         }
     });
     let artifact_kind_event = signed_canonical_event(
@@ -510,7 +510,7 @@ async fn events_describe_and_single_event_submit_work() {
     unknown_schema["requirements"] = serde_json::json!({
         "schema": ["ak.schema.not_registered.v1"]
     });
-    reseal_canonical_event(&mut unknown_schema);
+    resign_canonical_event(&mut unknown_schema);
     let mut unknown_schema_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&unknown_schema)
@@ -621,7 +621,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
     conflicting["payload"]["content"]["body"] =
         Value::String("different canonical body".to_owned());
-    reseal_canonical_event(&mut conflicting);
+    resign_canonical_event(&mut conflicting);
     let mut conflict = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&conflicting)
@@ -644,7 +644,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     )
     .await;
     let realm_id = new_prefixed_uuid7("ak:realm:");
-    let created_at = "2026-05-17T00:00:00Z";
+    let created_at = "2026-05-17T00:00:00.000Z";
     let payload = serde_json::json!({
         "object": {
             "id": realm_id,
@@ -1568,7 +1568,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
             "recipient_service_type": "principal_server"
         },
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "expires_at": "2026-06-14T10:00:00Z"
+        "expires_at": "2026-06-14T10:00:00.000Z"
     });
     let event = signed_canonical_event(
         "ak:event:01904100-0000-7000-8000-1e0c1a7e0001",

@@ -142,40 +142,12 @@ pub(in crate::routing) async fn submit_applet_event_value(
     state: &AppState,
     session: &SessionRecord,
     envelope: Value,
-    service_id: &str,
-    authorization_ref: Option<String>,
+    realm_id: &str,
+    kind: &str,
+    event_id: &str,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let realm_id = event_string_field_from_value(&envelope, "realm_id").ok_or_else(|| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "realm_id is required",
-        )
-    })?;
-    let actor_id = event_string_field_from_value(&envelope, "actor_id").ok_or_else(|| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "actor_id is required",
-        )
-    })?;
-    let kind = event_string_field_from_value(&envelope, "kind").ok_or_else(|| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "kind is required",
-        )
-    })?;
-    let admission = InternalEventAdmission::applet_formal(
-        realm_id,
-        actor_id,
-        kind,
-        service_id,
-        authorization_ref,
-        arkret_core::ed25519_pubkey_to_did_key_multibase(
-            state.notary_signing_key().verifying_key().as_bytes(),
-        ),
-    );
+    let admission =
+        InternalEventAdmission::applet_formal(realm_id, session.actor.as_str(), kind, event_id);
     submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission)).await
 }
 

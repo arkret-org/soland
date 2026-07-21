@@ -6,8 +6,8 @@
 //! at create time is bound to THIS deployment's domain. The `#` share sigil (and
 //! `@`) are display affordances and are stripped before the canonical form.
 //!
-//! Validation / canonicalization (lowercasing, localpart alphabet, confusable /
-//! mixed-script rejection, ≥2-label domain) is delegated to the SDK
+//! Validation / canonicalization (RFC 8265 preparation, UTS #46 domain
+//! processing, and the ≥2-label domain rule) is delegated to the SDK
 //! [`arkret_core::RealmAlias`] so soland and clients agree on the exact bytes.
 
 /// Derive this deployment's authority domain from its service DID. Mirrors the
@@ -39,7 +39,7 @@ pub fn canonical_realm_alias(service_id: &str, input: &str) -> Option<String> {
     } else {
         format!("{body}:{domain}")
     };
-    let alias = arkret_core::RealmAlias::parse(&canonical_input).ok()?;
+    let alias = arkret_core::RealmAlias::prepare(&canonical_input).ok()?;
     // Deployment-authority model: only aliases under THIS deployment's domain.
     (alias.domain() == domain).then(|| alias.canonical().to_owned())
 }
@@ -84,7 +84,9 @@ mod tests {
     fn rejects_invalid_inputs() {
         assert_eq!(canonical_realm_alias(DID, ""), None);
         assert_eq!(canonical_realm_alias(DID, "#"), None);
-        // Confusable Cyrillic 'е' (U+0435) in the localpart.
-        assert_eq!(canonical_realm_alias(DID, "gen\u{0435}ral"), None);
+        assert_eq!(
+            canonical_realm_alias(DID, "项目").as_deref(),
+            Some("项目:acme.example")
+        );
     }
 }

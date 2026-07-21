@@ -186,7 +186,6 @@ pub(super) async fn build_ghost_accountability_grant_event(
 
 pub(super) async fn build_ghost_profile_create_event(
     state: &AppState,
-    record: &AppletRecord,
     provision: &GhostActorProvisionRequestBody,
     applet_id: AppletId,
     service_id: &Did,
@@ -210,14 +209,6 @@ pub(super) async fn build_ghost_profile_create_event(
         "realm_id": realm_id,
         "external_ref": provision.external_ref,
     });
-    let mut accountable_principal_ids = vec![service_id.clone()];
-    if let Ok(controller) = Did::new(record.registry_did.clone())
-        && !accountable_principal_ids
-            .iter()
-            .any(|did| did == &controller)
-    {
-        accountable_principal_ids.push(controller);
-    }
     let request = GhostActorProfileRequest::new(
         profile_id,
         ghost_actor_id.clone(),
@@ -225,7 +216,7 @@ pub(super) async fn build_ghost_profile_create_event(
         applet_id.clone(),
     )
     .with_realm_id(realm_id.clone())
-    .with_accountable_principal_ids(accountable_principal_ids)
+    .with_accountable_principal_ids(vec![service_id.clone()])
     .with_external_ref(
         serde_json::from_value(external_ref)
             .map_err(|error| AppError::internal(format!("external_ref encode failed: {error}")))?,
@@ -257,10 +248,11 @@ pub(super) async fn build_ghost_profile_create_event(
 pub(super) async fn persist_formal_applet_event(
     state: &AppState,
     event: FormalAppletEvent,
-    service_id: &Did,
-    authorization_ref: Option<String>,
 ) -> Result<(), AppError> {
     let now = chrono::Utc::now();
+    let realm_id = event.event.realm_id.to_string();
+    let kind = event.event.kind.to_string();
+    let event_id = event.event.event_id.to_string();
     let session = SessionRecord {
         token_hash: "applet-formal-event".to_owned(),
         actor: event.event.actor_id.to_string(),
@@ -275,11 +267,7 @@ pub(super) async fn persist_formal_applet_event(
     let envelope = serde_json::to_value(event.event)
         .map_err(|error| AppError::internal(format!("event serialize failed: {error}")))?;
     crate::routing::events::event_log::submit_applet_event_value(
-        state,
-        &session,
-        envelope,
-        service_id.as_str(),
-        authorization_ref,
+        state, &session, envelope, &realm_id, &kind, &event_id,
     )
     .await
     .map_err(|error| {
@@ -325,7 +313,7 @@ pub(super) fn production_payload_proof(
     let binding = json!({
         "label": label,
         "payload": payload,
-        "created_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(created_at),
     });
     let binding_bytes = canonical::canonical_json_bytes(&binding).map_err(|error| {
         AppError::internal(format!(

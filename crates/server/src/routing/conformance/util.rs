@@ -91,8 +91,11 @@ mod tests {
         let cursor = arkret_core::Cursor {
             v: "1".to_owned(),
             purpose: arkret_core::CursorPurpose::Stream,
-            t: arkret_core::canonical::format_timestamp_canonical(issued_at),
-            x: issued_at.timestamp_millis() + arkret_core::Cursor::STREAM_TTL_MAX_MS,
+            issued_at,
+            expires_at: chrono::DateTime::from_timestamp_millis(
+                issued_at.timestamp_millis() + arkret_core::Cursor::STREAM_TTL_MAX_MS,
+            )
+            .unwrap(),
             h: "abcdefghijklmnopqrstuv".to_owned(),
         };
         let encoded = cursor.encode().unwrap();
@@ -100,7 +103,8 @@ mod tests {
         let decoded = arkret_core::Cursor::decode(&encoded).unwrap();
         assert_eq!(decoded.v, cursor.v);
         assert_eq!(decoded.purpose, cursor.purpose);
-        assert_eq!(decoded.x, cursor.x);
+        assert_eq!(decoded.issued_at, cursor.issued_at);
+        assert_eq!(decoded.expires_at, cursor.expires_at);
         assert_eq!(decoded.h, cursor.h);
     }
 

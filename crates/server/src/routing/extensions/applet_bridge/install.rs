@@ -1651,7 +1651,7 @@ mod tests {
             namespaces: Some(package.namespaces.clone()),
             allow_ghost_actors: true,
             status: "installed".to_owned(),
-            registered_at: chrono::DateTime::parse_from_rfc3339("2026-06-22T00:00:00Z")
+            registered_at: chrono::DateTime::parse_from_rfc3339("2026-06-22T00:00:00.000Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
             revoked_at: None,

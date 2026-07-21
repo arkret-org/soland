@@ -238,8 +238,8 @@ pub(crate) fn signed_device_recovery_receipt(
         "backup_classes_unlocked": [],
         "welcome_count": 0,
         "outcome": "completed",
-        "started_at": "2026-05-30T00:00:00Z",
-        "completed_at": "2026-05-30T00:00:01Z",
+        "started_at": "2026-05-30T00:00:00.000Z",
+        "completed_at": "2026-05-30T00:00:01.000Z",
         "auth_data": {
             "verification_method": format!("{principal_id}#{new_device_id}"),
             "signature_algorithm": "EdDSA",
@@ -291,7 +291,7 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
         "algorithms": algorithms,
         "authorized_by": principal,
         // Canonical operation timestamps are seconds-precision UTC.
-        "not_before": "2026-05-30T00:00:00Z",
+        "not_before": "2026-05-30T00:00:00.000Z",
         "device_signature": "ZGV2aWNlLXNlbGYtc2lnbmF0dXJlLXBsYWNlaG9sZGVy",
         "recovery_session_id": session["recovery_session_id"],
         "cross_signing_binding": {
@@ -332,7 +332,7 @@ pub(crate) fn seed_cross_signing(
         },
         "expected_previous_generation": 0,
         "generation": 1,
-        "issued_at": "2026-05-30T00:00:00Z",
+        "issued_at": "2026-05-30T00:00:00.000Z",
     });
     let content: arkret_core::CrossSigningPublish =
         serde_json::from_value(publish).expect("cross-signing publish content");
@@ -447,7 +447,7 @@ pub(crate) fn did_recovery_backup_body(
         "actor_id": principal_id,
         "backup_class": "did_recovery",
         "backup_version": "kb_1",
-        "created_at": "2026-05-30T00:00:00Z",
+        "created_at": "2026-05-30T00:00:00.000Z",
         "series_id": "ak:backup_series:01964137-0000-7000-8000-0000000000c5",
         "series_seq": 0,
         "recovery_policy_ref": { "policy_id": policy_id, "policy_version": 1 },
@@ -469,7 +469,7 @@ pub(crate) fn did_recovery_backup_body(
                 "device_id": "did:web:alice.example#recovery",
                 "backup_class": "did_recovery",
                 "backup_version": "kb_1",
-                "created_at": "2026-05-30T00:00:00Z",
+                "created_at": "2026-05-30T00:00:00.000Z",
                 "item_types": ["recovery_key_share"]
             }
         },
@@ -599,10 +599,10 @@ pub(crate) async fn seed_recovery_policy(
     supersedes: Option<&str>,
 ) -> String {
     let policy_id = new_prefixed_uuid7("ak:policy:");
-    let issued_at = chrono::DateTime::parse_from_rfc3339("2026-05-30T00:00:00Z")
+    let issued_at = chrono::DateTime::parse_from_rfc3339("2026-05-30T00:00:00.000Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let expires_at = chrono::DateTime::parse_from_rfc3339("2026-06-30T00:00:00Z")
+    let expires_at = chrono::DateTime::parse_from_rfc3339("2026-06-30T00:00:00.000Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
     let raw_payload = serde_json::json!({
@@ -613,8 +613,8 @@ pub(crate) async fn seed_recovery_policy(
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": ["principal_signing"],
         "supersedes": supersedes,
-        "issued_at": "2026-05-30T00:00:00Z",
-        "expires_at": "2026-06-30T00:00:00Z",
+        "issued_at": "2026-05-30T00:00:00.000Z",
+        "expires_at": "2026-06-30T00:00:00.000Z",
         "auth_data": {
             "verification_method": verification_method,
             "signature_algorithm": "Ed25519",
@@ -785,8 +785,8 @@ pub(crate) fn signed_recovery_policy(
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": ["principal_signing"],
         "supersedes": supersedes,
-        "issued_at": "2026-05-30T00:00:00Z",
-        "expires_at": "2026-06-30T00:00:00Z",
+        "issued_at": "2026-05-30T00:00:00.000Z",
+        "expires_at": "2026-06-30T00:00:00.000Z",
         "auth_data": {
             "verification_method": verification_method,
             "signature_algorithm": "Ed25519",
@@ -830,8 +830,8 @@ pub(crate) fn signed_recovery_receipt(
         "backup_classes_unlocked": [],
         "welcome_count": 0,
         "outcome": "completed",
-        "started_at": "2026-05-30T00:00:00Z",
-        "completed_at": "2026-05-30T00:00:01Z",
+        "started_at": "2026-05-30T00:00:00.000Z",
+        "completed_at": "2026-05-30T00:00:01.000Z",
         "auth_data": {
             "verification_method": verification_method,
             "signature_algorithm": "EdDSA",

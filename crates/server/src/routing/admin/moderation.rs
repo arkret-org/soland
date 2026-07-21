@@ -201,7 +201,12 @@ async fn assign_queue_item(
     if let Some(obj) = item.as_object_mut() {
         obj.insert("assigned_to".to_owned(), json!(body.into_inner().reviewers));
         obj.insert("status".to_owned(), json!("reviewing"));
-        obj.insert("updated_at".to_owned(), json!(Utc::now().to_rfc3339()));
+        obj.insert(
+            "updated_at".to_owned(),
+            json!(arkret_core::canonical::format_timestamp_canonical(
+                Utc::now()
+            )),
+        );
     }
     state
         .moderation_store()
@@ -261,7 +266,12 @@ async fn prioritise_queue_item(
         .ok_or_else(|| AppError::not_found("queue item"))?;
     if let Some(obj) = item.as_object_mut() {
         obj.insert("priority".to_owned(), json!(priority));
-        obj.insert("updated_at".to_owned(), json!(Utc::now().to_rfc3339()));
+        obj.insert(
+            "updated_at".to_owned(),
+            json!(arkret_core::canonical::format_timestamp_canonical(
+                Utc::now()
+            )),
+        );
     }
     state
         .moderation_store()

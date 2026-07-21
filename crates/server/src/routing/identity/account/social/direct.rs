@@ -753,7 +753,7 @@ pub(crate) async fn prepare_remote_direct_keypackage_claim(
             "claim_purpose": "direct_conversation",
             "required_capabilities": ["ak.mls.rfc9420"],
             "claim_nonce": claim_nonce,
-            "expires_at": (now() + chrono::Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Secs, true),
+            "expires_at": arkret_core::canonical::format_timestamp_canonical(now() + chrono::Duration::minutes(5)),
             "target_device_ids": [],
             "minimal_metadata_allowed": true,
             "timeout_ms": 5000,
@@ -2033,8 +2033,7 @@ pub(super) fn direct_operation_id() -> Result<arkret_core::OperationId, &'static
 }
 
 pub(super) fn direct_now_seconds() -> chrono::DateTime<chrono::Utc> {
-    let now = now();
-    chrono::DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now)
+    now()
 }
 
 pub(super) fn direct_realm_create_payload(
@@ -2107,10 +2106,10 @@ pub(super) fn direct_member_join_operation(
             "binding_source": "explicit",
             "delivery_modes": ["events", "sync", "to_device", "key_packages"],
             "service_endpoint": service_endpoint,
-            "resolved_at": created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+            "resolved_at": arkret_core::canonical::format_timestamp_canonical(created_at),
             "service_acceptance_ref": service_acceptance_ref,
             "holder_proof_ref": service_acceptance_ref,
-            "expires_at": (created_at + chrono::Duration::days(30)).to_rfc3339_opts(SecondsFormat::Secs, true)
+            "expires_at": arkret_core::canonical::format_timestamp_canonical(created_at + chrono::Duration::days(30))
         });
     }
     let mut operation = arkret_core::Operation::create(

@@ -507,7 +507,7 @@ pub(super) fn roster_members_for_realm(
                                 claim_digest: claim.digest.clone(),
                                 binding_state: claim.binding_state.clone(),
                                 expires_at: claim.expires_at.map(|expires_at| {
-                                    expires_at.to_rfc3339_opts(SecondsFormat::Millis, true)
+                                    arkret_core::canonical::format_timestamp_canonical(expires_at)
                                 }),
                             })
                             .collect();
@@ -1118,7 +1118,7 @@ fn notification_projection_payload(row: &Value, actor_id: &str) -> Option<Value>
         .get("created_at")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        .unwrap_or_else(|| arkret_core::canonical::format_timestamp_canonical(now()));
     let mut payload = json!({
         "id": notification_id,
         "schema": "ak.schema.notification.v1",

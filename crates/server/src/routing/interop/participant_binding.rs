@@ -322,8 +322,8 @@ pub(crate) fn verify_call_state_participant_bindings(
         // (c) freshness — reject an already-expired binding.
         let expires_at = binding_str(binding, "expires_at")
             .ok_or("participant_binding_invalid: participant_binding.expires_at is required")?;
-        let expires_at = chrono::DateTime::parse_from_rfc3339(expires_at).map_err(
-            |_| "participant_binding_invalid: participant_binding.expires_at is not RFC3339",
+        let expires_at = arkret_core::canonical::parse_timestamp_canonical(expires_at).map_err(
+            |_| "participant_binding_invalid: participant_binding.expires_at is not canonical",
         )?;
         if expires_at <= event_created_at {
             return Err(
@@ -420,7 +420,7 @@ mod cross_impl_tests {
     const ACTOR_ID: &str = "did:web:alice.example";
     const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-000000000005";
     const PARTICIPANT_IDENTITY: &str = "ak:rtc_participant:0198c2f4-0000-7000-8000-000000000000";
-    const EXPIRES_AT: &str = "2026-05-27T12:34:56Z";
+    const EXPIRES_AT: &str = "2026-05-27T12:34:56.000Z";
 
     /// SDK-side signing input for the fixed tuple (`expires_at` overridable so
     /// the field-sensitivity assertion can perturb a single field).
@@ -431,7 +431,7 @@ mod cross_impl_tests {
             scheme: arkret_core::PARTICIPANT_BINDING_SCHEMA.to_owned(),
             sig: String::new(),
             issuer_kid: "did:web:media.example#media-token".to_owned(),
-            issued_at: "2026-05-27T12:30:00Z".parse().unwrap(),
+            issued_at: "2026-05-27T12:30:00.000Z".parse().unwrap(),
             // The seven authoritative fields.
             realm_id: RealmId::new(REALM_ID).unwrap(),
             call_id: CallId::new(CALL_ID).unwrap(),
@@ -481,7 +481,7 @@ mod cross_impl_tests {
         // Perturbing a single authoritative field MUST change the bytes on both
         // sides (guards against a construction collapsing to a constant), and
         // the two sides MUST still agree on the perturbed bytes.
-        let other_expires = "2026-05-27T12:34:57Z";
+        let other_expires = "2026-05-27T12:34:57.000Z";
 
         let soland_base = soland_signing_input(EXPIRES_AT);
         let soland_other = soland_signing_input(other_expires);

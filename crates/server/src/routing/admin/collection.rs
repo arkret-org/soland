@@ -433,7 +433,9 @@ pub(super) async fn admin_realm_member_items(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let owner = realm_meta.as_ref().map(|meta| meta.owner.as_str());
-    let joined_at = realm_meta.as_ref().map(|meta| meta.created_at.to_rfc3339());
+    let joined_at = realm_meta
+        .as_ref()
+        .map(|meta| arkret_core::canonical::format_timestamp_canonical(meta.created_at));
     Ok(members
         .into_iter()
         .map(|actor_id| AdminRealmMemberItem {
@@ -569,8 +571,12 @@ fn admin_applet_items(state: &AppState) -> Vec<Value> {
                 "namespace": applet.namespace,
                 "manifest": applet.manifest,
                 "capabilities": applet.capabilities,
-                "registered_at": applet.registered_at.to_rfc3339(),
-                "updated_at": applet.updated_at.to_rfc3339(),
+                "registered_at": arkret_core::canonical::format_timestamp_canonical(
+                    applet.registered_at
+                ),
+                "updated_at": arkret_core::canonical::format_timestamp_canonical(
+                    applet.updated_at
+                ),
             })
         })
         .collect()

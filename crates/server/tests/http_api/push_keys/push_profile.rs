@@ -33,8 +33,8 @@ fn broadcast_ephemeral_envelope_signed_by(
         "realm_id": DEMO_REALM_ID,
         "actor_id": actor_id,
         "device_id": device_id,
-        "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "sent_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
         "payload": payload,
     });
     let canonical = arkret_core::canonical::canonical_json_bytes(&env).unwrap();
@@ -504,7 +504,7 @@ async fn push_profile_and_moderation_contracts_work() {
                     }
                 }]
             },
-            "updated_at": "2026-05-08T10:00:00Z"
+            "updated_at": "2026-05-08T10:00:00.000Z"
         }),
     )
     .await;
@@ -864,7 +864,7 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
     let state = AppState::new(test_config(), Db { pool: None });
     add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
     let alice_token = ephemeral_test_token(state.clone()).await;
-    let bob_token = dev_token_for_device(
+    let bob_token = verified_dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
         "ak:device:01904100-0000-7000-8000-b0b000000004",
@@ -1026,7 +1026,7 @@ async fn typing_fanout_respects_receiver_blocklist() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice_token = ephemeral_test_token(state.clone()).await;
     add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
-    let bob_token = dev_token_for_device(
+    let bob_token = verified_dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
         "ak:device:01904100-0000-7000-8000-b0b000000001",
@@ -1054,7 +1054,7 @@ async fn typing_fanout_respects_receiver_blocklist() {
                 .unwrap(),
             )
             .unwrap(),
-            "updated_at": "2026-05-21T00:00:00Z",
+            "updated_at": "2026-05-21T00:00:00.000Z",
         }),
     )
     .await;
@@ -1205,8 +1205,8 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
             "kind": "ak.call.signal",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
-            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "sent_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
+            "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
             "payload": {
                 "call_id": call_id,
                 "signal_type": signal_type,
@@ -1224,7 +1224,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
                 "alg": "EdDSA",
                 "verification_method": format!("did:web:alice.example#{device_id}"),
                 "event_digest": event_digest,
-                "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "created_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
                 "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
             });
         }

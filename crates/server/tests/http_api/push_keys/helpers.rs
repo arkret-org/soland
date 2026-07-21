@@ -26,8 +26,9 @@ pub(crate) fn device_message_target(kind: &str, content: Value) -> Value {
         "message_id": new_prefixed_uuid7("ak:device_message:"),
         "kind": kind,
         "content": content,
-        "expires_at": (chrono::Utc::now() + chrono::Duration::hours(1))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(
+            chrono::Utc::now() + chrono::Duration::hours(1)
+        ),
     })
 }
 

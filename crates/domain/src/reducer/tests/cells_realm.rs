@@ -483,7 +483,7 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
             serde_json::json!({
                 "frozen": true,
                 "reason": "incident hold",
-                "freeze_expires_at": "2026-06-22T10:00:00Z"
+                "freeze_expires_at": "2026-06-22T10:00:00.000Z"
             }),
         ),
         &hlc,
@@ -499,7 +499,7 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
     assert!(
         state.realm_is_frozen_at(
             realm_id,
-            chrono::DateTime::parse_from_rfc3339("2026-06-22T09:59:59Z")
+            chrono::DateTime::parse_from_rfc3339("2026-06-22T09:59:59.000Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc)
         )
@@ -507,7 +507,7 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
     assert!(
         !state.realm_is_frozen_at(
             realm_id,
-            chrono::DateTime::parse_from_rfc3339("2026-06-22T10:00:00Z")
+            chrono::DateTime::parse_from_rfc3339("2026-06-22T10:00:00.000Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc)
         )

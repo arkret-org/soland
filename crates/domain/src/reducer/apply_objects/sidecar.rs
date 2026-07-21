@@ -67,7 +67,7 @@ mod tests {
                 "backing_circle_id": "ak:circle:01964137-0000-7000-8000-000000000041",
                 "encryption_profile": "mls_rfc9420",
                 "state": "active",
-                "created_at": "2026-07-20T00:00:00Z"
+                "created_at": "2026-07-20T00:00:00.000Z"
             }}),
         )
     }

@@ -207,7 +207,9 @@ pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProje
             "expiry_state": expiry.state_str(),
             "expiry_trigger": expiry.trigger.as_str(),
             "expiry_reason": expiry.reason_code(),
-            "expired_at": expiry.expires_at.as_ref().map(|value| value.to_rfc3339()),
+            "expired_at": expiry.expires_at.map(
+                arkret_core::canonical::format_timestamp_canonical
+            ),
             "physical_delete": false,
             "cache_invalidation": message_expiry_cache_invalidation_value(),
         });
@@ -220,8 +222,9 @@ pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProje
         object.insert("expiry_reason".to_owned(), json!(reason));
     }
     if let Some(expires_at) = expiry.expires_at.as_ref() {
-        object.insert("expired_at".to_owned(), json!(expires_at.to_rfc3339()));
-        object.insert("expires_at".to_owned(), json!(expires_at.to_rfc3339()));
+        let expires_at = arkret_core::canonical::format_timestamp_canonical(*expires_at);
+        object.insert("expired_at".to_owned(), json!(expires_at));
+        object.insert("expires_at".to_owned(), json!(expires_at));
     }
     if let Some(anchor_hlc) = expiry.anchor_hlc.as_deref() {
         object.insert("expiry_anchor_hlc".to_owned(), json!(anchor_hlc));
@@ -256,8 +259,12 @@ pub fn retention_tombstone_payload_value(
             "retention_tombstone": true,
             "retention_state": "tombstoned",
             "retention_reason": tombstone.reason.as_str(),
-            "retention_expired_at": tombstone.expired_at.to_rfc3339(),
-            "retention_tombstoned_at": tombstone.tombstoned_at.to_rfc3339(),
+            "retention_expired_at": arkret_core::canonical::format_timestamp_canonical(
+                tombstone.expired_at
+            ),
+            "retention_tombstoned_at": arkret_core::canonical::format_timestamp_canonical(
+                tombstone.tombstoned_at
+            ),
             "retention_seal_preserved": tombstone.sealed,
             "physical_delete": false,
             "cache_invalidation": message_expiry_cache_invalidation_value(),
@@ -275,11 +282,15 @@ pub fn retention_tombstone_payload_value(
     );
     object.insert(
         "retention_expired_at".to_owned(),
-        json!(tombstone.expired_at.to_rfc3339()),
+        json!(arkret_core::canonical::format_timestamp_canonical(
+            tombstone.expired_at
+        )),
     );
     object.insert(
         "retention_tombstoned_at".to_owned(),
-        json!(tombstone.tombstoned_at.to_rfc3339()),
+        json!(arkret_core::canonical::format_timestamp_canonical(
+            tombstone.tombstoned_at
+        )),
     );
     object.insert(
         "retention_seal_preserved".to_owned(),
@@ -444,7 +455,7 @@ mod tests {
             })),
             encrypted: false,
             operation_id: "ak:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
-            created_at: fixed_time("2020-01-01T00:00:00Z"),
+            created_at: fixed_time("2020-01-01T00:00:00.000Z"),
             history_basis_seals: Vec::new(),
             revision_of: None,
             redacted_at: None,
@@ -461,8 +472,8 @@ mod tests {
             realm_id: realm_id.to_owned(),
             reason: "retention_policy.ttl".to_owned(),
             policy_ttl_seconds: 60,
-            expired_at: fixed_time("2020-01-01T00:01:00Z"),
-            tombstoned_at: fixed_time("2020-01-01T00:02:00Z"),
+            expired_at: fixed_time("2020-01-01T00:01:00.000Z"),
+            tombstoned_at: fixed_time("2020-01-01T00:02:00.000Z"),
             sealed,
         }
     }
@@ -489,7 +500,7 @@ mod tests {
     fn on_last_read_waits_for_active_realm_member_aggregate() {
         let event_id = "ak:event:01904100-0000-7000-8000-0000000000b3";
         let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-        let now = fixed_time("2020-01-01T00:00:00Z");
+        let now = fixed_time("2020-01-01T00:00:00.000Z");
         let mut message = expired_message(event_id, realm_id);
         message.expiry = Some(json!({
             "ttl_ms": 1,
@@ -571,14 +582,14 @@ mod tests {
                     "grace_ms": 0
                 }
             }),
-            created_at: fixed_time("2020-01-01T00:00:00Z"),
-            received_at: fixed_time("2020-01-01T00:00:00Z"),
+            created_at: fixed_time("2020-01-01T00:00:00.000Z"),
+            received_at: fixed_time("2020-01-01T00:00:00.000Z"),
         };
 
         stub_projection_event_for_message_expiry(
             &projection,
             &mut event,
-            fixed_time("2026-06-19T00:00:01Z"),
+            fixed_time("2026-06-19T00:00:01.000Z"),
         );
 
         assert_eq!(event.payload["expiry_stub"], json!(true));
@@ -722,7 +733,7 @@ mod tests {
     fn pin_projection_event_for_expired_target_is_stubbed() {
         let event_id = "ak:event:01904100-0000-7000-8000-0000000000d1";
         let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-        let now = fixed_time("2026-06-19T00:00:01Z");
+        let now = fixed_time("2026-06-19T00:00:01.000Z");
         let mut projection = ProjectionState::new();
         projection
             .messages

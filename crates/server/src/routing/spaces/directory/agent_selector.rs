@@ -84,8 +84,8 @@ pub(super) fn signed_agent_selector_claim(
         "visibility": "restricted",
         "audience": audience,
         "claim_scope": claim_scope.clone(),
-        "expires_at": expires_at.to_rfc3339(),
-        "created_at": created_at.to_rfc3339(),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(created_at),
         "source_refs": [],
     });
     let canonical_bytes = canonical::canonical_json_bytes(&unsigned).map_err(|err| {

@@ -515,8 +515,9 @@ fn grant_item_value(
             .or_insert_with(|| Value::String(operation.realm_id.to_string()));
         if revoked {
             map.insert("revoked".to_owned(), Value::Bool(true));
-            map.entry("revoked_at".to_owned())
-                .or_insert_with(|| Value::String(now.to_rfc3339()));
+            map.entry("revoked_at".to_owned()).or_insert_with(|| {
+                Value::String(arkret_core::canonical::format_timestamp_canonical(now))
+            });
         }
     }
     body
@@ -829,7 +830,7 @@ impl ProjectionState {
         };
 
         let mut items = self.capability_cell_items(&cell_ref);
-        let revoked_at = now.to_rfc3339();
+        let revoked_at = arkret_core::canonical::format_timestamp_canonical(now);
         if items.is_empty() {
             // Revoke-before-grant (or revoke of a grant this server never
             // projected): write a tombstone-only item so the terminal rule
@@ -1601,7 +1602,9 @@ mod agent_key_tests {
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
-        parent["grant"]["expires_at"] = json!(parent_expiry.to_rfc3339());
+        parent["grant"]["expires_at"] = json!(arkret_core::canonical::format_timestamp_canonical(
+            parent_expiry
+        ));
         let parent_effect =
             state.apply_capability_grant(&op("capability_grant", parent), chrono::Utc::now());
         assert!(matches!(
@@ -1617,7 +1620,9 @@ mod agent_key_tests {
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         child["grant"]["parent_grant_id"] = json!(GRANT);
-        child["grant"]["expires_at"] = json!(child_expiry.to_rfc3339());
+        child["grant"]["expires_at"] = json!(arkret_core::canonical::format_timestamp_canonical(
+            child_expiry
+        ));
         let child_effect =
             state.apply_capability_grant(&op("capability_grant", child), chrono::Utc::now());
         assert!(matches!(
@@ -1661,8 +1666,9 @@ mod agent_key_tests {
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         child["grant"]["parent_grant_id"] = json!(GRANT);
-        child["grant"]["expires_at"] =
-            json!((chrono::Utc::now() + chrono::Duration::minutes(30)).to_rfc3339());
+        child["grant"]["expires_at"] = json!(arkret_core::canonical::format_timestamp_canonical(
+            chrono::Utc::now() + chrono::Duration::minutes(30)
+        ));
         let child_effect =
             state.apply_capability_grant(&op("capability_grant", child), chrono::Utc::now());
         assert!(matches!(

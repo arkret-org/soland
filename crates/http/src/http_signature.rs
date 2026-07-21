@@ -1,7 +1,6 @@
 use chrono::Utc;
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use salvo::prelude::Request;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
@@ -48,16 +47,29 @@ pub fn rfc9530_content_digest(bytes: &[u8]) -> String {
     .wire_value
 }
 
-pub fn canonical_body_digests(
-    value: &Value,
+pub fn exact_body_digests(body_bytes: &[u8]) -> CanonicalBodyDigests {
+    CanonicalBodyDigests {
+        content_digest: rfc9530_content_digest(body_bytes),
+        request_digest: arkret_core::canonical::sha256_digest(body_bytes),
+    }
+}
+
+pub fn validate_canonical_json_body(
+    body_bytes: &[u8],
     canonical_error: impl FnOnce(String) -> AppError,
-) -> Result<CanonicalBodyDigests, AppError> {
-    let body_bytes = arkret_core::canonical::canonical_json_bytes(value)
-        .map_err(|error| canonical_error(error.to_string()))?;
-    Ok(CanonicalBodyDigests {
-        content_digest: rfc9530_content_digest(&body_bytes),
-        request_digest: arkret_core::canonical::sha256_digest(&body_bytes),
-    })
+) -> Result<(), AppError> {
+    arkret_core::canonical::validate_canonical_bytes(body_bytes)
+        .map_err(|error| canonical_error(error.to_string()))
+}
+
+pub fn reject_content_encoding(
+    req: &Request,
+    encoded_error: impl FnOnce() -> AppError,
+) -> Result<(), AppError> {
+    if req.headers().contains_key("content-encoding") {
+        return Err(encoded_error());
+    }
+    Ok(())
 }
 
 pub fn required_header(
@@ -173,4 +185,48 @@ pub fn deterministic_development_signing_key(domain: &[u8], key_material: &str) 
     hasher.update(key_material.as_bytes());
     let seed: [u8; 32] = hasher.finalize().into();
     SigningKey::from_bytes(&seed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_body_digests_cover_exact_wire_bytes() {
+        let body = br#"{"a":1,"b":2}"#;
+        let digests = exact_body_digests(body);
+
+        assert_eq!(digests.content_digest, rfc9530_content_digest(body));
+        assert_eq!(
+            digests.request_digest,
+            arkret_core::canonical::sha256_digest(body)
+        );
+        assert!(digests.content_digest.starts_with("sha-256=:"));
+    }
+
+    #[test]
+    fn canonical_json_validation_rejects_parse_then_canonicalize_variants() {
+        for body in [
+            br#"{ "a": 1, "b": 2 }"#.as_slice(),
+            br#"{"b":2,"a":1}"#.as_slice(),
+            br#"{"a":1,"a":1}"#.as_slice(),
+        ] {
+            assert!(
+                validate_canonical_json_body(body, AppError::invalid_param).is_err(),
+                "non-canonical wire body must be rejected: {}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[test]
+    fn signed_json_rejects_content_encoding() {
+        let mut request = Request::new();
+        request.headers_mut().insert(
+            "content-encoding",
+            salvo::http::HeaderValue::from_static("gzip"),
+        );
+
+        assert!(reject_content_encoding(&request, || AppError::invalid_param("encoded")).is_err());
+    }
 }

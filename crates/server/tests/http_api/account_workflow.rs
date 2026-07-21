@@ -776,7 +776,11 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         "did:web:alice.example",
         &realm_id,
         "ak:strand:workflow",
-        serde_json::json!({"kind": "ak.content.location", "body": "location", "latitude": 31.2304, "longitude": 121.4737}),
+        serde_json::json!({
+            "kind": "ak.content.location",
+            "body": "location",
+            "geo_uri": "geo:31.2304,121.4737"
+        }),
         false,
     )
     .await;

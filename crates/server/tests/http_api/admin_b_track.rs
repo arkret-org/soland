@@ -114,7 +114,7 @@ async fn admin_invite_token_create_and_revoke_round_trip() {
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "uses_allowed": 1,
-            "expires_at": "2030-01-01T00:00:00Z"
+            "expires_at": "2030-01-01T00:00:00.000Z"
         }))
         .send(&app_from_state(state.clone()))
         .await

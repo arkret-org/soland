@@ -109,8 +109,10 @@ async fn submit_read_receipt_policy(
             "disclosure": disclosure,
             "visibility": visibility,
             "scope_overrides_allowed": true,
-            "allow_public_receipts_on_world_readable": allow_public_world_readable,
-            "allow_forced_public_world_readable_receipts": allow_forced_public_world_readable
+            "receipt_compliance_opt_in": {
+                "public_receipts_on_world_readable": allow_public_world_readable,
+                "forced_public_world_readable_receipts": allow_forced_public_world_readable
+            }
         }),
     )
     .await
@@ -178,8 +180,8 @@ fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i
         "realm_id": DEMO_REALM_ID,
         "actor_id": actor,
         "device_id": device_id,
-        "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "sent_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
         "payload": {
             "receipt_type": "read",
             "schema": "ak.schema.read_receipt.v1",
@@ -187,7 +189,7 @@ fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i
             "actor_id": actor,
             "event_id": event_id,
             "read_scope": {"kind": "realm"},
-            "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            "created_at": arkret_core::canonical::format_timestamp_canonical(sent_at)
         }
     });
     let canonical = arkret_core::canonical::canonical_json_bytes(&envelope).unwrap();
@@ -197,7 +199,7 @@ fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i
         "alg": "EdDSA",
         "verification_method": format!("{actor}#{device_id}"),
         "event_digest": event_digest,
-        "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
         "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
     });
     envelope
@@ -260,9 +262,10 @@ async fn private_read_receipt_visible_only_to_target_sender() {
     let alice_token = dev_token(state.clone()).await;
     add_test_realm_member(&state, DEMO_REALM_ID, BOB);
     add_test_realm_member(&state, DEMO_REALM_ID, CAROL);
-    let bob_token = dev_token_for_device(state.clone(), BOB, BOB_DEVICE, "Bob Desktop").await;
+    let bob_token =
+        verified_dev_token_for_device(state.clone(), BOB, BOB_DEVICE, "Bob Desktop").await;
     let carol_token =
-        dev_token_for_device(state.clone(), CAROL, CAROL_DEVICE, "Carol Desktop").await;
+        verified_dev_token_for_device(state.clone(), CAROL, CAROL_DEVICE, "Carol Desktop").await;
     set_demo_realm_visibility(&state, "invite_only", "shared").await;
 
     let target_event_id =
@@ -296,8 +299,10 @@ async fn members_and_public_read_receipts_are_cropped() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice_token = dev_token(state.clone()).await;
     add_test_realm_member(&state, DEMO_REALM_ID, BOB);
-    let bob_token = dev_token_for_device(state.clone(), BOB, BOB_DEVICE, "Bob Desktop").await;
-    let dave_token = dev_token_for_device(state.clone(), DAVE, DAVE_DEVICE, "Dave Desktop").await;
+    let bob_token =
+        verified_dev_token_for_device(state.clone(), BOB, BOB_DEVICE, "Bob Desktop").await;
+    let dave_token =
+        verified_dev_token_for_device(state.clone(), DAVE, DAVE_DEVICE, "Dave Desktop").await;
     set_demo_realm_visibility(&state, "public", "world_readable").await;
 
     let target_event_id =
@@ -343,7 +348,8 @@ async fn read_receipt_ttl_expiry_suppresses_sync_and_event_view() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice_token = dev_token(state.clone()).await;
     add_test_realm_member(&state, DEMO_REALM_ID, BOB);
-    let bob_token = dev_token_for_device(state.clone(), BOB, BOB_DEVICE, "Bob Desktop").await;
+    let bob_token =
+        verified_dev_token_for_device(state.clone(), BOB, BOB_DEVICE, "Bob Desktop").await;
     set_demo_realm_visibility(&state, "invite_only", "shared").await;
 
     let target_event_id =

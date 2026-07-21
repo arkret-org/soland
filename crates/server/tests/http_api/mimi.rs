@@ -138,7 +138,7 @@ fn mimi_room_update_body(
             "content_profile": "application/mimi-content",
             "policy_root": MIMI_TEST_POLICY_ROOT,
             "status": status,
-            "created_at": "2026-05-16T00:00:00Z",
+            "created_at": "2026-05-16T00:00:00.000Z",
         }
     });
     json!({

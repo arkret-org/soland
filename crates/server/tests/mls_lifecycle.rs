@@ -97,7 +97,7 @@ fn signed_event(
     payload: Value,
 ) -> Value {
     let now = Utc::now();
-    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let created_at = arkret_core::canonical::format_timestamp_canonical(now);
     let mut event = json!({
         "event_id": event_id,
         "kind": kind,
@@ -229,8 +229,8 @@ async fn mls_lifecycle_end_to_end() {
                 "key_package": b64(keypackage_bytes),
                 "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
                 "capabilities": capabilities.clone(),
-                "expires_at": "2100-01-01T00:00:00Z",
-                "created_at": "2026-05-25T00:00:00Z"
+                "expires_at": "2100-01-01T00:00:00.000Z",
+                "created_at": "2026-05-25T00:00:00.000Z"
             },
             {
                 "keypackage_id": keypackage_id_mismatch,
@@ -239,8 +239,8 @@ async fn mls_lifecycle_end_to_end() {
                 "key_package": b64(mismatch_keypackage_bytes),
                 "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
                 "capabilities": mismatch_capabilities,
-                "expires_at": "2100-01-01T00:00:00Z",
-                "created_at": "2026-05-25T00:00:01Z"
+                "expires_at": "2100-01-01T00:00:00.000Z",
+                "created_at": "2026-05-25T00:00:01.000Z"
             }
         ]
     });
@@ -294,7 +294,7 @@ async fn mls_lifecycle_end_to_end() {
             "requester": alice_did,
             "required_capabilities": ["ak.mls.profile.full"],
             "claim_nonce": b64(b"claim-nonce-01"),
-            "expires_at": "2100-01-01T00:00:00Z",
+            "expires_at": "2100-01-01T00:00:00.000Z",
             "mls_group_id": "ak:mls_group:abc"
         }))
         .send(&app_from_state(state.clone()))
@@ -327,7 +327,7 @@ async fn mls_lifecycle_end_to_end() {
             "requester": alice_did,
             "required_capabilities": ["ak.mls.profile.full"],
             "claim_nonce": b64(b"claim-nonce-02"),
-            "expires_at": "2100-01-01T00:00:00Z",
+            "expires_at": "2100-01-01T00:00:00.000Z",
             "mls_group_id": "ak:mls_group:second"
         }))
         .send(&app_from_state(state.clone()))
@@ -397,7 +397,7 @@ async fn mls_lifecycle_end_to_end() {
                     "controller_organization": "did:web:organization.primary.example",
                     "recovery_controller_organizations": ["did:web:organization.recovery.example"]
                 },
-                "created_at": "2026-05-25T00:00:00Z"
+                "created_at": "2026-05-25T00:00:00.000Z"
             }
         }),
     );
@@ -425,7 +425,7 @@ async fn mls_lifecycle_end_to_end() {
             "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
             "ratchet_tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
             "governance_binding": governance_binding,
-            "created_at": "2026-05-25T00:00:01Z"
+            "created_at": "2026-05-25T00:00:01.000Z"
         }),
     );
     let genesis_resp = TestClient::post("http://server/_arkret/self/events")
@@ -461,7 +461,7 @@ async fn mls_lifecycle_end_to_end() {
         "ssk_generation": 3,
         "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
         "welcome_digest": arkret_core::canonical::sha256_digest(b"opaque-mls-welcome"),
-        "created_at": "2026-05-25T00:00:02Z",
+        "created_at": "2026-05-25T00:00:02.000Z",
         "signature": {
             "kid": format!("{alice_did}#self-signing"),
             "alg": "EdDSA",
@@ -501,7 +501,7 @@ async fn mls_lifecycle_end_to_end() {
             "claim_envelope": claim_envelope,
             "welcome_ref": welcome_ref,
             "ciphertext": b64(b"opaque-mls-welcome"),
-            "expires_at": "2100-01-01T00:00:00Z",
+            "expires_at": "2100-01-01T00:00:00.000Z",
             "commit_ref": "ak:event:01904100-0000-7000-8000-00000000e2e3",
             "governance_binding": governance_binding
         }),
@@ -595,7 +595,10 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(device_message["sender_device_id"], json!(alice_device));
     assert_eq!(device_message["recipient_principal_id"], json!(bob_did));
     assert_eq!(device_message["recipient_device_id"], json!(bob_device));
-    assert_eq!(device_message["expires_at"], json!("2100-01-01T00:00:00Z"));
+    assert_eq!(
+        device_message["expires_at"],
+        json!("2100-01-01T00:00:00.000Z")
+    );
     assert_eq!(device_message["content"]["mls_group_id"], json!(group_id));
     assert_eq!(device_message["content"]["epoch"], json!(1));
     assert_eq!(

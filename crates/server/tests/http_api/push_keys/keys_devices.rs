@@ -115,8 +115,9 @@ async fn auth_keys_device_messages_and_blobs_work() {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": {
                         "kind": "ak.mls.welcome",
                         "content": "not-an-object",
-                        "expires_at": (chrono::Utc::now() + chrono::Duration::hours(1))
-                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                        "expires_at": arkret_core::canonical::format_timestamp_canonical(
+                            chrono::Utc::now() + chrono::Duration::hours(1)
+                        )
                     }
                 }
             }
@@ -720,7 +721,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
             "hpke_key": "z6LSTestPhase1HpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": alice,
-            "not_before": "2026-05-08T10:00:00Z",
+            "not_before": "2026-05-08T10:00:00.000Z",
             "enrollment_authority_binding": {
                 "kind": "service_attested",
                 "authority_did": alice,
@@ -787,7 +788,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
             "hpke_key": "z6LSTestPhase1HpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": alice,
-            "not_before": "2026-05-08T10:00:00Z",
+            "not_before": "2026-05-08T10:00:00.000Z",
             "enrollment_authority_binding": {
                 "kind": "service_attested",
                 "authority_did": alice,
@@ -838,7 +839,7 @@ async fn keys_query_exposes_service_attested_device_anchor() {
             "hpke_key": "z6LSTestServiceAttestedHpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": "did:web:auth.example",
-            "not_before": "2026-05-08T10:00:00Z",
+            "not_before": "2026-05-08T10:00:00.000Z",
             "enrollment_authority_binding": {
                 "kind": "service_attested",
                 "authority_did": "did:web:auth.example",
@@ -982,7 +983,7 @@ fn tier2_publish_and_authorize(
         "hpke_key": "z6LSTestTier2HpkeKey",
         "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
         "authorized_by": principal,
-        "not_before": "2026-05-08T10:00:00Z",
+        "not_before": "2026-05-08T10:00:00.000Z",
         "device_signature": "c2ln",
         "cross_signing_binding": {
             "verification_method": format!("{principal}#ak_self_signing_v1"),

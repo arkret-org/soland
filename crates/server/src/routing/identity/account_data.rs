@@ -213,7 +213,7 @@ async fn persist_account_data_event(
     let mut payload = json!({
         "owner": session.actor,
         "key": data_type,
-        "updated_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "updated_at": arkret_core::canonical::format_timestamp_canonical(created_at),
     });
     if let Some(content) = content {
         payload["body"] = content;

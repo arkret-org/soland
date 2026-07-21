@@ -104,7 +104,6 @@ pub async fn sync_token_for_client_sync_frontiers(
     let (principal_id, device_id) = cursor_principal_device(session);
     let device_positions = BTreeMap::from([(device_id.clone(), issued_at.timestamp_micros())]);
     let filter_digest = sync_filter_digest(filter);
-    let issued_at_ms = issued_at.timestamp_millis();
     let positions = json!({
         "realms": realms_positions,
         "account_realms": account_realms_positions,
@@ -134,7 +133,8 @@ pub async fn sync_token_for_client_sync_frontiers(
     let cursor = arkret_core::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
-    let expires_at_ms = cursor.x;
+    let issued_at_ms = cursor.issued_at.timestamp_millis();
+    let expires_at_ms = cursor.expires_at.timestamp_millis();
     upsert_sync_cursor_record(
         state,
         SyncCursorRecord {
@@ -161,7 +161,6 @@ pub(crate) async fn sync_token_for_events_query(
     event_id: &str,
 ) -> String {
     let issued_at = chrono::Utc::now();
-    let issued_at_ms = issued_at.timestamp_millis();
     let (principal_id, device_id) = cursor_principal_device(session);
     let target = json!({ "event_id": event_id });
     let binding = events_query_cursor_handle_binding(
@@ -175,7 +174,8 @@ pub(crate) async fn sync_token_for_events_query(
     let cursor = arkret_core::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
-    let expires_at_ms = cursor.x;
+    let issued_at_ms = cursor.issued_at.timestamp_millis();
+    let expires_at_ms = cursor.expires_at.timestamp_millis();
     upsert_sync_cursor_record(
         state,
         SyncCursorRecord {
@@ -204,13 +204,13 @@ async fn sync_token_for_state_positions(
     realms_positions: BTreeMap<String, i64>,
 ) -> String {
     let issued_at = chrono::Utc::now();
-    let issued_at_ms = issued_at.timestamp_millis();
     let binding = service_cursor_handle_binding(&state.service_id, &realms_positions);
     let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, &binding);
     let cursor = arkret_core::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
-    let expires_at_ms = cursor.x;
+    let issued_at_ms = cursor.issued_at.timestamp_millis();
+    let expires_at_ms = cursor.expires_at.timestamp_millis();
     upsert_sync_cursor_record(
         state,
         SyncCursorRecord {

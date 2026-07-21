@@ -27,8 +27,8 @@ fn action_approve(request_id: &str) -> Operation {
             "target": { "kind": "realm", "realm_id": REALM },
             "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "approval_nonce": "nonce-01904100",
-            "approved_at": "2026-06-19T00:00:10Z",
-            "expires_at": "2026-06-19T00:10:10Z"
+            "approved_at": "2026-06-19T00:00:10.000Z",
+            "expires_at": "2026-06-19T00:10:10.000Z"
         }),
     )
 }
@@ -39,7 +39,7 @@ fn pause_agent() -> Operation {
         REALM,
         serde_json::json!({
             "agent_id": AGENT,
-            "status_changed_at": "2026-06-19T00:00:00Z"
+            "status_changed_at": "2026-06-19T00:00:00.000Z"
         }),
     )
 }
@@ -50,7 +50,7 @@ fn resume_agent() -> Operation {
         REALM,
         serde_json::json!({
             "agent_id": AGENT,
-            "status_changed_at": "2026-06-19T00:01:00Z"
+            "status_changed_at": "2026-06-19T00:01:00.000Z"
         }),
     )
 }
@@ -61,7 +61,7 @@ fn deactivate_agent() -> Operation {
         REALM,
         serde_json::json!({
             "agent_id": AGENT,
-            "status_changed_at": "2026-06-19T00:02:00Z"
+            "status_changed_at": "2026-06-19T00:02:00.000Z"
         }),
     )
 }

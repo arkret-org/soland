@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn projection_event_json_emits_canonical_actor_fields() {
-        let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-24T10:00:00Z")
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
         let event = soland_storage::ProjectionEventRecord {

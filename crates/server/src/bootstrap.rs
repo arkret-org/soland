@@ -1126,6 +1126,7 @@ fn sign_registration_receipt(
     signing_seed: &[u8; 32],
     issued_at: chrono::DateTime<chrono::Utc>,
 ) -> anyhow::Result<ServiceRegistrationReceipt> {
+    let issued_at = arkret_core::canonical::normalize_timestamp_canonical(issued_at);
     let log_head_digest = request.inception_operation.log_head_digest()?;
     let control_key_digest = request.inception_operation.control_key_digest()?;
     let receipt_claims = json!({
@@ -1134,7 +1135,7 @@ fn sign_registration_receipt(
         "version_id": request.inception_operation.version_id,
         "log_head_digest": log_head_digest,
         "control_key_digest": control_key_digest,
-        "issued_at": issued_at,
+        "issued_at": arkret_core::canonical::format_timestamp_canonical(issued_at),
         "provider_service_id": provider_service_id,
     });
     let receipt_digest = arkret_core::canonical::canonical_sha256(&receipt_claims)?;
@@ -1203,7 +1204,7 @@ fn registration_receipt_signing_input(
         "version_id": version_id,
         "log_head_digest": log_head_digest,
         "control_key_digest": control_key_digest,
-        "issued_at": issued_at,
+        "issued_at": arkret_core::canonical::format_timestamp_canonical(issued_at),
         "provider_service_id": provider_service_id,
     });
     let mut signing_input = Vec::with_capacity(64);

@@ -56,9 +56,9 @@ pub(super) fn recovery_session_summary(record: &RecoverySessionApplicationState)
         "identity_model": record.identity_model,
         "challenge": record.challenge,
         "state": record.state,
-        "created_at": record.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "updated_at": record.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(record.created_at),
+        "updated_at": arkret_core::canonical::format_timestamp_canonical(record.updated_at),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(record.expires_at),
     });
     match record.identity_model {
         RecoveryIdentityModel::CrossSigning => {
@@ -1078,8 +1078,8 @@ pub(super) fn recovery_proof_transcript(
         "challenge": record.challenge,
         // created_at is the SESSION creation/signing time (not proof time), per
         // recovery-session.schema.json $defs/principal_signing_transcript.
-        "created_at": record.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(record.created_at),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(record.expires_at),
     })
 }
 
@@ -1100,8 +1100,8 @@ pub(super) fn generic_recovery_proof_transcript(
         "identity_model": record.identity_model,
         "model_generation_ref": recovery_model_generation_ref(record),
         "challenge": record.challenge,
-        "created_at": record.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(record.created_at),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(record.expires_at),
         "proof_body": proof_body,
     })
 }
@@ -1495,7 +1495,7 @@ pub(super) async fn recovery_session_complete(
             "policy_version": record.policy_version,
             "trust_domain": record.trust_domain,
             "proof_summary": proof_summary,
-            "authorized_at": now.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "authorized_at": arkret_core::canonical::format_timestamp_canonical(now),
         }),
     );
     device_payload_object.insert(

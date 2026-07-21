@@ -1106,7 +1106,7 @@ mod tests {
                     "recipient_service_id": "did:webvh:z6mkfixture:bob.example"
                 },
                 "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "expires_at": "2026-07-20T00:00:00Z",
+                "expires_at": "2026-07-20T00:00:00.000Z",
                 "event_id": "ak:event:01904100-0000-7000-8000-0000000000e2",
                 "sender": "did:web:alice.example",
                 "hlc": "019041000000-0001-00000001",
@@ -1126,7 +1126,7 @@ mod tests {
                     "recipient_service_id": "did:webvh:z6mkfixture:bob.example"
                 },
                 "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "expires_at": "2026-07-20T00:00:00Z"
+                "expires_at": "2026-07-20T00:00:00.000Z"
             })
         );
     }

@@ -120,7 +120,7 @@ fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
         json!({"collection": {"page_size": 50}}),
         json!({"collection": {"selection_policy": "multiple"}}),
         json!({"collection": {"grouping": {"wip_limit_enforcement": "warn"}}}),
-        json!({"state": "tombstoned", "state_changed_at": "2026-07-17T00:00:00Z"}),
+        json!({"state": "tombstoned", "state_changed_at": "2026-07-17T00:00:00.000Z"}),
     ] {
         let operation = op(
             realm_id.clone(),
@@ -162,7 +162,7 @@ fn service_attested_device_authorize_binding_accepts_projection_metadata() {
         "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
         "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
         "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-        "not_before": "2026-06-22T14:45:51Z",
+        "not_before": "2026-06-22T14:45:51.000Z",
         "enrollment_authority_binding": {
             "kind": "service_attested",
             "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
@@ -194,7 +194,7 @@ fn signed_service_attested_device_authorize_payload(
         "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
         "device_key_algorithm": "EdDSA",
         "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-        "not_before": "2026-06-22T14:45:51Z",
+        "not_before": "2026-06-22T14:45:51.000Z",
         "enrollment_authority_binding": {
             "kind": "service_attested",
             "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
@@ -1297,8 +1297,8 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
             "issuer": "did:web:alice.example",
             "subject": "did:web:agent.example",
             "grant_status": "active",
-            "not_before": "2026-01-01T00:00:00Z",
-            "expires_at": "2099-01-01T00:00:00Z"
+            "not_before": "2026-01-01T00:00:00.000Z",
+            "expires_at": "2099-01-01T00:00:00.000Z"
         }),
     );
 
@@ -1335,8 +1335,8 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
                     "issuer": "did:web:alice.example",
                     "subject": "did:web:agent.example",
                     "grant_status": "active",
-                    "not_before": "2026-01-01T00:00:00Z",
-                    "expires_at": "2099-01-01T00:00:00Z"
+                    "not_before": "2026-01-01T00:00:00.000Z",
+                    "expires_at": "2099-01-01T00:00:00.000Z"
                 }
             }),
             received_at: chrono::Utc::now(),
@@ -2166,7 +2166,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
                 "to_epoch": 3
             },
             "ciphertext": "hpke-sealed-history-secret",
-            "created_at": "2026-06-25T00:00:00Z"
+            "created_at": "2026-06-25T00:00:00.000Z"
         }),
     );
 
@@ -2181,7 +2181,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
     let realm_id =
         arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d300".to_owned())
             .unwrap();
-    let now = chrono::DateTime::parse_from_rfc3339("2026-07-05T00:00:00Z")
+    let now = chrono::DateTime::parse_from_rfc3339("2026-07-05T00:00:00.000Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
     let bob = "did:web:bob.example";
@@ -2280,10 +2280,10 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
                 "to_epoch": 3
             },
             "ciphertext": "sealed-history-secret",
-            "created_at": "2026-07-05T00:00:00Z",
+            "created_at": "2026-07-05T00:00:00.000Z",
             "event_id": "ak:event:01904100-0000-7000-8000-00000000d300",
             "sender": "did:web:alice.example",
-            "hlc": "2026-07-05T00:00:00Z/node/1"
+            "hlc": "2026-07-05T00:00:00.000Z/node/1"
         }),
     );
 
@@ -2343,7 +2343,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
                 "to_epoch": 3
             },
             "ciphertext": "sealed",
-            "created_at": "2026-06-25T00:00:00Z"
+            "created_at": "2026-06-25T00:00:00.000Z"
         }),
     );
 

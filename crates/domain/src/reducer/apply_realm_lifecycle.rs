@@ -1173,7 +1173,7 @@ impl ProjectionState {
                         "encryption_profile": payload_encryption_profile,
                         "content_scheme": payload_content_scheme,
                         "digest_algorithm": payload_digest_algorithm,
-                        "created_at": now.to_rfc3339(),
+                        "created_at": arkret_core::canonical::format_timestamp_canonical(now),
                         "operation_id": operation.operation_id.as_str(),
                     });
                     self.cells
@@ -1289,7 +1289,7 @@ impl ProjectionState {
                         "terminal_kind": "tombstoned",
                         "tombstoned": true,
                         "successor_realm_id": payload_successor_realm_id,
-                        "at": now.to_rfc3339(),
+                        "at": arkret_core::canonical::format_timestamp_canonical(now),
                         "operation_id": operation.operation_id.as_str(),
                     });
                     self.cells.insert(cell_id, CellState::Value(value));
@@ -1307,7 +1307,7 @@ impl ProjectionState {
                     let value = serde_json::json!({
                         "terminal_kind": "destroyed",
                         "destroyed": true,
-                        "at": now.to_rfc3339(),
+                        "at": arkret_core::canonical::format_timestamp_canonical(now),
                         "operation_id": operation.operation_id.as_str(),
                     });
                     self.cells.insert(cell_id, CellState::Value(value));

@@ -621,7 +621,9 @@ fn preview_token_for_address(
     let mut claim = serde_json::json!({
         "iss": state.service_id().clone(),
         "aud": "anonymous",
-        "exp": (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
+        "exp": arkret_core::canonical::format_timestamp_canonical(
+            chrono::Utc::now() + chrono::Duration::minutes(10)
+        ),
         "nonce": new_prefixed_uuid7("ak:nonce:"),
         "target_digest": target_digest,
         "link_type": "preview",

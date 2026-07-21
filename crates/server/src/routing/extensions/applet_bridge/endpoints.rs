@@ -545,7 +545,6 @@ async fn provision_ghost_actor_endpoint(
 
     let profile_event = build_ghost_profile_create_event(
         state,
-        &record,
         &provision,
         applet_id,
         &service_id,
@@ -555,14 +554,8 @@ async fn provision_ghost_actor_endpoint(
     )
     .await?;
 
-    persist_formal_applet_event(state, grant_event, &service_id, None).await?;
-    persist_formal_applet_event(
-        state,
-        profile_event.clone(),
-        &service_id,
-        Some(authorization_ref.to_string()),
-    )
-    .await?;
+    persist_formal_applet_event(state, grant_event).await?;
+    persist_formal_applet_event(state, profile_event.clone()).await?;
     persist_formal_ghost_record(
         state,
         record,

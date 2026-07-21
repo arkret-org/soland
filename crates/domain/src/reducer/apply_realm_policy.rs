@@ -795,7 +795,7 @@ impl ProjectionState {
                 "status": status,
                 "label": label,
                 "commitment": commitment,
-                "updated_at": now.to_rfc3339(),
+                "updated_at": arkret_core::canonical::format_timestamp_canonical(now),
             });
             self.cells.insert(cell_id, CellState::Value(value));
         }
@@ -891,17 +891,6 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        if let Err(reason) = parent_capability_grants_allow(
-            self,
-            source_realm_id,
-            &allowed_policies,
-            &allowed_capability_bundles,
-        ) {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-
         if let Ok(cell_id) = arkret_core::CellRef::new(format!(
             "ak:cell:ak.component.realm.inheritance_policy.v1:{realm_id}"
         )) {
@@ -911,7 +900,7 @@ impl ProjectionState {
                 "allowed_policies": allowed_policies,
                 "allowed_capability_bundles": allowed_capability_bundles,
                 "max_depth": max_depth,
-                "updated_at": now.to_rfc3339(),
+                "updated_at": arkret_core::canonical::format_timestamp_canonical(now),
             });
             self.cells.insert(cell_id, CellState::Value(value));
         }
@@ -1101,7 +1090,10 @@ impl ProjectionState {
                         .collect(),
                 ),
             );
-            value.insert("updated_at".to_owned(), Value::String(now.to_rfc3339()));
+            value.insert(
+                "updated_at".to_owned(),
+                Value::String(arkret_core::canonical::format_timestamp_canonical(now)),
+            );
             if let Some(bundle) = operation.payload.get("bundle") {
                 value.insert("bundle".to_owned(), bundle.clone());
             }

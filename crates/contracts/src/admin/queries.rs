@@ -62,10 +62,20 @@ pub struct AdminActor {
     /// account is not deactivated or the fanout state is unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deactivation_federation_incomplete: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub created_at: Option<DateTime<Utc>>,
     /// Last activity timestamp. `None` = not tracked by this deployment.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub last_active_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_count: Option<u64>,
@@ -120,7 +130,12 @@ pub struct AdminAuditEntry {
     /// `authorization_ref` / `actor_kind` live here when present).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub created_at: Option<DateTime<Utc>>,
 }
 
@@ -193,12 +208,22 @@ pub struct CapabilitySummary {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub constraints: Vec<GrantConstraint>,
     pub revoked: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub created_at: Option<DateTime<Utc>>,
     /// Parent grant id when issued via re-delegation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_from: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -232,11 +257,26 @@ pub struct AdminDevice {
     pub verification_state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub created_at: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub updated_at: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub revoked_at: Option<DateTime<Utc>>,
 }
 
@@ -340,7 +380,7 @@ mod tests {
             "resource": "realm",
             "actions": ["ak.realm.read"],
             "revoked": false,
-            "created_at": "2026-07-10T00:00:00Z",
+            "created_at": "2026-07-10T00:00:00.000Z",
         });
         let summary: CapabilitySummary = serde_json::from_value(wire).expect("parses");
         assert_eq!(summary.actions, vec!["ak.realm.read".to_owned()]);

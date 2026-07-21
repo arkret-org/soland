@@ -125,7 +125,7 @@ pub(crate) fn build_left_to_join_move() -> Move {
             "alg": "EdDSA",
             "verification_method": "did:web:admin.example#k1",
             "payload_digest": payload_digest,
-            "created_at": "2026-05-08T00:00:00Z",
+            "created_at": "2026-05-08T00:00:00.000Z",
             // Real 64-byte Ed25519 detached JWS over the canonical body
             // bytes, signed with the dev verifier key. The SDK verifier
             // (wave-2 tightening) rejects shorter placeholder signatures.
@@ -144,7 +144,7 @@ pub(crate) fn build_seal(
         alg: "EdDSA".to_owned(),
         verification_method: "did:web:notary.example#k1".to_owned(),
         payload_digest: Hash::new(format!("sha256:{}", "ff".repeat(32))).unwrap(),
-        created_at: chrono::DateTime::parse_from_rfc3339("2026-05-08T00:00:00Z")
+        created_at: chrono::DateTime::parse_from_rfc3339("2026-05-08T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc),
         // Detached JWS shape (RFC 7515 §3.2): empty payload segment between
@@ -177,7 +177,7 @@ pub(crate) fn build_seal(
         previous_state_root: None,
         previous_digest_algorithm: None,
         notary_signature: NotarySig::Single(sig),
-        sealed_at: chrono::DateTime::parse_from_rfc3339("2026-05-08T00:00:00Z")
+        sealed_at: chrono::DateTime::parse_from_rfc3339("2026-05-08T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc),
         hlc: Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
@@ -257,7 +257,7 @@ pub(crate) fn build_consent_grant_add_move() -> Move {
             "alg": "EdDSA",
             "verification_method": "did:web:admin.example#k1",
             "payload_digest": payload_digest,
-            "created_at": "2026-05-08T00:00:00Z",
+            "created_at": "2026-05-08T00:00:00.000Z",
             "jws": dev_detached_jws(&body_bytes)
         }),
     );

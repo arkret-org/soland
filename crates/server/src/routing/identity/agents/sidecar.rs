@@ -333,7 +333,7 @@ async fn ensure_backing_circle(
         "encryption_profile": "mls_rfc9420",
         "state": "active",
         "created_by": controller,
-        "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        "created_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now())
     });
     let operation = new_sidecar_operation(
         realm_id,
@@ -537,7 +537,7 @@ async fn ensure_sidecar_mls_genesis(
             "ratchet_tree_digest": arkret_core::canonical::sha256_digest(format!("sidecar-ratchet-tree:{realm_id}:{group_id}")),
             "covered_seals": member_event_refs,
             "governance_binding": governance_binding,
-            "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "created_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
         }),
     )?;
     let effect =
@@ -612,7 +612,7 @@ async fn create_private_context(
     let strand_id = StrandId::new(ids::generate("strand"))
         .map_err(|error| AppError::internal(format!("generated Strand id: {error}")))?;
     let tracks = private_tracks_for_context(state, context_ref);
-    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let created_at = arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now());
     let object = private_context_strand_object(
         &strand_id,
         &realm_id,
@@ -975,12 +975,18 @@ mod tests {
         crate::routing::events::operations::validate_canonical_json_value(&operation.payload)
             .unwrap();
         let object = operation.payload.get("object").unwrap();
-        assert_eq!(object.get("created_at").unwrap(), "2026-07-20T12:34:56Z");
+        assert_eq!(
+            object.get("created_at").unwrap(),
+            "2026-07-20T12:34:56.987Z"
+        );
         assert_eq!(
             object.get("state_changed_at").unwrap(),
-            "2026-07-20T12:34:56Z"
+            "2026-07-20T12:34:56.987Z"
         );
-        assert_eq!(object.get("updated_at").unwrap(), "2026-07-20T12:34:56Z");
+        assert_eq!(
+            object.get("updated_at").unwrap(),
+            "2026-07-20T12:34:56.987Z"
+        );
     }
 
     #[test]
@@ -1003,7 +1009,7 @@ mod tests {
             &circle_id,
             "did:web:example.com:users:alice",
             tracks.clone(),
-            "2026-07-20T00:00:00Z",
+            "2026-07-20T00:00:00.000Z",
         );
 
         assert_eq!(object.get("tracks"), Some(&tracks));

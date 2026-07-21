@@ -338,7 +338,11 @@ async fn policy_check(
             // Encode (policy_id, updated_at) so a policy mutation
             // (`PATCH /policies/{id}`) shifts the frontier even if the
             // policy_id set is unchanged.
-            format!("{}@{}", policy.policy_id, policy.updated_at.to_rfc3339())
+            format!(
+                "{}@{}",
+                policy.policy_id,
+                arkret_core::canonical::format_timestamp_canonical(policy.updated_at)
+            )
         })
         .collect();
     policy_doc_ids.sort();

@@ -204,6 +204,10 @@ pub struct OutboundPushBridgeCacheSnapshot {
     pub fetch_state: String,
     pub cache_state: String,
     pub contract_digest: String,
+    #[serde(
+        serialize_with = "arkret_core::canonical::serialize_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_canonical_timestamp"
+    )]
     pub fetched_at: DateTime<Utc>,
     pub remote_contract: Value,
     /// C33.1: trust state for the cached snapshot (`pending` / `trusted` /
@@ -211,7 +215,11 @@ pub struct OutboundPushBridgeCacheSnapshot {
     #[serde(default = "default_trust_pending")]
     pub trust_level: String,
     /// Last freshness check timestamp, distinct from `fetched_at`.
-    #[serde(default)]
+    #[serde(
+        default,
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub freshness_at: Option<DateTime<Utc>>,
     /// Opaque server ETag from the upstream describe response.
     #[serde(default)]
@@ -297,7 +305,12 @@ pub struct OutboundPushBridgeFetchOutcome {
     pub fetch_state: String,
     pub cache_state: String,
     pub contract_digest: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub fetched_at: Option<DateTime<Utc>>,
     pub fetched_contract: OutboundPushResolvedContract,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -305,7 +318,12 @@ pub struct OutboundPushBridgeFetchOutcome {
     /// C33.1: trust state of the cached snapshot returned by the fetch path.
     #[serde(default = "default_trust_pending")]
     pub trust_level: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub freshness_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub etag: String,
@@ -327,11 +345,19 @@ pub struct OutboundPushBridgeCacheEntry {
     pub fetch_state: String,
     pub cache_state: String,
     pub contract_digest: String,
+    #[serde(
+        serialize_with = "arkret_core::canonical::serialize_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_canonical_timestamp"
+    )]
     pub fetched_at: DateTime<Utc>,
     pub fetched_contract: OutboundPushResolvedContract,
     /// C33.1: trust state surfaced to status callers so dashboards can flag
     /// `pending` / `revoked` snapshots without round-tripping the export API.
     pub trust_level: String,
+    #[serde(
+        serialize_with = "arkret_core::canonical::serialize_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_canonical_timestamp"
+    )]
     pub freshness_at: DateTime<Utc>,
     pub etag: String,
 }
@@ -400,6 +426,7 @@ pub struct PolicyDocumentOutcome {
     pub policy_type: String,
     pub payload: Value,
     pub active: bool,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -428,6 +455,7 @@ pub struct SolandAccountRegisterOutcome {
     pub handle: String,
     pub display_name: Option<String>,
     pub state: String,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     pub created_at: DateTime<Utc>,
 }
 

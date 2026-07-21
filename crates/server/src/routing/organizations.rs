@@ -884,8 +884,8 @@ fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> Or
         realms,
         realm_count,
         created_by: record.created_by.clone(),
-        created_at: record.created_at.to_rfc3339(),
-        updated_at: record.updated_at.to_rfc3339(),
+        created_at: arkret_core::canonical::format_timestamp_canonical(record.created_at),
+        updated_at: arkret_core::canonical::format_timestamp_canonical(record.updated_at),
     }
 }
 
@@ -911,7 +911,7 @@ fn organization_policy_record_view(
         policy: record.payload.clone(),
         applies_to_realms,
         updated_by: record.updated_by.clone(),
-        updated_at: record.updated_at.to_rfc3339(),
+        updated_at: arkret_core::canonical::format_timestamp_canonical(record.updated_at),
     }
 }
 
@@ -923,7 +923,7 @@ pub(crate) fn realm_policy_record_outcome(
         realm_id: record.realm_id.clone(),
         policy: record.payload.clone(),
         updated_by: record.updated_by.clone(),
-        updated_at: record.updated_at.to_rfc3339(),
+        updated_at: arkret_core::canonical::format_timestamp_canonical(record.updated_at),
     }
 }
 

@@ -174,17 +174,15 @@ async fn remove_staged(dir: &Path, id: &str) {
 }
 
 fn is_expired(meta: &StagedUpload) -> bool {
-    chrono::DateTime::parse_from_rfc3339(&meta.expires_at)
+    arkret_core::canonical::parse_timestamp_canonical(&meta.expires_at)
         .map(|expires| expires < chrono::Utc::now())
         .unwrap_or(true)
 }
 
 fn http_date(rfc3339: &str) -> Option<String> {
-    chrono::DateTime::parse_from_rfc3339(rfc3339).ok().map(|t| {
-        t.with_timezone(&chrono::Utc)
-            .format("%a, %d %b %Y %H:%M:%S GMT")
-            .to_string()
-    })
+    arkret_core::canonical::parse_timestamp_canonical(rfc3339)
+        .ok()
+        .map(|t| t.format("%a, %d %b %Y %H:%M:%S GMT").to_string())
 }
 
 fn set_tus_header(res: &mut Response) {
@@ -348,10 +346,13 @@ async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         return;
     }
     let upload_id = uuid::Uuid::new_v4().simple().to_string();
-    let created_at = now().to_rfc3339();
-    let expires_at = (chrono::Utc::now()
-        + chrono::Duration::seconds(state.config.resumable_upload_incomplete_ttl_seconds as i64))
-    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let created_at = arkret_core::canonical::format_timestamp_canonical(now());
+    let expires_at = arkret_core::canonical::format_timestamp_canonical(
+        chrono::Utc::now()
+            + chrono::Duration::seconds(
+                state.config.resumable_upload_incomplete_ttl_seconds as i64,
+            ),
+    );
     let mut meta = StagedUpload {
         upload_id: upload_id.clone(),
         declared_size_bytes: declared_size,

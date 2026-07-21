@@ -246,7 +246,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "sender": "did:web:alice.example",
-            "expires_at": "2030-01-01T00:00:00Z"
+            "expires_at": "2030-01-01T00:00:00.000Z"
         }),
     );
     let message = Operation::create(

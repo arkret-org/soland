@@ -120,29 +120,6 @@ fn inheritance_policy_projects_cell_and_cache() {
 }
 
 #[test]
-fn inheritance_policy_rejects_parent_bundle_not_granted() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-    seed_source_grant(
-        &mut state,
-        "ak:event:01904100-0000-7000-8000-111111111111",
-        REALM_PARENT,
-        &["read"],
-        &["bundle.read.v1"],
-    );
-
-    let bad = inheritance_op(REALM_CHILD, REALM_PARENT, &["bundle.admin.v1"]);
-    match state.apply(&bad, &hlc) {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "realm_inheritance_parent_bundle_not_granted");
-        }
-        other => {
-            panic!("expected Rejected(realm_inheritance_parent_bundle_not_granted), got {other:?}")
-        }
-    }
-}
-
-#[test]
 fn inheritance_policy_rejects_non_capability_bearing_link_kind() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");

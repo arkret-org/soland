@@ -824,9 +824,11 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
         Value::String(kinds::canonical_kind_string(operation)),
     );
     record.insert("appeal_state".to_owned(), Value::String(new_state.clone()));
-    record
-        .entry("projected_at".to_owned())
-        .or_insert_with(|| Value::String(operation.created_at.to_rfc3339()));
+    record.entry("projected_at".to_owned()).or_insert_with(|| {
+        Value::String(arkret_core::canonical::format_timestamp_canonical(
+            operation.created_at,
+        ))
+    });
     if let Err(error) = state
         .moderation_store()
         .append_appeal(Value::Object(record))
@@ -1278,10 +1280,10 @@ mod tests {
                 "to_epoch": 0
             },
             "ciphertext": "sealed",
-            "created_at": "2026-07-05T00:00:00Z",
+            "created_at": "2026-07-05T00:00:00.000Z",
             "event_id": "ak:event:01904100-0000-7000-8000-000000000101",
             "sender": sender,
-            "hlc": "2026-07-05T00:00:00Z/node/1"
+            "hlc": "2026-07-05T00:00:00.000Z/node/1"
         });
         let operation = Operation::create(
             operation_id.clone(),
@@ -1345,7 +1347,7 @@ mod tests {
             },
             "ciphertext": "sealed",
             "aad_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-            "created_at": "2026-06-30T00:00:00Z"
+            "created_at": "2026-06-30T00:00:00.000Z"
         });
         let created_at = chrono::Utc::now();
         // Production assigns the `message_id` in the storage `append`

@@ -38,7 +38,6 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::now;
 
-const HEADER_CONTENT_DIGEST: &str = "content-digest";
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
@@ -216,6 +215,7 @@ async fn peer_invites_submit(
     req: &mut Request,
 ) -> JsonResult<InviteDeliveryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    super::events::peer::validate_peer_request(state, req, true).await?;
     let delivery = req
         .parse_json::<InviteDeliveryRequest>()
         .await
@@ -223,8 +223,6 @@ async fn peer_invites_submit(
     let body = serde_json::to_value(&delivery).map_err(|error| {
         AppError::internal(format!("invite delivery request serialize: {error}"))
     })?;
-    super::events::peer::validate_peer_request(state, req, Some(&body)).await?;
-    validate_content_digest(req, &body)?;
 
     delivery.validate_minimal().map_err(|error| {
         super::events::peer::schema_violation(format!("invalid invite delivery request: {error}"))
@@ -1520,30 +1518,6 @@ fn validate_invite_delivery_consistency(
     {
         return Err(super::events::peer::schema_violation(
             "invite_event.payload.introduction_evidence_digest must equal digest(canonical_json(introduction_evidence))",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> {
-    let header = required_header(req, HEADER_CONTENT_DIGEST)?;
-    let canonical_bytes = canonical::canonical_json_bytes(body).map_err(|error| {
-        super::events::peer::schema_violation(format!(
-            "request body is not canonical-hashable: {error}"
-        ))
-    })?;
-    // RFC 9530 Content-Digest is the base64 of the SHA-256 *digest* of the
-    // canonical body bytes, matching the `peer/events` federation surface and
-    // the signing base every peer builds. Routed through the single
-    // `federation::rfc9530_content_digest` helper so the byte encoding can't
-    // drift from the outbound/outbox sign path. Earlier this hashed nothing and
-    // base64'd the raw canonical bytes, so well-formed `peer/invites`
-    // deliveries were rejected.
-    let expected = super::federation::rfc9530_content_digest(&canonical_bytes);
-    if header != expected {
-        crate::metrics::record_digest_mismatch("peer_invites_content_digest");
-        return Err(super::events::peer::cross_domain_replay(
-            "Content-Digest does not match the canonical request body",
         ));
     }
     Ok(())

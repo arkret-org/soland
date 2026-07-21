@@ -1386,7 +1386,9 @@ pub(super) async fn emit_consent_revoke_invalidation(
                 "cell_id": &mutation.updated.cell_id,
                 "consent_scope": &mutation.updated.scope,
                 "revoked_dots": mutation.updated.revoked_dots.iter().cloned().collect::<Vec<_>>(),
-                "revoked_at": mutation.updated.revoked_at.as_ref().map(|value| value.to_rfc3339()),
+                "revoked_at": mutation.updated.revoked_at.map(
+                    arkret_core::canonical::format_timestamp_canonical
+                ),
             })
         })
         .collect::<Vec<_>>();
@@ -1407,7 +1409,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
             None
         },
         "mutated_cells": mutated_cells,
-        "revoked_at": revoked_at.to_rfc3339(),
+        "revoked_at": arkret_core::canonical::format_timestamp_canonical(revoked_at),
     });
     let _ = crate::routing::events::projection::append_projection_event(
         state,

@@ -402,7 +402,7 @@ mod tests {
                 serde_json::json!({
                     "signature_b64": "AAAA",
                     "kid": format!("did:web:signer-{i}.example#k1"),
-                    "submitted_at": "2026-05-10T00:00:00Z",
+                    "submitted_at": "2026-05-10T00:00:00.000Z",
                 }),
             );
         }

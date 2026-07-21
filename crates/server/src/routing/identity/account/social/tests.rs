@@ -117,7 +117,7 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
     );
     assert_eq!(
         object.get("created_at").and_then(Value::as_str),
-        Some("2026-07-06T00:00:00Z")
+        Some("2026-07-06T00:00:00.000Z")
     );
 }
 
@@ -188,7 +188,7 @@ fn direct_strand_create_payload_is_sdk_schema_valid() {
     );
     assert_eq!(
         object.get("created_at").and_then(Value::as_str),
-        Some("2026-07-06T00:00:00Z")
+        Some("2026-07-06T00:00:00.000Z")
     );
 }
 
@@ -325,14 +325,18 @@ async fn participant_leave_retires_direct_binding() {
         bob,
     );
 
+    let leave_payload = arkret_core::MembershipPayload::transition(
+        arkret_core::MembershipPayloadState::Leave,
+        arkret_core::Did::new(bob.to_owned()).unwrap(),
+        "direct conversation participant left",
+    )
+    .to_value()
+    .unwrap();
     let leave = arkret_core::Operation::create(
         direct_operation_id().unwrap(),
         arkret_core::RealmId::new(realm_id).unwrap(),
         arkret_core::events::EventKind::MEMBER_STATE,
-        json!({
-            "actor_id": bob,
-            "membership": "leave"
-        }),
+        leave_payload,
     );
     crate::routing::accept_local_operations(&state, bob, std::slice::from_ref(&leave))
         .await

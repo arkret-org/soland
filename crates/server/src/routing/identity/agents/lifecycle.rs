@@ -151,7 +151,8 @@ pub(super) async fn provision_agent(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let agent_slug = agent_slug.trim().to_owned();
+    let agent_slug = arkret_core::prepare_agent_slug(agent_slug.trim())
+        .map_err(|err| AppError::invalid_param(format!("slug is invalid: {err}")))?;
     let avatar_blob_ref = avatar_blob_ref.map(|value| value.to_string());
     let now_utc = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         chrono::Utc::now().timestamp_millis(),

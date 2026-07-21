@@ -273,9 +273,8 @@ fn optional_now(value: Option<&str>) -> Result<Option<DateTime<Utc>>, AppError> 
     let Some(value) = value else {
         return Ok(None);
     };
-    let parsed = DateTime::parse_from_rfc3339(value)
-        .map_err(|_| AppError::invalid_param("now must be RFC3339"))?
-        .with_timezone(&Utc);
+    let parsed = arkret_core::canonical::parse_timestamp_canonical(value)
+        .map_err(|_| AppError::invalid_param("now must be a canonical Arkret timestamp"))?;
     Ok(Some(parsed))
 }
 
@@ -284,7 +283,7 @@ fn policy_outcome(record: &RetentionPolicyRecord) -> RetentionPolicyOutcome {
         realm_id: record.realm_id.clone(),
         ttl_seconds: record.ttl_seconds,
         updated_by: record.updated_by.clone(),
-        updated_at: record.updated_at.to_rfc3339(),
+        updated_at: arkret_core::canonical::format_timestamp_canonical(record.updated_at),
     }
 }
 
@@ -295,8 +294,8 @@ fn tombstone_item(record: &RetentionTombstoneRecord) -> RetentionTombstoneItem {
         retention_state: "tombstoned".to_owned(),
         reason: record.reason.clone(),
         policy_ttl_seconds: record.policy_ttl_seconds,
-        expired_at: record.expired_at.to_rfc3339(),
-        tombstoned_at: record.tombstoned_at.to_rfc3339(),
+        expired_at: arkret_core::canonical::format_timestamp_canonical(record.expired_at),
+        tombstoned_at: arkret_core::canonical::format_timestamp_canonical(record.tombstoned_at),
         sealed: record.sealed,
         physical_delete: false,
     }

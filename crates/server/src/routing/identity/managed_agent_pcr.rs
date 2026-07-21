@@ -76,7 +76,7 @@ pub(crate) async fn persist_managed_agent_did_binding(
     )?;
     let operation = json!({
         "versionId": "1",
-        "versionTime": now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "versionTime": arkret_core::canonical::format_timestamp_canonical(now),
         "state": document,
     });
     let digest = arkret_core::canonical::canonical_sha256(&operation).map_err(|error| {
@@ -1460,7 +1460,7 @@ mod tests {
 
     #[test]
     fn recovery_signing_key_cannot_be_used_as_managed_agent_backup_recipient() {
-        let now: DateTime<Utc> = "2026-07-15T00:00:00Z".parse().unwrap();
+        let now: DateTime<Utc> = "2026-07-15T00:00:00.000Z".parse().unwrap();
         let agreement = RecoveryKeyAgreementEntry {
             key_agreement_ref: arkret_core::DidUrl::new(format!("{CONTROLLER}#backup-hpke-1"))
                 .unwrap(),

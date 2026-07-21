@@ -67,7 +67,7 @@ fn install_media_service(state: &AppState, issuer_kid: &str) {
 /// additionally carries the unsigned `scheme` / `issuer_kid` / `issued_at`
 /// metadata.
 fn signed_binding(state: &AppState, expires_at: &str) -> Value {
-    let issued_at = "2026-06-15T00:00:00Z";
+    let issued_at = "2026-06-15T00:00:00.000Z";
     // Signed value = the seven authoritative fields only.
     let signed = participant_binding::binding_canonical_value(
         &json!(REALM_ID),
@@ -113,7 +113,7 @@ fn call_state_op(binding: Value) -> Operation {
     );
     // Freeze created_at before the binding expiry so the freshness gate
     // passes for the happy-path fixtures.
-    op.created_at = "2026-06-15T00:01:00Z".parse().unwrap();
+    op.created_at = "2026-06-15T00:01:00.000Z".parse().unwrap();
     op
 }
 
@@ -121,7 +121,7 @@ fn call_state_op(binding: Value) -> Operation {
 fn legal_self_signed_binding_passes_full_crypto_verification() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service(&state, ISSUER_KID);
-    let op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00Z"));
+    let op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00.000Z"));
     assert!(validate_operation_semantics(&state, std::slice::from_ref(&op)).is_ok());
 }
 
@@ -129,7 +129,7 @@ fn legal_self_signed_binding_passes_full_crypto_verification() {
 fn tampered_tuple_field_is_rejected_participant_binding_invalid() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service(&state, ISSUER_KID);
-    let mut binding = signed_binding(&state, "2026-06-15T00:05:00Z");
+    let mut binding = signed_binding(&state, "2026-06-15T00:05:00.000Z");
     // Flip the signed actor_id without re-signing → signature no longer
     // covers these bytes.
     binding["actor_id"] = json!("did:web:mallory.example");
@@ -148,7 +148,7 @@ fn tampered_tuple_field_is_rejected_participant_binding_invalid() {
 fn binding_field_mismatch_with_participant_entry_is_rejected() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service(&state, ISSUER_KID);
-    let mut op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00Z"));
+    let mut op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00.000Z"));
     // The participant entry's device_id diverges from the signed binding.
     op.payload["participants"][0]["device_id"] =
         json!("ak:device:01904100-0000-7000-8000-d1ffffffffff");
@@ -172,7 +172,7 @@ fn issuer_not_anchored_in_current_epoch_is_rejected_token_issuer_unauthorised() 
         "did:web:other.example",
         "did:web:other.example#media-1",
     );
-    let op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00Z"));
+    let op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00.000Z"));
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();
     assert!(
         err.starts_with("token_issuer_unauthorised"),
@@ -184,7 +184,7 @@ fn issuer_not_anchored_in_current_epoch_is_rejected_token_issuer_unauthorised() 
 fn missing_media_service_epoch_is_rejected_token_issuer_unauthorised() {
     let state = AppState::new(test_config(), Db { pool: None });
     // No media_service cell installed at all.
-    let op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00Z"));
+    let op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00.000Z"));
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();
     assert!(
         err.starts_with("token_issuer_unauthorised"),
@@ -196,7 +196,7 @@ fn missing_media_service_epoch_is_rejected_token_issuer_unauthorised() {
 fn corrupt_signature_is_rejected_participant_binding_invalid() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service(&state, ISSUER_KID);
-    let mut binding = signed_binding(&state, "2026-06-15T00:05:00Z");
+    let mut binding = signed_binding(&state, "2026-06-15T00:05:00.000Z");
     binding["sig"] = json!(
         "eddsa-ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     );
@@ -212,8 +212,8 @@ fn corrupt_signature_is_rejected_participant_binding_invalid() {
 fn expired_binding_is_rejected_participant_binding_invalid() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service(&state, ISSUER_KID);
-    // expires_at is before the event created_at (2026-06-15T00:01:00Z).
-    let op = call_state_op(signed_binding(&state, "2026-06-15T00:00:30Z"));
+    // expires_at is before the event created_at (2026-06-15T00:01:00.000Z).
+    let op = call_state_op(signed_binding(&state, "2026-06-15T00:00:30.000Z"));
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();
     assert!(
         err.starts_with("participant_binding_invalid"),
@@ -236,7 +236,7 @@ fn signing_input_matches_spec_construction() {
         &json!(ACTOR_ID),
         &json!(DEVICE_ID),
         &json!(PARTICIPANT_IDENTITY),
-        &json!("2026-06-15T00:05:00Z"),
+        &json!("2026-06-15T00:05:00.000Z"),
     );
     let canonical = participant_binding::binding_canonical_bytes(&signed);
     let actual = participant_binding::binding_signing_input(&canonical);
@@ -247,7 +247,7 @@ fn signing_input_matches_spec_construction() {
     // canonical-json is key-sorted (alphabetical) over the seven fields only.
     let expected_json = format!(
         "{{\"actor_id\":\"{ACTOR_ID}\",\"call_id\":\"{CALL_ID}\",\
-         \"device_id\":\"{DEVICE_ID}\",\"expires_at\":\"2026-06-15T00:05:00Z\",\
+         \"device_id\":\"{DEVICE_ID}\",\"expires_at\":\"2026-06-15T00:05:00.000Z\",\
          \"focus_id\":\"{FOCUS_ID}\",\"participant_identity\":\"{PARTICIPANT_IDENTITY}\",\
          \"realm_id\":\"{REALM_ID}\"}}"
     );
@@ -265,8 +265,8 @@ fn signing_input_layout_and_unsigned_metadata() {
     // verifiable: the signature only covers the seven authoritative fields.
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service(&state, ISSUER_KID);
-    let mut binding = signed_binding(&state, "2026-06-15T00:05:00Z");
-    binding["issued_at"] = json!("2000-01-01T00:00:00Z");
+    let mut binding = signed_binding(&state, "2026-06-15T00:05:00.000Z");
+    binding["issued_at"] = json!("2000-01-01T00:00:00.000Z");
     let op = call_state_op(binding);
     assert!(
         validate_operation_semantics(&state, std::slice::from_ref(&op)).is_ok(),

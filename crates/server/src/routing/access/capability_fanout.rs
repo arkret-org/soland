@@ -504,7 +504,7 @@ mod tests {
                     "subject": SUBJECT,
                     "actions": ["ak.message.create"],
                     "resources": [{ "kind": "realm", "realm_id": REALM }],
-                    "issued_at": "2026-01-01T00:00:00Z",
+                    "issued_at": "2026-01-01T00:00:00.000Z",
                     "proofs": [{ "kind": "detached_jws" }]
                 }
             }),

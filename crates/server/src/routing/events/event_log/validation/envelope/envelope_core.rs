@@ -184,8 +184,17 @@ pub(crate) async fn validate_event_envelope_with_context(
 
     let realm_id = event_realm_id(object)?;
     let is_applet_delegated = object.get("applet_id").is_some();
-    validate_applet_delegated_authorization_chain(state, object, &kind, &actor_id, &realm_id)
-        .await?;
+    let is_authorized_internal_adapter =
+        internal_admission.is_some_and(|admission| admission.matches(session, object));
+    // The closed applet provisioning adapter has already verified the installed
+    // registration, ghost namespace and provision request before constructing
+    // this exact signed Event. Its first formal profile Event is authorized by
+    // the accountability-grant Event persisted immediately before it, rather
+    // than by an `ak:grant:*` capability object in the runtime grant index.
+    if !is_authorized_internal_adapter {
+        validate_applet_delegated_authorization_chain(state, object, &kind, &actor_id, &realm_id)
+            .await?;
+    }
     // Round R2/R3 (T07) + Stream-F (Wave 1B) — Realm in terminal state
     // (`ak.realm.tombstone` OR `ak.realm.destroy` applied) refuses every
     // non-audit-class write. Spec `realm-and-space.md` §2.5 / §2.5.1.

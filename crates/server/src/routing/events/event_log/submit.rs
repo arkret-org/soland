@@ -61,7 +61,9 @@ fn stamp_projection_operation_received_at(
     };
     payload.insert(
         "event_received_at".to_owned(),
-        Value::String(received_at.to_rfc3339()),
+        Value::String(arkret_core::canonical::format_timestamp_canonical(
+            received_at,
+        )),
     );
 }
 
@@ -122,7 +124,8 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
 /// Closed authorization context for trusted internal protocol adapters. This
 /// does not skip schema, proof, actor-lock, idempotency or reducer admission;
 /// it only supplies the protocol-specific substitute for ordinary Realm
-/// membership after the adapter has verified its durable binding.
+/// membership (and, for the exact applet-provisioning Event, delegated-grant
+/// lookup) after the adapter has verified its durable binding.
 #[derive(Debug, Clone)]
 pub(in crate::routing) struct InternalEventAdmission {
     realm_id: String,
@@ -142,9 +145,7 @@ enum InternalEventBinding {
         key: String,
     },
     AppletFormal {
-        service_id: String,
-        authorization_ref: Option<String>,
-        signer_key_multibase: String,
+        event_id: String,
     },
     PeerDirectBinding {
         subject_id: String,
@@ -215,9 +216,7 @@ impl InternalEventAdmission {
         realm_id: impl Into<String>,
         actor_id: impl Into<String>,
         kind: impl Into<String>,
-        service_id: impl Into<String>,
-        authorization_ref: Option<String>,
-        signer_key_multibase: impl Into<String>,
+        event_id: impl Into<String>,
     ) -> Self {
         Self {
             realm_id: realm_id.into(),
@@ -225,9 +224,7 @@ impl InternalEventAdmission {
             kind: kind.into(),
             device_id: "applet-service".to_owned(),
             binding: InternalEventBinding::AppletFormal {
-                service_id: service_id.into(),
-                authorization_ref,
-                signer_key_multibase: signer_key_multibase.into(),
+                event_id: event_id.into(),
             },
         }
     }
@@ -278,34 +275,8 @@ impl InternalEventAdmission {
                             && payload.get("key").and_then(Value::as_str) == Some(key.as_str())
                     })
                 }
-                InternalEventBinding::AppletFormal {
-                    service_id,
-                    authorization_ref,
-                    ..
-                } => {
-                    let service_executes = self.actor_id == *service_id
-                        || object.get("executed_by").and_then(Value::as_str)
-                            == Some(service_id.as_str());
-                    let signer_is_service = object
-                        .get("proofs")
-                        .and_then(Value::as_array)
-                        .is_some_and(|proofs| {
-                            proofs.iter().any(|proof| {
-                                proof.get("verification_method").and_then(Value::as_str)
-                                    == Some(service_id.as_str())
-                                    || proof
-                                        .get("verification_method")
-                                        .and_then(Value::as_str)
-                                        .is_some_and(|method| {
-                                            method.starts_with(&format!("{service_id}#"))
-                                        })
-                            })
-                        });
-                    let authorization_matches = authorization_ref.as_ref().is_none_or(|expected| {
-                        object.get("authorization_ref").and_then(Value::as_str)
-                            == Some(expected.as_str())
-                    });
-                    service_executes && signer_is_service && authorization_matches
+                InternalEventBinding::AppletFormal { event_id } => {
+                    object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
                 InternalEventBinding::PeerDirectBinding { subject_id, .. } => object
                     .get("payload")
@@ -347,28 +318,6 @@ impl InternalEventAdmission {
                 && entry.verification_method == verification_method
                 && entry.validate_shape().is_ok()
         })
-    }
-
-    pub(in crate::routing::events::event_log) fn applet_signer_key_multibase(
-        &self,
-        session: &SessionRecord,
-        object: &serde_json::Map<String, Value>,
-        verification_method: &str,
-    ) -> Option<&str> {
-        if !self.matches(session, object) {
-            return None;
-        }
-        let InternalEventBinding::AppletFormal {
-            service_id,
-            signer_key_multibase,
-            ..
-        } = &self.binding
-        else {
-            return None;
-        };
-        (verification_method == service_id
-            || verification_method.starts_with(&format!("{service_id}#")))
-        .then_some(signer_key_multibase.as_str())
     }
 
     pub(in crate::routing::events::event_log) fn authorizes_realm_membership_bypass(
@@ -1352,14 +1301,14 @@ mod received_at_stamp_tests {
                 .payload
                 .get("event_received_at")
                 .and_then(Value::as_str),
-            Some("2026-07-07T05:20:58.398662+00:00")
+            Some("2026-07-07T05:20:58.398Z")
         );
         assert_eq!(
             circle_member_state
                 .payload
                 .get("event_received_at")
                 .and_then(Value::as_str),
-            Some("2026-07-07T05:20:58.398662+00:00")
+            Some("2026-07-07T05:20:58.398Z")
         );
     }
 }

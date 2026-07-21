@@ -292,8 +292,8 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
                 "key_package": URL_SAFE_NO_PAD.encode(keypackage_bytes.as_bytes()),
                 "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
                 "capabilities": capabilities,
-                "expires_at": "2100-01-01T00:00:00Z",
-                "created_at": "2026-05-25T00:00:00Z"
+                "expires_at": "2100-01-01T00:00:00.000Z",
+                "created_at": "2026-05-25T00:00:00.000Z"
             }]
         }))
         .send(&app_from_state(state))

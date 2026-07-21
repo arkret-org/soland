@@ -123,7 +123,7 @@ mod tests {
             "device_id": DEVICE_ID,
             "backup_class": backup_class,
             "backup_version": "kb_1",
-            "created_at": "2026-05-30T00:00:00Z",
+            "created_at": "2026-05-30T00:00:00.000Z",
             "series_id": "ak:backup_series:01964137-0000-7000-8000-000000000001",
             "series_seq": 0,
             "encryption": encryption,
@@ -142,7 +142,7 @@ mod tests {
                     "device_id": DEVICE_ID,
                     "backup_class": backup_class,
                     "backup_version": "kb_1",
-                    "created_at": "2026-05-30T00:00:00Z",
+                    "created_at": "2026-05-30T00:00:00.000Z",
                     "item_types": [item_type]
                 }
             },

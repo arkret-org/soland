@@ -18,7 +18,7 @@ fn event_envelope(event_id: &str, actor: &str, realm_id: &str, payload: Value) -
         "actor_id": actor,
         "actor_seq": 1,
         "realm_id": realm_id,
-        "created_at": "2026-05-02T00:00:00Z",
+        "created_at": "2026-05-02T00:00:00.000Z",
         "hlc": "01970e589d21-0001-a13f9c2e",
         "payload": payload,
         "prev_refs": [],
@@ -31,7 +31,7 @@ fn event_envelope(event_id: &str, actor: &str, realm_id: &str, payload: Value) -
             "alg": "EdDSA",
             "verification_method": format!("{actor}#test"),
             "payload_digest": "",
-            "created_at": "2026-05-02T00:00:00Z",
+            "created_at": "2026-05-02T00:00:00.000Z",
             "jws": "a..b",
         }],
     });
@@ -230,7 +230,9 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
                     "realm_id": demo_realm_id(),
                     "event_kind": "ak.message.create",
                     "sender": "did:web:admin.example",
-                    "created_at": first_received_at.to_rfc3339(),
+                    "created_at": arkret_core::canonical::format_timestamp_canonical(
+                        first_received_at
+                    ),
                     "payload": {"content": {"body": "live anchor"}},
                 }),
             ))

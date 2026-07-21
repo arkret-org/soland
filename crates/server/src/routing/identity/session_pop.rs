@@ -22,8 +22,8 @@
 //! `AuthArgs::authenticated_session`; this hoop only adds the PoP layer.
 
 use arkret_signatures::http_signature::{
-    Component, Ed25519PublicKey, SignatureVerificationPolicy, public_key_from_bytes,
-    verify_signed_http_message,
+    Component, ContentDigest, Ed25519PublicKey, SignatureVerificationPolicy, public_key_from_bytes,
+    verify_content_digest, verify_signed_http_message,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -97,6 +97,9 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
     let jwk = session_signing_key_jwk(state, req, token).await?;
     let (public_key, explicit_kid, thumbprint) = parse_session_jwk(&jwk)?;
 
+    soland_http::http_signature::reject_content_encoding(req, || {
+        AppError::unauthenticated("PoP-signed JSON requests must not use Content-Encoding")
+    })?;
     let body = req
         .payload()
         .await
@@ -107,6 +110,28 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
             )
         })?
         .to_vec();
+    if !body.is_empty() {
+        let content_digest = req
+            .headers()
+            .get("content-digest")
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| {
+                AppError::unauthenticated("PoP-signed request is missing Content-Digest")
+            })?;
+        let content_digest = ContentDigest::parse(content_digest).map_err(|error| {
+            AppError::unauthenticated(format!("PoP Content-Digest is invalid: {error}"))
+        })?;
+        verify_content_digest(&content_digest, &body).map_err(|error| {
+            AppError::unauthenticated(format!(
+                "PoP Content-Digest does not match exact request bytes: {error}"
+            ))
+        })?;
+        arkret_core::canonical::validate_canonical_bytes(&body).map_err(|error| {
+            AppError::unauthenticated(format!(
+                "PoP-signed request body is not canonical JSON: {error}"
+            ))
+        })?;
+    }
 
     let method = req.method().as_str().to_owned();
     let target_uri = signature_target_uri(req, state);

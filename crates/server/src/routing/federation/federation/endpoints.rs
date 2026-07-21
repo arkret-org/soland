@@ -358,7 +358,9 @@ fn local_peer_policy_digest_for_transaction(
                     json!({
                         "realm_id": record.realm_id.as_str(),
                         "payload": record.payload.clone(),
-                        "updated_at": record.updated_at.to_rfc3339(),
+                        "updated_at": arkret_core::canonical::format_timestamp_canonical(
+                            record.updated_at
+                        ),
                     })
                 })
             })
@@ -895,10 +897,7 @@ pub(crate) async fn federation_seals_push(
         )
         .with_wire_code("federation_origin_denied"));
     }
-    let body_value = serde_json::to_value(&body).map_err(|error| {
-        AppError::internal(format!("federation seals push body serialize: {error}"))
-    })?;
-    super::verify_inbound_peer_http_signature(state, req, Some(&body_value)).await?;
+    super::verify_inbound_peer_http_signature(state, req, true).await?;
     //   3. bind every Move the Seal encapsulates (its `delta` entries) to the authenticated origin,
     //      exactly like the sibling `federation_transaction` / `federation_push_operations` tracks
     //      run `federation_actor_origin_acceptable` per operation. A signed peer MUST NOT be able

@@ -346,7 +346,7 @@ mod tests {
     const ORG2: &str = "did:webvh:example.test:orgs:01J0000000000000000000000B";
 
     fn now() -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::parse_from_rfc3339("2026-06-25T12:00:00Z")
+        chrono::DateTime::parse_from_rfc3339("2026-06-25T12:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc)
     }
@@ -369,12 +369,12 @@ mod tests {
             "relationship": relationship,
             "status": "active",
             "control_scopes": scopes,
-            "issued_at": "2026-06-25T00:00:00Z",
+            "issued_at": "2026-06-25T00:00:00.000Z",
             "authorization": {
                 "issuer": org,
                 "issuer_role": "organization_did",
                 "verification_method": format!("{org}#k1"),
-                "signed_at": "2026-06-25T00:00:00Z",
+                "signed_at": "2026-06-25T00:00:00.000Z",
                 "proof": "c2ln"
             }
         })
@@ -510,7 +510,7 @@ mod tests {
     fn expired_statement_is_not_verified() {
         let mut state = ProjectionState::new();
         let mut payload = active_payload(REALM, ORG, "owner", &["realm_admin"]);
-        payload["expires_at"] = json!("2026-06-25T06:00:00Z");
+        payload["expires_at"] = json!("2026-06-25T06:00:00.000Z");
         apply(&mut state, payload);
         // Row stored, but not verified at `now()` (12:00 > 06:00 expiry).
         assert_eq!(
@@ -528,7 +528,7 @@ mod tests {
     fn not_yet_valid_statement_is_not_verified() {
         let mut state = ProjectionState::new();
         let mut payload = active_payload(REALM, ORG, "owner", &["realm_admin"]);
-        payload["not_before"] = json!("2026-06-26T00:00:00Z");
+        payload["not_before"] = json!("2026-06-26T00:00:00.000Z");
         apply(&mut state, payload);
         assert!(
             state
