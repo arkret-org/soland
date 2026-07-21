@@ -412,7 +412,9 @@ pub(crate) fn validate_read_receipt_policy_payload(
             "disclosure"
             | "visibility"
             | "scope_overrides_allowed"
-            | "receipt_compliance_opt_in" => {}
+            | "allow_child_privacy_tightening_against_required"
+            | "allow_public_receipts_on_world_readable"
+            | "allow_forced_public_world_readable_receipts" => {}
             _ => return Err("ak.realm.read_receipt_policy payload has unknown field"),
         }
     }
@@ -428,28 +430,14 @@ pub(crate) fn validate_read_receipt_policy_payload(
             _ => return Err("ak.realm.read_receipt_policy.visibility is invalid"),
         }
     }
-    if payload
-        .get("scope_overrides_allowed")
-        .is_some_and(|value| !value.is_boolean())
-    {
-        return Err("ak.realm.read_receipt_policy boolean field is invalid");
-    }
-    if let Some(opt_in) = payload.get("receipt_compliance_opt_in") {
-        let opt_in = opt_in
-            .as_object()
-            .ok_or("ak.realm.read_receipt_policy receipt_compliance_opt_in is invalid")?;
-        for (field, value) in opt_in {
-            match field.as_str() {
-                "child_privacy_tightening_against_required"
-                | "public_receipts_on_world_readable"
-                | "forced_public_world_readable_receipts"
-                    if value.is_boolean() => {}
-                _ => {
-                    return Err(
-                        "ak.realm.read_receipt_policy receipt_compliance_opt_in is invalid",
-                    );
-                }
-            }
+    for field in [
+        "scope_overrides_allowed",
+        "allow_child_privacy_tightening_against_required",
+        "allow_public_receipts_on_world_readable",
+        "allow_forced_public_world_readable_receipts",
+    ] {
+        if payload.get(field).is_some_and(|value| !value.is_boolean()) {
+            return Err("ak.realm.read_receipt_policy boolean field is invalid");
         }
     }
     Ok(())

@@ -410,9 +410,7 @@ async fn read_receipt_child_policy_allows_required_floor_escape() {
             "disclosure": "required",
             "visibility": "members",
             "scope_overrides_allowed": true,
-            "receipt_compliance_opt_in": {
-                "child_privacy_tightening_against_required": true
-            }
+            "allow_child_privacy_tightening_against_required": true
         }),
     );
 
