@@ -807,6 +807,78 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
 }
 
 #[test]
+fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
+    let mut state = ProjectionState::default();
+    initialize_genesis(&mut state);
+    let frontier = "ak:event:0196419b-0000-7000-8000-00000000d202";
+    let targets = [
+        (
+            "did:web:bob.example",
+            "ak:event:0196419b-0000-7000-8000-00000000d203",
+        ),
+        (
+            "did:web:charlie.example",
+            "ak:event:0196419b-0000-7000-8000-00000000d204",
+        ),
+    ];
+    for (target, proposal_ref) in targets {
+        state.pending_mls_removals.push(MlsRemoveObligation {
+            realm_id: "ak:realm:0196419b-0000-7000-8000-000000000000".to_owned(),
+            circle_id: None,
+            mls_group_ref: Some("ak:mls_group:abc".to_owned()),
+            actor_id: target.to_owned(),
+            device_id: None,
+            membership_frontier: vec![frontier.to_owned()],
+            trigger_membership: "realm_member_remove".to_owned(),
+            triggered_at: Utc.timestamp_opt(500, 0).single().unwrap(),
+        });
+        assert!(matches!(
+            apply_remove_proposal(
+                &mut state,
+                &op_at(
+                    500,
+                    "ak.mls.proposal",
+                    json!({
+                        "event_id": proposal_ref,
+                        "mls_group_id": "ak:mls_group:abc",
+                        "base_epoch": 0,
+                        "proposal_type": "remove",
+                        "proposal_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                        "target_principal_id": target,
+                    }),
+                )
+            ),
+            ProjectionEffect::Mls(MlsEffect::RemoveProposalRecorded { .. })
+        ));
+    }
+    let mut binding = governance_binding(0);
+    binding["membership_frontier"] = json!([frontier]);
+
+    let effect = apply_commit_epoch(
+        &mut state,
+        &op_at(
+            501,
+            "ak.mls.commit",
+            json!({
+                "group_id": "ak:mls_group:abc",
+                "expected_prev_epoch": 0,
+                "next_epoch": 1,
+                "leader_actor_id": "did:web:alice.example",
+                "commit_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "proposal_refs": targets.map(|(_, proposal_ref)| proposal_ref),
+                "governance_binding": binding,
+            }),
+        ),
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 1, .. })
+    ));
+    assert!(state.pending_mls_removals.is_empty());
+}
+
+#[test]
 fn commit_epoch_requires_covered_seals() {
     let mut state = ProjectionState::default();
     let effect = apply_commit_epoch(

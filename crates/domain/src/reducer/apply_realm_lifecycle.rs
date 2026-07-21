@@ -247,6 +247,13 @@ impl ProjectionState {
                 .get("sender")
                 .and_then(Value::as_str)
                 .unwrap_or(member.as_str());
+            self.enqueue_realm_mls_member_removal(
+                &realm_id,
+                &member,
+                new_state.as_str(),
+                remove_membership_frontier.clone().unwrap_or_default(),
+                now,
+            );
             self.cascade_realm_member_removal_to_circles(
                 &realm_id,
                 &member,
@@ -279,6 +286,54 @@ impl ProjectionState {
             realm_id,
             member,
             action: new_state.to_owned(),
+        }
+    }
+
+    /// Queue the cryptographic removal for every Realm-default MLS group.
+    ///
+    /// Realm membership and MLS membership are separate state machines.  The
+    /// accepted `ak.member.state` transition advances the governance frontier;
+    /// it must not silently leave the removed principal in the Realm-default
+    /// MLS group.  Circle obligations are queued separately by
+    /// `cascade_realm_member_removal_to_circles`.
+    fn enqueue_realm_mls_member_removal(
+        &mut self,
+        realm_id: &str,
+        member: &str,
+        trigger_membership: &str,
+        membership_frontier: Vec<String>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        let group_refs = self
+            .mls_commit_epochs
+            .values()
+            .filter(|row| {
+                row.effective_scope.get("kind").and_then(Value::as_str) == Some("realm")
+                    && row.effective_scope.get("realm_id").and_then(Value::as_str) == Some(realm_id)
+            })
+            .map(|row| row.group_id.clone())
+            .collect::<Vec<_>>();
+        for group_ref in group_refs {
+            let duplicate = self.pending_mls_removals.iter().any(|obligation| {
+                obligation.realm_id == realm_id
+                    && obligation.circle_id.is_none()
+                    && obligation.mls_group_ref.as_deref() == Some(group_ref.as_str())
+                    && obligation.actor_id == member
+                    && obligation.membership_frontier == membership_frontier
+            });
+            if duplicate {
+                continue;
+            }
+            self.pending_mls_removals.push(MlsRemoveObligation {
+                realm_id: realm_id.to_owned(),
+                circle_id: None,
+                mls_group_ref: Some(group_ref),
+                actor_id: member.to_owned(),
+                device_id: None,
+                membership_frontier: membership_frontier.clone(),
+                trigger_membership: trigger_membership.to_owned(),
+                triggered_at: now,
+            });
         }
     }
 
@@ -412,6 +467,13 @@ impl ProjectionState {
                 self.cells
                     .insert(cell_id, CellState::Value(Value::String("leave".to_owned())));
             }
+            self.enqueue_realm_mls_member_removal(
+                realm_id,
+                agent_id,
+                "leave",
+                membership_frontier.clone(),
+                now,
+            );
             self.cascade_realm_member_removal_to_circles(
                 realm_id,
                 agent_id,
