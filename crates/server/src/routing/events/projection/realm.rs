@@ -132,17 +132,9 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 asset_privacy_policy_digest,
                 encryption_profile: operation_realm_encryption_profile(operation)
                     .map(ToOwned::to_owned),
-                plaintext_visible_services: operation
-                    .payload
-                    .get("plaintext_visible_services")
-                    .and_then(|value| value.as_array())
-                    .map(|services| {
-                        services
-                            .iter()
-                            .filter_map(|service| service.as_str().map(ToOwned::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                plaintext_visible_services: plaintext_services_from_operation(operation)
+                    .into_iter()
+                    .collect(),
                 plaintext_visible_service_classes: plaintext_service_classes_from_operation(
                     operation,
                 ),

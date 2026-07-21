@@ -147,6 +147,13 @@ mod tests {
         );
 
         let classes = plaintext_service_classes_from_operation(&operation);
+        let services = plaintext_services_from_operation(&operation);
+        assert!(services.iter().any(|candidate| candidate == service));
+        assert!(
+            services
+                .iter()
+                .any(|candidate| candidate == "did:web:legacy.local")
+        );
         assert!(classes[service].contains(&arkret_core::PlaintextDataClassKind::MessageContent));
         assert!(
             classes[service].contains(&arkret_core::PlaintextDataClassKind::NotificationSummary)

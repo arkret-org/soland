@@ -878,6 +878,8 @@ fn collect_plaintext_services_from_value(payload: &Value, services: &mut Vec<Str
         for item in items {
             if let Some(service) = item.as_str() {
                 push_service(service);
+            } else if let Some(service) = item.get("service_id").and_then(Value::as_str) {
+                push_service(service);
             }
         }
     }

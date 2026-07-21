@@ -822,6 +822,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     state: &AppState,
     envelope: &MlsWelcomeClaimEnvelope,
     sender_device_id: Option<&str>,
+    signer_key_evidence: Option<&arkret_core::FederatedDeviceSigningKeyEvidence>,
 ) -> Result<(), &'static str> {
     envelope.validate_signature_shape()?;
     if let Some(alg) = envelope.signature.alg.as_deref()
@@ -839,6 +840,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
                 envelope,
                 requester_device_id.as_str(),
                 sender_device_id,
+                signer_key_evidence,
             )
             .await
         }
@@ -883,11 +885,35 @@ async fn verify_mls_welcome_claim_envelope_device_signature(
     envelope: &MlsWelcomeClaimEnvelope,
     requester_device_id: &str,
     sender_device_id: Option<&str>,
+    signer_key_evidence: Option<&arkret_core::FederatedDeviceSigningKeyEvidence>,
 ) -> Result<(), &'static str> {
     if let Some(sender_device_id) = sender_device_id
         && sender_device_id != requester_device_id
     {
         return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    }
+    if let Some(evidence) = signer_key_evidence {
+        if evidence.validate_shape().is_err()
+            || evidence.actor_id != envelope.requester_did
+            || evidence.device_id.as_str() != requester_device_id
+            || evidence.verification_method != envelope.signature.kid.as_str()
+        {
+            return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        }
+        let device_public_key = evidence
+            .device_signing_key
+            .as_str()
+            .strip_prefix("did:key:")
+            .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        let device_key = decode_ed25519_key(device_public_key, "multibase")
+            .map_err(|_| arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        let signing_bytes = envelope
+            .canonical_signing_bytes()
+            .map_err(|_| arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        if !ed25519_verify(&device_key, &signing_bytes, &envelope.signature.sig) {
+            return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        }
+        return Ok(());
     }
     let record = state
         .identity_application()

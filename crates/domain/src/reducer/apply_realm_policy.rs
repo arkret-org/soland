@@ -22,6 +22,7 @@ impl ProjectionState {
                 | arkret_core::events::EventKind::REALM_HISTORY_VISIBILITY
                 | arkret_core::events::EventKind::REALM_HISTORY_SHARING_POLICY
                 | arkret_core::events::EventKind::REALM_DISCOVERY
+                | arkret_core::events::EventKind::REALM_DELIVERY_BINDING_POLICY
                 | arkret_core::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
         ) {
             return ProjectionEffect::Rejected {

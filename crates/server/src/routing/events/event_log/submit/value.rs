@@ -436,8 +436,22 @@ pub(super) async fn submit_event_value_with_context(
                 reason,
             ));
         }
-        if let Some(reason) =
-            preflight_mls_welcome_claim_signature_reject(state, &parsed.actor_id, operation).await
+        let envelope_object = envelope.as_object().ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "validated Event envelope is not an object",
+            )
+        })?;
+        if let Some(reason) = preflight_mls_welcome_claim_signature_reject(
+            state,
+            session,
+            envelope_object,
+            &parsed.actor_id,
+            operation,
+            internal_admission,
+        )
+        .await
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,

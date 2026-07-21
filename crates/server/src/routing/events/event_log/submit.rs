@@ -991,8 +991,22 @@ pub(crate) async fn submit_federation_events(
             );
             return;
         }
-        for event in &events {
-            if let Err(rejection) = profile_gate.enforce_event(event) {
+        for (index, event) in events.iter().enumerate() {
+            let profile_result = if index == 1
+                && event_string_field_from_value(event, "kind").as_deref()
+                    == Some(arkret_core::events::EventKind::CAPABILITY_GRANT)
+            {
+                // An ordinary Realm bootstrap cannot be federated without its
+                // mandatory founding grant. The bootstrap reducer below
+                // validates the closed grant shape and registry basis; the
+                // peer profile gate must not make that normative unit
+                // impossible merely because federation_minimal does not list
+                // aggregate capability actions as an extension surface.
+                profile_gate.enforce_realm_founding_grant(event)
+            } else {
+                profile_gate.enforce_event(event)
+            };
+            if let Err(rejection) = profile_result {
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,

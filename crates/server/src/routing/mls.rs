@@ -963,43 +963,75 @@ async fn peer_claim_policy_authorized(
     {
         return Ok(false);
     }
-    let scope = "direct_message";
-    let contact = crate::routing::identity::account::accepted_contact_for_pair(
-        state,
-        body.target_principal_id.as_str(),
-        body.requester.as_str(),
-        scope,
-    )
-    .await?;
-    let Some(contact) = contact else {
-        return Ok(false);
-    };
-    if contact.peer_service_id.as_deref() != Some(source_service_id)
-        || !crate::routing::identity::consent::has_active_consent_for_scope(
-            state,
-            body.target_principal_id.as_str(),
-            body.requester.as_str(),
-            scope,
-            now(),
-        )
-    {
-        return Ok(false);
-    }
-    if body.claim_purpose == PeerKeyPackageClaimPurpose::DirectConversation {
-        let trust_domain = arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
-            .map_err(|_| AppError::internal("configured trust_domain is invalid"))?;
-        let expected_pair_key = arkret_core::direct_conversation_pair_key(
-            trust_domain,
-            arkret_core::DirectConversationPairKeyParticipant::unmapped(body.requester.clone()),
-            arkret_core::DirectConversationPairKeyParticipant::unmapped(
-                body.target_principal_id.clone(),
-            ),
-        )
-        .map_err(|_| peer_claim_failed())?;
-        if body.pair_key.as_ref() != Some(&expected_pair_key)
-            || body.allow_last_resort == Some(true)
-        {
-            return Ok(false);
+    match body.claim_purpose {
+        PeerKeyPackageClaimPurpose::RealmMembership => {
+            if !crate::routing::federation::federation::federation_actor_origin_acceptable(
+                state,
+                body.requester.as_str(),
+                source_service_id,
+                body.intended_realm_id.as_str(),
+            )
+            .await
+            {
+                return Ok(false);
+            }
+            let projection = state.projection.lock();
+            let is_participant = |actor_id: &str| {
+                projection
+                    .member(body.intended_realm_id.as_str(), actor_id)
+                    .is_some_and(|member| member.state == "join")
+                    || projection
+                        .realm_states
+                        .get(body.intended_realm_id.as_str())
+                        .and_then(|realm| realm.owner.as_deref())
+                        == Some(actor_id)
+            };
+            if !is_participant(body.requester.as_str())
+                || !is_participant(body.target_principal_id.as_str())
+            {
+                return Ok(false);
+            }
+        }
+        PeerKeyPackageClaimPurpose::DirectConversation => {
+            let scope = "direct_message";
+            let contact = crate::routing::identity::account::accepted_contact_for_pair(
+                state,
+                body.target_principal_id.as_str(),
+                body.requester.as_str(),
+                scope,
+            )
+            .await?;
+            let Some(contact) = contact else {
+                return Ok(false);
+            };
+            if contact.peer_service_id.as_deref() != Some(source_service_id)
+                || !crate::routing::identity::consent::has_active_consent_for_scope(
+                    state,
+                    body.target_principal_id.as_str(),
+                    body.requester.as_str(),
+                    scope,
+                    now(),
+                )
+            {
+                return Ok(false);
+            }
+            let trust_domain =
+                arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
+                    .map_err(|_| AppError::internal("configured trust_domain is invalid"))?;
+            let expected_pair_key = arkret_core::direct_conversation_pair_key(
+                trust_domain,
+                arkret_core::DirectConversationPairKeyParticipant::unmapped(body.requester.clone()),
+                arkret_core::DirectConversationPairKeyParticipant::unmapped(
+                    body.target_principal_id.clone(),
+                ),
+            )
+            .map_err(|_| peer_claim_failed())?;
+            if body.pair_key.as_ref() != Some(&expected_pair_key)
+                || body.allow_last_resort == Some(true)
+                || body.strand_id.is_none()
+            {
+                return Ok(false);
+            }
         }
     }
     Ok(true)
