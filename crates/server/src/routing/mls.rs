@@ -546,7 +546,7 @@ async fn peer_claim_keypackage(
 
     // Service authentication is deliberately first so an unauthenticated
     // caller cannot probe whether a target principal or KeyPackage exists.
-    crate::routing::events::peer::validate_peer_request(state, req, Some(&body_value)).await?;
+    crate::routing::events::peer::validate_peer_request(state, req, true).await?;
     let transport = peer_claim_transport_binding(state, req)?;
     let source_service_id = transport.source_service_id.as_str().to_owned();
     let claim_request_id = body.claim_request_id.as_str();
@@ -739,7 +739,7 @@ async fn peer_query_keypackage_claim(
         .map_err(|_| AppError::bad_json("invalid peer KeyPackage claim query body"))?;
     let body_value = serde_json::to_value(&body)
         .map_err(|error| AppError::internal(format!("peer claim query serialize: {error}")))?;
-    crate::routing::events::peer::validate_peer_request(state, req, Some(&body_value)).await?;
+    crate::routing::events::peer::validate_peer_request(state, req, true).await?;
     body.validate_shape()
         .map_err(|error| peer_claim_schema_violation(error.to_string()))?;
     let transport = peer_claim_transport_binding(state, req)?;
