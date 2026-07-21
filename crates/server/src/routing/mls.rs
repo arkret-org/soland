@@ -737,8 +737,6 @@ async fn peer_query_keypackage_claim(
         .parse_json::<PeerKeyPackagesClaimQueryRequestBody>()
         .await
         .map_err(|_| AppError::bad_json("invalid peer KeyPackage claim query body"))?;
-    let body_value = serde_json::to_value(&body)
-        .map_err(|error| AppError::internal(format!("peer claim query serialize: {error}")))?;
     crate::routing::events::peer::validate_peer_request(state, req, true).await?;
     body.validate_shape()
         .map_err(|error| peer_claim_schema_violation(error.to_string()))?;

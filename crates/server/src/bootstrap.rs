@@ -457,6 +457,7 @@ fn stored_external_identity_from_outcome(
     outcome
         .validate_for(registration_key)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let now = arkret_core::canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let stored = StoredServiceIdentity {
         identity: LocalServiceIdentity {
             service_id: outcome.service_id,
@@ -466,11 +467,11 @@ fn stored_external_identity_from_outcome(
             active_signing_key_ref: material.signing_key_ref.clone(),
             control_key_ref: material.control_key_ref.clone(),
             version_id: outcome.version_id,
-            last_verified_at: chrono::Utc::now(),
+            last_verified_at: now,
         },
         did_document: outcome.did_document,
         registration_receipt: outcome.registration_receipt,
-        stored_at: chrono::Utc::now(),
+        stored_at: now,
     };
     validate_external_stored_identity(&stored, provider, material)?;
     Ok(stored)
@@ -635,7 +636,7 @@ async fn ensure_identity_bundle(
         identity: stored.clone(),
         webvh_history: vec![inception],
         receipt_chain: vec![stored.registration_receipt.clone()],
-        exported_at: chrono::Utc::now(),
+        exported_at: arkret_core::canonical::normalize_timestamp_canonical(chrono::Utc::now()),
     };
     backend
         .store(&bundle)
@@ -841,6 +842,7 @@ fn stored_identity_from_outcome(
         .map_err(|error| anyhow::anyhow!("stored service registration is invalid: {error}"))?;
     let signing_key_ref = signing_key_ref(config, &outcome.service_id, key_store)?;
     let generation = webvh_version_number(&outcome.version_id)?;
+    let now = arkret_core::canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let identity = LocalServiceIdentity {
         service_id: outcome.service_id,
         registration_key,
@@ -849,13 +851,13 @@ fn stored_identity_from_outcome(
         active_signing_key_ref: signing_key_ref,
         control_key_ref: control_key_ref(&outcome.did_document.id, generation)?,
         version_id: outcome.version_id,
-        last_verified_at: chrono::Utc::now(),
+        last_verified_at: now,
     };
     let stored = StoredServiceIdentity {
         identity,
         did_document: outcome.did_document,
         registration_receipt: outcome.registration_receipt,
-        stored_at: chrono::Utc::now(),
+        stored_at: now,
     };
     stored
         .validate()
@@ -1109,7 +1111,7 @@ async fn mint_local_service_identity(
             identity: stored.clone(),
             webvh_history: vec![request.inception_operation],
             receipt_chain: vec![stored.registration_receipt.clone()],
-            exported_at: chrono::Utc::now(),
+            exported_at: arkret_core::canonical::normalize_timestamp_canonical(chrono::Utc::now()),
         };
         backend.store(&bundle).map_err(|error| {
             anyhow::anyhow!("persisting service identity bundle failed: {error}")
