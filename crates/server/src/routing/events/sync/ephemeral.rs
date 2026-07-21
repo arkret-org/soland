@@ -449,22 +449,26 @@ async fn admit_ephemeral_read_receipt(
         arkret_models_collaboration::objects::read_receipts::ReadReceiptVisibility::Public => {
             let history_visibility = realm_history_visibility_for_id(state, realm_id).await;
             if history_visibility == "world_readable"
-                && !policy.allow_public_receipts_on_world_readable
+                && !policy
+                    .receipt_compliance_opt_in
+                    .public_receipts_on_world_readable
             {
                 return Err(soland_http::error::AppError::new(
                     soland_http::error::ErrorCode::PolicyViolation,
-                    "read_receipt_policy.visibility=public is rejected for world_readable history unless allow_public_receipts_on_world_readable=true",
+                    "read_receipt_policy.visibility=public is rejected for world_readable history unless receipt_compliance_opt_in.public_receipts_on_world_readable=true",
                 )
                 .with_status(StatusCode::FORBIDDEN)
                 .with_wire_code("read_receipt_visibility_combination_invalid"));
             }
             if history_visibility == "world_readable"
                 && policy.disclosure == arkret_models_collaboration::objects::read_receipts::ReadReceiptDisclosure::Required
-                && !policy.allow_forced_public_world_readable_receipts
+                && !policy
+                    .receipt_compliance_opt_in
+                    .forced_public_world_readable_receipts
             {
                 return Err(soland_http::error::AppError::new(
                     soland_http::error::ErrorCode::PolicyViolation,
-                    "read_receipt_policy.disclosure=required with visibility=public is rejected for world_readable history unless allow_forced_public_world_readable_receipts=true",
+                    "read_receipt_policy.disclosure=required with visibility=public is rejected for world_readable history unless receipt_compliance_opt_in.forced_public_world_readable_receipts=true",
                 )
                 .with_status(StatusCode::FORBIDDEN)
                 .with_wire_code("read_receipt_forced_public_world_readable_forbidden"));

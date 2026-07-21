@@ -173,7 +173,7 @@ fn policy_decision_transcript_bytes(
     request: &PolicyCheckRequestBody,
     response: &PolicyCheckOutcome,
 ) -> Vec<u8> {
-    let expires_at = response.expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let expires_at = arkret_core::canonical::format_timestamp_canonical(response.expires_at);
     let transcript = PolicyDecisionTranscript {
         kind: "ak.policy.check.transcript.v1",
         request_id: request.request_id.as_str(),

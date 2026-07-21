@@ -24,41 +24,11 @@ use crate::state::AppState;
 /// cas-register conflict semantics writes should go through Move/Seal.
 pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     let realm_id = operation.realm_id.clone();
-    let payload = match operation.payload.as_object() {
-        Some(payload) => payload,
-        None => return,
-    };
-    let disclosure = payload
-        .get("disclosure")
-        .and_then(|v| v.as_str())
-        .unwrap_or("optional")
-        .to_owned();
-    let visibility = payload
-        .get("visibility")
-        .and_then(|v| v.as_str())
-        .unwrap_or("members")
-        .to_owned();
-    // Default `true` is spec-mandated (discovery/read-receipts.md §2.5, default
-    // column). Unlike the adjacent `allow_*` escape switches (which can breach
-    // the compliance floor and so fail closed at `false`), this flag only lets a
-    // Circle declare an independently *stricter* policy — loosening is rejected
-    // by the reducer regardless of its value, so `true` is directionally safe.
-    let scope_overrides_allowed = payload
-        .get("scope_overrides_allowed")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let allow_child_privacy_tightening_against_required = payload
-        .get("allow_child_privacy_tightening_against_required")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let allow_public_receipts_on_world_readable = payload
-        .get("allow_public_receipts_on_world_readable")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let allow_forced_public_world_readable_receipts = payload
-        .get("allow_forced_public_world_readable_receipts")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let policy: arkret_core::ReadReceiptPolicy =
+        match serde_json::from_value(operation.payload.clone()) {
+            Ok(policy) => policy,
+            Err(_) => return,
+        };
 
     // Synthesize a CellState::Value at the canonical cell ref. This lets
     // the cells-map fast-path serve reads without scanning the durable
@@ -70,14 +40,10 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         Ok(c) => c,
         Err(_) => return,
     };
-    let value = serde_json::json!({
-        "disclosure": disclosure,
-        "visibility": visibility,
-        "scope_overrides_allowed": scope_overrides_allowed,
-        "allow_child_privacy_tightening_against_required": allow_child_privacy_tightening_against_required,
-        "allow_public_receipts_on_world_readable": allow_public_receipts_on_world_readable,
-        "allow_forced_public_world_readable_receipts": allow_forced_public_world_readable_receipts,
-    });
+    let value = match serde_json::to_value(policy) {
+        Ok(value) => value,
+        Err(_) => return,
+    };
     {
         let mut proj = state.projection.lock();
         proj.cells

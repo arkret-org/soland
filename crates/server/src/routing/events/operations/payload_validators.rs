@@ -407,39 +407,8 @@ pub(crate) fn validate_read_receipt_policy_payload(
     if payload.is_empty() {
         return Err("ak.realm.read_receipt_policy payload must set at least one field");
     }
-    for field in payload.keys() {
-        match field.as_str() {
-            "disclosure"
-            | "visibility"
-            | "scope_overrides_allowed"
-            | "allow_child_privacy_tightening_against_required"
-            | "allow_public_receipts_on_world_readable"
-            | "allow_forced_public_world_readable_receipts" => {}
-            _ => return Err("ak.realm.read_receipt_policy payload has unknown field"),
-        }
-    }
-    if let Some(disclosure) = payload.get("disclosure") {
-        match disclosure.as_str() {
-            Some("required" | "optional" | "disabled") => {}
-            _ => return Err("ak.realm.read_receipt_policy.disclosure is invalid"),
-        }
-    }
-    if let Some(visibility) = payload.get("visibility") {
-        match visibility.as_str() {
-            Some("public" | "members" | "private") => {}
-            _ => return Err("ak.realm.read_receipt_policy.visibility is invalid"),
-        }
-    }
-    for field in [
-        "scope_overrides_allowed",
-        "allow_child_privacy_tightening_against_required",
-        "allow_public_receipts_on_world_readable",
-        "allow_forced_public_world_readable_receipts",
-    ] {
-        if payload.get(field).is_some_and(|value| !value.is_boolean()) {
-            return Err("ak.realm.read_receipt_policy boolean field is invalid");
-        }
-    }
+    serde_json::from_value::<arkret_core::ReadReceiptPolicy>(wire_payload)
+        .map_err(|_| "ak.realm.read_receipt_policy payload violates SDK artifact schema")?;
     Ok(())
 }
 

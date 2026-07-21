@@ -417,7 +417,9 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "claim_purpose": "direct_conversation",
             "required_capabilities": ["ak.mls.rfc9420"],
             "claim_nonce": claim_nonce,
-            "expires_at": (Utc::now() + chrono::Duration::minutes(4)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "expires_at": arkret_core::canonical::format_timestamp_canonical(
+                Utc::now() + chrono::Duration::minutes(4)
+            ),
             "minimal_metadata_allowed": true,
             "timeout_ms": 5000,
             "strand_id": strand_id,
@@ -431,7 +433,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "verification_method": verification_method,
             "requester_device_id": ALICE_SIGNING_DEVICE,
             "device_authorize_event_id": "ak:event:01904100-0000-7000-8000-a11ce00000bb",
-            "signed_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "signed_at": arkret_core::canonical::format_timestamp_canonical(Utc::now()),
             "signature": {"kid": verification_method, "alg": "EdDSA", "sig": "AA"}
         }))
         .unwrap();

@@ -109,8 +109,10 @@ async fn submit_read_receipt_policy(
             "disclosure": disclosure,
             "visibility": visibility,
             "scope_overrides_allowed": true,
-            "allow_public_receipts_on_world_readable": allow_public_world_readable,
-            "allow_forced_public_world_readable_receipts": allow_forced_public_world_readable
+            "receipt_compliance_opt_in": {
+                "public_receipts_on_world_readable": allow_public_world_readable,
+                "forced_public_world_readable_receipts": allow_forced_public_world_readable
+            }
         }),
     )
     .await

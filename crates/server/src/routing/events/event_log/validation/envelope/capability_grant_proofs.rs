@@ -156,7 +156,7 @@ mod tests {
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
                 "match_scope": "realm_wide"
             }],
-            "issued_at": "2026-07-21T08:00:00Z",
+            "issued_at": "2026-07-21T08:00:00.000Z",
             "proofs": []
         }))
         .expect("grant fixture");
@@ -165,7 +165,7 @@ mod tests {
             alg: "EdDSA".to_owned(),
             verification_method,
             payload_digest: grant.payload_digest().expect("grant digest"),
-            created_at: chrono::DateTime::parse_from_rfc3339("2026-07-21T08:00:00Z")
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-07-21T08:00:00.000Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
             domain: None,

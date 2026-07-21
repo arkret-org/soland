@@ -263,9 +263,9 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         message_payload,
     );
     let event_id = message_op.operation_id.to_string();
-    message_op.created_at = joined_at
+    message_op.created_at = (joined_at + chrono::TimeDelta::seconds(1))
         .with_nanosecond(0)
-        .expect("joined_at can be rounded to canonical seconds");
+        .expect("post-join message time can be rounded to canonical seconds");
     crate::routing::accept_local_operations(&state, alice, std::slice::from_ref(&message_op))
         .await
         .unwrap();
