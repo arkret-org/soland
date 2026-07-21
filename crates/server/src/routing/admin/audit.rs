@@ -11,7 +11,7 @@
 //! `append_audit_log` — internal helper used everywhere a side-effect needs
 //! to be recorded (auth, Realm lifecycle, message send, federation, etc.).
 //!
-//! All of it backs onto `state.audit_store()`.
+//! All persistence access is mediated by `GovernanceApplicationService`.
 
 use std::collections::BTreeMap;
 
@@ -308,8 +308,8 @@ async fn audit_events(
             return Err(AppError::not_found("audit realm not found"));
         }
         state
-            .audit_store()
-            .snapshot_all()
+            .governance_application()
+            .audit_entries()
             .await
             .map_err(|error| {
                 tracing::error!(%error, "failed to read audit log");
@@ -328,8 +328,8 @@ async fn audit_events(
             ));
         }
         state
-            .audit_store()
-            .list_for_actor(&actor)
+            .governance_application()
+            .audit_entries_for_actor(&actor)
             .await
             .map_err(|error| {
                 tracing::error!(%error, "failed to read audit log");

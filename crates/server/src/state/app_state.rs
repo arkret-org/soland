@@ -872,10 +872,6 @@ impl AppState {
         self.persistence.account_localparts()
     }
 
-    pub(crate) fn audit_store(&self) -> &dyn soland_storage::AuditStore {
-        self.persistence.audit()
-    }
-
     pub(crate) fn retention_tombstones_store(
         &self,
     ) -> &dyn soland_storage::RetentionTombstoneStore {
@@ -2230,6 +2226,10 @@ impl soland_application::governance::AuditLogPort for PersistenceAuditLog {
     async fn append(&self, entry: Value) -> soland_application::ApplicationResult<()> {
         self.0.audit().append(entry).await?;
         Ok(())
+    }
+
+    async fn entries(&self) -> soland_application::ApplicationResult<Vec<Value>> {
+        Ok(self.0.audit().snapshot_all().await?)
     }
 
     async fn entries_for_actor(

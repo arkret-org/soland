@@ -720,14 +720,14 @@ async fn events_frontier(
             crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
                 state,
                 &session.actor,
-                &realm_value,
+                realm_value,
             )
             .await?;
         let accessible = realm_value == &own_pcr
             || managed_agent_pcr
             || crate::routing::spaces::space::realm_id_accessible(
                 state,
-                &realm_value,
+                realm_value,
                 Some(&session),
             )
             .await;

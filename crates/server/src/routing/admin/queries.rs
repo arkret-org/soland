@@ -370,8 +370,8 @@ pub(super) async fn admin_query_audit(
     };
 
     let mut entries: Vec<AdminAuditEntry> = state
-        .audit_store()
-        .snapshot_all()
+        .governance_application()
+        .audit_entries()
         .await
         .map_err(|error| {
             tracing::error!(%error, "failed to read audit log");

@@ -324,7 +324,11 @@ pub(super) async fn admin_list_delivery_binding_handovers(
         .with_status(StatusCode::BAD_REQUEST));
     }
 
-    let entries = state.audit_store().snapshot_all().await.unwrap_or_default();
+    let entries = state
+        .governance_application()
+        .audit_entries()
+        .await
+        .unwrap_or_default();
     let mut data: Vec<DeliveryBindingHandoverRowOutcome> = entries
         .into_iter()
         .filter(|entry| audit_entry_is_handover_for_realm(entry, &realm_id))

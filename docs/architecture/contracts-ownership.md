@@ -1,6 +1,6 @@
 # Soland contracts 类型所有权登记
 
-本表记录阶段 0 对改名前公共 DTO 的逐项审计。审计范围包括
+本表记录阶段 0 及后续新增公共 DTO 的逐项审计。审计范围包括
 `arkret-spec/spec/v1/artifacts`、`arkret-rust-sdk` 的公开 wire 类型以及真实跨仓消费者。
 结论是：这些类型均未命中 Arkret spec wire 定义，属于部署本地的管理面或集成契约，
 因此保留在 `soland-contracts`；没有需要迁回 SDK 的本地重复定义。
@@ -9,6 +9,26 @@
 | --- | --- | --- | --- | --- |
 | `admin::covered_seals` | `CoveredSealsSnapshot` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::covered_seals` | `CoveredSealsAdvanceOutcome` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
+| `admin::handles` | `AdminHandleRecord` | local contract | Soland、Sodmin | 部署本地 handle 管理投影；未命中 spec wire 类型 |
+| `admin::handles` | `AdminHandleAuditEvent` | local contract | Soland、Sodmin | 部署本地 handle 审计投影；未命中 spec wire 类型 |
+| `admin::handles` | `AdminHandleListOutcome` | local contract | Soland、Sodmin | 部署本地 handle 列表 envelope；未命中 spec wire 类型 |
+| `admin::handles` | `AdminHandleAuditListOutcome` | local contract | Soland、Sodmin | 部署本地 handle 审计列表 envelope；未命中 spec wire 类型 |
+| `admin::handles` | `AdminHandleReassignBody` | local contract | Soland、Sodmin | 部署本地 handle 管理命令；未命中 spec wire 类型 |
+| `admin::handles` | `AdminHandleRevokeBody` | local contract | Soland、Sodmin | 部署本地 handle 管理命令；未命中 spec wire 类型 |
+| `admin::device_signing_directory` | `DeviceSigningKeyDirectoryQueryRequestBody` | local contract | Soland、Coauth | 产品间 signing-key directory 查询；字段复用 SDK 类型，整体未命中 spec wire 类型 |
+| `admin::device_signing_directory` | `AuthorizedDeviceSigningKey` | local contract | Soland、Coauth | 产品间 signing-key directory 投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
+| `admin::device_signing_directory` | `DeviceSigningKeyDirectoryOutcome` | local contract | Soland、Coauth | 产品间 signing-key directory 响应；字段复用 SDK 类型，整体未命中 spec wire 类型 |
+| `admin::invite_tokens` | `CreateInviteTokenRequest` | local contract | Soland、Sodmin | 部署本地邀请令牌管理命令；未命中 spec wire 类型 |
+| `admin::invite_tokens` | `AdminInviteTokenItem` | local contract | Soland、Sodmin | 部署本地邀请令牌管理投影；未命中 spec wire 类型 |
+| `admin::queries` | `AdminActor` | local contract | Soland、Sodmin | `/_soland/admin` 操作面投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
+| `admin::queries` | `AdminActorList` | local contract | Soland、Sodmin | `/_soland/admin` 操作面列表 envelope；未命中 spec wire 类型 |
+| `admin::queries` | `AdminAuditEntry` | local contract | Soland、Sodmin | `/_soland/admin` 操作面审计投影；未命中 spec wire 类型 |
+| `admin::queries` | `AdminAuditList` | local contract | Soland、Sodmin | `/_soland/admin` 操作面列表 envelope；未命中 spec wire 类型 |
+| `admin::queries` | `CapabilityGrantState` | local contract | Soland、Sodmin | `/_soland/admin` 操作面枚举；未命中 spec wire 类型 |
+| `admin::queries` | `CapabilitySummary` | local contract | Soland、Sodmin | `/_soland/admin` 操作面投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
+| `admin::queries` | `AdminCapabilityList` | local contract | Soland、Sodmin | `/_soland/admin` 操作面列表 envelope；未命中 spec wire 类型 |
+| `admin::queries` | `AdminDevice` | local contract | Soland、Sodmin | `/_soland/admin` 操作面投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
+| `admin::queries` | `AdminDeviceList` | local contract | Soland、Sodmin | `/_soland/admin` 操作面列表 envelope；未命中 spec wire 类型 |
 | `admin::seal` | `NotaryKind` | local contract | Soland、Sodmin | SDK 有领域 notary 值，但无此管理面投影视图 |
 | `admin::seal` | `AdminNotaryValue` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `SelfSignViolation` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |

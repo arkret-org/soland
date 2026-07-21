@@ -247,7 +247,11 @@ async fn get_handle_audit(
     let record = handle_record_by_id(state, &handle_id).await?;
     let handle_at = record.aliases.first().cloned().unwrap_or_default();
 
-    let entries = state.audit_store().snapshot_all().await.unwrap_or_default();
+    let entries = state
+        .governance_application()
+        .audit_entries()
+        .await
+        .unwrap_or_default();
     let mut data: Vec<AdminHandleAuditEvent> = entries
         .into_iter()
         .filter(|entry| audit_entry_mentions_handle(entry, &handle_id, &handle_at))

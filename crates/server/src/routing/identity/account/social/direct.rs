@@ -2087,7 +2087,6 @@ pub(super) fn direct_member_join_operation(
     let mut payload = direct_member_join_payload(realm_scope.clone(), member)?;
     if let Some(recipient_service_id) = contact
         .and_then(|contact| contact.peer_service_id.as_deref())
-        .as_deref()
         .filter(|service_id| *service_id != state.service_id)
     {
         let service_acceptance_ref = contact

@@ -330,7 +330,7 @@ async fn submit_event(
         })
         .unwrap_or_default();
     assert!(
-        actor_seq >= accepted_seq + 1,
+        actor_seq > accepted_seq,
         "fixture-requested actor_seq must not precede the accepted frontier"
     );
     let event = signed_event_with_prev_refs(
