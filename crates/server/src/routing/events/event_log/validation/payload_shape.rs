@@ -120,6 +120,18 @@ pub(super) fn validate_realm_create_policy_constraints(
         .get("history_visibility")
         .and_then(Value::as_str)
         .unwrap_or("joined");
+    if object.get("encryption_profile").and_then(Value::as_str) == Some("mls_rfc9420")
+        && let Err(reason) = arkret_core::validate_history_visibility_content_scheme_values(
+            history_visibility,
+            object.get("content_scheme").and_then(Value::as_str),
+        )
+    {
+        return Err(event_validation_error(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            reason,
+        ));
+    }
     if history_visibility == "restricted"
         && !is_self_principal_pcr_bootstrap_create
         && object
@@ -239,5 +251,27 @@ mod tests {
             true,
         )
         .expect("strict SDK-validated PCR bootstrap is exactly two slots");
+    }
+
+    #[test]
+    fn mls_world_readable_realm_requires_history_capable_content_scheme() {
+        let payload = json!({
+            "object": {
+                "history_visibility": "world_readable",
+                "encryption_profile": "mls_rfc9420"
+            }
+        });
+        let error = validate_realm_create_policy_constraints(
+            arkret_core::events::EventKind::REALM_CREATE,
+            &payload,
+            false,
+        )
+        .expect_err("strict MLS content cannot expose pre-join history");
+        assert_eq!(error.status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(error.code, "failed_precondition");
+        assert_eq!(
+            error.message,
+            arkret_core::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        );
     }
 }

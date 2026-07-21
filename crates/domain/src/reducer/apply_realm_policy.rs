@@ -891,17 +891,6 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        if let Err(reason) = parent_capability_grants_allow(
-            self,
-            source_realm_id,
-            &allowed_policies,
-            &allowed_capability_bundles,
-        ) {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-
         if let Ok(cell_id) = arkret_core::CellRef::new(format!(
             "ak:cell:ak.component.realm.inheritance_policy.v1:{realm_id}"
         )) {

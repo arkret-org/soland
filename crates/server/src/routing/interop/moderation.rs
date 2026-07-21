@@ -8,8 +8,6 @@
 //!   authoritative in the reducer (`soland_domain::reducer::apply_moderation`), surfaced at ingest
 //!   by the moderation projection preflight.
 
-use std::time::Duration;
-
 use arkret_core::models::EffectiveScope;
 use arkret_core::{
     Did, EventId, FrankingProof, FrankingProofEventTimeAnchor, Hash,
@@ -582,6 +580,31 @@ const FRANKING_PROOF_FORBIDDEN_KEYS: &[&str] = &[
     "epoch",
 ];
 
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct ModerationAppealSubmitRequestBody {
+    /// The `ak.moderation.decision` event being appealed.
+    pub decision_ref: String,
+    /// The original moderation target (message / strand / blob / etc.).
+    pub target_ref: String,
+    /// Realm whose decision is being appealed. MUST equal the
+    /// authenticated session's home realm.
+    pub realm_id: String,
+    /// Reference to (or inline string for) the appeal narrative.
+    pub reason_text_ref: String,
+    /// Optional supporting evidence refs.
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    /// Optional override of the default `reviewers_only` visibility.
+    #[serde(default)]
+    pub evidence_visibility: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct ModerationAppealSubmitOutcome {
+    pub appeal_id: String,
+    pub state: String,
+}
+
 #[endpoint(
     operation_id = "ak.self.moderation.command.report",
     tags("moderation"),
@@ -643,7 +666,6 @@ async fn moderation_report(
     // Internal assignment keeps the `<did>#moderation` role form; the wire
     // `routed_to` carries bare DIDs only (spec pattern forbids fragments).
     let moderation_role = format!("{}#moderation", state.service_id);
-    let audit_policy = audit_disclosure_policy_for_realm(state, body.realm_id.as_str()).await;
     let mut report_fields = serde_json::Map::new();
     report_fields.insert("report_id".to_owned(), json!(report_id));
     report_fields.insert("realm_id".to_owned(), json!(realm_id));
@@ -714,8 +736,6 @@ async fn moderation_report(
         "submitted",
     )
     .await;
-    let audit_agent_id =
-        notify_audit_agent_for_report(state, audit_policy.as_ref(), &report_payload).await;
     let mut routed_to = Vec::new();
     if moderation_routing_visible_to_actor(state, &realm_id, &session.actor).await {
         match validate_did(&state.service_id) {
@@ -724,18 +744,6 @@ async fn moderation_report(
                 service_id = %state.service_id,
                 "service_id is not a valid bare DID; omitted from routed_to"
             ),
-        }
-        if let Some(audit_agent_id) = audit_agent_id {
-            // `routed_to` is spec-constrained to bare DIDs; the audit-agent
-            // principal id may come from an external identity response, so it
-            // only rides the wire when it parses as a DID.
-            match validate_did(&audit_agent_id) {
-                Ok(did) => routed_to.push(did),
-                Err(_) => tracing::warn!(
-                    %audit_agent_id,
-                    "audit agent principal id is not a bare DID; omitted from routed_to"
-                ),
-            }
         }
     }
     json_ok(ModerationReportOutcome {
@@ -867,381 +875,6 @@ async fn moderation_routing_visible_to_actor(
             )
             .allowed
     })
-}
-
-async fn notify_audit_agent_for_report(
-    state: &AppState,
-    policy: Option<&Value>,
-    report_payload: &Value,
-) -> Option<String> {
-    let policy = policy?;
-    if policy.get("enabled").and_then(Value::as_bool) == Some(false)
-        || policy.get("trigger").and_then(Value::as_str) != Some("report_filed")
-    {
-        return None;
-    }
-    let agent_url = policy.get("agent_url").and_then(Value::as_str)?.trim();
-    if agent_url.is_empty() {
-        return None;
-    }
-    let agent_url = agent_url.trim_end_matches('/');
-    // SOL-03-002: all audit-agent calls target the same `agent_url`
-    // host. Build one client that pins the validated IPs (egress check and
-    // connection resolve to the same addresses), closing the DNS-rebinding
-    // TOCTOU window; the remaining URL is validated against the same
-    // egress policy and ride the same pinned host.
-    let (identity_url, client) =
-        match crate::security::validate_http_url_for_egress_with_pinned_client(
-            &format!("{agent_url}/_soland/audit-agent/identity"),
-            "audit agent identity",
-            state.config.development_mode,
-            Duration::from_secs(3),
-        ) {
-            Ok(pair) => pair,
-            Err(error) => {
-                tracing::warn!(%error, "audit agent identity request denied by egress policy");
-                return None;
-            }
-        };
-    let events_url = match crate::security::validate_http_url_for_egress(
-        &format!("{agent_url}/_soland/audit-agent/events"),
-        "audit agent events",
-        state.config.development_mode,
-    ) {
-        Ok(url) => url,
-        Err(error) => {
-            tracing::warn!(%error, "audit agent events request denied by egress policy");
-            return None;
-        }
-    };
-    let identity = match client.get(identity_url).send().await {
-        Ok(response) if response.status().is_success() => {
-            response.json::<Value>().await.unwrap_or(Value::Null)
-        }
-        _ => Value::Null,
-    };
-    let audit_agent_id = identity
-        .get("did")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            policy
-                .get("audit_agent_id")
-                .and_then(Value::as_str)
-        })
-        .or_else(|| policy.get("agent_id").and_then(Value::as_str))
-        // did:webvh-only red line: sentinel default for a missing audit agent
-        // is never a did:web literal.
-        .unwrap_or("did:webvh:audit-agent.unknown")
-        .to_owned();
-    let realm_id = report_payload
-        .get("realm_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let report_id = report_payload
-        .get("report_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    audit_plaintext_release_withheld_for_report(state, policy, report_payload, &audit_agent_id)
-        .await;
-
-    let event_body = json!({
-        "kind": "org.arkret.soland.audit.report",
-        "event": report_payload,
-        "disclosure": {
-            "plaintext_release": false,
-            "history_key_release": false,
-            "sealed_decision_required": true,
-        },
-    });
-    match client.post(events_url).json(&event_body).send().await {
-        Ok(response) if response.status().is_success() => {
-            if let Ok(body) = response.json::<Value>().await {
-                append_audit_log(
-                    state,
-                    None,
-                    "org.arkret.soland.audit.report",
-                    json!({
-                        "realm_id": realm_id,
-                        "report_id": report_id,
-                        "audit_agent_id": audit_agent_id,
-                    }),
-                    "accepted",
-                )
-                .await;
-                append_agent_accessed_if_present(state, &audit_agent_id, report_payload, &body)
-                    .await;
-            }
-        }
-        Ok(response) => {
-            append_audit_log(
-                state,
-                None,
-                "org.arkret.soland.audit.report",
-                json!({
-                    "realm_id": realm_id,
-                    "report_id": report_id,
-                    "audit_agent_id": audit_agent_id,
-                    "status": response.status().as_u16(),
-                }),
-                "failed",
-            )
-            .await
-        }
-        Err(error) => {
-            append_audit_log(
-                state,
-                None,
-                "org.arkret.soland.audit.report",
-                json!({
-                    "realm_id": realm_id,
-                    "report_id": report_id,
-                    "audit_agent_id": audit_agent_id,
-                    "error": error.to_string(),
-                }),
-                "failed",
-            )
-            .await
-        }
-    }
-    Some(audit_agent_id)
-}
-
-async fn audit_plaintext_release_withheld_for_report(
-    state: &AppState,
-    policy: &Value,
-    report_payload: &Value,
-    audit_agent_id: &str,
-) {
-    let requested = policy
-        .get("release_plaintext_on_report")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || policy
-            .get("release_history_key_on_report")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        || policy
-            .get("plaintext_release")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-    if !requested {
-        return;
-    }
-    append_audit_log(
-        state,
-        None,
-        "org.arkret.soland.audit.plaintext_release",
-        json!({
-            "kind": "org.arkret.soland.audit.plaintext_release",
-            "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
-            "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
-            "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
-            "audit_agent_id": audit_agent_id,
-            "reason_code": "sealed_decision_required",
-        }),
-        "withheld",
-    )
-    .await;
-}
-
-async fn append_agent_accessed_if_present(
-    state: &AppState,
-    audit_agent_id: &str,
-    report_payload: &Value,
-    response_body: &Value,
-) {
-    let Some(emitted) = response_body.get("emitted") else {
-        return;
-    };
-    if !is_plaintext_release_emission(emitted) {
-        return;
-    }
-    if !sealed_plaintext_release_authorized(emitted) {
-        append_audit_log(
-            state,
-            None,
-            "org.arkret.soland.audit.plaintext_release",
-            json!({
-                "kind": "org.arkret.soland.audit.plaintext_release",
-                "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
-                "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
-                "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
-                "audit_agent_id": audit_agent_id,
-                "reason_code": "sealed_decision_required",
-            }),
-            "failed_closed",
-        )
-        .await;
-        return;
-    }
-    append_audit_log(
-        state,
-        Some(audit_agent_id),
-        "ak.audit.accessed",
-        json!({
-            "kind": "ak.audit.accessed",
-            "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
-            "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
-            "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
-            "audit_agent_id": audit_agent_id,
-            "access_kind": "e2ee_plaintext_release",
-            "purpose": "moderation_report",
-            "accessed_at": emitted.get("occurred_at").cloned().unwrap_or_else(|| json!(now())),
-            "binding_proof": emitted.get("binding_proof").cloned().unwrap_or(Value::Null),
-            "emitted": emitted,
-        }),
-        "accepted",
-    )
-    .await;
-}
-
-fn is_plaintext_release_emission(emitted: &Value) -> bool {
-    emitted
-        .get("access_kind")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            emitted
-                .pointer("/payload/access_kind")
-                .and_then(Value::as_str)
-        })
-        == Some("e2ee_plaintext_release")
-}
-
-fn sealed_plaintext_release_authorized(emitted: &Value) -> bool {
-    let Some(object) = emitted.as_object() else {
-        return false;
-    };
-    if !is_plaintext_release_emission(emitted) {
-        return false;
-    }
-    let sealed = object
-        .get("sealed")
-        .and_then(Value::as_bool)
-        .or_else(|| {
-            object
-                .get("sealed_decision")
-                .and_then(Value::as_object)
-                .and_then(|decision| decision.get("sealed"))
-                .and_then(Value::as_bool)
-        })
-        .unwrap_or(false);
-    let decision_ref = object
-        .get("sealed_decision_ref")
-        .and_then(Value::as_str)
-        .or_else(|| object.get("decision_ref").and_then(Value::as_str))
-        .or_else(|| {
-            object
-                .get("sealed_decision")
-                .and_then(Value::as_object)
-                .and_then(|decision| decision.get("decision_ref"))
-                .and_then(Value::as_str)
-        })
-        .filter(|value| value.starts_with("ak:event:") || value.starts_with("ak:decision:"));
-    let proof = object
-        .get("binding_proof")
-        .and_then(Value::as_str)
-        .or_else(|| object.get("seal_ref").and_then(Value::as_str))
-        .or_else(|| {
-            object
-                .get("sealed_decision")
-                .and_then(Value::as_object)
-                .and_then(|decision| decision.get("seal_ref"))
-                .and_then(Value::as_str)
-        })
-        .filter(|value| !value.trim().is_empty());
-    sealed && decision_ref.is_some() && proof.is_some()
-}
-
-/// Resolve the effective `audit_disclosure_policy` for a Realm.
-///
-/// The create-time policy (`ak.realm.create`) is the baseline. Subsequent
-/// `ak.realm.update` events MAY carry an `audit_disclosure_policy` in their
-/// object patch; the latest such patch wins (cas-register semantics), so an
-/// admin can revoke or narrow the policy after the fact (audited-e2ee.md §3.1
-/// — admins MAY suspend / revoke a binding). A revoke is expressed by an
-/// update whose patch sets `audit_disclosure_policy.enabled = false`; once the
-/// resolved policy reports `enabled == false`, `notify_audit_agent_for_report`
-/// refuses to invite the audit agent for any later report, while historical
-/// `ak.audit.accessed` records stay in the durable audit log.
-async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
-    let mut records = state.events_store().snapshot_all().await.ok()?;
-    // Fold in chronological order so the latest create/update wins regardless
-    // of the backing store's natural iteration order.
-    records.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
-    let mut policy: Option<Value> = None;
-    for record in records {
-        if record.realm_id.as_deref() != Some(realm_id) {
-            continue;
-        }
-        if record.kind == arkret_core::events::EventKind::REALM_CREATE {
-            if let Some(found) = record
-                .envelope
-                .pointer("/payload/object/audit_disclosure_policy")
-                .or_else(|| record.envelope.pointer("/payload/audit_disclosure_policy"))
-                .cloned()
-            {
-                policy = Some(found);
-            }
-        } else if record.kind == arkret_core::events::EventKind::REALM_UPDATE
-            && let Some(found) = record
-                .envelope
-                .pointer("/payload/patch/audit_disclosure_policy")
-                .or_else(|| {
-                    record
-                        .envelope
-                        .pointer("/payload/patch/object/audit_disclosure_policy")
-                })
-                .or_else(|| record.envelope.pointer("/payload/audit_disclosure_policy"))
-                .map(unwrap_realm_update_patch_value)
-        {
-            policy = Some(found);
-        }
-    }
-    policy
-}
-
-/// A `ak.realm.update` patch entry MAY be either a direct value
-/// (`audit_disclosure_policy: { ... }`) or a `$op` register form
-/// (`audit_disclosure_policy: { "$op": "set", "value": { ... } }`), matching
-/// the realm-lifecycle reducer's patch handling. Unwrap the latter to the
-/// embedded value; pass any other shape through unchanged.
-fn unwrap_realm_update_patch_value(value: &Value) -> Value {
-    if let Value::Object(object) = value
-        && object.get("$op").and_then(Value::as_str) == Some("set")
-        && let Some(inner) = object.get("value")
-    {
-        return inner.clone();
-    }
-    value.clone()
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct ModerationAppealSubmitRequestBody {
-    /// The `ak.moderation.decision` event being appealed.
-    pub decision_ref: String,
-    /// The original moderation target (message / strand / blob / etc.).
-    pub target_ref: String,
-    /// Realm whose decision is being appealed. MUST equal the
-    /// authenticated session's home realm.
-    pub realm_id: String,
-    /// Reference to (or inline string for) the appeal narrative.
-    pub reason_text_ref: String,
-    /// Optional supporting evidence refs.
-    #[serde(default)]
-    pub evidence_refs: Vec<String>,
-    /// Optional override of the default `reviewers_only` visibility.
-    #[serde(default)]
-    pub evidence_visibility: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct ModerationAppealSubmitOutcome {
-    pub appeal_id: String,
-    pub state: String,
 }
 
 #[endpoint(
@@ -1548,28 +1181,5 @@ mod report_safety_tests {
             error.wire_code(),
             arkret_core::error::ReasonCode::PROOF_INVALID
         );
-    }
-
-    #[test]
-    fn plaintext_release_audit_requires_sealed_decision_boundary() {
-        assert!(!is_plaintext_release_emission(&json!({
-            "access_kind": "report_ack",
-        })));
-        assert!(!sealed_plaintext_release_authorized(&json!({
-            "access_kind": "e2ee_plaintext_release",
-            "decision_ref": "ak:event:01904100-0000-7000-8000-000000000999",
-            "binding_proof": "proof",
-        })));
-        assert!(!sealed_plaintext_release_authorized(&json!({
-            "access_kind": "e2ee_plaintext_release",
-            "sealed": true,
-            "binding_proof": "proof",
-        })));
-        assert!(sealed_plaintext_release_authorized(&json!({
-            "access_kind": "e2ee_plaintext_release",
-            "sealed": true,
-            "sealed_decision_ref": "ak:event:01904100-0000-7000-8000-000000000999",
-            "binding_proof": "proof",
-        })));
     }
 }

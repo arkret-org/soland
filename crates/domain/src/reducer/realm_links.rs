@@ -136,13 +136,8 @@ pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> Ef
         // tombstoning or rejecting the underlying link severs the
         // inheritance even if the inheritance_policy declaration is
         // still on file.
-        for p in &own_decl.allowed_policies {
-            allowed_policies.insert(p.clone());
-        }
-        for b in &own_decl.allowed_capability_bundles {
-            allowed_capability_bundles.insert(b.clone());
-        }
-        let has_active_link_to_source = own_decl.source_realm_id != realm_id
+        let source_is_self = own_decl.source_realm_id == realm_id;
+        let has_active_link_to_source = !source_is_self
             && state
                 .realm_links
                 .get(realm_id)
@@ -157,6 +152,14 @@ pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> Ef
                     })
                 })
                 .unwrap_or(false);
+        if source_is_self || has_active_link_to_source {
+            for p in &own_decl.allowed_policies {
+                allowed_policies.insert(p.clone());
+            }
+            for b in &own_decl.allowed_capability_bundles {
+                allowed_capability_bundles.insert(b.clone());
+            }
+        }
         if has_active_link_to_source {
             chain.push(own_decl.source_realm_id.clone());
 
@@ -661,6 +664,22 @@ mod tests {
         let allow_strs: Vec<&str> = allow.iter().filter_map(Value::as_str).collect();
         assert!(allow_strs.contains(&"child.policy"));
         assert!(allow_strs.contains(&"parent.policy"));
+    }
+
+    #[test]
+    fn effective_policy_drops_cross_realm_rules_when_link_is_rejected() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        state.apply(&link_op(REALM_D, REALM_C, "governed_by", "active"), &hlc);
+        state.apply(&inherit_op(REALM_D, REALM_C, &["child.policy"]), &hlc);
+        state.apply(&link_op(REALM_D, REALM_C, "governed_by", "rejected"), &hlc);
+
+        let ep = effective_policy_for_realm(&state, REALM_D);
+        assert!(ep.inheritance_chain.is_empty());
+        assert_eq!(
+            ep.effective_policy.get("allowed_policies"),
+            Some(&serde_json::json!([]))
+        );
     }
 
     #[test]
