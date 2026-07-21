@@ -184,7 +184,7 @@ pub fn apply_keypackage_publish(
         ssk_generation: trust_binding.ssk_generation,
         device_authorize_event_id: trust_binding.device_authorize_event_id,
         claimed_at: None,
-        claim_expires_at: None,
+        claim_expires_at_unix_ms: None,
         consumed_at: None,
         created_at,
     };
@@ -270,16 +270,18 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
             row.last_resort_realm_id = Some(realm_id.to_owned());
         }
     } else {
-        let claim_expires_at = payload
-            .get("claim_expires_at")
+        let claim_expires_at_unix_ms = payload
+            .get("claim_expires_at_unix_ms")
             .and_then(Value::as_i64)
-            .unwrap_or(row.lifetime.not_after);
-        if claim_expires_at <= claimed_at || claim_expires_at > row.lifetime.not_after {
+            .unwrap_or_else(|| row.lifetime.not_after.saturating_mul(1000));
+        if claim_expires_at_unix_ms <= claimed_at.saturating_mul(1000)
+            || claim_expires_at_unix_ms > row.lifetime.not_after.saturating_mul(1000)
+        {
             return reject(arkret_core::ReasonCode::KEYPACKAGE_EXPIRED);
         }
         row.claimed_by = Some(group_id.to_owned());
         row.claimed_at = Some(claimed_at);
-        row.claim_expires_at = Some(claim_expires_at);
+        row.claim_expires_at_unix_ms = Some(claim_expires_at_unix_ms);
         row.consumed_at = None;
     }
 

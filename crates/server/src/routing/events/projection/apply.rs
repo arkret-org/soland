@@ -76,7 +76,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 ssk_generation: kp.ssk_generation,
                 device_authorize_event_id: kp.device_authorize_event_id,
                 claimed_at: kp.claimed_at,
-                claim_expires_at: kp.claim_expires_at,
+                claim_expires_at_unix_ms: kp.claim_expires_at_unix_ms,
                 consumed_at: kp.consumed_at,
                 created_at: kp.created_at,
             });
@@ -104,7 +104,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     *claimed_at,
                     operation
                         .payload
-                        .get("claim_expires_at")
+                        .get("claim_expires_at_unix_ms")
                         .and_then(Value::as_i64),
                 )
                 .await

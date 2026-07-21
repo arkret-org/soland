@@ -42,7 +42,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         ssk_generation: Option<u64>,
         device_authorize_event_id: Option<&str>,
         claimed_at: i64,
-        claim_expires_at: Option<i64>,
+        claim_expires_at_unix_ms: Option<i64>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut state = self.state.lock();
         let Some(row) = state.rows.get_mut(id) else {
@@ -53,8 +53,9 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         }
         if group_id != "revoked"
             && (claimed_at >= row.lifetime_not_after
-                || claim_expires_at.is_some_and(|expires_at| {
-                    expires_at <= claimed_at || expires_at > row.lifetime_not_after
+                || claim_expires_at_unix_ms.is_some_and(|expires_at_unix_ms| {
+                    expires_at_unix_ms <= claimed_at.saturating_mul(1000)
+                        || expires_at_unix_ms > row.lifetime_not_after.saturating_mul(1000)
                 }))
         {
             return Ok(None);
@@ -91,7 +92,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         }
         row.claimed_by_mls_group_id = Some(group_id.to_owned());
         row.claimed_at = Some(claimed_at);
-        row.claim_expires_at = claim_expires_at;
+        row.claim_expires_at_unix_ms = claim_expires_at_unix_ms;
         row.consumed_at = None;
         Ok(Some(row.clone()))
     }
@@ -110,8 +111,10 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             || row.claimed_by_mls_group_id.as_deref() != Some(mls_group_id)
             || row.consumed_at.is_some()
             || row
-                .claim_expires_at
-                .is_some_and(|expires_at| consumed_at >= expires_at)
+                .claim_expires_at_unix_ms
+                .is_some_and(|expires_at_unix_ms| {
+                    consumed_at.saturating_mul(1000) >= expires_at_unix_ms
+                })
         {
             return Ok(None);
         }
@@ -151,8 +154,8 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
         }
         if attempt.claimed_at >= row.lifetime_not_after
-            || attempt.claim_expires_at <= attempt.claimed_at
-            || attempt.claim_expires_at > row.lifetime_not_after
+            || attempt.claim_expires_at_unix_ms <= attempt.claimed_at.saturating_mul(1000)
+            || attempt.claim_expires_at_unix_ms > row.lifetime_not_after.saturating_mul(1000)
         {
             return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
         }
@@ -167,7 +170,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         }
         row.claimed_by_mls_group_id = Some(attempt.mls_group_id.to_owned());
         row.claimed_at = Some(attempt.claimed_at);
-        row.claim_expires_at = Some(attempt.claim_expires_at);
+        row.claim_expires_at_unix_ms = Some(attempt.claim_expires_at_unix_ms);
         row.consumed_at = None;
         let claimed = row.clone();
         state.peer_claims.insert(ledger_key, attempt.ledger.clone());
@@ -192,7 +195,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         Ok(PeerKeyPackageClaimLedgerWriteResult::Inserted)
     }
 
-    async fn revoke_expired_peer_claims(&self, now: i64) -> PersistenceResult<Vec<String>> {
+    async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> PersistenceResult<Vec<String>> {
         let mut state = self.state.lock();
         let expired = state
             .peer_claims
@@ -200,8 +203,8 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             .filter_map(|(key, ledger)| {
                 (ledger.state == "claimed"
                     && ledger
-                        .claim_expires_at
-                        .is_some_and(|expires_at| expires_at <= now))
+                        .claim_expires_at_unix_ms
+                        .is_some_and(|expires_at_unix_ms| expires_at_unix_ms <= now_unix_ms))
                 .then(|| (key.clone(), ledger.keypackage_id.clone()))
             })
             .collect::<Vec<_>>();
@@ -222,7 +225,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             }
             if let Some(ledger) = state.peer_claims.get_mut(&ledger_key) {
                 ledger.state = "revoked".to_owned();
-                ledger.updated_at = now;
+                ledger.updated_at = now_unix_ms.div_euclid(1000);
             }
             revoked.push(keypackage_id);
         }
@@ -433,7 +436,7 @@ mod tests {
             ssk_generation: Some(1),
             device_authorize_event_id: None,
             claimed_at: None,
-            claim_expires_at: None,
+            claim_expires_at_unix_ms: None,
             consumed_at: None,
             created_at: 1,
         }
@@ -448,7 +451,7 @@ mod tests {
             state: "claimed".to_owned(),
             outcome: Some(serde_json::json!({"winner": outcome})),
             keypackage_id: Some(outcome.to_owned()),
-            claim_expires_at: Some(i64::MAX - 1),
+            claim_expires_at_unix_ms: Some(i64::MAX - 1),
             expires_at: i64::MAX,
             updated_at: 10,
         }
@@ -468,7 +471,7 @@ mod tests {
                 ssk_generation: Some(1),
                 device_authorize_event_id: None,
                 claimed_at: 10,
-                claim_expires_at: i64::MAX - 1,
+                claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &first_ledger,
             }),
             store.try_claim_peer(PeerKeyPackageClaimAttempt {
@@ -477,7 +480,7 @@ mod tests {
                 ssk_generation: Some(1),
                 device_authorize_event_id: None,
                 claimed_at: 10,
-                claim_expires_at: i64::MAX - 1,
+                claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &second_ledger,
             })
         );
@@ -518,7 +521,7 @@ mod tests {
                 ssk_generation: Some(1),
                 device_authorize_event_id: None,
                 claimed_at: 10,
-                claim_expires_at: i64::MAX - 1,
+                claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &ledger,
             })
             .await
@@ -544,10 +547,10 @@ mod tests {
 
         let mut expired_ledger = ledger("kp-expired");
         expired_ledger.claim_request_id = "BBBBBBBBBBBBBBBBBBBBBB".to_owned();
-        expired_ledger.claim_expires_at = Some(20);
+        expired_ledger.claim_expires_at_unix_ms = Some(20_000);
         let mut consumed_ledger = ledger("kp-consumed");
         consumed_ledger.claim_request_id = "CCCCCCCCCCCCCCCCCCCCCC".to_owned();
-        consumed_ledger.claim_expires_at = Some(20);
+        consumed_ledger.claim_expires_at_unix_ms = Some(20_000);
 
         for (id, group, ledger) in [
             ("kp-expired", "group-expired", &expired_ledger),
@@ -561,7 +564,7 @@ mod tests {
                         ssk_generation: Some(1),
                         device_authorize_event_id: None,
                         claimed_at: 10,
-                        claim_expires_at: 20,
+                        claim_expires_at_unix_ms: 20_000,
                         ledger,
                     })
                     .await
@@ -576,7 +579,7 @@ mod tests {
             .expect("consume before claim deadline");
 
         assert_eq!(
-            store.revoke_expired_peer_claims(20).await.unwrap(),
+            store.revoke_expired_peer_claims(20_000).await.unwrap(),
             vec!["kp-expired".to_owned()]
         );
         assert_eq!(

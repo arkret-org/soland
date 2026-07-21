@@ -31,7 +31,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
               capabilities, capabilities_digest, device_signature, last_resort, \
               last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
               claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
-              claim_expires_at, consumed_at, created_at) \
+              claim_expires_at_unix_ms, consumed_at, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
              ON CONFLICT (id) DO NOTHING",
         )
@@ -52,7 +52,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<Nullable<Text>, _>(&record.device_authorize_event_id)
         .bind::<Nullable<BigInt>, _>(record.claimed_at)
-        .bind::<Nullable<BigInt>, _>(record.claim_expires_at)
+        .bind::<Nullable<BigInt>, _>(record.claim_expires_at_unix_ms)
         .bind::<Nullable<BigInt>, _>(record.consumed_at)
         .bind::<BigInt, _>(record.created_at)
         .execute(&mut *conn)
@@ -69,7 +69,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
-             claim_expires_at, consumed_at, created_at \
+             claim_expires_at_unix_ms, consumed_at, created_at \
              FROM mls_key_packages WHERE id = $1",
         )
         .bind::<Text, _>(id)
@@ -88,7 +88,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         ssk_generation: Option<u64>,
         device_authorize_event_id: Option<&str>,
         claimed_at: i64,
-        claim_expires_at: Option<i64>,
+        claim_expires_at_unix_ms: Option<i64>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut conn = pg_conn(&self.pool)
             .await
@@ -101,7 +101,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                  ssk_generation = COALESCE($4, ssk_generation), \
                  device_authorize_event_id = COALESCE($5, device_authorize_event_id), \
                  claimed_at = CASE WHEN last_resort AND $2 <> 'revoked' THEN claimed_at ELSE $6 END, \
-                 claim_expires_at = CASE WHEN last_resort AND $2 <> 'revoked' THEN claim_expires_at ELSE $7 END, \
+                 claim_expires_at_unix_ms = CASE WHEN last_resort AND $2 <> 'revoked' THEN claim_expires_at_unix_ms ELSE $7 END, \
                  consumed_at = CASE WHEN $2 = 'revoked' THEN consumed_at ELSE NULL END \
              WHERE id = $1 \
                AND (claimed_by_mls_group_id IS NULL OR claimed_by_mls_group_id <> 'revoked') \
@@ -109,13 +109,13 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                AND ($4 IS NULL OR ssk_generation = $4) \
                AND ($5 IS NULL OR device_authorize_event_id = $5) \
                AND ($2 = 'revoked' OR (lifetime_not_after > $6 \
-                    AND ($7 IS NULL OR ($7 > $6 AND $7 <= lifetime_not_after)))) \
+                    AND ($7 IS NULL OR ($7 > $6 * 1000 AND $7 <= lifetime_not_after * 1000)))) \
                AND ((NOT last_resort) OR $2 = 'revoked' OR (last_resort_realm_id IS NULL AND $3 IS NOT NULL) OR last_resort_realm_id = $3) \
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
-             claim_expires_at, consumed_at, created_at",
+             claim_expires_at_unix_ms, consumed_at, created_at",
         )
         .bind::<Text, _>(id)
         .bind::<Text, _>(group_id)
@@ -123,7 +123,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<Nullable<Text>, _>(device_authorize_event_id)
         .bind::<BigInt, _>(claimed_at)
-        .bind::<Nullable<BigInt>, _>(claim_expires_at)
+        .bind::<Nullable<BigInt>, _>(claim_expires_at_unix_ms)
         .get_result::<MlsKeyPackagePgRow>(&mut *conn)
         .await
         .optional()
@@ -146,12 +146,12 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              WHERE id = $1 AND NOT last_resort \
                AND claimed_by_mls_group_id = $2 \
                AND consumed_at IS NULL \
-               AND (claim_expires_at IS NULL OR claim_expires_at > $3) \
+               AND (claim_expires_at_unix_ms IS NULL OR claim_expires_at_unix_ms > $3 * 1000) \
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
-             claim_expires_at, consumed_at, created_at",
+             claim_expires_at_unix_ms, consumed_at, created_at",
         )
         .bind::<Text, _>(id)
         .bind::<Text, _>(mls_group_id)
@@ -197,26 +197,26 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 }
                 let claimed = sql_query(
                     "UPDATE mls_key_packages \
-                 SET claimed_by_mls_group_id = $2, claimed_at = $5, claim_expires_at = $6, consumed_at = NULL \
+                 SET claimed_by_mls_group_id = $2, claimed_at = $5, claim_expires_at_unix_ms = $6, consumed_at = NULL \
                  WHERE id = $1 \
                    AND NOT last_resort \
                    AND claimed_by_mls_group_id IS NULL \
                    AND ($3 IS NULL OR ssk_generation = $3) \
                    AND ($4 IS NULL OR device_authorize_event_id = $4) \
                    AND lifetime_not_after > $5 \
-                   AND $6 > $5 AND $6 <= lifetime_not_after \
+                   AND $6 > $5 * 1000 AND $6 <= lifetime_not_after * 1000 \
                  RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
                  key_package_bytes, capabilities, capabilities_digest, device_signature, \
                  last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
                  claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
-                 claim_expires_at, consumed_at, created_at",
+                 claim_expires_at_unix_ms, consumed_at, created_at",
                 )
                 .bind::<Text, _>(attempt.keypackage_id)
                 .bind::<Text, _>(attempt.mls_group_id)
                 .bind::<Nullable<BigInt>, _>(ssk_generation)
                 .bind::<Nullable<Text>, _>(attempt.device_authorize_event_id)
                 .bind::<BigInt, _>(attempt.claimed_at)
-                .bind::<BigInt, _>(attempt.claim_expires_at)
+                .bind::<BigInt, _>(attempt.claim_expires_at_unix_ms)
                 .get_result::<MlsKeyPackagePgRow>(conn)
                 .await
                 .optional()
@@ -270,7 +270,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         Ok(PeerKeyPackageClaimLedgerWriteResult::Existing(existing))
     }
 
-    async fn revoke_expired_peer_claims(&self, now: i64) -> PersistenceResult<Vec<String>> {
+    async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> PersistenceResult<Vec<String>> {
         #[derive(QueryableByName)]
         struct RevokedKeyPackageId {
             #[diesel(sql_type = Text)]
@@ -285,7 +285,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 "WITH expired AS ( \
                    SELECT source_service_id, claim_request_id, keypackage_id \
                    FROM peer_keypackage_claims \
-                   WHERE state = 'claimed' AND claim_expires_at <= $1 \
+                   WHERE state = 'claimed' AND claim_expires_at_unix_ms <= $1 \
                  ), revoked AS ( \
                    UPDATE mls_key_packages kp \
                    SET claimed_by_mls_group_id = 'revoked' \
@@ -295,14 +295,14 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                    RETURNING kp.id \
                  ) \
                  UPDATE peer_keypackage_claims ledger \
-                 SET state = 'revoked', updated_at = $1 \
+                 SET state = 'revoked', updated_at = $1 / 1000 \
                  FROM expired e, revoked r \
                  WHERE ledger.source_service_id = e.source_service_id \
                    AND ledger.claim_request_id = e.claim_request_id \
                    AND e.keypackage_id = r.id \
                  RETURNING r.id",
             )
-            .bind::<BigInt, _>(now)
+            .bind::<BigInt, _>(now_unix_ms)
             .load::<RevokedKeyPackageId>(conn)
             .await
             .map_err(PersistenceError::database)?;
@@ -321,7 +321,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
-             claim_expires_at, consumed_at, created_at \
+             claim_expires_at_unix_ms, consumed_at, created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
         .load::<MlsKeyPackagePgRow>(&mut *conn)
@@ -345,7 +345,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
-             claim_expires_at, consumed_at, created_at \
+             claim_expires_at_unix_ms, consumed_at, created_at \
              FROM mls_key_packages WHERE claimed_by_mls_group_id = $1 \
              ORDER BY claimed_at ASC NULLS FIRST, id ASC",
         )
@@ -363,7 +363,7 @@ async fn insert_peer_claim(
 ) -> Result<usize, diesel::result::Error> {
     sql_query(
         "INSERT INTO peer_keypackage_claims \
-         (source_service_id, claim_request_id, request_digest, state, outcome, keypackage_id, claim_expires_at, expires_at, updated_at) \
+         (source_service_id, claim_request_id, request_digest, state, outcome, keypackage_id, claim_expires_at_unix_ms, expires_at, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
          ON CONFLICT (source_service_id, claim_request_id) DO NOTHING",
     )
@@ -373,7 +373,7 @@ async fn insert_peer_claim(
     .bind::<Text, _>(&record.state)
     .bind::<Nullable<Jsonb>, _>(&record.outcome)
     .bind::<Nullable<Text>, _>(&record.keypackage_id)
-    .bind::<Nullable<BigInt>, _>(record.claim_expires_at)
+    .bind::<Nullable<BigInt>, _>(record.claim_expires_at_unix_ms)
     .bind::<BigInt, _>(record.expires_at)
     .bind::<BigInt, _>(record.updated_at)
     .execute(conn)
@@ -386,7 +386,7 @@ async fn insert_peer_claim_strict(
 ) -> Result<(), diesel::result::Error> {
     sql_query(
         "INSERT INTO peer_keypackage_claims \
-         (source_service_id, claim_request_id, request_digest, state, outcome, keypackage_id, claim_expires_at, expires_at, updated_at) \
+         (source_service_id, claim_request_id, request_digest, state, outcome, keypackage_id, claim_expires_at_unix_ms, expires_at, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind::<Text, _>(&record.source_service_id)
@@ -395,7 +395,7 @@ async fn insert_peer_claim_strict(
     .bind::<Text, _>(&record.state)
     .bind::<Nullable<Jsonb>, _>(&record.outcome)
     .bind::<Nullable<Text>, _>(&record.keypackage_id)
-    .bind::<Nullable<BigInt>, _>(record.claim_expires_at)
+    .bind::<Nullable<BigInt>, _>(record.claim_expires_at_unix_ms)
     .bind::<BigInt, _>(record.expires_at)
     .bind::<BigInt, _>(record.updated_at)
     .execute(conn)
@@ -409,7 +409,7 @@ async fn load_peer_claim(
     claim_request_id: &str,
 ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
     sql_query(
-        "SELECT source_service_id, claim_request_id, request_digest, state, outcome, keypackage_id, claim_expires_at, expires_at, updated_at \
+        "SELECT source_service_id, claim_request_id, request_digest, state, outcome, keypackage_id, claim_expires_at_unix_ms, expires_at, updated_at \
          FROM peer_keypackage_claims \
          WHERE source_service_id = $1 AND claim_request_id = $2",
     )
@@ -702,7 +702,7 @@ struct MlsKeyPackagePgRow {
     #[diesel(sql_type = Nullable<BigInt>)]
     claimed_at: Option<i64>,
     #[diesel(sql_type = Nullable<BigInt>)]
-    claim_expires_at: Option<i64>,
+    claim_expires_at_unix_ms: Option<i64>,
     #[diesel(sql_type = Nullable<BigInt>)]
     consumed_at: Option<i64>,
     #[diesel(sql_type = BigInt)]
@@ -724,7 +724,7 @@ struct PeerKeyPackageClaimPgRow {
     #[diesel(sql_type = Nullable<Text>)]
     keypackage_id: Option<String>,
     #[diesel(sql_type = Nullable<BigInt>)]
-    claim_expires_at: Option<i64>,
+    claim_expires_at_unix_ms: Option<i64>,
     #[diesel(sql_type = BigInt)]
     expires_at: i64,
     #[diesel(sql_type = BigInt)]
@@ -740,7 +740,7 @@ impl From<PeerKeyPackageClaimPgRow> for PeerKeyPackageClaimLedgerRecord {
             state: row.state,
             outcome: row.outcome,
             keypackage_id: row.keypackage_id,
-            claim_expires_at: row.claim_expires_at,
+            claim_expires_at_unix_ms: row.claim_expires_at_unix_ms,
             expires_at: row.expires_at,
             updated_at: row.updated_at,
         }
@@ -769,7 +769,7 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
                 .filter(|generation| *generation >= 1),
             device_authorize_event_id: row.device_authorize_event_id,
             claimed_at: row.claimed_at,
-            claim_expires_at: row.claim_expires_at,
+            claim_expires_at_unix_ms: row.claim_expires_at_unix_ms,
             consumed_at: row.consumed_at,
             created_at: row.created_at,
         }

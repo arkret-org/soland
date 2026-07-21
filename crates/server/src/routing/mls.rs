@@ -621,7 +621,10 @@ async fn peer_claim_keypackage(
             .values()
             .filter(|keypackage| !keypackage.last_resort)
             .filter(|keypackage| keypackage.claimed_by.is_none())
-            .filter(|keypackage| keypackage.lifetime.not_after >= body.expires_at.timestamp())
+            .filter(|keypackage| {
+                keypackage.lifetime.not_after.saturating_mul(1000)
+                    >= body.expires_at.timestamp_millis()
+            })
             .filter(|keypackage| {
                 keypackage_matches_claim(
                     keypackage,
@@ -659,7 +662,7 @@ async fn peer_claim_keypackage(
         }
         predicted.claimed_by_mls_group_id = Some(body.mls_group_id.as_str().to_owned());
         predicted.claimed_at = Some(now_secs);
-        predicted.claim_expires_at = Some(body.expires_at.timestamp());
+        predicted.claim_expires_at_unix_ms = Some(body.expires_at.timestamp_millis());
         predicted.consumed_at = None;
         let outcome = build_peer_claim_outcome(
             state,
@@ -678,7 +681,7 @@ async fn peer_claim_keypackage(
             state: "claimed".to_owned(),
             outcome: Some(outcome_value),
             keypackage_id: Some(candidate_id.clone()),
-            claim_expires_at: Some(body.expires_at.timestamp()),
+            claim_expires_at_unix_ms: Some(body.expires_at.timestamp_millis()),
             expires_at: (body.expires_at + chrono::Duration::minutes(10)).timestamp(),
             updated_at: now_secs,
         };
@@ -690,7 +693,7 @@ async fn peer_claim_keypackage(
                 ssk_generation: binding.ssk_generation,
                 device_authorize_event_id: binding.device_authorize_event_id.as_deref(),
                 claimed_at: now_secs,
-                claim_expires_at: body.expires_at.timestamp(),
+                claim_expires_at_unix_ms: body.expires_at.timestamp_millis(),
                 ledger: &ledger,
             })
             .await
@@ -705,7 +708,7 @@ async fn peer_claim_keypackage(
                 {
                     projected.claimed_by = Some(body.mls_group_id.as_str().to_owned());
                     projected.claimed_at = Some(now_secs);
-                    projected.claim_expires_at = Some(body.expires_at.timestamp());
+                    projected.claim_expires_at_unix_ms = Some(body.expires_at.timestamp_millis());
                     projected.consumed_at = None;
                 }
                 debug_assert_eq!(claimed.id, candidate_id);
@@ -1151,7 +1154,7 @@ async fn record_peer_claim_failed(
         state: "claim_failed".to_owned(),
         outcome: None,
         keypackage_id: None,
-        claim_expires_at: None,
+        claim_expires_at_unix_ms: None,
         expires_at: (body.expires_at + chrono::Duration::minutes(10)).timestamp(),
         updated_at: timestamp,
     };
@@ -1194,7 +1197,7 @@ fn replay_peer_claim(
 async fn revoke_expired_peer_claims(state: &AppState) -> Result<(), AppError> {
     let revoked = state
         .mls_key_packages_store()
-        .revoke_expired_peer_claims(now().timestamp())
+        .revoke_expired_peer_claims(now().timestamp_millis())
         .await
         .map_err(|error| AppError::internal(format!("peer claim expiry sweep: {error}")))?;
     if revoked.is_empty() {
@@ -1384,7 +1387,7 @@ pub(crate) async fn claim_keypackages_for_request(
         "keypackage_id": keypackage_id,
         "group_id": mls_group_ref,
         "intended_realm_id": intended_realm_id.clone(),
-        "claim_expires_at": body.expires_at.timestamp()
+        "claim_expires_at_unix_ms": body.expires_at.timestamp_millis()
     });
     claim_binding.insert_into(&mut payload);
     let op = build_op(arkret_core::events::EventKind::MLS_KEYPACKAGE, payload);
@@ -1449,7 +1452,7 @@ pub(crate) async fn claim_keypackages_for_request(
             claim_binding.ssk_generation,
             claim_binding.device_authorize_event_id.as_deref(),
             claimed_at,
-            Some(body.expires_at.timestamp()),
+            Some(body.expires_at.timestamp_millis()),
         )
         .await
         .map_err(|err| AppError::internal(format!("mls_key_packages.try_claim: {err}")))?;
@@ -1674,7 +1677,7 @@ pub(crate) async fn retire_device_keypackages(
             if let Some(projected) = state.projection.lock().mls_key_packages.get_mut(&row.id) {
                 projected.claimed_by = Some("revoked".to_owned());
                 projected.claimed_at = Some(retired_at);
-                projected.claim_expires_at = None;
+                projected.claim_expires_at_unix_ms = None;
                 projected.consumed_at = None;
             }
             retired += 1;
@@ -2044,9 +2047,10 @@ fn keypackage_claim_record(
             .map_err(|error| AppError::internal(format!("invalid capabilities_digest: {error}")))?,
         ssk_generation: trust_binding.ssk_generation,
         device_authorize_event_id: trust_binding.device_authorize_event_id,
-        expires_at: unix_timestamp_datetime(
-            record.claim_expires_at.unwrap_or(record.lifetime_not_after),
-        )?,
+        expires_at: match record.claim_expires_at_unix_ms {
+            Some(expires_at_unix_ms) => unix_millis_datetime(expires_at_unix_ms)?,
+            None => unix_timestamp_datetime(record.lifetime_not_after)?,
+        },
         device_signature: serde_json::from_value::<KeyOperationSignature>(
             record.device_signature.clone(),
         )
@@ -2060,6 +2064,14 @@ fn unix_timestamp_datetime(timestamp: i64) -> Result<DateTime<Utc>, AppError> {
     Utc.timestamp_opt(timestamp, 0)
         .single()
         .ok_or_else(|| AppError::internal(format!("invalid unix timestamp: {timestamp}")))
+}
+
+fn unix_millis_datetime(timestamp_millis: i64) -> Result<DateTime<Utc>, AppError> {
+    DateTime::from_timestamp_millis(timestamp_millis).ok_or_else(|| {
+        AppError::internal(format!(
+            "invalid unix millisecond timestamp: {timestamp_millis}"
+        ))
+    })
 }
 
 /// Build a minimal in-process `Operation` carrying the MLS payload so
@@ -2095,7 +2107,7 @@ fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRow {
         ssk_generation: kp.ssk_generation,
         device_authorize_event_id: kp.device_authorize_event_id.clone(),
         claimed_at: kp.claimed_at,
-        claim_expires_at: kp.claim_expires_at,
+        claim_expires_at_unix_ms: kp.claim_expires_at_unix_ms,
         consumed_at: kp.consumed_at,
         created_at: kp.created_at,
     }

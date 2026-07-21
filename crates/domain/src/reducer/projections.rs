@@ -336,8 +336,8 @@ pub struct MlsKeyPackage {
     pub device_authorize_event_id: Option<String>,
     /// Unix seconds at which the CAS claim happened (mirrors `claimed_by`).
     pub claimed_at: Option<i64>,
-    /// Claim authorization deadline for a single-use package.
-    pub claim_expires_at: Option<i64>,
+    /// Unix milliseconds for the single-use claim authorization deadline.
+    pub claim_expires_at_unix_ms: Option<i64>,
     /// Unix seconds at which the target device consumed the claim.
     pub consumed_at: Option<i64>,
     pub created_at: i64,

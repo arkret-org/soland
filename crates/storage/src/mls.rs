@@ -26,9 +26,9 @@ pub struct MlsKeyPackageRow {
     pub device_authorize_event_id: Option<String>,
     /// Unix seconds at which the single-use claim was accepted.
     pub claimed_at: Option<i64>,
-    /// Claim authorization deadline. An unconsumed row is terminally
-    /// revoked at or after this instant.
-    pub claim_expires_at: Option<i64>,
+    /// Unix milliseconds for the claim authorization deadline. An unconsumed
+    /// row is terminally revoked at or after this instant.
+    pub claim_expires_at_unix_ms: Option<i64>,
     /// Unix seconds at which the target device consumed the accepted claim.
     pub consumed_at: Option<i64>,
     pub created_at: i64,
@@ -50,8 +50,9 @@ pub struct PeerKeyPackageClaimLedgerRecord {
     /// Single-use KeyPackage transitioned by this ledger row. Absent for an
     /// opaque failure row.
     pub keypackage_id: Option<String>,
-    /// Protocol claim deadline, distinct from `expires_at` (ledger retention).
-    pub claim_expires_at: Option<i64>,
+    /// Unix milliseconds for the protocol claim deadline, distinct from
+    /// `expires_at` (Unix-second ledger retention).
+    pub claim_expires_at_unix_ms: Option<i64>,
     pub expires_at: i64,
     pub updated_at: i64,
 }
@@ -64,7 +65,7 @@ pub struct PeerKeyPackageClaimAttempt<'a> {
     pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<&'a str>,
     pub claimed_at: i64,
-    pub claim_expires_at: i64,
+    pub claim_expires_at_unix_ms: i64,
     pub ledger: &'a PeerKeyPackageClaimLedgerRecord,
 }
 
@@ -133,7 +134,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
         ssk_generation: Option<u64>,
         device_authorize_event_id: Option<&str>,
         claimed_at: i64,
-        claim_expires_at: Option<i64>,
+        claim_expires_at_unix_ms: Option<i64>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Mark an already claimed ordinary KeyPackage consumed by the same MLS
     /// group. A consume at or after the claim deadline fails closed.
@@ -163,7 +164,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
     ) -> PersistenceResult<PeerKeyPackageClaimLedgerWriteResult>;
     /// Revoke expired, still-unconsumed peer claims atomically with their
     /// ledger transitions. Returns newly revoked KeyPackage ids.
-    async fn revoke_expired_peer_claims(&self, now: i64) -> PersistenceResult<Vec<String>>;
+    async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> PersistenceResult<Vec<String>>;
     /// Snapshot all rows. Diagnostics + the integration test rely on it.
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
     /// All rows claimed by `mls_group_id` (excluding the sentinel

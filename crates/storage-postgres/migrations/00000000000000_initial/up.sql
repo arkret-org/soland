@@ -652,7 +652,7 @@ CREATE TABLE public.mls_key_packages (
     ssk_generation bigint,
     device_authorize_event_id text,
     claimed_at bigint,
-    claim_expires_at bigint,
+    claim_expires_at_unix_ms bigint,
     consumed_at bigint,
     created_at bigint NOT NULL
 );
@@ -664,7 +664,7 @@ CREATE TABLE public.peer_keypackage_claims (
     state text NOT NULL,
     outcome jsonb,
     keypackage_id text,
-    claim_expires_at bigint,
+    claim_expires_at_unix_ms bigint,
     expires_at bigint NOT NULL,
     updated_at bigint NOT NULL,
     CONSTRAINT peer_keypackage_claims_state_check CHECK (state IN ('claimed', 'claim_failed', 'expired', 'revoked')),

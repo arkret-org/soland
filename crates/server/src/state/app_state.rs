@@ -4527,7 +4527,7 @@ mod membership_hydration_tests {
                 ssk_generation: None,
                 device_authorize_event_id: Some("ak:event:auth".to_owned()),
                 claimed_at: None,
-                claim_expires_at: None,
+                claim_expires_at_unix_ms: None,
                 consumed_at: None,
                 created_at: 1,
             })
