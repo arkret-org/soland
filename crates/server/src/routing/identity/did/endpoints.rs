@@ -413,10 +413,10 @@ pub(crate) async fn embedded_webvh_register(
     });
     // Optional governance threshold is part of the signed entry and therefore
     // flows through SCID derivation and the entry hash unchanged.
-    if let Value::Object(map) = &mut parameters {
-        if let Some(governance) = body.governance.clone() {
-            map.insert("governance".to_owned(), governance);
-        }
+    if let Value::Object(map) = &mut parameters
+        && let Some(governance) = body.governance.clone()
+    {
+        map.insert("governance".to_owned(), governance);
     }
     let entry_skeleton = json!({
         "versionId": WEBVH_SCID_PLACEHOLDER,

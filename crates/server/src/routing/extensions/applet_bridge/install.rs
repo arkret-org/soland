@@ -944,7 +944,7 @@ fn validate_registration_epoch_evidence_for_document(
             .with_wire_code("applet_registration_epoch_evidence_mismatch")
     })?;
     evidence
-        .validate_against_did_document(&document)
+        .validate_against_did_document(document)
         .map_err(|reason| {
             AppError::invalid_param(
                 "applet registration_epoch evidence does not match service DID document",

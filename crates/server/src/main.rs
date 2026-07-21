@@ -834,6 +834,10 @@ fn unresolved_federation_peer_endpoint(entry: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "discovery tests stay adjacent to their private parser helpers"
+)]
 mod federation_peer_discovery_tests {
     use super::{federation_peer_endpoint, unresolved_federation_peer_endpoint};
 

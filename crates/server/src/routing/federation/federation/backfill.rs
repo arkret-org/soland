@@ -80,8 +80,7 @@ pub(super) async fn pull_operations_page(
 
 #[cfg(test)]
 pub(super) async fn operation_frontier_value(state: &AppState, realm_id: &str) -> Value {
-    serde_json::to_value(operation_frontier_outcome(state, realm_id).await)
-        .unwrap_or_else(|_| Value::Null)
+    serde_json::to_value(operation_frontier_outcome(state, realm_id).await).unwrap_or(Value::Null)
 }
 
 pub(super) async fn operation_frontier_outcome(

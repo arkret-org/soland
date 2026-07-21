@@ -720,7 +720,7 @@ async fn moderation_report(
     if moderation_routing_visible_to_actor(state, &realm_id, &session.actor).await {
         match validate_did(&state.service_id) {
             Ok(did) => routed_to.push(did),
-            Err(()) => tracing::warn!(
+            Err(_) => tracing::warn!(
                 service_id = %state.service_id,
                 "service_id is not a valid bare DID; omitted from routed_to"
             ),
@@ -731,7 +731,7 @@ async fn moderation_report(
             // only rides the wire when it parses as a DID.
             match validate_did(&audit_agent_id) {
                 Ok(did) => routed_to.push(did),
-                Err(()) => tracing::warn!(
+                Err(_) => tracing::warn!(
                     %audit_agent_id,
                     "audit agent principal id is not a bare DID; omitted from routed_to"
                 ),
@@ -1186,8 +1186,8 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
             {
                 policy = Some(found);
             }
-        } else if record.kind == arkret_core::events::EventKind::REALM_UPDATE {
-            if let Some(found) = record
+        } else if record.kind == arkret_core::events::EventKind::REALM_UPDATE
+            && let Some(found) = record
                 .envelope
                 .pointer("/payload/patch/audit_disclosure_policy")
                 .or_else(|| {
@@ -1197,9 +1197,8 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
                 })
                 .or_else(|| record.envelope.pointer("/payload/audit_disclosure_policy"))
                 .map(unwrap_realm_update_patch_value)
-            {
-                policy = Some(found);
-            }
+        {
+            policy = Some(found);
         }
     }
     policy

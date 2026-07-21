@@ -111,6 +111,15 @@ pub trait MlsWelcomeStore: Send + Sync {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
 }
 /// G3.S1 — per-group MLS commit epoch store.
+pub struct MlsCommitEpochAdvance<'a> {
+    pub effective_scope: &'a Value,
+    pub group_id: &'a str,
+    pub leader_actor_id: &'a str,
+    pub covered_seals: &'a [String],
+    pub governance_binding: &'a Value,
+    pub committed_at: i64,
+}
+
 #[async_trait]
 pub trait MlsCommitStore: Send + Sync {
     async fn get(
@@ -135,13 +144,8 @@ pub trait MlsCommitStore: Send + Sync {
     /// missing genesis row or stale `expected_prev_epoch`.
     async fn try_bump(
         &self,
-        effective_scope: &Value,
-        group_id: &str,
         expected_prev_epoch: u64,
-        leader_actor_id: &str,
-        covered_seals: &[String],
-        governance_binding: &Value,
-        committed_at: i64,
+        advance: MlsCommitEpochAdvance<'_>,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
     /// §2.5.2 — flag the group's current epoch row as contested (`⊥`) after
     /// concurrent commits. A no-op (`Ok(None)`) when no epoch row exists or the

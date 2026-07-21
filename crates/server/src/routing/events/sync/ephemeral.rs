@@ -203,12 +203,12 @@ async fn persist_ephemeral_typing(
     // ephemeral-envelope.schema.json ak.typing branch: `track_name` is optional
     // but const "discussion" in v1 (mirrors message.schema.json); when omitted
     // receivers resolve it to "discussion".
-    if let Some(track_name) = envelope.payload.get("track_name") {
-        if track_name.as_str() != Some("discussion") {
-            return Err(crate::routing::events::peer::schema_violation(
-                "ak.typing payload.track_name must be \"discussion\" in v1",
-            ));
-        }
+    if let Some(track_name) = envelope.payload.get("track_name")
+        && track_name.as_str() != Some("discussion")
+    {
+        return Err(crate::routing::events::peer::schema_violation(
+            "ak.typing payload.track_name must be \"discussion\" in v1",
+        ));
     }
     let typing = envelope
         .payload

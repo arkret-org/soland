@@ -843,7 +843,7 @@ pub(super) async fn verify_recovery_unlock_proof(
     hasher.update(recovery_secret_ref.as_bytes());
     hasher.update(&transcript_bytes);
     let expected_commitment = format!("sha256:{}", hex::encode(hasher.finalize()));
-    if !constant_time_str_eq(&unlock_commitment, &expected_commitment) {
+    if !constant_time_str_eq(unlock_commitment, &expected_commitment) {
         crate::metrics::record_digest_mismatch("recovery_unlock_commitment");
         return Err(recovery_evidence_unbound_error(
             "recovery_unlock unlock_commitment does not match the recomputed binding",

@@ -776,11 +776,15 @@ mod tests {
     #[test]
     fn federation_auth_errors_share_public_message() {
         assert_eq!(
-            signature_error("missing required federation header: signature").message,
+            signature_error("missing required federation header: signature")
+                .message
+                .as_ref(),
             FEDERATION_AUTH_FAILURE_MESSAGE
         );
         assert_eq!(
-            cross_domain_replay_error("Destination-Trust-Domain mismatch").message,
+            cross_domain_replay_error("Destination-Trust-Domain mismatch")
+                .message
+                .as_ref(),
             FEDERATION_AUTH_FAILURE_MESSAGE
         );
     }

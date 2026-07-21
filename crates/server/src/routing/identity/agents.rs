@@ -29,8 +29,6 @@
 
 use std::collections::BTreeSet;
 
-#[cfg(test)]
-use arkret_core::models::AgentSidecarContextRef;
 use arkret_core::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentKeyScope,
@@ -41,10 +39,11 @@ use arkret_core::models::{
     AgentProvisionRequestBody, AgentRenewPairingOutcome, AgentRenewPairingRequestBody,
     AgentResumeRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
     AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody,
-    AgentSidecarEnsureRequestBody, AgentSidecarExposureAck, AgentStatus, AgentView, GrantSnapshot,
-    KeyState, PublicKey, effective_participation, validate_agent_slug,
-    validate_selection_within_ceiling,
+    AgentSidecarExposureAck, AgentStatus, AgentView, GrantSnapshot, KeyState, PublicKey,
+    effective_participation, validate_agent_slug, validate_selection_within_ceiling,
 };
+#[cfg(test)]
+use arkret_core::models::{AgentSidecarContextRef, AgentSidecarEnsureRequestBody};
 use arkret_core::{
     BlobRef, CircleId, Did, EventId, GrantId, Hash, Operation, OperationId, RealmId, RelationId,
     StrandId,

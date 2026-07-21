@@ -126,7 +126,7 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
         .test_persistence()
         .sessions()
         .put(&soland_storage::SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.service_id()),
+            token_hash: test_session_credential_hash(token, state.service_id()),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
             audience: state.service_id().clone(),
@@ -184,13 +184,10 @@ fn assert_agent_scope_denied(body: &Value, scope: &str) {
 }
 
 async fn optional_pg_app_state() -> Option<AppState> {
-    if std::env::var("DATABASE_URL")
+    std::env::var("DATABASE_URL")
         .ok()
         .filter(|url| !url.trim().is_empty())
-        .is_none()
-    {
-        return None;
-    }
+        .as_ref()?;
     let db = Db::from_env()
         .await
         .expect("postgres migrations should run");
@@ -892,29 +889,30 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             .member(&realm_id, &actor)
             .is_some_and(|member| member.state == "join")
     );
-    let projection = state.test_projection().lock();
-    assert!(
-        projection.effective_engine_grant(&grant_id).is_some(),
-        "accepted bootstrap must make its founding grant effective before success"
-    );
-    for (family, expected) in [
-        (
-            "ak.component.realm.join_rule.v1",
-            serde_json::json!("invite"),
-        ),
-        (
-            "ak.component.realm.history_visibility.v1",
-            serde_json::json!("shared"),
-        ),
-        (
-            "ak.component.realm.discovery.v1",
-            serde_json::json!("listed"),
-        ),
-    ] {
-        let cell = arkret_core::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
-        assert_eq!(projection.cell_value(&cell), Some(&expected));
+    {
+        let projection = state.test_projection().lock();
+        assert!(
+            projection.effective_engine_grant(&grant_id).is_some(),
+            "accepted bootstrap must make its founding grant effective before success"
+        );
+        for (family, expected) in [
+            (
+                "ak.component.realm.join_rule.v1",
+                serde_json::json!("invite"),
+            ),
+            (
+                "ak.component.realm.history_visibility.v1",
+                serde_json::json!("shared"),
+            ),
+            (
+                "ak.component.realm.discovery.v1",
+                serde_json::json!("listed"),
+            ),
+        ] {
+            let cell = arkret_core::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
+            assert_eq!(projection.cell_value(&cell), Some(&expected));
+        }
     }
-    drop(projection);
     assert!(
         state.test_authz().get_grant(&grant_id).is_some(),
         "accepted bootstrap must refresh the authorization cache before success"
@@ -981,40 +979,41 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             .is_some_and(|member| member.state == "join"),
         "restart must rebuild creator membership from canonical create"
     );
-    let restarted_projection = restarted.test_projection().lock();
-    let grant_cell = arkret_core::CellRef::new(format!(
-        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
-    ))
-    .unwrap();
-    let projected_grant_cell = restarted_projection.cell_value(&grant_cell).cloned();
-    assert!(
-        restarted_projection
-            .effective_engine_grant(&grant_id)
-            .is_some(),
-        "restart must rebuild the founding capability grant; cell={projected_grant_cell:?}"
-    );
-    for (family, expected) in [
-        (
-            "ak.component.realm.join_rule.v1",
-            serde_json::json!("invite"),
-        ),
-        (
-            "ak.component.realm.history_visibility.v1",
-            serde_json::json!("shared"),
-        ),
-        (
-            "ak.component.realm.discovery.v1",
-            serde_json::json!("listed"),
-        ),
-    ] {
-        let cell = arkret_core::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
-        assert_eq!(
-            restarted_projection.cell_value(&cell),
-            Some(&expected),
-            "restart must rebuild bootstrap cell {family}"
+    {
+        let restarted_projection = restarted.test_projection().lock();
+        let grant_cell = arkret_core::CellRef::new(format!(
+            "ak:cell:ak.component.capability.grant.v1:{grant_id}"
+        ))
+        .unwrap();
+        let projected_grant_cell = restarted_projection.cell_value(&grant_cell).cloned();
+        assert!(
+            restarted_projection
+                .effective_engine_grant(&grant_id)
+                .is_some(),
+            "restart must rebuild the founding capability grant; cell={projected_grant_cell:?}"
         );
+        for (family, expected) in [
+            (
+                "ak.component.realm.join_rule.v1",
+                serde_json::json!("invite"),
+            ),
+            (
+                "ak.component.realm.history_visibility.v1",
+                serde_json::json!("shared"),
+            ),
+            (
+                "ak.component.realm.discovery.v1",
+                serde_json::json!("listed"),
+            ),
+        ] {
+            let cell = arkret_core::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
+            assert_eq!(
+                restarted_projection.cell_value(&cell),
+                Some(&expected),
+                "restart must rebuild bootstrap cell {family}"
+            );
+        }
     }
-    drop(restarted_projection);
     assert!(
         restarted.test_authz().get_grant(&grant_id).is_some(),
         "restart must refresh the authorization cache from the founding grant"
@@ -1527,7 +1526,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         "chunk_index": 0
     });
     let (_, bundle) =
-        fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request.clone()).await;
+        fetch_chunked_mls_governance_proof(&state, token, &realm_id, proof_request.clone()).await;
     assert_eq!(bundle.realm_id.as_str(), realm_id);
     assert_eq!(
         bundle.trusted_anchor_seal_id.as_str(),

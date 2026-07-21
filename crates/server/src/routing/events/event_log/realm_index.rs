@@ -51,6 +51,7 @@ pub(super) fn invite_create_actor_is_inviter(
 ///   - `membership=knock` — stage 1 of the application-review path (join-policy.md §7.1); and
 ///   - `membership=join` carrying `gate_proofs[]` — the auto-resolve path (join-policy.md §5),
 ///     where the not-yet-member submits its own join with inline gate proofs.
+///
 /// In both cases the applicant is not yet a member, so the generic
 /// `realm_has_member` gate would wrongly reject the entry. The actual
 /// join-policy gate / review enforcement runs in

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use soland_application::delivery::DeviceMessageState;
 use soland_domain::kinds;
 use soland_domain::reducer::MlsWelcomeQueueKey;
-use soland_storage::{MlsKeyPackageRow, MlsWelcomeRecord};
+use soland_storage::{MlsCommitEpochAdvance, MlsKeyPackageRow, MlsWelcomeRecord};
 
 use super::*;
 use crate::ids;
@@ -197,13 +197,15 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             if let Err(error) = state
                 .mls_commits_store()
                 .try_bump(
-                    effective_scope,
-                    group_id,
                     *previous_epoch,
-                    leader_actor_id,
-                    covered_seals,
-                    &binding,
-                    operation.created_at.timestamp(),
+                    MlsCommitEpochAdvance {
+                        effective_scope,
+                        group_id,
+                        leader_actor_id,
+                        covered_seals,
+                        governance_binding: &binding,
+                        committed_at: operation.created_at.timestamp(),
+                    },
                 )
                 .await
             {

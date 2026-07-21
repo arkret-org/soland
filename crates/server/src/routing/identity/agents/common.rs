@@ -324,6 +324,7 @@ pub(super) fn agent_requested_participation_ceiling(
     }
 }
 
+#[cfg(test)]
 pub(super) fn ensure_sidecar_controller_request(
     body: &AgentSidecarEnsureRequestBody,
     session: &SessionRecord,
@@ -373,6 +374,10 @@ pub(super) fn generate_agent_principal_did(service_id: &str) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "scope tests stay adjacent to the private scope helpers"
+)]
 mod requested_scope_tests {
     use super::*;
 
@@ -683,7 +688,7 @@ pub(super) fn agent_key_state_from_record(
         && record
             .pairing_expires_at
             .is_some_and(|expires_at| expires_at > chrono::Utc::now());
-    let pairing_mode = pairing_is_open.then(|| match record.state.as_str() {
+    let pairing_mode = pairing_is_open.then_some(match record.state.as_str() {
         "paused" => AgentPairingMode::Replacement,
         _ => AgentPairingMode::Bootstrap,
     });

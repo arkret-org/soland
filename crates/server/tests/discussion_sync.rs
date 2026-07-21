@@ -998,19 +998,20 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         bob_did
     );
 
-    let projection = state.test_projection().lock();
-    let reactions = projection.reactions_for_event(&root_event_id);
-    assert!(
-        reactions.iter().any(|reaction| {
-            reaction.actor == alice_did && reaction.key == "+1" && reaction.active
-        }),
-        "{reactions:?}"
-    );
-    assert!(
-        reactions.iter().all(|reaction| reaction.actor != bob_did),
-        "{reactions:?}"
-    );
-    drop(projection);
+    {
+        let projection = state.test_projection().lock();
+        let reactions = projection.reactions_for_event(&root_event_id);
+        assert!(
+            reactions.iter().any(|reaction| {
+                reaction.actor == alice_did && reaction.key == "+1" && reaction.active
+            }),
+            "{reactions:?}"
+        );
+        assert!(
+            reactions.iter().all(|reaction| reaction.actor != bob_did),
+            "{reactions:?}"
+        );
+    }
 
     let reply = timeline
         .iter()
@@ -1151,27 +1152,28 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         .find(|event| event["event_id"] == poll_event_id)
         .unwrap_or_else(|| panic!("poll missing from sync projection: {timeline:?}"));
     assert_eq!(poll["payload"]["content"]["kind"], "ak.content.poll");
-    let projection = state.test_projection().lock();
-    let poll_state = projection.poll(&poll_ref).expect("poll projection");
-    assert!(
-        poll_state
-            .votes
-            .values()
-            .all(|choices| !choices.contains("now")),
-        "{poll_state:?}"
-    );
-    let mut expected_backup_voters = vec![bob_did, carol_did];
-    expected_backup_voters.sort_unstable();
-    assert_eq!(
-        poll_state
-            .votes
-            .iter()
-            .filter(|(_, choices)| choices.contains("backup"))
-            .map(|(actor, _)| actor.as_str())
-            .collect::<Vec<_>>(),
-        expected_backup_voters
-    );
-    drop(projection);
+    {
+        let projection = state.test_projection().lock();
+        let poll_state = projection.poll(&poll_ref).expect("poll projection");
+        assert!(
+            poll_state
+                .votes
+                .values()
+                .all(|choices| !choices.contains("now")),
+            "{poll_state:?}"
+        );
+        let mut expected_backup_voters = vec![bob_did, carol_did];
+        expected_backup_voters.sort_unstable();
+        assert_eq!(
+            poll_state
+                .votes
+                .iter()
+                .filter(|(_, choices)| choices.contains("backup"))
+                .map(|(actor, _)| actor.as_str())
+                .collect::<Vec<_>>(),
+            expected_backup_voters
+        );
+    }
 
     submit_projection_event(
         state.clone(),

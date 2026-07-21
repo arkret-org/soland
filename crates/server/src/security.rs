@@ -558,7 +558,8 @@ fn url_host(raw_url: &str) -> Option<String> {
 fn did_web_domain(did: &str) -> Option<String> {
     let domain = if let Some(rest) = did.strip_prefix("did:web:") {
         rest.split(':').next()?
-    } else if let Some(rest) = did.strip_prefix("did:webvh:") {
+    } else {
+        let rest = did.strip_prefix("did:webvh:")?;
         let mut parts = rest.split(':');
         let scid = parts.next()?;
         let host = parts.next()?;
@@ -566,8 +567,6 @@ fn did_web_domain(did: &str) -> Option<String> {
             return None;
         }
         host
-    } else {
-        return None;
     };
     let domain = domain
         .split("%3A")

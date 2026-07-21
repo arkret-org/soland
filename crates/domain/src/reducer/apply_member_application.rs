@@ -319,13 +319,12 @@ impl ProjectionState {
             self.apply_member_application_review(operation, &realm_id, &review);
             return;
         }
-        if operation.payload.get("application_cancel").is_some() {
-            if let Some(state) = self
+        if operation.payload.get("application_cancel").is_some()
+            && let Some(state) = self
                 .member_applications
                 .get_mut(&(realm_id.clone(), member.clone()))
-            {
-                state.status = "canceled".to_owned();
-            }
+        {
+            state.status = "canceled".to_owned();
         }
     }
 
@@ -467,10 +466,9 @@ impl ProjectionState {
                         && state.review_receipt_digest.as_deref() == Some(review_ref.as_str())
                 })
                 .map(|(key, _)| key.clone())
+                && let Some(state) = self.member_applications.get_mut(&key)
             {
-                if let Some(state) = self.member_applications.get_mut(&key) {
-                    state.invite_consumed = true;
-                }
+                state.invite_consumed = true;
             }
         }
     }

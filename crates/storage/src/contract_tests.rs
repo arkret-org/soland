@@ -126,7 +126,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .commit_event(request)
         .await
         .expect("commit complete event unit of work");
-    assert_eq!(outcome.event_inserted, true);
+    assert!(outcome.event_inserted);
     assert_eq!(outcome.projections_inserted, 1);
     assert_eq!(outcome.outbox_inserted, 1);
     assert!(stores.events.contains(&event_id).await.expect("read event"));

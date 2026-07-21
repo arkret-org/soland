@@ -841,10 +841,10 @@ pub(crate) fn validate_view_payload(operation: &Operation) -> Result<(), &'stati
             if contains_retired_field(value) {
                 return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
             }
-            if let Some(state) = value.get("state") {
-                if !matches!(state.as_str(), Some("active" | "tombstoned")) {
-                    return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
-                }
+            if let Some(state) = value.get("state")
+                && !matches!(state.as_str(), Some("active" | "tombstoned"))
+            {
+                return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
             }
         }
     }

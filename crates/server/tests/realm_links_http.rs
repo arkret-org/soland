@@ -70,7 +70,7 @@ fn project_inheritance_policy(
         }),
     );
     let mut proj = state.test_projection().lock();
-    proj.apply(&op, &state.test_hlc());
+    proj.apply(&op, state.test_hlc());
 }
 
 /// G3.S5 — happy path: POST a `governed_by` link from B → A, GET the

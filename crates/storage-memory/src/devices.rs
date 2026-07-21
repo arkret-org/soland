@@ -83,11 +83,14 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
             .collect())
     }
 }
+type DeviceMessageTransaction = (String, BTreeMap<String, bool>, chrono::DateTime<Utc>);
+type DeviceMessageIntent = (String, bool, chrono::DateTime<Utc>);
+
 #[derive(Default)]
 pub(crate) struct MemoryDeviceMessageStore {
     queue: Mutex<VecDeque<DeviceMessageRecord>>,
-    txns: Mutex<BTreeMap<String, (String, BTreeMap<String, bool>, chrono::DateTime<Utc>)>>,
-    message_intents: Mutex<BTreeMap<String, (String, bool, chrono::DateTime<Utc>)>>,
+    txns: Mutex<BTreeMap<String, DeviceMessageTransaction>>,
+    message_intents: Mutex<BTreeMap<String, DeviceMessageIntent>>,
     ack_tokens: Mutex<BTreeMap<String, DeviceMessageAckTokenRecord>>,
     lost_watermarks: Mutex<BTreeMap<(String, String), i64>>,
 }
@@ -174,12 +177,12 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
                     message_key: item.message_key.clone(),
                 });
             }
-            if let Some((digest, ..)) = intents.get(&item.message_key) {
-                if digest != &item.intent_digest {
-                    return Ok(DeviceMessageBatchCommitOutcome::MessageConflict {
-                        message_key: item.message_key.clone(),
-                    });
-                }
+            if let Some((digest, ..)) = intents.get(&item.message_key)
+                && digest != &item.intent_digest
+            {
+                return Ok(DeviceMessageBatchCommitOutcome::MessageConflict {
+                    message_key: item.message_key.clone(),
+                });
             }
         }
 

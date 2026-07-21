@@ -1361,7 +1361,7 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
     );
 
     assert_eq!(
-        validate_operation_policy(&state, &[tombstone.clone()])
+        validate_operation_policy(&state, std::slice::from_ref(&tombstone))
             .await
             .unwrap_err(),
         "circle_manage_capability_required"

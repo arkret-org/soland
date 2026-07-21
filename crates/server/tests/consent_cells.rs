@@ -294,6 +294,10 @@ fn signed_event_with_prev_refs(
     serde_json::to_value(event).expect("SDK Event serializes")
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fixture mirrors the complete signed-event envelope"
+)]
 async fn submit_event(
     app: &salvo::Service,
     token: &str,

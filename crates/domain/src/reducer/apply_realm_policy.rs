@@ -255,12 +255,12 @@ impl ProjectionState {
         // `content_scheme=mls-exporter-aead-v1` Realm (else
         // `durability_scheme_incompatible`). The effective scheme is the
         // incoming scheme when this same update sets it, else the projected one.
-        if let Some(durability_policy) = durability_policy_field(&value) {
-            if let Err(reason) = validate_durability_policy(durability_policy, effective_scheme) {
-                return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
-                };
-            }
+        if let Some(durability_policy) = durability_policy_field(&value)
+            && let Err(reason) = validate_durability_policy(durability_policy, effective_scheme)
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
         }
         if let Ok(cell_id) = arkret_core::CellRef::new(format!(
             "ak:cell:ak.component.realm.policy_components.v1:{realm_id}"

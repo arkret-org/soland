@@ -87,15 +87,14 @@ pub(crate) async fn federation_actor_origin_acceptable(
 fn did_deployment_authority(did: &str) -> Option<String> {
     let authority = if let Some(rest) = did.strip_prefix("did:web:") {
         rest.split(':').next()?
-    } else if let Some(rest) = did.strip_prefix("did:webvh:") {
+    } else {
+        let rest = did.strip_prefix("did:webvh:")?;
         let mut parts = rest.split(':');
         let scid = parts.next()?;
         if scid.is_empty() {
             return None;
         }
         parts.next()?
-    } else {
-        return None;
     };
     let authority = authority.trim_end_matches('.');
     (!authority.is_empty()).then(|| authority.to_ascii_lowercase())
@@ -122,21 +121,20 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
         // SOL-SEC-01 — bind the operation's embedded actor DID to the origin
         // service authority before any side effect, so a verified peer cannot
         // speak for an unrelated actor that is not a known Realm member.
-        if let Some(actor) = operation.actor() {
-            if !federation_actor_origin_acceptable(
+        if let Some(actor) = operation.actor()
+            && !federation_actor_origin_acceptable(
                 state,
                 actor.as_str(),
                 origin_service_id,
                 operation.realm_id.as_str(),
             )
             .await
-            {
-                return Err(AppError::capability_denied(
-                    "operation actor home domain does not match the origin peer trust domain and \
-                     the actor is not a known member of the target realm",
-                )
-                .with_wire_code("federation_actor_origin_rejected"));
-            }
+        {
+            return Err(AppError::capability_denied(
+                "operation actor home domain does not match the origin peer trust domain and \
+                 the actor is not a known member of the target realm",
+            )
+            .with_wire_code("federation_actor_origin_rejected"));
         }
         enforce_realm_federation_policy(
             state,

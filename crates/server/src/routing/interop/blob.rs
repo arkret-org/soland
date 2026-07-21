@@ -474,7 +474,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                         res,
                         error.http_status(),
                         error.wire_code(),
-                        error.message.as_str(),
+                        error.message.as_ref(),
                     );
                     return;
                 }

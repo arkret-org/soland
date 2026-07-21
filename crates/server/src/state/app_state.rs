@@ -183,11 +183,6 @@ pub struct AppState {
     /// act-on-behalf publishes. Durable controller approval state lives in the
     /// projection; this table prevents replay within the approval TTL.
     pub(crate) agent_approval_nonces: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
-    /// Per-actor notifications read marker. `mark_all_read(actor)` writes
-    /// `Utc::now()`; the notifications read-side filter uses it to flag
-    /// rows as read. Same in-memory shape as the other two.
-    pub(crate) notification_read_cursors:
-        Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
     /// Domain-separated HMAC key for the deterministic stateful sync-cursor
     /// handle (`routing/events/sync.rs::derive_cursor_handle`). The handle
     /// binding rows themselves live in the durable
@@ -780,7 +775,6 @@ impl AppState {
             moderation_report_rate_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             moderation_franking_replay_nonces: Arc::new(Mutex::new(BTreeMap::new())),
             agent_approval_nonces: Arc::new(Mutex::new(BTreeMap::new())),
-            notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
             sync_cursor_hmac_key,
             push_target_hmac_key,
             sync_cursor_revocations: Arc::new(Mutex::new(Vec::new())),

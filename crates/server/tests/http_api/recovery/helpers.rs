@@ -725,7 +725,7 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
         .test_persistence()
         .sessions()
         .put(&SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.service_id()),
+            token_hash: test_session_credential_hash(token, state.service_id()),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
             audience: state.service_id().clone(),

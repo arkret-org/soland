@@ -1457,6 +1457,10 @@ async fn arkret_rtc_token(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "media-token tests stay adjacent to the private token helpers"
+)]
 mod tests {
     use super::*;
 

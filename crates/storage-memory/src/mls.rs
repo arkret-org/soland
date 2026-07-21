@@ -1,7 +1,7 @@
 use super::{
-    BTreeMap, MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitStore, MlsKeyPackageRow,
-    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Mutex, PersistenceResult, Uuid, Value,
-    VecDeque, async_trait, mls_epoch_key,
+    BTreeMap, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitStore,
+    MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Mutex,
+    PersistenceResult, Uuid, Value, VecDeque, async_trait, mls_epoch_key,
 };
 #[derive(Default)]
 pub(crate) struct MemoryMlsKeyPackageStore {
@@ -199,15 +199,10 @@ impl MlsCommitStore for MemoryMlsCommitStore {
 
     async fn try_bump(
         &self,
-        effective_scope: &Value,
-        group_id: &str,
         expected_prev_epoch: u64,
-        leader_actor_id: &str,
-        covered_seals: &[String],
-        governance_binding: &Value,
-        committed_at: i64,
+        advance: MlsCommitEpochAdvance<'_>,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
-        let key = mls_epoch_key(effective_scope, group_id)?;
+        let key = mls_epoch_key(advance.effective_scope, advance.group_id)?;
         let mut rows = self.rows.lock();
         let Some(current_record) = rows.get(&key) else {
             return Ok(None);
@@ -217,18 +212,18 @@ impl MlsCommitStore for MemoryMlsCommitStore {
             return Ok(None);
         }
         let mut merged_frontier = current_record.covered_seals.clone();
-        merged_frontier.extend(covered_seals.iter().cloned());
+        merged_frontier.extend(advance.covered_seals.iter().cloned());
         merged_frontier.sort();
         merged_frontier.dedup();
         let new_record = MlsCommitEpochRecord {
             id: current_record.id,
-            group_id: group_id.to_owned(),
-            effective_scope: effective_scope.clone(),
+            group_id: advance.group_id.to_owned(),
+            effective_scope: advance.effective_scope.clone(),
             epoch: current.saturating_add(1),
-            leader_actor_id: leader_actor_id.to_owned(),
+            leader_actor_id: advance.leader_actor_id.to_owned(),
             covered_seals: merged_frontier,
-            governance_binding: governance_binding.clone(),
-            committed_at,
+            governance_binding: advance.governance_binding.clone(),
+            committed_at: advance.committed_at,
             // A resolving commit advances the epoch and clears the ⊥ marker.
             frontier_contested: false,
         };

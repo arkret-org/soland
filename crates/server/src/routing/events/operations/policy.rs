@@ -106,13 +106,8 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("cross_signing_reset_")
         || message == "cross_signing_model_mismatch"
         || message == arkret_core::error::ReasonCode::REACTION_SCOPE_MISMATCH
-    {
-        (
-            salvo::http::StatusCode::PRECONDITION_FAILED,
-            "failed_precondition",
-        )
-    } else if message
-        == arkret_core::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        || message
+            == arkret_core::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
@@ -298,6 +293,10 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "focused policy tests stay adjacent to the public policy entry point"
+)]
 mod tests {
     use soland_storage_postgres::Db;
 

@@ -83,7 +83,7 @@ fn strand_update_pending_replays_after_create() {
 
     state.apply(&strand_create(), &hlc);
 
-    assert!(state.pending_replay.get(STRAND).is_none());
+    assert!(!state.pending_replay.contains_key(STRAND));
     assert_eq!(state.strands[STRAND].title, "Backfilled title");
 }
 
@@ -110,7 +110,7 @@ fn relation_create_waits_for_unknown_endpoint() {
 
     state.apply(&strand_create(), &hlc);
 
-    assert!(state.pending_replay.get(STRAND).is_none());
+    assert!(!state.pending_replay.contains_key(STRAND));
     assert!(state.relations.contains_key(RELATION));
 }
 
@@ -144,7 +144,7 @@ fn relation_update_pending_replays_after_create() {
     );
     state.apply(&create, &hlc);
 
-    assert!(state.pending_replay.get(RELATION).is_none());
+    assert!(!state.pending_replay.contains_key(RELATION));
     assert_eq!(state.relations[RELATION].fields["rank"], "m");
 }
 
@@ -179,7 +179,7 @@ fn message_revision_pending_replays_after_original_event() {
     );
     state.apply(&create, &hlc);
 
-    assert!(state.pending_replay.get(EVENT).is_none());
+    assert!(!state.pending_replay.contains_key(EVENT));
     assert_eq!(
         state.messages[&revision_id].revision_of.as_deref(),
         Some(EVENT)
@@ -208,6 +208,6 @@ fn object_redaction_pending_replays_after_object_create() {
 
     state.apply(&strand_create(), &hlc);
 
-    assert!(state.pending_replay.get(STRAND).is_none());
+    assert!(!state.pending_replay.contains_key(STRAND));
     assert_eq!(state.strands[STRAND].state, ObjectLifecycleState::Redacted);
 }

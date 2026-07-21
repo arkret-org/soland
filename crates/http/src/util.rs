@@ -174,18 +174,17 @@ pub fn is_valid_sha256_hex(value: &str) -> bool {
 
 // ── Identifier / handle validators ──────────────────────────────────────────
 
-/// Wrap `Did::new` and discard the SDK error, since callers always answer with
-/// `bad_request / invalid_param` regardless of the underlying reason.
-pub fn validate_did(value: &str) -> Result<Did, ()> {
-    Did::new(value.to_owned()).map_err(|_| ())
+/// Validate and parse a DID.
+pub fn validate_did(value: &str) -> arkret_core::Result<Did> {
+    Did::new(value.to_owned()).map_err(Into::into)
 }
 
-pub fn validate_device_id(value: &str) -> Result<DeviceId, ()> {
-    DeviceId::new(value.to_owned()).map_err(|_| ())
+pub fn validate_device_id(value: &str) -> arkret_core::Result<DeviceId> {
+    DeviceId::new(value.to_owned()).map_err(Into::into)
 }
 
-pub fn validate_space_id(value: &str) -> Result<SpaceId, ()> {
-    SpaceId::new(value.to_owned()).map_err(|_| ())
+pub fn validate_space_id(value: &str) -> arkret_core::Result<SpaceId> {
+    SpaceId::new(value.to_owned()).map_err(Into::into)
 }
 
 /// Lowercase + ensure leading `@`.

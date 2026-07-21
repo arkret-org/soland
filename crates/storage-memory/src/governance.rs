@@ -178,8 +178,12 @@ impl RealmOrganizationStore for MemoryRealmOrganizationStore {
             .collect())
     }
 }
+type RealmOrganizationStatementKey = (String, String, String);
+type RealmOrganizationStatementMap =
+    BTreeMap<RealmOrganizationStatementKey, RealmOrganizationStatementRecord>;
+
 pub(crate) struct MemoryRealmOrganizationStatementStore {
-    data: Arc<Mutex<BTreeMap<(String, String, String), RealmOrganizationStatementRecord>>>,
+    data: Arc<Mutex<RealmOrganizationStatementMap>>,
 }
 impl MemoryRealmOrganizationStatementStore {
     pub(crate) fn new() -> Self {

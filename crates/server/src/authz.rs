@@ -33,7 +33,6 @@ pub use arkret_core::authz::delegation::{
 };
 use parking_lot::Mutex;
 use serde::Serialize;
-use serde_json::{Map, Value};
 
 use crate::ids;
 
@@ -42,49 +41,6 @@ const SELECTOR_TOKEN_MAX: usize = 256;
 const SELECTOR_DISJUNCTION_MAX: usize = 16;
 const SELECTOR_CONJUNCTION_MAX: usize = 64;
 const SELECTOR_TERM_MAX_BYTES: usize = 1024;
-const SELECTOR_JSON_MAX_BYTES: usize = 64 * 1024;
-const RESOURCE_SELECTOR_KNOWN_FIELDS: &[&str] = &[
-    "kind",
-    "realm_id",
-    "space_id",
-    "circle_id",
-    "object_type",
-    "object_ref",
-    "strand_id",
-    "message_id",
-    "morph_id",
-    "morph_type",
-    "relation_kind",
-    "relation_id",
-    "view_id",
-    "event_id",
-    "actor_id",
-    "schema_ref",
-    "policy_id",
-    "invite_id",
-    "blob_ref",
-    "match_scope",
-];
-const RESOURCE_SELECTOR_KINDS: &[&str] = &[
-    "realm",
-    "space",
-    "circle",
-    "strand",
-    "message",
-    "morph",
-    "object",
-    "relation",
-    "view",
-    "event",
-    "actor",
-    "schema",
-    "policy",
-    "invite",
-    "notification",
-    "read_cursor",
-    "blob",
-    "*",
-];
 pub(crate) const REASON_CAPABILITY_ACTION_UNKNOWN: &str = "capability_action_unknown";
 pub(crate) const REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE: &str =
     "capability_action_registry_unavailable";
@@ -806,93 +762,6 @@ pub(crate) fn validate_resource_pattern(pattern: &str) -> Result<(), &'static st
     Ok(())
 }
 
-pub(crate) fn validate_resource_selector_object(
-    map: &Map<String, Value>,
-) -> Result<(), &'static str> {
-    let json_bytes = serde_json::to_vec(map).map_err(|_| "capability_grant_resources_invalid")?;
-    if json_bytes.len() > SELECTOR_JSON_MAX_BYTES {
-        return Err("selector_too_complex");
-    }
-    let unknown_fields = map
-        .keys()
-        .filter(|key| !RESOURCE_SELECTOR_KNOWN_FIELDS.contains(&key.as_str()))
-        .count();
-    if unknown_fields > 0 {
-        return Err("capability_grant_resources_invalid");
-    }
-    let Some(kind) = map.get("kind").and_then(Value::as_str) else {
-        return Err("capability_grant_resources_invalid");
-    };
-    if !RESOURCE_SELECTOR_KINDS.contains(&kind) {
-        return Err("capability_grant_resources_invalid");
-    }
-    let match_scope = map
-        .get("match_scope")
-        .and_then(Value::as_str)
-        .unwrap_or("exact");
-    if !matches!(match_scope, "exact" | "children" | "subtree" | "realm_wide") {
-        return Err("capability_grant_resources_invalid");
-    }
-    if match_scope == "realm_wide" && map.get("realm_id").and_then(Value::as_str).is_none() {
-        return Err("capability_grant_resources_invalid");
-    }
-    if matches!(match_scope, "children" | "subtree") && kind != "space" {
-        return Err("capability_grant_resources_invalid");
-    }
-    if matches!(match_scope, "children" | "subtree")
-        && map
-            .get("space_id")
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-    {
-        return Err("capability_grant_resources_invalid");
-    }
-    if match_scope == "realm_wide" && !matches!(kind, "space" | "circle") {
-        return Err("capability_grant_resources_invalid");
-    }
-    if matches!(kind, "space" | "circle" | "notification" | "read_cursor")
-        && map.get("realm_id").and_then(Value::as_str).is_none()
-    {
-        return Err("capability_grant_resources_invalid");
-    }
-    if map.get("actor_id").and_then(Value::as_str) == Some("*") {
-        return Err("selector_actor_wildcard_forbidden");
-    }
-    if map.get("kind").and_then(Value::as_str) == Some("actor")
-        && map.get("actor_id").and_then(Value::as_str).is_none()
-    {
-        return Err("selector_actor_wildcard_forbidden");
-    }
-    if selector_uses_governance_wildcard(map) {
-        return Err("selector_governance_wildcard_forbidden");
-    }
-    for value in map.values() {
-        validate_selector_field_value(value)?;
-    }
-    Ok(())
-}
-
-fn validate_selector_field_value(value: &Value) -> Result<(), &'static str> {
-    match value {
-        Value::String(value) if value.len() > SELECTOR_TERM_MAX_BYTES => {
-            Err("selector_too_complex")
-        }
-        Value::Array(values) => {
-            for value in values {
-                validate_selector_field_value(value)?;
-            }
-            Ok(())
-        }
-        Value::Object(object) => {
-            for value in object.values() {
-                validate_selector_field_value(value)?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
 fn validate_resource_selector_term(term: &str) -> Result<(), &'static str> {
     if term == "*" {
         return Err("capability_grant_resource_wildcard_forbidden");
@@ -933,38 +802,6 @@ fn object_selector_tail(term: &str) -> Option<String> {
     }
     let tail = parts[3..].join(":");
     (!tail.is_empty()).then_some(tail)
-}
-
-fn selector_uses_governance_wildcard(map: &Map<String, Value>) -> bool {
-    match map.get("kind").and_then(Value::as_str) {
-        Some("policy") => {
-            selector_field_missing_or_wildcard(map, "policy_id")
-                || selector_field_missing_or_wildcard(map, "realm_id")
-        }
-        Some("schema") => {
-            selector_field_missing_or_wildcard(map, "schema_ref")
-                || selector_field_missing_or_wildcard(map, "realm_id")
-        }
-        Some("object") => {
-            let object_type = map.get("object_type").and_then(Value::as_str);
-            let object_ref = map.get("object_ref").and_then(Value::as_str);
-            let governance_type = matches!(object_type, Some("policy" | "schema"));
-            let governance_ref = object_ref.is_some_and(|value| {
-                value.starts_with("ak:policy:") || value.starts_with("ak:schema:")
-            });
-            (governance_type
-                && (selector_field_missing_or_wildcard(map, "object_ref")
-                    || selector_field_missing_or_wildcard(map, "realm_id")))
-                || (governance_ref && selector_field_missing_or_wildcard(map, "realm_id"))
-        }
-        _ => false,
-    }
-}
-
-fn selector_field_missing_or_wildcard(map: &Map<String, Value>, field: &str) -> bool {
-    map.get(field)
-        .and_then(Value::as_str)
-        .is_none_or(|value| value == "*")
 }
 
 /// Pick the resulting decision over a set of satisfied grants.

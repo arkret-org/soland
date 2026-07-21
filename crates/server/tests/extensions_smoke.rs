@@ -148,7 +148,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
         &app,
         &token,
         &package,
-        &realm_id,
+        realm_id,
         &format!("install-{suffix}"),
     )
     .await;
@@ -223,7 +223,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         &app,
         &token,
         &package,
-        &realm_id,
+        realm_id,
         &format!("ghost-provision-{suffix}"),
     )
     .await;
@@ -365,7 +365,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
         &app,
         &token,
         &package,
-        &realm_id,
+        realm_id,
         &format!("ghost-denied-{suffix}"),
         vec!["ak.message.create".to_owned()],
     )
@@ -418,7 +418,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
         &app,
         &token,
         &package,
-        &realm_id,
+        realm_id,
         &format!("ghost-namespace-{suffix}"),
     )
     .await;
@@ -471,23 +471,27 @@ async fn canonical_did_document(app: &salvo::Service, did: &str) -> Value {
         .unwrap_or(body)
 }
 
+struct AppletMessageTransactionRequest<'a> {
+    applet_id: &'a str,
+    actor_id: &'a str,
+    realm_id: &'a str,
+    authorization_ref: &'a str,
+    text: &'a str,
+    idempotency_key: &'a str,
+}
+
 async fn post_signed_applet_message_transaction(
     app: &salvo::Service,
     package: &AppletPackage,
-    applet_id: &str,
-    actor_id: &str,
-    realm_id: &str,
-    authorization_ref: &str,
-    text: &str,
-    idempotency_key: &str,
+    request: AppletMessageTransactionRequest<'_>,
 ) -> Value {
     let event = applet_message_event(
         package,
-        applet_id,
-        actor_id,
-        realm_id,
-        authorization_ref,
-        text,
+        request.applet_id,
+        request.actor_id,
+        request.realm_id,
+        request.authorization_ref,
+        request.text,
     );
     let body = json!({
         "source_service_id": package.service_id.to_string(),
@@ -507,7 +511,7 @@ async fn post_signed_applet_message_transaction(
         &content_digest,
         package.service_id.as_str(),
         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-        idempotency_key,
+        request.idempotency_key,
         &signature_params,
     );
     let signing_key = applet_service_signing_key(&verification_method);
@@ -524,7 +528,7 @@ async fn post_signed_applet_message_transaction(
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             true,
         )
-        .add_header("Idempotency-Key", idempotency_key.to_owned(), true)
+        .add_header("Idempotency-Key", request.idempotency_key.to_owned(), true)
         .add_header("Signature-Input", format!("sig1={signature_params}"), true)
         .add_header("Signature", signature_header, true)
         .json(&body)
@@ -655,7 +659,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         &app,
         &token,
         &package,
-        &realm_id,
+        realm_id,
         &format!("bridge-{suffix}"),
     )
     .await;
@@ -699,15 +703,19 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     );
     assert_eq!(provision["ghost_actor_id"], json!(ghost_actor_id));
 
+    let transaction_text = format!("hi from outside {suffix}");
+    let transaction_idempotency_key = format!("tx-{suffix}");
     let transaction = post_signed_applet_message_transaction(
         &app,
         &package,
-        &applet_id,
-        &ghost_actor_id,
-        &realm_id,
-        &message_grant_ref,
-        &format!("hi from outside {suffix}"),
-        &format!("tx-{suffix}"),
+        AppletMessageTransactionRequest {
+            applet_id: &applet_id,
+            actor_id: &ghost_actor_id,
+            realm_id,
+            authorization_ref: &message_grant_ref,
+            text: &transaction_text,
+            idempotency_key: &transaction_idempotency_key,
+        },
     )
     .await;
     assert_eq!(
@@ -718,7 +726,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let messages = state
         .test_persistence()
         .messages()
-        .list_for_realm(&realm_id, 10)
+        .list_for_realm(realm_id, 10)
         .await
         .unwrap();
     assert_eq!(messages.len(), 1);
@@ -756,15 +764,18 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .unwrap();
     assert_eq!(revoke["ok"], json!(true));
 
+    let rejected_idempotency_key = format!("tx-after-revoke-{suffix}");
     let rejected = post_signed_applet_message_transaction(
         &app,
         &package,
-        &applet_id,
-        &ghost_actor_id,
-        &realm_id,
-        &message_grant_ref,
-        "after revoke",
-        &format!("tx-after-revoke-{suffix}"),
+        AppletMessageTransactionRequest {
+            applet_id: &applet_id,
+            actor_id: &ghost_actor_id,
+            realm_id,
+            authorization_ref: &message_grant_ref,
+            text: "after revoke",
+            idempotency_key: &rejected_idempotency_key,
+        },
     )
     .await;
     assert_eq!(

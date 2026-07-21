@@ -207,7 +207,7 @@ mod tests {
 #[derive(Debug, Clone)]
 pub struct AppError {
     pub code: ErrorCode,
-    pub message: String,
+    pub message: Box<str>,
     /// When set, overrides the registry-derived HTTP status. Most call sites
     /// should leave this `None` and let the registry decide; lifecycle paths
     /// (`401` on missing token vs `403` on capability denial) sometimes need
@@ -218,9 +218,9 @@ pub struct AppError {
     /// clients (or tests) depend on (e.g. `unknown_schema`,
     /// `<kind>_not_active`, `batch_not_supported`). New code should prefer
     /// a canonical `ErrorCode` variant.
-    pub wire_code_override: Option<String>,
+    pub wire_code_override: Option<Box<str>>,
     /// Stable protocol reason code rendered as `error.details.reason_code`.
-    pub reason_code: Option<String>,
+    pub reason_code: Option<Box<str>>,
     /// Free-form diagnostic explaining *why* this error fired.
     ///
     /// Round 2 — surfaced through the rendered envelope as
@@ -230,7 +230,7 @@ pub struct AppError {
     /// string is unstable across releases — see the [`EndpointOutRegister`]
     /// doc on the response: clients MUST NOT parse this value, only
     /// log/display it.
-    pub reason_detail: Option<String>,
+    pub reason_detail: Option<Box<str>>,
     /// When set, render a top-level `reason` field on the error envelope.
     ///
     /// Unlike [`Self::reason_detail`] (an opaque diagnostic at
@@ -241,14 +241,14 @@ pub struct AppError {
     /// (`http_signature_required` / `http_signature_invalid` /
     /// `signature_window_invalid`), where `error.code` stays the generic
     /// `unauthenticated` and the discriminator travels in `reason`.
-    pub top_level_reason: Option<String>,
+    pub top_level_reason: Option<Box<str>>,
 }
 
 impl AppError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
-            message: message.into(),
+            message: message.into().into_boxed_str(),
             status: None,
             wire_code_override: None,
             reason_code: None,
@@ -265,13 +265,13 @@ impl AppError {
     /// Override the on-wire `error.code` string. See `wire_code_override` for
     /// the rationale + caveats.
     pub fn with_wire_code(mut self, wire_code: impl Into<String>) -> Self {
-        self.wire_code_override = Some(wire_code.into());
+        self.wire_code_override = Some(wire_code.into().into_boxed_str());
         self
     }
 
     /// Attach a stable protocol reason code without replacing `error.code`.
     pub fn with_reason_code(mut self, reason_code: impl Into<String>) -> Self {
-        self.reason_code = Some(reason_code.into());
+        self.reason_code = Some(reason_code.into().into_boxed_str());
         self
     }
 
@@ -281,7 +281,7 @@ impl AppError {
     /// `error.details.reason_detail` and the OpenAPI schema annotates
     /// it as unstable / opaque.
     pub fn with_reason_detail(mut self, reason_detail: impl Into<String>) -> Self {
-        self.reason_detail = Some(reason_detail.into());
+        self.reason_detail = Some(reason_detail.into().into_boxed_str());
         self
     }
 
@@ -290,7 +290,7 @@ impl AppError {
     /// transaction-push signature path so the `reason` carries the §7.3.1
     /// failure code while `error.code` stays generic.
     pub fn with_top_level_reason(mut self, reason: impl Into<String>) -> Self {
-        self.top_level_reason = Some(reason.into());
+        self.top_level_reason = Some(reason.into().into_boxed_str());
         self
     }
 
@@ -375,7 +375,7 @@ impl Writer for AppError {
         let public_message = if redact_internal {
             "internal error"
         } else {
-            self.message.as_str()
+            self.message.as_ref()
         };
         if let Some(reason) = self.top_level_reason.as_deref() {
             render_error_with_top_level_reason(

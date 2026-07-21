@@ -86,7 +86,10 @@ fn verify_actor_headers_reject_digest_mismatch() {
     assert_eq!(error.code, soland_http::error::ErrorCode::Unauthenticated);
     assert_eq!(error.wire_code(), "unauthenticated");
     assert_eq!(error.http_status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(error.message, FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST);
+    assert_eq!(
+        error.message.as_ref(),
+        FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST
+    );
 }
 
 #[test]
@@ -105,7 +108,10 @@ fn verify_actor_headers_reject_destination_mismatch() {
     assert_eq!(error.code, soland_http::error::ErrorCode::Unauthenticated);
     assert_eq!(error.wire_code(), "unauthenticated");
     assert_eq!(error.http_status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(error.message, FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST);
+    assert_eq!(
+        error.message.as_ref(),
+        FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST
+    );
 }
 
 #[test]
@@ -489,5 +495,8 @@ fn assert_signature_param_rejection_is_minimal(err: AppError) {
     assert_eq!(err.code, soland_http::error::ErrorCode::Unauthenticated);
     assert_eq!(err.wire_code(), "unauthenticated");
     assert_eq!(err.http_status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(err.message, FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST);
+    assert_eq!(
+        err.message.as_ref(),
+        FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST
+    );
 }

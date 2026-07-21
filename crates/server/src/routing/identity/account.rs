@@ -978,21 +978,20 @@ async fn delete_account_localpart(
         .remove_localpart(&account_did, &localpart)
         .await
         .map_err(localpart_persistence_error)?;
-    if removed_primary {
-        if let Some(replacement) = state
+    if removed_primary
+        && let Some(replacement) = state
             .identity_application()
             .account_localparts(&account_did)
             .await
             .map_err(localpart_persistence_error)?
             .into_iter()
             .next()
-        {
-            state
-                .identity_application()
-                .set_primary_localpart(&account_did, &replacement.localpart)
-                .await
-                .map_err(localpart_persistence_error)?;
-        }
+    {
+        state
+            .identity_application()
+            .set_primary_localpart(&account_did, &replacement.localpart)
+            .await
+            .map_err(localpart_persistence_error)?;
     }
     record_handle_release(state, &localpart)
         .await

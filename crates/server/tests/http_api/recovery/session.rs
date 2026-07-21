@@ -785,7 +785,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
         &session,
         &service_id,
         &service_vm,
-        &state.service_id(),
+        state.service_id(),
         None,
     );
     let accepted_audience = state.service_id().clone();

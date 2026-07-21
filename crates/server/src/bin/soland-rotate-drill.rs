@@ -307,7 +307,7 @@ fn run_export_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<()
     let key_id = &identity.signing_key_ref;
     let store = open_service_identity_key_store()?;
     let bytes = store
-        .load(&key_id)
+        .load(key_id)
         .map_err(|e| DrillError::Io(format!("KeyStore::load({key_id}): {e}")))?;
     validate_seed_binding(identity, &bytes)?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -380,7 +380,7 @@ fn run_import_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<()
     let key_id = &identity.signing_key_ref;
     let store = open_service_identity_key_store()?;
     store
-        .store(&key_id, &seed_bytes)
+        .store(key_id, &seed_bytes)
         .map_err(|e| DrillError::Io(format!("KeyStore::store({key_id}): {e}")))?;
     eprintln!("[rotate-drill] import OK ({key_id})");
     Ok(())
@@ -415,7 +415,7 @@ async fn run_rotate_drill(
     let key_id = &identity.signing_key_ref;
     let store = open_service_identity_key_store()?;
     let old_seed_bytes = store
-        .load(&key_id)
+        .load(key_id)
         .map_err(|e| DrillError::Io(format!("snapshot old seed: {e}")))?;
     let old_seed = validate_seed_binding(identity, &old_seed_bytes)?;
     let signing_key = SigningKey::from_bytes(&old_seed);
@@ -456,7 +456,7 @@ async fn run_rotate_drill(
 
     // ── 3. verify rejection left key custody untouched ─────────────────
     let current_seed_bytes = store
-        .load(&key_id)
+        .load(key_id)
         .map_err(|e| DrillError::Io(format!("reload keystore: {e}")))?;
     if current_seed_bytes != old_seed_bytes {
         return Err(DrillError::Assertion(

@@ -21,7 +21,7 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
         .test_persistence()
         .sessions()
         .put(&soland_storage::SessionRecord {
-            token_hash: test_session_credential_hash(token, &state.service_id()),
+            token_hash: test_session_credential_hash(token, state.service_id()),
             actor: actor.to_owned(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             audience: state.service_id().clone(),

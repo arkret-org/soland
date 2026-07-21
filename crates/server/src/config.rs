@@ -1586,7 +1586,8 @@ pub fn derive_trust_domain(service_id: &str) -> anyhow::Result<String> {
 pub(crate) fn did_host_from_service_id(service_id: &str) -> Option<String> {
     let host = if let Some(rest) = service_id.strip_prefix("did:web:") {
         rest.split(':').next()?
-    } else if let Some(rest) = service_id.strip_prefix("did:webvh:") {
+    } else {
+        let rest = service_id.strip_prefix("did:webvh:")?;
         let mut parts = rest.split(':');
         let scid = parts.next()?;
         let host = parts.next()?;
@@ -1594,8 +1595,6 @@ pub(crate) fn did_host_from_service_id(service_id: &str) -> Option<String> {
             return None;
         }
         host
-    } else {
-        return None;
     };
     let host = host
         .split("%3A")

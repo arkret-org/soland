@@ -507,16 +507,16 @@ fn schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
         .filter_map(|relation| relation.to_ref.clone())
         .filter(|actor| actor.starts_with("did:"))
         .collect::<BTreeSet<_>>();
-    if let Some(strand) = projection.strands.get(strand_id) {
-        if let Some(attendees) = strand.fields.get("attendees").and_then(Value::as_array) {
-            recipients.extend(
-                attendees
-                    .iter()
-                    .filter_map(|attendee| attendee.get("actor_id").and_then(Value::as_str))
-                    .filter(|actor| actor.starts_with("did:"))
-                    .map(ToOwned::to_owned),
-            );
-        }
+    if let Some(strand) = projection.strands.get(strand_id)
+        && let Some(attendees) = strand.fields.get("attendees").and_then(Value::as_array)
+    {
+        recipients.extend(
+            attendees
+                .iter()
+                .filter_map(|attendee| attendee.get("actor_id").and_then(Value::as_str))
+                .filter(|actor| actor.starts_with("did:"))
+                .map(ToOwned::to_owned),
+        );
     }
     recipients.extend(
         projection

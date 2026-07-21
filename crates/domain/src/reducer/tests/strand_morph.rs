@@ -428,7 +428,7 @@ fn strand_position_events_queue_unknown_strand() {
         ),
         &hlc,
     );
-    assert!(state.pending_replay.get(strand_id).is_none());
+    assert!(!state.pending_replay.contains_key(strand_id));
     assert!(state.strands[strand_id].updated_at.is_some());
 }
 

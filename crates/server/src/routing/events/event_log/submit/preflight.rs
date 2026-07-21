@@ -49,25 +49,19 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
     if kinds::canonical_kind_string(operation) != arkret_core::events::EventKind::MLS_WELCOME {
         return None;
     }
-    let Some(recipient_actor_id) = operation
+    let recipient_actor_id = operation
         .payload
         .get("recipient_actor_id")
         .or_else(|| operation.payload.get("recipient_principal_id"))
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return None;
-    };
-    let Some(recipient_device_id) = operation
+        .filter(|value| !value.is_empty())?;
+    let recipient_device_id = operation
         .payload
         .get("recipient_device_id")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return None;
-    };
+        .filter(|value| !value.is_empty())?;
     if crate::routing::identity::auth::is_device_revoked(
         state,
         recipient_actor_id,

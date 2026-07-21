@@ -608,6 +608,10 @@ pub(crate) fn event_canonical_digest(event: &Value) -> String {
     sha256_json(&canonical)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fixture mirrors the complete canonical event envelope"
+)]
 pub(crate) fn signed_canonical_event(
     event_id: &str,
     kind: &str,
@@ -1059,6 +1063,10 @@ pub(crate) fn test_ephemeral_device_signing_key(actor: &str, device_id: &str) ->
     SigningKey::from_bytes(&hasher.finalize().into())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fixture exposes each signed did:webvh proof component"
+)]
 pub(crate) fn test_embedded_webvh_proof(
     principal_server_url: &str,
     local_id: &str,
@@ -1220,18 +1228,18 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if kind == "ak.space.create" {
-        if let Some(space) = object.get_mut("object").and_then(Value::as_object_mut) {
-            space
-                .entry("schema".to_owned())
-                .or_insert_with(|| Value::String("ak.schema.space.v1".to_owned()));
-            space.entry("realm_id".to_owned()).or_insert_with(|| {
-                Value::String("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned())
-            });
-            space
-                .entry("created_at".to_owned())
-                .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
-        }
+    if kind == "ak.space.create"
+        && let Some(space) = object.get_mut("object").and_then(Value::as_object_mut)
+    {
+        space
+            .entry("schema".to_owned())
+            .or_insert_with(|| Value::String("ak.schema.space.v1".to_owned()));
+        space.entry("realm_id".to_owned()).or_insert_with(|| {
+            Value::String("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned())
+        });
+        space
+            .entry("created_at".to_owned())
+            .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
     }
 }
 
@@ -1323,29 +1331,29 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if kind == "ak.strand.create" {
-        if let Some(strand) = object.get_mut("object").and_then(Value::as_object_mut) {
-            strand
-                .entry("schema".to_owned())
-                .or_insert_with(|| Value::String("ak.schema.strand.v1".to_owned()));
-            strand.entry("realm_id".to_owned()).or_insert_with(|| {
-                Value::String("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned())
-            });
-            strand
-                .entry("created_at".to_owned())
-                .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
-            strand
-                .entry("stage".to_owned())
-                .or_insert_with(|| Value::String("draft".to_owned()));
-            strand.entry("tracks".to_owned()).or_insert_with(|| {
-                serde_json::json!({
-                    "discussion": {
-                        "is_primary": true,
-                        "profile": "discussion"
-                    }
-                })
-            });
-        }
+    if kind == "ak.strand.create"
+        && let Some(strand) = object.get_mut("object").and_then(Value::as_object_mut)
+    {
+        strand
+            .entry("schema".to_owned())
+            .or_insert_with(|| Value::String("ak.schema.strand.v1".to_owned()));
+        strand.entry("realm_id".to_owned()).or_insert_with(|| {
+            Value::String("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned())
+        });
+        strand
+            .entry("created_at".to_owned())
+            .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+        strand
+            .entry("stage".to_owned())
+            .or_insert_with(|| Value::String("draft".to_owned()));
+        strand.entry("tracks".to_owned()).or_insert_with(|| {
+            serde_json::json!({
+                "discussion": {
+                    "is_primary": true,
+                    "profile": "discussion"
+                }
+            })
+        });
     }
     if matches!(
         kind,
@@ -1392,24 +1400,24 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if kind == "ak.morph.create" {
-        if let Some(morph) = object.get_mut("object").and_then(Value::as_object_mut) {
-            morph
-                .entry("schema".to_owned())
-                .or_insert_with(|| Value::String("ak.schema.morph.v1".to_owned()));
-            morph.entry("realm_id".to_owned()).or_insert_with(|| {
-                Value::String("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned())
-            });
-            morph
-                .entry("created_at".to_owned())
-                .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
-            morph
-                .entry("stage".to_owned())
-                .or_insert_with(|| Value::String("draft".to_owned()));
-            morph
-                .entry("schema_refs".to_owned())
-                .or_insert_with(|| serde_json::json!(["ak.schema.morph.v1"]));
-        }
+    if kind == "ak.morph.create"
+        && let Some(morph) = object.get_mut("object").and_then(Value::as_object_mut)
+    {
+        morph
+            .entry("schema".to_owned())
+            .or_insert_with(|| Value::String("ak.schema.morph.v1".to_owned()));
+        morph.entry("realm_id".to_owned()).or_insert_with(|| {
+            Value::String("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned())
+        });
+        morph
+            .entry("created_at".to_owned())
+            .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+        morph
+            .entry("stage".to_owned())
+            .or_insert_with(|| Value::String("draft".to_owned()));
+        morph
+            .entry("schema_refs".to_owned())
+            .or_insert_with(|| serde_json::json!(["ak.schema.morph.v1"]));
     }
 }
 

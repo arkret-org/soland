@@ -526,7 +526,7 @@ mod tests {
             "019041000000-0001-00000002",
             now,
         ));
-        assert!(projection.message_expiry_anchors.get(event_id).is_none());
+        assert!(!projection.message_expiry_anchors.contains_key(event_id));
         assert!(projection.observe_message_read_for_expiry(
             "did:web:alice.example",
             event_id,

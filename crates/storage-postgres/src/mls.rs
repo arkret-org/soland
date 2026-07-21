@@ -1,9 +1,9 @@
 use super::{
-    BigInt, Binary, Bool, Jsonb, MlsCommitEpochRecord, MlsCommitStore, MlsKeyPackageRow,
-    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Nullable, OptionalExtension,
-    PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SqlUuid, Text, Uuid,
-    Value, async_trait, db_ssk_generation, json_string_array, mls_effective_scope_parts, pg_conn,
-    sql_query,
+    BigInt, Binary, Bool, Jsonb, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitStore,
+    MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Nullable,
+    OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl,
+    SqlUuid, Text, Uuid, Value, async_trait, db_ssk_generation, json_string_array,
+    mls_effective_scope_parts, pg_conn, sql_query,
 };
 pub struct PgMlsKeyPackageStore {
     pub pool: PgPool,
@@ -315,15 +315,10 @@ impl MlsCommitStore for PgMlsCommitStore {
 
     async fn try_bump(
         &self,
-        effective_scope: &Value,
-        group_id: &str,
         expected_prev_epoch: u64,
-        leader_actor_id: &str,
-        covered_seals: &[String],
-        governance_binding: &Value,
-        committed_at: i64,
+        advance: MlsCommitEpochAdvance<'_>,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
-        let scope = mls_effective_scope_parts(effective_scope)?;
+        let scope = mls_effective_scope_parts(advance.effective_scope)?;
         let expected_epoch = i64::try_from(expected_prev_epoch)
             .map_err(|_| PersistenceError::Internal("MLS epoch exceeds i64".to_owned()))?;
         let next_epoch = expected_prev_epoch
@@ -354,13 +349,13 @@ impl MlsCommitStore for PgMlsCommitStore {
         .bind::<Text, _>(&scope.kind)
         .bind::<Text, _>(&scope.realm_id)
         .bind::<Nullable<Text>, _>(&scope.circle_id)
-        .bind::<Text, _>(group_id)
+        .bind::<Text, _>(advance.group_id)
         .bind::<BigInt, _>(expected_epoch)
         .bind::<BigInt, _>(next_epoch)
-        .bind::<Text, _>(leader_actor_id)
-        .bind::<Jsonb, _>(serde_json::json!(covered_seals))
-        .bind::<Jsonb, _>(governance_binding)
-        .bind::<BigInt, _>(committed_at)
+        .bind::<Text, _>(advance.leader_actor_id)
+        .bind::<Jsonb, _>(serde_json::json!(advance.covered_seals))
+        .bind::<Jsonb, _>(advance.governance_binding)
+        .bind::<BigInt, _>(advance.committed_at)
         .get_result::<MlsCommitEpochRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(MlsCommitEpochRecord::from))

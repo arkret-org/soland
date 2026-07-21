@@ -750,14 +750,13 @@ fn validate_space_wip_policy(
     if kind != "list" && (limit.is_some() || enforcement.is_some()) {
         return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
     }
-    if let Some(limit) = limit {
-        if !limit
+    if let Some(limit) = limit
+        && (!limit
             .as_u64()
             .is_some_and(|limit| (1..=100_000).contains(&limit))
-            || enforcement.is_none()
-        {
-            return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
-        }
+            || enforcement.is_none())
+    {
+        return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
     }
     if let Some(enforcement) = enforcement
         && (limit.is_none()

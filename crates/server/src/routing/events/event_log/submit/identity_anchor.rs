@@ -67,10 +67,7 @@ pub(super) async fn submit_identity_anchor_batch(
         None
     };
 
-    let first_contexts = self_principal_pcr_context
-        .as_ref()
-        .map(std::slice::from_ref)
-        .unwrap_or_default();
+    let first_contexts = self_principal_pcr_context.as_slice();
     let first =
         validate_event_envelope_with_context(state, session, &envelopes[0], first_contexts, None)
             .await?;

@@ -56,14 +56,14 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         Some(session) => session,
         None => return,
     };
-    if let Some(session) = session.as_ref() {
-        if let Err(error) = super::super::require_agent_session_scope(
+    if let Some(session) = session.as_ref()
+        && let Err(error) = super::super::require_agent_session_scope(
             session,
             arkret_core::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
-        ) {
-            render_error(res, error.http_status(), error.wire_code(), &error.message);
-            return;
-        }
+        )
+    {
+        render_error(res, error.http_status(), error.wire_code(), &error.message);
+        return;
     }
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
     for realm in realms {
@@ -259,15 +259,15 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         // response. Reuse the validated resume cursor: `frontier` is
         // projection-neutral but establishes the baseline required before
         // `catchup_complete`.
-        if catchup && replay_cursor.is_none() {
-            if let Some(cursor) = after_token.as_ref() {
-                let frontier = json!({
-                    "kind": "frontier",
-                    "cursor": cursor,
-                });
-                yield Ok(ndjson_line(&frontier));
-                replay_cursor = Some(cursor.clone());
-            }
+        if catchup && replay_cursor.is_none()
+            && let Some(cursor) = after_token.as_ref()
+        {
+            let frontier = json!({
+                "kind": "frontier",
+                "cursor": cursor,
+            });
+            yield Ok(ndjson_line(&frontier));
+            replay_cursor = Some(cursor.clone());
         }
 
         // Completion follows either replay data or the empty-replay frontier.
