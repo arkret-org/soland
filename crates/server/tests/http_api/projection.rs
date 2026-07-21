@@ -395,7 +395,10 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
     let circle_id = "ak:circle:01904100-0000-7000-8000-d20dc0000c01";
     let public_morph_id = "ak:morph:01904100-0000-7000-8000-d20dc0000101";
     let scoped_morph_id = "ak:morph:01904100-0000-7000-8000-d20dc0000102";
-    let now = chrono::Utc::now();
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .unwrap();
 
     {
         let mut projection = state.test_projection().lock();
@@ -623,7 +626,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
             "content": "abc"
         }]
     });
-    let update_event = signed_morph_event(
+    let mut update_event = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-d21ec0000003",
         20_000,
         "ak.morph.update",
@@ -640,6 +643,14 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         }),
         vec!["ak:event:01904100-0000-7000-8000-d21ec0000001"],
     );
+    move_event_to_actor_realm_frontier(
+        &state,
+        &token,
+        "did:web:alice.example",
+        realm_id,
+        &mut update_event,
+    )
+    .await;
     let update_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&update_event)
@@ -736,7 +747,10 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
     .await;
     let locked_realm_id = locked_realm["realm_id"].as_str().unwrap().to_owned();
 
-    let now = chrono::Utc::now();
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .unwrap();
     let strand = |strand_id: &str, strand_realm_id: &str, title: &str| {
         soland_domain::reducer::StrandProjection {
             strand_id: strand_id.to_owned(),
@@ -849,7 +863,9 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
     .take_json()
     .await
     .unwrap();
-    let relations = body["relations"].as_array().expect("relations array");
+    let relations = body["relations"]
+        .as_array()
+        .unwrap_or_else(|| panic!("relations array missing from response: {body}"));
     let accessible = relations
         .iter()
         .find(|relation| relation["relation_id"] == accessible_relation_id)

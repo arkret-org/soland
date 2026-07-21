@@ -130,7 +130,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     // e2e suite hits.
     let alice_did = "did:web:s23-alice-c58c7ec9-39a4-40ce-acfd-e7318c944230.example";
     let bob_did = "did:web:s23-bob-f7ec8919-f086-4735-b4d2-8632440d98f8.example";
-    let alice = dev_token_for_device(
+    let alice = verified_dev_token_for_device(
         state.clone(),
         alice_did,
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -164,7 +164,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         "membership": "invite",
         "reason": "realm_invite",
     });
-    let event = signed_canonical_event(
+    let mut event = signed_canonical_event(
         event_id,
         "ak.member.state",
         alice_did,
@@ -174,16 +174,18 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         Vec::new(),
         payload,
     );
+    move_event_to_actor_realm_frontier(&state, &alice, alice_did, &realm_id, &mut event).await;
 
-    let submit = TestClient::post("http://server/_arkret/self/events")
+    let mut submit = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&event)
         .send(&app_from_state(state.clone()))
         .await;
+    let submit_status = submit.status_code.unwrap().as_u16();
+    let submit_body: Value = submit.take_json().await.unwrap();
     assert_eq!(
-        submit.status_code.unwrap().as_u16(),
-        200,
-        "ak.member.state{{invite}} should be accepted"
+        submit_status, 200,
+        "ak.member.state{{invite}} should be accepted: {submit_body}"
     );
 
     // Bob should now see a pending invite for the space.

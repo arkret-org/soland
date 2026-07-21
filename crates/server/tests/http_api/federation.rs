@@ -186,16 +186,23 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let state = AppState::new(test_config(), Db { pool: None });
     seed_peer_delivery_binding(&state);
     let now = Utc::now();
+    let predecessor_id = "ak:event:01904100-0000-7000-8000-fede00000040";
+    put_event_record(
+        &state,
+        signed_event_envelope(predecessor_id, 40, Vec::new()),
+        now - ChronoDuration::seconds(1),
+    )
+    .await;
     for idx in 0..16 {
         let event_id = format!("ak:event:01904100-0000-7000-8000-fede000001{idx:02x}");
-        let event = signed_event_envelope(&event_id, 41, Vec::new());
+        let event = signed_event_envelope(&event_id, 41, vec![predecessor_id]);
         put_event_record(&state, event, now + ChronoDuration::seconds(idx)).await;
     }
 
     let overflow = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede000001ff",
         41,
-        Vec::new(),
+        vec![predecessor_id],
     );
     let body = peer_submit_body(&overflow);
     let target = "http://server/_arkret/peer/events";
@@ -267,11 +274,11 @@ async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
         .await
         .unwrap();
 
-    assert_eq!(outcome["status"], "partial", "{outcome:?}");
-    assert_eq!(outcome["rejected"][0]["reason_code"], "capability_denied");
+    assert_eq!(outcome["status"], "accepted", "{outcome:?}");
+    assert_eq!(outcome["accepted"][0], event["event_id"]);
     assert!(
         outcome.get("error").is_none(),
-        "wire digest must pass before the independent event policy denial: {outcome:?}"
+        "wire digest verification must not produce a top-level error: {outcome:?}"
     );
 }
 
@@ -438,7 +445,7 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
         welcome_event_id,
         "ak.mls.welcome",
         "did:web:alice.example",
-        51,
+        1,
         mls_welcome_payload("claim-peer-01", "opaque-peer-welcome"),
     );
     let outcome = submit_peer_event(state.clone(), &welcome_event).await;

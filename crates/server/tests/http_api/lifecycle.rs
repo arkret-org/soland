@@ -60,7 +60,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     // 3) ak.space.archive — legal (Active → Archived).
     let archive_event = signed_space_event(
         "ak:event:01904100-0000-7000-8000-d10dc0000003",
-        3,
+        2,
         "ak.space.archive",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000001"],
@@ -78,7 +78,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     // 4) ak.space.restore — legal now (Archived → Active).
     let good_restore = signed_space_event(
         "ak:event:01904100-0000-7000-8000-d10dc0000004",
-        4,
+        3,
         "ak.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000003"],
@@ -96,7 +96,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     // 5) ak.space.tombstone — legal (Active → Tombstoned).
     let tombstone_event = signed_space_event(
         "ak:event:01904100-0000-7000-8000-d10dc0000005",
-        5,
+        4,
         "ak.space.tombstone",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000004"],
@@ -114,7 +114,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     // 6) ak.space.tombstone again on Tombstoned → 412 space_already_terminal.
     let bad_tombstone = signed_space_event(
         "ak:event:01904100-0000-7000-8000-d10dc0000006",
-        6,
+        5,
         "ak.space.tombstone",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000005"],
@@ -137,7 +137,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     // transitions).
     let bad_restore_terminal = signed_space_event(
         "ak:event:01904100-0000-7000-8000-d10dc0000007",
-        7,
+        5,
         "ak.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ak:event:01904100-0000-7000-8000-d10dc0000005"],
@@ -209,7 +209,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     // 3) strand archive — legal.
     let archive = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-e10ec0000003",
-        3,
+        2,
         "ak.strand.archive",
         serde_json::json!({ "strand_id": strand_id }),
         vec!["ak:event:01904100-0000-7000-8000-e10ec0000001"],
@@ -227,7 +227,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     // 4) strand archive again on Archived → 412 strand_not_active.
     let bad_archive = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-e10ec0000004",
-        4,
+        3,
         "ak.strand.archive",
         serde_json::json!({ "strand_id": strand_id }),
         vec!["ak:event:01904100-0000-7000-8000-e10ec0000003"],
@@ -244,7 +244,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     // 5) strand update on Archived → 412 strand_not_active.
     let bad_update = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-e10ec0000005",
-        5,
+        3,
         "ak.strand.update",
         serde_json::json!({
             "target_ref": strand_id,
@@ -264,7 +264,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     // 6) strand restore — legal now.
     let good_restore = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-e10ec0000006",
-        6,
+        3,
         "ak.strand.restore",
         serde_json::json!({ "strand_id": strand_id }),
         vec!["ak:event:01904100-0000-7000-8000-e10ec0000003"],
@@ -283,7 +283,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 
     let create_morph = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-e20ec0000001",
-        7,
+        4,
         "ak.morph.create",
         serde_json::json!({
             "object": {
@@ -294,7 +294,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
                 "created_by": "did:web:alice.example",
             }
         }),
-        Vec::new(),
+        vec!["ak:event:01904100-0000-7000-8000-e10ec0000006"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -309,7 +309,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     // morph restore on Active → 412 morph_not_archived.
     let bad_morph_restore = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-e20ec0000002",
-        8,
+        5,
         "ak.morph.restore",
         serde_json::json!({ "target_ref": morph_id }),
         vec!["ak:event:01904100-0000-7000-8000-e20ec0000001"],
@@ -326,7 +326,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     // morph archive — legal.
     let morph_archive = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-e20ec0000003",
-        9,
+        5,
         "ak.morph.archive",
         serde_json::json!({ "target_ref": morph_id }),
         vec!["ak:event:01904100-0000-7000-8000-e20ec0000001"],
@@ -344,7 +344,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     // morph update on Archived → 412 morph_not_active.
     let bad_morph_update = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-e20ec0000004",
-        10,
+        6,
         "ak.morph.update",
         serde_json::json!({
             "target_ref": morph_id,
@@ -525,7 +525,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
 
     let good_in_progress = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-f51ec0000003",
-        3,
+        2,
         "ak.strand.update",
         serde_json::json!({
             "target_ref": task_strand_id,
@@ -545,7 +545,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
 
     let good_done = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-f51ec0000004",
-        4,
+        3,
         "ak.strand.update",
         serde_json::json!({
             "target_ref": task_strand_id,
@@ -565,7 +565,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
 
     let create_incident = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-f51ec0000005",
-        5,
+        4,
         "ak.strand.create",
         serde_json::json!({
             "object": {
@@ -589,7 +589,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
 
     let bad_resolved = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-f51ec0000006",
-        6,
+        5,
         "ak.strand.update",
         serde_json::json!({
             "target_ref": incident_strand_id,
@@ -746,7 +746,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
 
     let create_morph = signed_morph_event(
         "ak:event:01904100-0000-7000-8000-f20ec0000001",
-        4,
+        3,
         "ak.morph.create",
         serde_json::json!({
             "object": {
@@ -757,7 +757,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
                 "created_by": "did:web:alice.example",
             }
         }),
-        Vec::new(),
+        vec!["ak:event:01904100-0000-7000-8000-f10ec0000002"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -771,7 +771,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
 
     let morph_redact = signed_redaction_event(
         "ak:event:01904100-0000-7000-8000-f20ec0000002",
-        5,
+        4,
         serde_json::json!({
             "target_event_id": "ak:event:01904100-0000-7000-8000-f20ec0000001",
             "object_ref": morph_id,
@@ -796,7 +796,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     // Second morph redaction → 412 morph_already_terminal.
     let bad_morph_redact = signed_redaction_event(
         "ak:event:01904100-0000-7000-8000-f20ec0000003",
-        6,
+        5,
         serde_json::json!({
             "target_event_id": "ak:event:01904100-0000-7000-8000-f20ec0000001",
             "object_ref": morph_id,

@@ -398,12 +398,12 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
         (
             "private-contact-discovery",
             serde_json::json!({
-                "requester": "did:web:alice.example",
-                "contacts": [{
-                    "contact_ref": "alice",
-                    "identifier_kind": "handle",
-                    "identifier_commitment": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-                }]
+                "profile": "ak.private_contact_discovery.v1",
+                "phase": "blind",
+                "batch_id": "ak:batch:01904100-0000-7000-8000-000000000001",
+                "ciphersuite": "ristretto255-SHA512",
+                "key_epoch": 1,
+                "blinded_elements": ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
             }),
         ),
     ];
@@ -561,7 +561,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         .await
         .unwrap();
 
-    assert_eq!(resolved["target_kind"], "strand");
+    assert_eq!(resolved["target_kind"], "strand", "{resolved}");
     assert_eq!(resolved["realm_preview"]["realm_id"], realm_id);
     // discovery-directory.md §9 resolve_target reuses resolve_realm's flat
     // realm_preview; fields are top-level with no `preview` nesting.

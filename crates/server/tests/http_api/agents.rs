@@ -349,12 +349,17 @@ pub(super) async fn provision_agent_with_sdk_events(
         preparation["requested_scope_digest"],
         expected_scope_digest.as_str()
     );
-    let next_actor_seq = state
-        .test_persistence()
-        .events()
-        .max_actor_seq(controller)
-        .await
-        .unwrap()
+    let actor_frontier: Value = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?actor_id={controller}&realm_id={controller_realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .expect("controller actor frontier");
+    let next_actor_seq = actor_frontier["frontier"]["actor_seq"]
+        .as_u64()
         .unwrap_or(0)
         + 1;
     let now =
@@ -382,6 +387,11 @@ pub(super) async fn provision_agent_with_sdk_events(
         &signer,
     )
     .unwrap();
+    events.accountability_grant.prev_refs = actor_frontier["frontier"]["event_id"]
+        .as_str()
+        .map(|event_id| vec![arkret_core::EventId::new(event_id.to_owned()).unwrap()])
+        .unwrap_or_default();
+    events.selector_claim.prev_refs = vec![events.accountability_grant.event_id.clone()];
     let mut frontier_response = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?realm_id={controller_realm_id}"
     ))

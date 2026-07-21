@@ -1082,6 +1082,14 @@ pub(crate) async fn submit_federation_events(
             });
             continue;
         }
+        if let Err(rejection) = profile_gate.enforce_event(&envelope) {
+            rejected.push(EventsSubmitRejectedItem {
+                id,
+                reason_code: rejection.code.to_owned(),
+                detail: Some(rejection.message),
+            });
+            continue;
+        }
         if event_string_field_from_value(&envelope, "kind").as_deref()
             == Some(arkret_core::events::EventKind::MLS_WELCOME)
         {
@@ -1144,14 +1152,6 @@ pub(crate) async fn submit_federation_events(
                 id,
                 reason_code: "capability_denied".to_owned(),
                 detail: Some("actor_id is not hosted by the source service authority and is not a known member of the binding realm".to_owned()),
-            });
-            continue;
-        }
-        if let Err(rejection) = profile_gate.enforce_event(&envelope) {
-            rejected.push(EventsSubmitRejectedItem {
-                id,
-                reason_code: rejection.code.to_owned(),
-                detail: Some(rejection.message),
             });
             continue;
         }

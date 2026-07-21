@@ -1346,7 +1346,10 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let push_gateway = "https://push.example/_arkret/edge/push/notify";
     let bridge_describe = "https://push.example/_floria/push/bridge/describe";
-    let stale_at = chrono::Utc::now() - chrono::Duration::hours(25);
+    let stale_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        (chrono::Utc::now() - chrono::Duration::hours(25)).timestamp_millis(),
+    )
+    .unwrap();
 
     let stale_import: Value = TestClient::post(
         "http://server/_soland/edge/push/outbound/bridge/cache/import",
@@ -1412,7 +1415,10 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .unwrap();
     assert_eq!(stale_notify["rejected"][0]["reason_code"], "contract_drift");
 
-    let now = chrono::Utc::now();
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .unwrap();
     let fresh_import: Value = TestClient::post(
         "http://server/_soland/edge/push/outbound/bridge/cache/import",
     )

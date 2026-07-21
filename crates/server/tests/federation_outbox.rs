@@ -448,7 +448,7 @@ fn http_signature_verifies_with_headers(
     };
     let authority = authority_from_target_uri(target_uri);
 
-    let signature_base = format!(
+    let mut signature_base = format!(
         "\"@method\": POST\n\
          \"@target-uri\": {target_uri}\n\
          \"@authority\": {authority}\n\
@@ -457,9 +457,12 @@ fn http_signature_verifies_with_headers(
          \"destination-service-id\": {destination_service_id}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}\n\
-         \"request-canonical-digest\": {request_canonical_digest}\n\
-         \"@signature-params\": {signature_params}",
+         \"request-canonical-digest\": {request_canonical_digest}",
     );
+    if let Some(idempotency_key) = headers.get("idempotency-key") {
+        signature_base.push_str(&format!("\n\"idempotency-key\": {idempotency_key}"));
+    }
+    signature_base.push_str(&format!("\n\"@signature-params\": {signature_params}"));
 
     verifying_key
         .verify(signature_base.as_bytes(), &signature)

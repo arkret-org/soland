@@ -940,7 +940,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(filter_mismatch.status_code.unwrap().as_u16(), 400);
 
     let mut expired_cursor = cursor.clone();
-    expired_cursor["x"] = serde_json::json!(1);
+    expired_cursor["expires_at"] = serde_json::json!("2020-01-01T00:00:00.000Z");
     let mut expired = TestClient::get(format!(
         "http://server/_arkret/self/account/subscribe?catchup=true&after={}",
         encode_cursor(&expired_cursor)

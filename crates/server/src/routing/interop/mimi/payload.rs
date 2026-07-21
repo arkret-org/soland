@@ -18,13 +18,29 @@ pub(super) async fn persist_mimi_canonical_message_event(
     let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
     let _service_event_guard = service_event_lock.lock().await;
     let actor_id = state.service_id.as_str();
-    let actor_seq = state
+    let scoped_records = state
         .events_store()
-        .max_actor_seq(actor_id)
+        .list_for_actor(actor_id)
         .await
         .map_err(|error| AppError::internal(format!("MIMI actor frontier lookup: {error}")))?
-        .unwrap_or(0)
-        + 1;
+        .into_iter()
+        .filter(|record| record.realm_id.as_deref() == Some(realm_id))
+        .collect::<Vec<_>>();
+    let max_actor_seq = scoped_records
+        .iter()
+        .map(|record| record.actor_seq)
+        .max()
+        .unwrap_or(0);
+    let prev_refs = scoped_records
+        .into_iter()
+        .filter(|record| max_actor_seq > 0 && record.actor_seq == max_actor_seq)
+        .map(|record| {
+            arkret_core::EventId::new(record.event_id).map_err(|error| {
+                AppError::internal(format!("stored MIMI actor frontier id invalid: {error}"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let actor_seq = max_actor_seq + 1;
     let service_did = arkret_core::Did::new(state.service_id.clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let mut event = arkret_core::Event::new_with_id_at(
@@ -41,6 +57,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         created_at,
     )
     .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
+    event.prev_refs = prev_refs;
     let verification_method = format!("{}#notary-key", state.service_id);
     let signer = arkret_signatures::Ed25519MoveSigner::new(
         state.notary_signing_key().as_ref().clone(),

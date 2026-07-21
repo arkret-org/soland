@@ -286,6 +286,7 @@ pub(super) async fn submit_event_value_with_context(
             "a Realm-scoped actor-chain genesis must use actor_seq=1",
         ));
     }
+    let mut max_actor_predecessor_seq = None;
     for prev_ref in &parsed.prev_refs {
         let predecessor = existing_records
             .iter()
@@ -298,16 +299,30 @@ pub(super) async fn submit_event_value_with_context(
             ));
         }
         let predecessor = predecessor.expect("presence checked above");
-        if predecessor.actor_id != parsed.actor_id
-            || predecessor.realm_id.as_deref() != Some(parsed.realm_id.as_str())
-            || predecessor.actor_seq.saturating_add(1) != parsed.actor_seq
-        {
+        if predecessor.realm_id.as_deref() != Some(parsed.realm_id.as_str()) {
             return Err(SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "prev_refs must reference the preceding actor sequence in the same Realm",
+                "prev_refs must not reference an Event in another Realm",
             ));
         }
+        if predecessor.actor_id == parsed.actor_id {
+            max_actor_predecessor_seq = Some(
+                max_actor_predecessor_seq.map_or(predecessor.actor_seq, |current: u64| {
+                    current.max(predecessor.actor_seq)
+                }),
+            );
+        }
+    }
+    if max_actor_predecessor_seq
+        .is_some_and(|predecessor_seq| predecessor_seq.saturating_add(1) != parsed.actor_seq)
+        || (max_actor_predecessor_seq.is_none() && parsed.actor_seq != 1)
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "prev_refs must include the preceding actor sequence in the same Realm",
+        ));
     }
     for authorized_ref in &parsed.authorized_refs {
         if !existing_records

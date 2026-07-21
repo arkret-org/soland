@@ -50,7 +50,8 @@ impl RealmDirectoryEntry {
             category: None,
             realm_class: None,
             default_join_rule: None,
-            as_of: Utc::now(),
+            as_of: DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
+                .expect("current time is representable at millisecond precision"),
             source_refs: vec![crate::ids::generate_event_id()],
             policy_revision: "local".to_owned(),
         }

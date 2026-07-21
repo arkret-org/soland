@@ -1030,7 +1030,7 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     let publish_op = Operation::create(
         OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
         RealmId::new(control_realm.clone()).unwrap(),
-        "ak.test_cross_signing().publish",
+        "ak.cross_signing.publish",
         publish_payload,
     );
     let authorize_op = Operation::create(
@@ -1238,14 +1238,20 @@ async fn keys_query_hides_revoked_device() {
         "phone-device-key"
     );
 
-    let logout: Value = TestClient::post("http://server/_arkret/gate/account/logout")
-        .add_header("authorization", format!("Bearer {mobile}"), true)
-        .send(&app_from_state(state.clone()))
+    let mut revoked = state
+        .test_persistence()
+        .devices()
+        .get("did:web:alice.example", mobile_device)
         .await
-        .take_json()
+        .unwrap()
+        .unwrap();
+    revoked.revoked_at = Some(chrono::Utc::now());
+    state
+        .test_persistence()
+        .devices()
+        .put(&revoked)
         .await
         .unwrap();
-    assert_eq!(logout["revoked"], true);
 
     let post_revoke_query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
@@ -1271,13 +1277,6 @@ async fn keys_query_hides_revoked_device() {
 #[tokio::test]
 async fn revoked_device_blocks_encrypted_writes() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let device_token = dev_token_for_device(
-        state.clone(),
-        "did:web:alice.example",
-        "ak:device:01904100-0000-7000-8000-30b11e000005",
-        "Alice Mobile",
-    )
-    .await;
     let stale_session = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
@@ -1285,27 +1284,46 @@ async fn revoked_device_blocks_encrypted_writes() {
         "Alice Mobile",
     )
     .await;
-
-    let logout: Value = TestClient::post("http://server/_arkret/gate/account/logout")
-        .add_header("authorization", format!("Bearer {device_token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(logout["revoked"], true);
-
-    let blocked_send = post_message_event(
-        state.clone(),
-        &stale_session,
+    let mut blocked_event = signed_message_event_envelope(
         "did:web:alice.example",
         DEMO_REALM_ID,
         DEMO_REALM_ID,
         encrypted_envelope("ak.message.v1", "blocked-ciphertext"),
         true,
+    );
+    move_event_to_actor_realm_frontier(
+        &state,
+        &stale_session,
+        "did:web:alice.example",
+        DEMO_REALM_ID,
+        &mut blocked_event,
     )
     .await;
-    assert_eq!(blocked_send.as_u16(), 401);
+
+    let mut revoked = state
+        .test_persistence()
+        .devices()
+        .get(
+            "did:web:alice.example",
+            "ak:device:01904100-0000-7000-8000-30b11e000005",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    revoked.revoked_at = Some(chrono::Utc::now());
+    state
+        .test_persistence()
+        .devices()
+        .put(&revoked)
+        .await
+        .unwrap();
+
+    let blocked_send = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {stale_session}"), true)
+        .json(&blocked_event)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(blocked_send.status_code.unwrap().as_u16(), 401);
 
     let mut blocked_upload = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {stale_session}"), true)

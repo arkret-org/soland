@@ -385,7 +385,10 @@ pub(crate) async fn verified_dev_token_for_device(
 }
 
 pub(crate) async fn seed_did_document_also_known_as(state: &AppState, did: &str, aliases: &[&str]) {
-    let now = chrono::Utc::now();
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .unwrap();
     let aliases = aliases
         .iter()
         .map(|alias| Value::String((*alias).to_owned()))
@@ -430,7 +433,10 @@ pub(crate) async fn seed_test_realm(
     let realm_id = new_prefixed_uuid7("ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_did = Did::new(owner.to_owned()).unwrap();
-    let now = chrono::Utc::now();
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .unwrap();
 
     let mut entry = RealmDirectoryEntry::new(typed_realm_id, title);
     entry.description = summary.map(ToOwned::to_owned);
@@ -527,7 +533,10 @@ pub(crate) async fn seed_test_realm(
 pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Value {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
-    let now = chrono::Utc::now();
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .unwrap();
     let mut realms = state.test_realms().lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.insert(member_did);

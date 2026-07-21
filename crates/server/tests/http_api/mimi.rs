@@ -519,7 +519,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     assert_eq!(event_kind(message_event), Some("ak.message.create"));
     assert_eq!(message_event["actor_id"], state.service_id().as_str());
     assert_eq!(
-        message_event["payload"]["mimi_provenance"]["original_sender"],
+        message_event["payload"]["metadata"]["mimi_provenance"]["original_sender"],
         "did:web:remote.example"
     );
     assert_eq!(
@@ -527,11 +527,11 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         "hello from MIMI P4"
     );
     assert_eq!(
-        message_event["payload"]["mimi_provenance"]["mimi_message_id"],
+        message_event["payload"]["metadata"]["mimi_provenance"]["mimi_message_id"],
         "mimi-msg-p4-001"
     );
     assert_eq!(
-        message_event["payload"]["mimi_provenance"]["facade"],
+        message_event["payload"]["metadata"]["mimi_provenance"]["facade"],
         "soland.mimi.v1"
     );
 
@@ -781,7 +781,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     .unwrap();
     let transcript_event_id = transcript_resp["event_ref"]
         .as_str()
-        .expect("transcript event id")
+        .unwrap_or_else(|| panic!("transcript event id: {transcript_resp}"))
         .to_owned();
 
     let quarantine_resp: Value = signed_mimi_post!(
@@ -835,7 +835,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         "mimi_bridge"
     );
     assert_eq!(
-        downgrade_event["payload"]["mimi_policy"]["e2ee_boundary"],
+        downgrade_event["payload"]["metadata"]["mimi_policy"]["e2ee_boundary"],
         "explicit_downgrade"
     );
 
@@ -845,7 +845,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     );
     assert_eq!(
-        transcript_event["payload"]["mimi_policy"]["e2ee_boundary"],
+        transcript_event["payload"]["metadata"]["mimi_policy"]["e2ee_boundary"],
         "transcript_bound"
     );
 
@@ -859,7 +859,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         "m.location.share.live"
     );
     assert_eq!(
-        quarantine_event["payload"]["quarantine"]["unknown_content_kind"],
+        quarantine_event["payload"]["metadata"]["quarantine"]["unknown_content_kind"],
         "m.location.share.live"
     );
 }

@@ -27,7 +27,7 @@ fn cross_signing_reset_event(
         actor,
         device_id,
         &realm_id,
-        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        1,
         Vec::new(),
         payload,
     );

@@ -489,7 +489,7 @@ async fn events_describe_and_single_event_submit_work() {
         "01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
         3,
-        Vec::new(),
+        vec!["ak:event:01904100-0000-7000-8000-63f16896f0b0"],
         artifact_kind_payload,
     );
     let artifact_kind_submitted: Value = TestClient::post("http://server/_arkret/self/events")
@@ -710,10 +710,34 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     assert_eq!(missing_body["reason"], "realm_founding_grant_missing");
 
     let grant_id = new_prefixed_uuid7("ak:grant:");
-    let grant_proof = serde_json::to_value(arkret_core::PayloadProof {
+    let mut grant: arkret_core::CapabilityGrant = serde_json::from_value(serde_json::json!({
+        "id": grant_id,
+        "schema": "ak.schema.capability.v1",
+        "realm_id": realm_id,
+        "issuer": actor,
+        "subject": actor,
+        "actions": [
+            "ak.realm.admin",
+            "ak.capability.grant",
+            "ak.capability.revoke"
+        ],
+        "capability_action_registry_digest": arkret_core::current_capability_action_registry_digest().unwrap(),
+        "resources": [{
+            "kind": "realm",
+            "realm_id": realm_id,
+            "match_scope": "realm_wide"
+        }],
+        "issued_at": created_at,
+        "proofs": []
+    }))
+    .unwrap();
+    let verification_method = actor
+        .strip_prefix("did:key:")
+        .map_or_else(|| format!("{actor}#device"), |key| format!("{actor}#{key}"));
+    grant.proofs = vec![arkret_core::PayloadProof {
         kind: arkret_core::proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
-        verification_method: format!("{actor}#device"),
+        verification_method,
         payload_digest: arkret_core::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
         created_at: chrono::DateTime::parse_from_rfc3339(created_at)
             .unwrap()
@@ -721,8 +745,16 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         domain: None,
         audience: None,
         proof_purpose: Some(arkret_core::PayloadProofPurpose::IssuerAttestation),
-        jws: "eyJhbGciOiJFZERTQSJ9..c2lnbmF0dXJl".to_owned(),
-    })
+        jws: "pending".to_owned(),
+    }];
+    grant.proofs[0].payload_digest = grant.payload_digest().unwrap();
+    let proof_binding = grant
+        .canonical_proof_binding_bytes(&grant.proofs[0])
+        .unwrap();
+    grant.proofs[0].jws = arkret_signatures::jws::sign_jws_ed25519(
+        &proof_binding,
+        &SigningKey::from_bytes(&[21_u8; 32]),
+    )
     .unwrap();
     let founding = signed_canonical_event(
         "ak:event:01904100-0000-7000-8000-c7ea7e000002",
@@ -734,26 +766,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         vec![event["event_id"].as_str().unwrap()],
         serde_json::json!({
             "grant_id": grant_id,
-            "grant": {
-                "id": grant_id,
-                "schema": "ak.schema.capability.v1",
-                "realm_id": realm_id,
-                "issuer": actor,
-                "subject": actor,
-                "actions": [
-                    "ak.realm.admin",
-                    "ak.capability.grant",
-                    "ak.capability.revoke"
-                ],
-                "capability_action_registry_digest": arkret_core::current_capability_action_registry_digest().unwrap(),
-                "resources": [{
-                    "kind": "realm",
-                    "realm_id": realm_id,
-                    "match_scope": "realm_wide"
-                }],
-                "issued_at": created_at,
-                "proofs": [grant_proof]
-            }
+            "grant": grant
         }),
     );
 
@@ -1576,7 +1589,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
         realm_id,
-        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        1,
         Vec::new(),
         payload.clone(),
     );
