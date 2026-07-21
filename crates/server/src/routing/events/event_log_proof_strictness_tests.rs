@@ -1246,7 +1246,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
 }
 
 #[test]
-fn realm_create_shape_allows_world_readable_encrypted_history() {
+fn realm_create_rejects_world_readable_history_without_history_capable_scheme() {
     let state = make_state(true);
     let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000001";
     let envelope = json!({
@@ -1278,7 +1278,7 @@ fn realm_create_shape_allows_world_readable_encrypted_history() {
         }
     });
     let object = envelope.as_object().unwrap();
-    validate_event_schema_and_payload(
+    let err = validate_event_schema_and_payload(
         &state,
         "ak.realm.create",
         "ak.schema.event.v1",
@@ -1286,7 +1286,12 @@ fn realm_create_shape_allows_world_readable_encrypted_history() {
         object,
         false,
     )
-    .expect("shape validation defers encrypted history scheme compatibility to operation policy");
+    .expect_err("world-readable MLS history requires a history-capable content scheme");
+    assert_eq!(err.code, "failed_precondition");
+    assert_eq!(
+        err.message,
+        "history_visibility_requires_history_capable_scheme"
+    );
 }
 
 #[tokio::test]

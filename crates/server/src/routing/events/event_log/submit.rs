@@ -935,14 +935,14 @@ mod received_at_stamp_tests {
                 .payload
                 .get("event_received_at")
                 .and_then(Value::as_str),
-            Some("2026-07-07T05:20:58.398662+00:00")
+            Some("2026-07-07T05:20:58.398Z")
         );
         assert_eq!(
             circle_member_state
                 .payload
                 .get("event_received_at")
                 .and_then(Value::as_str),
-            Some("2026-07-07T05:20:58.398662+00:00")
+            Some("2026-07-07T05:20:58.398Z")
         );
     }
 }
