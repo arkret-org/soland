@@ -10,9 +10,7 @@
 //! in their owning module so they can carry their own invariants. They will
 //! land here only if they outgrow that scope.
 
-use arkret_core::{DeviceId, Did, SpaceId};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use arkret_core::{Cursor, CursorPurpose, DeviceId, Did, SpaceId};
 use salvo::http::header;
 use salvo::prelude::*;
 
@@ -112,46 +110,34 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Validate a `ak:cursor:<base64url>` token.
 ///
-/// `ak:cursor:` tokens are a base64url-encoded v1 cursor object with
-/// `{v,purpose,t,x,h}`. Core cursors do not carry inline positions or
-/// stateless integrity material.
+/// Delegate the issuing-service wire validation to the SDK cursor model so
+/// this transport gate cannot drift from the canonical timestamp field names
+/// or purpose-specific TTL rules.
 pub fn is_valid_sync_token(token: &str) -> bool {
-    let Some(encoded) = token.strip_prefix("ak:cursor:") else {
-        return false;
-    };
-    let Ok(bytes) = URL_SAFE_NO_PAD.decode(encoded) else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return false;
-    };
-    let Some(handle) = value.get("h").and_then(|handle| handle.as_str()) else {
-        return false;
-    };
-    if value.get("_mac").is_some()
-        || value.get("_sig").is_some()
-        || value.get("issuer_kid").is_some()
-        || value.get("_ctx").is_some()
-        || value.get("_positions").is_some()
-        || value.get("_filter_digest").is_some()
-        || value.get("filter_digest").is_some()
-    {
-        return false;
+    Cursor::decode(token).is_ok_and(|cursor| {
+        matches!(
+            cursor.purpose,
+            CursorPurpose::Stream | CursorPurpose::Barrier
+        )
+    })
+}
+
+#[cfg(test)]
+mod sync_token_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_sdk_stream_and_barrier_cursor_wire_shapes() {
+        let stream = Cursor::new_at(chrono::Utc::now(), 60_000)
+            .expect("stream cursor")
+            .with_stateful_handle("a".repeat(22));
+        assert!(is_valid_sync_token(&stream.encode().expect("encoded stream cursor")));
+
+        let barrier = stream.with_barrier();
+        assert!(is_valid_sync_token(
+            &barrier.encode().expect("encoded barrier cursor")
+        ));
     }
-    value
-        .get("v")
-        .and_then(|v| v.as_str())
-        .is_some_and(|v| v == "1")
-        && value
-            .get("purpose")
-            .and_then(|purpose| purpose.as_str())
-            .is_some_and(|purpose| matches!(purpose, "stream" | "barrier"))
-        && value.get("t").and_then(|t| t.as_str()).is_some()
-        && value
-            .get("x")
-            .and_then(|x| x.as_i64())
-            .is_some_and(|x| x > 0)
-        && crate::cursor::validate_cursor_handle(handle).is_ok()
 }
 
 /// `sha256:<64 lowercase hex>` shape.
