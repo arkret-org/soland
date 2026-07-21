@@ -18,9 +18,10 @@ fn cross_signing_reset_event(
     device_id: &str,
     event_id: &str,
     payload: Value,
+    actor_signing_key: &SigningKey,
 ) -> Value {
     let realm_id = soland_test_support::principal_control_realm_for_did(actor);
-    signed_canonical_event(
+    let event = signed_canonical_event(
         event_id,
         "ak.cross_signing.reset",
         actor,
@@ -29,7 +30,28 @@ fn cross_signing_reset_event(
         TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         Vec::new(),
         payload,
+    );
+    let mut event: arkret_core::Event =
+        serde_json::from_value(event).expect("reset Event roundtrip");
+    event.proofs.clear();
+    let verification_method = actor.strip_prefix("did:key:").map_or_else(
+        || format!("{actor}#{device_id}"),
+        |key| format!("{actor}#{key}"),
+    );
+    let signer = arkret_signatures::Ed25519MoveSigner::new(
+        actor_signing_key.clone(),
+        event.actor_id.clone(),
+        verification_method.clone(),
+    );
+    let created_at = event.created_at;
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
+    .expect("reset Event signing");
+    serde_json::to_value(event).expect("reset Event serializes")
 }
 
 fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value {
@@ -1096,7 +1118,13 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     let body = submit_reset_event(
         state.clone(),
         &token,
-        cross_signing_reset_event(&principal_id, RESET_SOURCE_DEVICE, &event_id, payload),
+        cross_signing_reset_event(
+            &principal_id,
+            RESET_SOURCE_DEVICE,
+            &event_id,
+            payload,
+            &signing,
+        ),
     )
     .await;
     assert_eq!(body["status"], "accepted", "body: {body}");
@@ -1146,7 +1174,13 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     let body = submit_reset_event(
         state.clone(),
         &token,
-        cross_signing_reset_event(&principal_id, RESET_SOURCE_DEVICE, &event_id, payload),
+        cross_signing_reset_event(
+            &principal_id,
+            RESET_SOURCE_DEVICE,
+            &event_id,
+            payload,
+            &signing,
+        ),
     )
     .await;
     assert_eq!(body["status"], "accepted", "body: {body}");
@@ -1224,7 +1258,13 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     let body = submit_reset_event(
         state.clone(),
         &token,
-        cross_signing_reset_event(&principal_id, RESET_SOURCE_DEVICE, &event_id, payload),
+        cross_signing_reset_event(
+            &principal_id,
+            RESET_SOURCE_DEVICE,
+            &event_id,
+            payload,
+            &signing,
+        ),
     )
     .await;
     assert_eq!(body["status"], "accepted", "body: {body}");
@@ -1303,7 +1343,13 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
     let body = submit_reset_event(
         state.clone(),
         &token,
-        cross_signing_reset_event(&principal_id, RESET_SOURCE_DEVICE, &event_id, payload),
+        cross_signing_reset_event(
+            &principal_id,
+            RESET_SOURCE_DEVICE,
+            &event_id,
+            payload,
+            &signing,
+        ),
     )
     .await;
     assert_eq!(body["status"], "accepted", "body: {body}");
@@ -1360,6 +1406,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
             RESET_SOURCE_DEVICE,
             &replay_event_id,
             replay_payload,
+            &signing,
         ),
         StatusCode::PRECONDITION_FAILED,
     )

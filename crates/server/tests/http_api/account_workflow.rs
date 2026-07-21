@@ -869,8 +869,8 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     );
     assert_eq!(cursor["v"], "1");
     assert_eq!(cursor["purpose"], "stream");
-    assert!(cursor["t"].as_str().is_some());
-    assert!(cursor["x"].as_i64().unwrap() > 0);
+    assert!(cursor["issued_at"].as_str().is_some());
+    assert!(cursor["expires_at"].as_str().is_some());
     assert!(cursor["h"].as_str().is_some_and(|h| h.len() >= 22));
     assert!(cursor.get("_ctx").is_none());
     assert!(cursor.get("_positions").is_none());

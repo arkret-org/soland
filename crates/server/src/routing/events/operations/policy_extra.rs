@@ -245,12 +245,17 @@ fn validate_read_receipt_policy_against_history(
     {
         return Ok(());
     }
-    if !policy.allow_public_receipts_on_world_readable {
+    if !policy
+        .receipt_compliance_opt_in
+        .public_receipts_on_world_readable
+    {
         return Err(READ_RECEIPT_VISIBILITY_COMBINATION_INVALID);
     }
     if policy.disclosure
         == arkret_models_collaboration::objects::read_receipts::ReadReceiptDisclosure::Required
-        && !policy.allow_forced_public_world_readable_receipts
+        && !policy
+            .receipt_compliance_opt_in
+            .forced_public_world_readable_receipts
     {
         return Err(READ_RECEIPT_FORCED_PUBLIC_WORLD_READABLE_FORBIDDEN);
     }

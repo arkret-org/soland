@@ -47,16 +47,19 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         .get("scope_overrides_allowed")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    let allow_child_privacy_tightening_against_required = payload
-        .get("allow_child_privacy_tightening_against_required")
+    let receipt_compliance_opt_in = payload
+        .get("receipt_compliance_opt_in")
+        .and_then(Value::as_object);
+    let child_privacy_tightening_against_required = receipt_compliance_opt_in
+        .and_then(|opt_in| opt_in.get("child_privacy_tightening_against_required"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let allow_public_receipts_on_world_readable = payload
-        .get("allow_public_receipts_on_world_readable")
+    let public_receipts_on_world_readable = receipt_compliance_opt_in
+        .and_then(|opt_in| opt_in.get("public_receipts_on_world_readable"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let allow_forced_public_world_readable_receipts = payload
-        .get("allow_forced_public_world_readable_receipts")
+    let forced_public_world_readable_receipts = receipt_compliance_opt_in
+        .and_then(|opt_in| opt_in.get("forced_public_world_readable_receipts"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
@@ -74,9 +77,11 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         "disclosure": disclosure,
         "visibility": visibility,
         "scope_overrides_allowed": scope_overrides_allowed,
-        "allow_child_privacy_tightening_against_required": allow_child_privacy_tightening_against_required,
-        "allow_public_receipts_on_world_readable": allow_public_receipts_on_world_readable,
-        "allow_forced_public_world_readable_receipts": allow_forced_public_world_readable_receipts,
+        "receipt_compliance_opt_in": {
+            "child_privacy_tightening_against_required": child_privacy_tightening_against_required,
+            "public_receipts_on_world_readable": public_receipts_on_world_readable,
+            "forced_public_world_readable_receipts": forced_public_world_readable_receipts,
+        },
     });
     {
         let mut proj = state.projection.lock();
