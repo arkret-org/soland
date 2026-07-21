@@ -50,7 +50,6 @@ use arkret_core::{
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::SecondsFormat;
 use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -165,7 +164,7 @@ mod tests {
     }
 
     fn agent_record(agent_id: &str, controller_id: &str) -> AgentPrincipalRecord {
-        let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-11T00:00:00Z")
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-11T00:00:00.000Z")
             .expect("fixture timestamp")
             .with_timezone(&chrono::Utc);
         let mut record = AgentPrincipalRecord::new(
@@ -253,8 +252,8 @@ mod tests {
                 "accountable_principal_id": controller,
                 "agent_key_scope": scope,
                 "audience": [service_id],
-                "issued_at": "2026-07-06T00:00:00Z",
-                "expires_at": "2999-01-01T00:00:00Z",
+                "issued_at": "2026-07-06T00:00:00.000Z",
+                "expires_at": "2999-01-01T00:00:00.000Z",
                 "approval_evidence": {
                     "kind": "pairing_request",
                     "request_canonical_digest": request_canonical_digest,
@@ -357,7 +356,9 @@ mod tests {
                     ),
                     (
                         "expires_at".to_owned(),
-                        json!(expires_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
+                        json!(arkret_core::canonical::format_timestamp_canonical(
+                            expires_at
+                        )),
                     ),
                     (
                         "signature".to_owned(),
@@ -428,7 +429,7 @@ mod tests {
 
     #[test]
     fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-07-07T00:00:00Z")
+        let now = chrono::DateTime::parse_from_rfc3339("2026-07-07T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
         let mut active = agent_record("did:web:agent.example", "did:web:controller.example");
@@ -444,7 +445,7 @@ mod tests {
             "did:web:controller.example",
             requested_agent_scope(),
             "12345678",
-            "2026-07-08T00:00:00Z",
+            "2026-07-08T00:00:00.000Z",
         );
         assert!(agent_record_reserves_selector_slug(&pending_future, &now));
 
@@ -453,7 +454,7 @@ mod tests {
             "did:web:controller.example",
             requested_agent_scope(),
             "12345678",
-            "2026-07-06T00:00:00Z",
+            "2026-07-06T00:00:00.000Z",
         );
         assert!(!agent_record_reserves_selector_slug(&pending_expired, &now));
 
@@ -481,7 +482,7 @@ mod tests {
     fn resume_sidecar_exposure_ack_is_validated_and_normalized() {
         let ack = normalize_sidecar_exposure_ack(
             Some(json!({
-                "acknowledged_at": "2026-06-18T12:00:00Z",
+                "acknowledged_at": "2026-06-18T12:00:00.000Z",
                 "acknowledged_by": "did:web:controller.example",
                 "sidecar_refs": [
                     "ak:circle:01964137-0000-7000-8000-000000000020",
@@ -501,7 +502,7 @@ mod tests {
     fn resume_sidecar_exposure_ack_rejects_wrong_controller() {
         let err = normalize_sidecar_exposure_ack(
             Some(json!({
-                "acknowledged_at": "2026-06-18T12:00:00Z",
+                "acknowledged_at": "2026-06-18T12:00:00.000Z",
                 "acknowledged_by": "did:web:other.example",
                 "sidecar_refs": ["ak:circle:01964137-0000-7000-8000-000000000020"]
             })),
@@ -547,7 +548,7 @@ mod tests {
             controller,
             scope.clone(),
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
         let envelope = key_authorize_envelope(
             &record,
@@ -621,11 +622,11 @@ mod tests {
             "did:web:controller.example",
             requested_agent_scope(),
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
         record.approval_request_id = Some("agent_runtime_approval:01999999".to_owned());
         record.approval_requested_at = Some(
-            chrono::DateTime::parse_from_rfc3339("2026-07-08T00:00:00Z")
+            chrono::DateTime::parse_from_rfc3339("2026-07-08T00:00:00.000Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
         );
@@ -680,7 +681,7 @@ mod tests {
     }
 
     fn status_now() -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::parse_from_rfc3339("2026-07-10T00:00:00Z")
+        chrono::DateTime::parse_from_rfc3339("2026-07-10T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc)
     }
@@ -692,7 +693,7 @@ mod tests {
             "did:web:controller.example",
             requested_agent_scope(),
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
         record.approval_request_id = Some("agent_runtime_approval:01999999".to_owned());
 
@@ -719,7 +720,7 @@ mod tests {
             "did:web:controller.example",
             requested_agent_scope(),
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
         record.state = "active".to_owned();
         record.authorized_event_ref =
@@ -759,7 +760,7 @@ mod tests {
             "did:web:controller.example",
             requested_agent_scope(),
             "12345678",
-            "2026-07-09T00:00:00Z",
+            "2026-07-09T00:00:00.000Z",
         );
         record.approval_request_id = Some("agent_runtime_approval:01999999".to_owned());
 
@@ -782,7 +783,7 @@ mod tests {
             "did:web:controller.example",
             requested_agent_scope(),
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
         let missing = agent_pairing_not_found();
 
@@ -812,7 +813,7 @@ mod tests {
             "did:web:controller.example",
             requested_agent_scope(),
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
 
         let err = ensure_pairing_request_id_matches(
@@ -839,7 +840,7 @@ mod tests {
             controller,
             scope.clone(),
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
         let mut mismatched_record = record.clone();
         mismatched_record.pairing_code = Some("87654321".to_owned());
@@ -883,7 +884,7 @@ mod tests {
             controller,
             scope.clone(),
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
         let envelope = key_authorize_envelope(
             &record,
@@ -925,7 +926,7 @@ mod tests {
             controller,
             scope.clone(),
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
         let mut envelope = key_authorize_envelope(
             &record,
@@ -960,7 +961,7 @@ mod tests {
             "did:web:controller.example",
             requested_agent_scope(),
             "12345678",
-            "2000-01-01T00:00:00Z",
+            "2000-01-01T00:00:00.000Z",
         );
 
         let err = ensure_pairing_request_open(&record)
@@ -988,7 +989,7 @@ mod tests {
             controller,
             expected_scope,
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
         let weaker_scope = json!({
             "actions": ["ak.self.events.stream.subscribe"],
@@ -1057,7 +1058,7 @@ mod tests {
             controller,
             scope.clone(),
             "12345678",
-            "2999-01-01T00:00:00Z",
+            "2999-01-01T00:00:00.000Z",
         );
         let envelope = key_authorize_envelope(
             &record,

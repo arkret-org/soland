@@ -1254,7 +1254,7 @@ mod tests {
             principal_endpoint: &endpoint,
             local_id: "alice",
             also_known_as: &aliases,
-            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00Z")
+            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00.000Z")
                 .unwrap()
                 .to_utc(),
             root_seed: &root_seed,
@@ -1334,7 +1334,7 @@ mod tests {
         // 1) Build the SCID-derivation skeleton (placeholder SCID).
         let skeleton = json!({
             "versionId": WEBVH_SCID_PLACEHOLDER,
-            "versionTime": "2026-05-21T00:00:00Z",
+            "versionTime": "2026-05-21T00:00:00.000Z",
             "parameters": {
                 "scid": WEBVH_SCID_PLACEHOLDER,
                 "method": "did:webvh:1.0",
@@ -1362,7 +1362,7 @@ mod tests {
     /// Build entry 2 linked to a genesis entry (correct chain).
     fn build_entry_two(prev: &WebvhLogEntry, scid: &str) -> WebvhLogEntry {
         let body = json!({
-            "versionTime": "2026-05-22T00:00:00Z",
+            "versionTime": "2026-05-22T00:00:00.000Z",
             "parameters": {
                 "scid": scid,
                 "method": "did:webvh:1.0",
@@ -1443,7 +1443,7 @@ mod tests {
         let forger = fresh_signing_key();
         let entry_body = json!({
             "versionId": "1-zSomeHash",
-            "versionTime": "2026-05-21T00:00:00Z",
+            "versionTime": "2026-05-21T00:00:00.000Z",
             "parameters": {"method": "did:webvh:1.0"},
         });
         // Sign the witness transcript with the forger key; attach it as if it
@@ -1491,7 +1491,7 @@ mod tests {
         let witness_c_pubkey = encode_pubkey_multibase(&witness_c.verifying_key());
         let mut entry_body = json!({
             "versionId": "1-zSomeHash",
-            "versionTime": "2026-05-25T00:00:00Z",
+            "versionTime": "2026-05-25T00:00:00.000Z",
             "parameters": {
                 "method": "did:webvh:1.0",
                 "updateKeys": ["z6MkupdateKey"],
@@ -1508,7 +1508,7 @@ mod tests {
         entry_body["witness"] = json!([proof_a, proof_b]);
         let entry = WebvhLogEntry::new(entry_body);
 
-        let now = chrono::DateTime::parse_from_rfc3339("2026-05-25T00:01:00Z")
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-25T00:01:00.000Z")
             .unwrap()
             .timestamp();
         validate_witness_policy_for_log(&[entry], now)
@@ -1521,7 +1521,7 @@ mod tests {
         let witness_b = encode_pubkey_multibase(&fresh_signing_key().verifying_key());
         let genesis = WebvhLogEntry::new(json!({
             "versionId": "1-zGenesis",
-            "versionTime": "2026-05-25T00:00:00Z",
+            "versionTime": "2026-05-25T00:00:00.000Z",
             "parameters": {
                 "method": "did:webvh:1.0",
                 "updateKeys": ["z6MkoldKey"],
@@ -1535,14 +1535,14 @@ mod tests {
         }));
         let rotation = WebvhLogEntry::new(json!({
             "versionId": "2-zRotation",
-            "versionTime": "2026-05-25T00:30:00Z",
+            "versionTime": "2026-05-25T00:30:00.000Z",
             "parameters": {
                 "method": "did:webvh:1.0",
                 "updateKeys": ["z6MknewKey"],
             },
             "state": {"authentication": ["did:webvh:z6mkfixture:example#new"]},
         }));
-        let now = chrono::DateTime::parse_from_rfc3339("2026-05-25T00:40:00Z")
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-25T00:40:00.000Z")
             .unwrap()
             .timestamp();
         let err = validate_witness_policy_for_log(&[genesis, rotation], now)
@@ -1566,7 +1566,7 @@ mod tests {
         let witness_a = encode_pubkey_multibase(&fresh_signing_key().verifying_key());
         let entry = WebvhLogEntry::new(json!({
             "versionId": "1-zGenesis",
-            "versionTime": "2026-05-25T00:00:00Z",
+            "versionTime": "2026-05-25T00:00:00.000Z",
             "parameters": {
                 "method": "did:webvh:1.0",
                 "updateKeys": ["z6MkoldKey"],
@@ -1576,7 +1576,7 @@ mod tests {
                 ]
             },
         }));
-        let now = chrono::DateTime::parse_from_rfc3339("2026-05-26T00:00:01Z")
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-26T00:00:01.000Z")
             .unwrap()
             .timestamp();
         let err = validate_witness_policy_for_log(&[entry], now)

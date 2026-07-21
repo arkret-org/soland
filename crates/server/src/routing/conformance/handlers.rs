@@ -266,6 +266,7 @@ struct CanonicalEventDiagnostic {
     realm_id: Option<String>,
     kind: String,
     canonical_digest: String,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     received_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -277,6 +278,7 @@ struct ProjectionEventDiagnostic {
     operation_type: String,
     operation_id: Option<String>,
     sender: Option<String>,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -445,9 +447,6 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
     let mut hasher = Sha256::new();
     hasher.update(event_ids.join(",").as_bytes());
     let digest: [u8; 32] = hasher.finalize().into();
-    // Fold the SHA-256 into a u64 for the `x` field — the `ak:cursor:`
-    // envelope hashes are opaque to the client, so a 64-bit truncation
-    // is sufficient and keeps the cursor short.
     let cursor_issued_at = chrono::Utc::now()
         .date_naive()
         .and_hms_opt(0, 0, 0)
@@ -456,8 +455,8 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
     let shape = Cursor {
         v: "1".to_owned(),
         purpose: CursorPurpose::Stream,
-        t: arkret_core::canonical::format_timestamp_canonical(cursor_issued_at),
-        x: cursor_issued_at.timestamp_millis() + Cursor::STREAM_TTL_MAX_MS,
+        issued_at: cursor_issued_at,
+        expires_at: cursor_issued_at + chrono::Duration::milliseconds(Cursor::STREAM_TTL_MAX_MS),
         h: URL_SAFE_NO_PAD.encode(digest),
     };
     let cursor_token = shape

@@ -26,6 +26,7 @@ use soland::state::AppState;
 use soland_storage_postgres::Db;
 
 const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
+const EXTENSION_TEST_SIGNING_SEED: [u8; 32] = [0x5a; 32];
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -36,6 +37,7 @@ fn test_config() -> AppConfig {
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
         seed_demo_data: true,
+        notary_signing_key_seed: Some(EXTENSION_TEST_SIGNING_SEED),
         ..soland_test_support::app_config()
     }
 }
@@ -65,9 +67,39 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
 
 async fn dev_token(state: AppState) -> String {
     state.hydrate().await.unwrap();
+    let actor = "did:web:alice.example";
+    let typed_realm_id = arkret_core::RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
+    let actor_did = Did::new(actor.to_owned()).unwrap();
+    let now = chrono::Utc::now();
+    {
+        let mut realms = state.test_realms().lock();
+        let mut realm = realms
+            .get(&typed_realm_id)
+            .cloned()
+            .expect("seeded extension test realm");
+        realm.members.insert(actor_did);
+        realms.upsert(realm);
+    }
+    state.test_projection().lock().members.insert(
+        (DEMO_REALM_ID.to_owned(), actor.to_owned()),
+        soland_domain::reducer::SolandMembershipState {
+            member: actor.to_owned(),
+            realm_id: DEMO_REALM_ID.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: None,
+            recipient_service_id: None,
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
+    );
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
-            "actor": "did:web:alice.example",
+            "actor": actor,
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "display_name": "Alice"
         }))
@@ -548,7 +580,7 @@ fn applet_message_event(
     text: &str,
 ) -> Value {
     let now = chrono::Utc::now();
-    let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let created_at = arkret_core::canonical::format_timestamp_canonical(now);
     let payload = json!({
         "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
@@ -557,7 +589,7 @@ fn applet_message_event(
             "body": text,
         },
     });
-    let mut event = json!({
+    let event = json!({
         "event_id": arkret_core::new_prefixed_uuid7("ak:event:"),
         "kind": "ak.message.create",
         "realm_id": realm_id,
@@ -577,28 +609,22 @@ fn applet_message_event(
         },
         "proofs": [],
     });
-    let event_digest = canonical_event_digest(&event);
-    event["proofs"] = json!([{
-        "kind": "detached_jws",
-        "alg": "EdDSA",
-        "verification_method": format!("{}#applet-service-key", package.service_id),
-        "event_digest": event_digest,
-        "created_at": created_at,
-        "jws": "dev-mode-fixture"
-    }]);
-    event
-}
-
-fn canonical_event_digest(event: &Value) -> String {
-    let mut canonical = event.clone();
-    if let Value::Object(object) = &mut canonical {
-        object.remove("proofs");
-        object.remove("unsigned");
-        object.remove("canonical_digest");
-        object.remove("canonical_hash");
-    }
-    let bytes = arkret_core::canonical::canonical_json_bytes(&canonical).unwrap();
-    arkret_core::canonical::sha256_digest(&bytes)
+    let verification_method = format!("{}#applet-service-key", package.service_id);
+    let signing_key = applet_service_signing_key(&verification_method);
+    let signer = Ed25519MoveSigner::new(
+        signing_key,
+        package.service_id.clone(),
+        verification_method.clone(),
+    );
+    let mut event: arkret_core::Event = serde_json::from_value(event).unwrap();
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .unwrap();
+    serde_json::to_value(event).unwrap()
 }
 
 fn content_digest_header(bytes: &[u8]) -> String {
@@ -908,12 +934,25 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
 }
 
 fn applet_service_id_document(package: &AppletPackage) -> arkret_identity::DidDocument {
+    let signing_key = SigningKey::from_bytes(&EXTENSION_TEST_SIGNING_SEED);
+    let notary_method = format!("{}#notary-key", package.service_id);
+    let applet_signing_key = applet_service_signing_key(&package.webhook_auth.key_ref);
     arkret_identity::DidDocument {
         id: package.service_id.clone(),
-        verification_methods: BTreeMap::from([(
-            package.webhook_auth.key_ref.clone(),
-            "dev-applet-service-key-material".to_owned(),
-        )]),
+        verification_methods: BTreeMap::from([
+            (
+                package.webhook_auth.key_ref.clone(),
+                arkret_core::ed25519_pubkey_to_did_key_multibase(
+                    applet_signing_key.verifying_key().as_bytes(),
+                ),
+            ),
+            (
+                notary_method,
+                arkret_core::ed25519_pubkey_to_did_key_multibase(
+                    signing_key.verifying_key().as_bytes(),
+                ),
+            ),
+        ]),
         also_known_as: Vec::new(),
         updated_at: Some(package.created_at),
         raw_properties: BTreeMap::new(),

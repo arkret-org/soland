@@ -73,9 +73,9 @@ impl From<NotificationRow> for Value {
             "projection_action": row.projection_action,
             "projection_data": row.projection_data,
             "projection_position": row.projection_position,
-            "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "created_at": arkret_core::canonical::format_timestamp_canonical(row.created_at),
             "updated_at": row.updated_at.map(|ts| {
-                ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                arkret_core::canonical::format_timestamp_canonical(ts)
             }),
         })
     }

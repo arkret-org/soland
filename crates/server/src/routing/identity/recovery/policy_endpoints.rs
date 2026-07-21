@@ -35,9 +35,9 @@ pub(super) fn recovery_policy_summary(
         "trust_domain": record.trust_domain,
         "allowed_proof_kinds": record.allowed_proof_kinds,
         "supersedes": record.supersedes,
-        "expires_at": record.expires_at,
-        "issued_at": record.issued_at,
-        "accepted_at": record.accepted_at,
+        "expires_at": record.expires_at.map(arkret_core::canonical::format_timestamp_canonical),
+        "issued_at": arkret_core::canonical::format_timestamp_canonical(record.issued_at),
+        "accepted_at": arkret_core::canonical::format_timestamp_canonical(record.accepted_at),
         "policy": record.raw_payload,
     })
 }

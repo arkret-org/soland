@@ -159,7 +159,7 @@ pub(crate) fn validate_event_time_fields(
         ));
     }
     match created_at_value.and_then(Value::as_str) {
-        Some(value) => canonical::validate_timestamp_millis_canonical(value).map_err(|_| {
+        Some(value) => canonical::validate_timestamp_canonical(value).map_err(|_| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_param",

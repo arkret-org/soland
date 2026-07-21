@@ -57,8 +57,8 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
                     "metadata": {
                         "title": "Planning",
                         "fields": {
-                            "start": "2026-06-22T16:00:00Z",
-                            "end": "2026-06-22T17:00:00Z",
+                            "start": "2026-06-22T16:00:00.000Z",
+                            "end": "2026-06-22T17:00:00.000Z",
                             "timezone": "America/Los_Angeles",
                             "all_day": false
                         }
@@ -253,7 +253,7 @@ fn rsvp_occurrence_is_canonicalized_and_lww_by_hlc() {
         REALM_ID,
         rsvp_payload_for(
             "accepted",
-            serde_json::json!("2026-06-22T16:00:00Z"),
+            serde_json::json!("2026-06-22T16:00:00.000Z"),
             comment.clone(),
         ),
     );

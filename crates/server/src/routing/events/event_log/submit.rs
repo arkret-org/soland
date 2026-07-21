@@ -61,7 +61,9 @@ fn stamp_projection_operation_received_at(
     };
     payload.insert(
         "event_received_at".to_owned(),
-        Value::String(received_at.to_rfc3339()),
+        Value::String(arkret_core::canonical::format_timestamp_canonical(
+            received_at,
+        )),
     );
 }
 
@@ -122,7 +124,8 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
 /// Closed authorization context for trusted internal protocol adapters. This
 /// does not skip schema, proof, actor-lock, idempotency or reducer admission;
 /// it only supplies the protocol-specific substitute for ordinary Realm
-/// membership after the adapter has verified its durable binding.
+/// membership (and, for the exact applet-provisioning Event, delegated-grant
+/// lookup) after the adapter has verified its durable binding.
 #[derive(Debug, Clone)]
 pub(in crate::routing) struct InternalEventAdmission {
     realm_id: String,
@@ -136,6 +139,7 @@ pub(in crate::routing) struct InternalEventAdmission {
 enum InternalEventBinding {
     MimiProvider { binding_ref: String },
     AccountData { owner: String, key: String },
+    AppletFormal { event_id: String },
 }
 
 impl InternalEventAdmission {
@@ -174,6 +178,23 @@ impl InternalEventAdmission {
         }
     }
 
+    pub(in crate::routing) fn applet_formal(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        kind: impl Into<String>,
+        event_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            realm_id: realm_id.into(),
+            actor_id: actor_id.into(),
+            kind: kind.into(),
+            device_id: "applet-service".to_owned(),
+            binding: InternalEventBinding::AppletFormal {
+                event_id: event_id.into(),
+            },
+        }
+    }
+
     pub(in crate::routing::events::event_log) fn matches(
         &self,
         session: &SessionRecord,
@@ -199,6 +220,9 @@ impl InternalEventAdmission {
                         payload.get("owner").and_then(Value::as_str) == Some(owner.as_str())
                             && payload.get("key").and_then(Value::as_str) == Some(key.as_str())
                     })
+                }
+                InternalEventBinding::AppletFormal { event_id } => {
+                    object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
             }
     }
@@ -871,7 +895,8 @@ use preflight::*;
 pub(in crate::routing::events::event_log) use value::submit_event_value_with_idempotency;
 use value::*;
 pub(in crate::routing) use value::{
-    submit_account_data_event_value, submit_event_value, submit_mimi_event_value,
+    submit_account_data_event_value, submit_applet_event_value, submit_event_value,
+    submit_mimi_event_value,
 };
 
 #[cfg(test)]

@@ -1420,7 +1420,7 @@ mod tests {
             soland_domain::identity::principal_control_realm_for_did(principal.as_str()),
         )
         .unwrap();
-        let created_at = "2026-07-15T00:00:00Z".parse().unwrap();
+        let created_at = "2026-07-15T00:00:00.000Z".parse().unwrap();
         let mut create = arkret_bootstrap::build_self_principal_pcr_create(
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: principal.clone(),
@@ -1564,7 +1564,7 @@ mod tests {
         )
         .unwrap();
         event.event_id = arkret_core::EventId::new(envelope["event_id"].as_str().unwrap()).unwrap();
-        event.created_at = "2026-06-03T12:34:56Z".parse().unwrap();
+        event.created_at = "2026-06-03T12:34:56.000Z".parse().unwrap();
         event.prev_refs = envelope
             .get("prev_refs")
             .and_then(Value::as_array)

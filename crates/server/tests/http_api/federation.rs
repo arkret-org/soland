@@ -111,8 +111,10 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
         Vec::new(),
     );
     let created_at = Utc::now();
-    event["created_at"] = serde_json::json!(created_at.to_rfc3339());
-    reseal_canonical_event(&mut event);
+    event["created_at"] = serde_json::json!(arkret_core::canonical::format_timestamp_canonical(
+        created_at
+    ));
+    resign_canonical_event(&mut event);
     put_event_record(&state, event, created_at).await;
 
     let query_target =
@@ -336,7 +338,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     // Re-author the envelope as an actor that is neither hosted by the source
     // service authority nor a member of the demo Realm's membership index.
     event["actor_id"] = serde_json::json!("did:web:intruder.evil");
-    reseal_canonical_event(&mut event);
+    resign_canonical_event(&mut event);
     let body = peer_submit_body(&event);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
@@ -485,9 +487,15 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     let hidden_event_id = "ak:event:01904100-0000-7000-8000-c1ac1e000002";
     let mut event = signed_event_envelope(hidden_event_id, 32, Vec::new());
     event["actor_id"] = serde_json::json!("did:web:alice.example");
-    event["effective_scope"] = serde_json::json!(TEST_CIRCLE_ID);
-    event["created_at"] = serde_json::json!((now - ChronoDuration::seconds(5)).to_rfc3339());
-    reseal_canonical_event(&mut event);
+    event["effective_scope"] = serde_json::json!({
+        "kind": "circle",
+        "realm_id": TEST_REALM_ID,
+        "circle_id": TEST_CIRCLE_ID
+    });
+    event["created_at"] = serde_json::json!(arkret_core::canonical::format_timestamp_canonical(
+        now - ChronoDuration::seconds(5)
+    ));
+    resign_canonical_event(&mut event);
     put_event_record(&state, event, now - ChronoDuration::seconds(10)).await;
 
     let query_target =
@@ -771,7 +779,7 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
             "ssk_generation": 1,
             "nonce": b64(format!("{claim_id}-nonce-128-bit-material").as_bytes()),
             "welcome_digest": arkret_core::canonical::sha256_digest(ciphertext.as_bytes()),
-            "created_at": "2026-05-25T00:00:02Z",
+            "created_at": "2026-05-25T00:00:02.000Z",
             "signature": {
                 "kid": "did:web:alice.example#self-signing",
                 "alg": "EdDSA",
@@ -780,7 +788,7 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
         },
         "welcome_ref": "ak:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888",
         "ciphertext": ciphertext,
-        "expires_at": "2026-05-25T01:00:00Z",
+        "expires_at": "2026-05-25T01:00:00.000Z",
         "commit_ref": "ak:event:01904100-0000-7000-8000-fede00000c01",
         "governance_binding": mls_governance_binding(group_id)
     })

@@ -204,7 +204,13 @@ async fn policy_request_for_operation(
         .map_err(|error| PolicyGateRejection::internal(format!("policy documents: {error}")))?
         .into_iter()
         .filter(|policy| policy.active)
-        .map(|policy| format!("{}@{}", policy.policy_id, policy.updated_at.to_rfc3339()))
+        .map(|policy| {
+            format!(
+                "{}@{}",
+                policy.policy_id,
+                arkret_core::canonical::format_timestamp_canonical(policy.updated_at)
+            )
+        })
         .collect::<Vec<_>>();
     policy_doc_ids.sort();
 

@@ -358,7 +358,9 @@ fn local_peer_policy_digest_for_transaction(
                     json!({
                         "realm_id": record.realm_id.as_str(),
                         "payload": record.payload.clone(),
-                        "updated_at": record.updated_at.to_rfc3339(),
+                        "updated_at": arkret_core::canonical::format_timestamp_canonical(
+                            record.updated_at
+                        ),
                     })
                 })
             })

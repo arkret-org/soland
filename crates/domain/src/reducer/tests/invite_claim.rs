@@ -25,7 +25,7 @@ fn third_party_invite(expires_at: &str) -> Value {
             },
             "state": "pending",
             "expires_at": expires_at,
-            "created_at": "2026-01-01T00:00:00Z",
+            "created_at": "2026-01-01T00:00:00.000Z",
             "third_party_id": {
                 "oob_code_kind": "offline_token",
                 "token_commitment": TOKEN_COMMITMENT,
@@ -47,7 +47,7 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value
         "realm_id": REALM,
         "audience": "arkret.invite.claim",
         "claim_nonce": nonce,
-        "expires_at": "2099-01-01T00:00:00Z",
+        "expires_at": "2099-01-01T00:00:00.000Z",
         "signature": "test-signature"
     });
     let binding_digest = arkret_core::canonical::canonical_sha256(&binding_proof).unwrap();
@@ -112,7 +112,7 @@ fn seed_realm_policy_allowlist(state: &mut ProjectionState, hlc: &ServerHlc, ser
 fn invite_claim_converts_third_party_invite_to_claimed_invite() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("invite-claim");
-    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00Z");
+    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
     seed_realm_policy_allowlist(&mut state, &hlc, vec![SERVICE]);
 
     let effect = state.apply(
@@ -160,7 +160,7 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
 fn invite_claim_rejects_reused_claim_nonce() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("invite-claim-nonce");
-    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00Z");
+    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
     seed_realm_policy_allowlist(&mut state, &hlc, vec![SERVICE]);
 
     assert!(!matches!(
@@ -193,7 +193,7 @@ fn invite_claim_rejects_reused_claim_nonce() {
 fn invite_claim_records_nonce_before_rejecting_bad_commitment() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("invite-claim-commitment");
-    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00Z");
+    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
 
     let rejected = state.apply(
         &make_operation(
@@ -220,7 +220,7 @@ fn invite_claim_records_nonce_before_rejecting_bad_commitment() {
 fn invite_claim_rechecks_verification_service_authorization() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("invite-claim-allowlist");
-    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00Z");
+    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
     seed_realm_policy_allowlist(&mut state, &hlc, vec![SERVICE]);
 
     let rejected = state.apply(
@@ -245,7 +245,7 @@ fn invite_claim_rechecks_verification_service_authorization() {
 fn invite_claim_rejects_invite_bound_service_without_current_policy_allowlist() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("invite-claim-policy-dropped");
-    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00Z");
+    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
 
     let rejected = state.apply(
         &make_operation(
@@ -269,7 +269,7 @@ fn invite_claim_rejects_invite_bound_service_without_current_policy_allowlist() 
 fn invite_claim_rejects_when_current_policy_no_longer_allows_bound_service() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("invite-claim-policy-rotated");
-    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00Z");
+    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
     seed_realm_policy_allowlist(&mut state, &hlc, vec!["did:web:other.example"]);
 
     let rejected = state.apply(
@@ -294,7 +294,7 @@ fn expired_invite_claim_cleans_active_token_material() {
         &make_operation(
             arkret_core::events::EventKind::INVITE_THIRD_PARTY,
             REALM,
-            third_party_invite("2000-01-01T00:00:00Z"),
+            third_party_invite("2000-01-01T00:00:00.000Z"),
         ),
         &hlc,
     );

@@ -163,6 +163,8 @@ fn sign_registration_receipt(
     request: &ServiceRegistrationEnsureRequestBody,
     issued_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ServiceRegistrationReceipt, AppError> {
+    let issued_at = arkret_core::canonical::normalize_timestamp_canonical(issued_at);
+    let issued_at_wire = arkret_core::canonical::format_timestamp_canonical(issued_at);
     let provider_service_id = Did::new(state.service_id.clone())
         .map_err(|error| AppError::internal(format!("provider service DID invalid: {error}")))?;
     let log_head_digest = request
@@ -179,7 +181,7 @@ fn sign_registration_receipt(
         "version_id": request.inception_operation.version_id,
         "log_head_digest": log_head_digest,
         "control_key_digest": control_key_digest,
-        "issued_at": issued_at,
+        "issued_at": issued_at_wire,
         "provider_service_id": provider_service_id,
     });
     let receipt_digest = arkret_core::canonical::canonical_sha256(&receipt_claims)
@@ -204,7 +206,7 @@ fn sign_registration_receipt(
         "version_id": request.inception_operation.version_id,
         "log_head_digest": log_head_digest,
         "control_key_digest": control_key_digest,
-        "issued_at": issued_at,
+        "issued_at": issued_at_wire,
         "provider_service_id": provider_service_id,
     });
     let mut signing_input = Vec::with_capacity(64);

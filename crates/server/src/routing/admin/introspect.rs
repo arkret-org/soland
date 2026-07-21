@@ -124,7 +124,9 @@ fn admin_grant_from_introspection_outcome(
         active: true,
         principal_id,
         admin_scopes: grant.scopes,
-        expires_at_unix: Some(grant.expires_at.timestamp()),
+        expires_at: Some(arkret_core::canonical::normalize_timestamp_canonical(
+            grant.expires_at,
+        )),
         device_id: grant
             .device_id
             .map(|device_id| device_id.as_str().to_owned()),
@@ -171,7 +173,9 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         active: true,
         principal_id,
         admin_scopes: scopes,
-        expires_at_unix: Some(session.expires_at.timestamp()),
+        expires_at: Some(arkret_core::canonical::normalize_timestamp_canonical(
+            session.expires_at,
+        )),
         device_id: Some(session.device_id.clone()),
         audit_context: serde_json::json!({ "synthetic": "development_mode" }),
     }

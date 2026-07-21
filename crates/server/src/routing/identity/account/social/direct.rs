@@ -927,7 +927,7 @@ pub(super) async fn submit_direct_mls_genesis(
         "ratchet_tree_digest": arkret_core::canonical::sha256_digest(format!("direct-ratchet-tree:{realm_id}:{mls_group_id}")),
         "covered_seals": member_event_refs,
         "governance_binding": governance_binding,
-        "created_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(now()),
     });
     let op = direct_mls_operation(
         realm_id,
@@ -1005,7 +1005,7 @@ pub(super) async fn submit_direct_mls_welcome(
         "requester_did": actor,
         "nonce": URL_SAFE_NO_PAD.encode(format!("direct-welcome:{realm_id}:{mls_group_id}:{}", claim.claim_id).as_bytes()),
         "welcome_digest": welcome_digest,
-        "created_at": created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(created_at),
         "signature": {
             "kid": format!("{actor}#self-signing"),
             "alg": "EdDSA",
@@ -1040,7 +1040,9 @@ pub(super) async fn submit_direct_mls_welcome(
         "claim_envelope": claim_envelope,
         "welcome_ref": format!("ak:blob:{}", arkret_core::canonical::sha256_digest(&welcome_bytes)),
         "welcome_bytes_b64": URL_SAFE_NO_PAD.encode(&welcome_bytes),
-        "expires_at": (created_at + chrono::Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(
+            created_at + chrono::Duration::days(1)
+        ),
         "governance_binding": governance_binding,
     });
     let op = direct_mls_operation(

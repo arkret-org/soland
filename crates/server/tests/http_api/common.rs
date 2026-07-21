@@ -265,13 +265,35 @@ pub(crate) fn trust_domain_from_service_id(service_id: &str) -> String {
 }
 
 pub(crate) async fn dev_token(state: AppState) -> String {
-    dev_token_for_device(
-        state,
+    let token = dev_token_for_device(
+        state.clone(),
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         "Alice Desktop",
     )
-    .await
+    .await;
+    authorize_test_event_device(
+        &state,
+        "did:web:alice.example",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+    )
+    .await;
+    token
+}
+
+async fn authorize_test_event_device(state: &AppState, actor: &str, device_id: &str) {
+    let devices = state.test_persistence().devices();
+    let mut record = devices
+        .get(actor, device_id)
+        .await
+        .unwrap()
+        .expect("dev-login persists its device inventory record");
+    let signing_key = SigningKey::from_bytes(&[21_u8; 32]);
+    record.payload["device_public_key"] =
+        Value::String(test_ed25519_multibase_public(&signing_key));
+    record.payload["verification"] = Value::String("verified".to_owned());
+    record.verification_state = "verified".to_owned();
+    devices.put(&record).await.unwrap();
 }
 
 pub(crate) async fn dev_token_for_device(
@@ -292,6 +314,17 @@ pub(crate) async fn dev_token_for_device(
         .await
         .unwrap();
     login["session_credential"].as_str().unwrap().to_owned()
+}
+
+pub(crate) async fn verified_dev_token_for_device(
+    state: AppState,
+    actor: &str,
+    device_id: &str,
+    display_name: &str,
+) -> String {
+    let token = dev_token_for_device(state.clone(), actor, device_id, display_name).await;
+    authorize_test_event_device(&state, actor, device_id).await;
+    token
 }
 
 pub(crate) async fn seed_did_document_also_known_as(state: &AppState, did: &str, aliases: &[&str]) {
@@ -624,6 +657,11 @@ pub(crate) fn signed_canonical_event(
 ) -> Value {
     let now = chrono::Utc::now();
     let actor = arkret_core::Did::new(actor_id.to_owned()).expect("fixture actor DID");
+    let device_id = if device_id.starts_with("ak:device:") {
+        device_id.to_owned()
+    } else {
+        format!("ak:device:{device_id}")
+    };
     let verification_method = actor_id.strip_prefix("did:key:").map_or_else(
         || format!("{actor_id}#{device_id}"),
         |key| format!("{actor_id}#{key}"),
@@ -660,13 +698,6 @@ pub(crate) fn signed_canonical_event(
     )
     .expect("SDK Event signer accepts HTTP fixture");
     serde_json::to_value(event).expect("SDK Event serializes")
-}
-
-pub(crate) fn reseal_canonical_event(event: &mut Value) {
-    let event_digest = event_canonical_digest(event);
-    let created_at = event["created_at"].clone();
-    event["proofs"][0]["event_digest"] = Value::String(event_digest);
-    event["proofs"][0]["created_at"] = created_at;
 }
 
 pub(crate) fn resign_canonical_event(event: &mut Value) {
@@ -1239,7 +1270,7 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
         });
         space
             .entry("created_at".to_owned())
-            .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+            .or_insert_with(|| Value::String("2026-05-17T00:00:00.000Z".to_owned()));
     }
 }
 
@@ -1342,7 +1373,7 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
         });
         strand
             .entry("created_at".to_owned())
-            .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+            .or_insert_with(|| Value::String("2026-05-17T00:00:00.000Z".to_owned()));
         strand
             .entry("stage".to_owned())
             .or_insert_with(|| Value::String("draft".to_owned()));
@@ -1411,7 +1442,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
         });
         morph
             .entry("created_at".to_owned())
-            .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
+            .or_insert_with(|| Value::String("2026-05-17T00:00:00.000Z".to_owned()));
         morph
             .entry("stage".to_owned())
             .or_insert_with(|| Value::String("draft".to_owned()));

@@ -7,7 +7,6 @@ use arkret_core::{
 use arkret_identity::DidResolver;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::SecondsFormat;
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::{Value, json};
 use soland_domain::reducer::{InviteProjection, ProjectionState};
@@ -367,7 +366,7 @@ fn invite_record_digest(
     third_party_id: &Value,
 ) -> Result<String, &'static str> {
     let invite_record = json!({
-        "expires_at": invite.expires_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(invite.expires_at),
         "invite_id": invite.invite_id,
         "realm_id": invite.realm_id,
         "third_party_id": third_party_id,
@@ -529,7 +528,7 @@ mod tests {
             "realm_id": REALM,
             "audience": INVITE_CLAIM_AUDIENCE,
             "claim_nonce": NONCE,
-            "expires_at": "2099-01-01T00:00:00Z",
+            "expires_at": "2099-01-01T00:00:00.000Z",
             "signature": "placeholder"
         });
         let typed_binding_proof = parse_binding_proof(&binding_proof).unwrap();

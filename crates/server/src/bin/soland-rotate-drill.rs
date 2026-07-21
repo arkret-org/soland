@@ -466,7 +466,7 @@ async fn run_rotate_drill(
     let probe_bytes = format!(
         "soland-rotate-drill probe v1 ({}) {}",
         identity.service_id,
-        chrono::Utc::now().to_rfc3339()
+        arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now())
     )
     .into_bytes();
     let probe_sig = signing_key.sign(&probe_bytes);

@@ -129,7 +129,7 @@ pub fn apply_realm_policy_server(
             "cache_ttl_seconds": cache_ttl_seconds,
             "timeout_ms": timeout_ms,
             "on_timeout": on_timeout,
-            "updated_at": now.to_rfc3339(),
+            "updated_at": arkret_core::canonical::format_timestamp_canonical(now),
         });
         state.cells.insert(cell_id, CellState::Value(value));
     }

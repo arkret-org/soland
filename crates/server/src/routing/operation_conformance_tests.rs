@@ -194,7 +194,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "controller_organization": "did:web:organization.primary.example",
                     "recovery_controller_organizations": ["did:web:organization.recovery.example"]
                 },
-                "created_at": "2026-05-20T00:00:00Z"
+                "created_at": "2026-05-20T00:00:00.000Z"
             }}),
             valid: true,
         },
@@ -253,7 +253,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
                 "tracks": {"discussion": {}},
                 "created_by": "did:web:alice.example",
-                "created_at": "2026-05-20T00:00:00Z",
+                "created_at": "2026-05-20T00:00:00.000Z",
                 "metadata": {"title": "Launch"}
             }}),
             valid: true,
@@ -331,7 +331,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "morph_type": "task",
                 "stage": "draft",
                 "created_by": "did:web:alice.example",
-                "created_at": "2026-05-20T00:00:00Z",
+                "created_at": "2026-05-20T00:00:00.000Z",
                 "metadata": {"title": "Backfill"}
             }}),
             valid: true,
@@ -382,7 +382,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "registration_epoch": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "webhook_auth": {"key_ref": "did:web:applet.example"},
                 "proof": {"signature": "c2ln"},
-                "created_at": "2026-05-20T00:00:00Z",
+                "created_at": "2026-05-20T00:00:00.000Z",
             }),
             valid: true,
         },
@@ -404,7 +404,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "registration_epoch": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "webhook_auth": {"key_ref": "did:web:applet.example"},
                 "proof": {"signature": "c2ln"},
-                "created_at": "2026-05-20T00:00:00Z",
+                "created_at": "2026-05-20T00:00:00.000Z",
             }),
             valid: false,
         },

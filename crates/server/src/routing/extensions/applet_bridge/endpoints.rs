@@ -545,7 +545,6 @@ async fn provision_ghost_actor_endpoint(
 
     let profile_event = build_ghost_profile_create_event(
         state,
-        &record,
         &provision,
         applet_id,
         &service_id,

@@ -174,7 +174,7 @@ fn call_state_removed_participants_ban_set_is_monotonic() {
                     "call_id": call_id,
                     "state": "active",
                     "removed_participants": [
-                        { "actor_id": "did:web:bob.example", "action": "ban", "removed_at": "2026-06-16T00:00:00Z" }
+                        { "actor_id": "did:web:bob.example", "action": "ban", "removed_at": "2026-06-16T00:00:00.000Z" }
                     ]
                 }),
             ),
@@ -246,7 +246,7 @@ fn call_state_participant_mute_overrides_are_current_set() {
                         "audio_muted": true,
                         "video_muted": false,
                         "muted_by": "did:web:mod.example",
-                        "muted_at": "2026-06-16T00:00:00Z"
+                        "muted_at": "2026-06-16T00:00:00.000Z"
                     }]
                 }),
             ),

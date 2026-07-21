@@ -186,7 +186,7 @@ async fn get_server_status(
         storage: state.db.mode().to_owned(),
         development_mode: state.config.development_mode,
         checked_by: session.actor,
-        generated_at: super::now().to_rfc3339(),
+        generated_at: arkret_core::canonical::format_timestamp_canonical(super::now()),
         counts: AdminServerStatusCounts {
             accounts: account_count,
             devices: device_count,
@@ -276,7 +276,7 @@ async fn get_server_stats(
         applet_count,
         blob_count,
         blob_total_size,
-        generated_at: super::now().to_rfc3339(),
+        generated_at: arkret_core::canonical::format_timestamp_canonical(super::now()),
     })
 }
 
@@ -501,7 +501,7 @@ fn account_lifecycle_change_response(
     let did = change.did;
     let state = change.state;
     let changed_by = change.changed_by;
-    let changed_at = change.changed_at.to_rfc3339();
+    let changed_at = arkret_core::canonical::format_timestamp_canonical(change.changed_at);
     AdminAccountLifecycleOutcome {
         account_id: did.clone(),
         did,
@@ -568,7 +568,7 @@ async fn revoke_device(
         actor: target_actor,
         device_id,
         revoked_by: session.actor,
-        revoked_at: super::now().to_rfc3339(),
+        revoked_at: arkret_core::canonical::format_timestamp_canonical(super::now()),
     })
 }
 
@@ -600,6 +600,6 @@ async fn get_moderation_queue(
     json_ok(AdminModerationQueueOutcome {
         items,
         total,
-        generated_at: super::now().to_rfc3339(),
+        generated_at: arkret_core::canonical::format_timestamp_canonical(super::now()),
     })
 }

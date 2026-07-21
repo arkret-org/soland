@@ -30,7 +30,7 @@ fn realm_key_share_payload(effective_scope: Value) -> Value {
         },
         "ciphertext": "sealed-history-key",
         "aad_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-        "created_at": "2026-06-22T00:00:00Z"
+        "created_at": "2026-06-22T00:00:00.000Z"
     })
 }
 
@@ -74,7 +74,7 @@ fn realm_key_share_dispatch_accepts_projection_metadata() {
     let mut payload = realm_key_share_payload(realm_scope(REALM));
     payload["event_id"] = json!("ak:event:01904100-0000-7000-8000-000000000701");
     payload["sender"] = json!("did:web:alice.example");
-    payload["hlc"] = json!("2026-07-05T00:00:00Z/node/1");
+    payload["hlc"] = json!("2026-07-05T00:00:00.000Z/node/1");
 
     let effect = state.apply(
         &make_operation(

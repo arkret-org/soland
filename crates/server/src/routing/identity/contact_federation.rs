@@ -20,7 +20,6 @@ use arkret_core::{
     InviteReceiveAction, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
     Proof, RealmId, canonical, proof_kind,
 };
-use chrono::SecondsFormat;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -313,7 +312,7 @@ async fn peer_contacts_submit(
             return json_ok(PeerContactDeliveryOutcome {
                 status: "deferred".to_owned(),
                 disclosed_outcome: decision.disclosed_outcome.map(disclosed_outcome_str),
-                received_at: Some(now().to_rfc3339_opts(SecondsFormat::Secs, true)),
+                received_at: Some(arkret_core::canonical::format_timestamp_canonical(now())),
                 retry_after_ms: None,
             });
         }
@@ -348,7 +347,7 @@ async fn peer_contacts_submit(
     json_ok(PeerContactDeliveryOutcome {
         status: outcome.to_owned(),
         disclosed_outcome: None,
-        received_at: Some(now().to_rfc3339_opts(SecondsFormat::Secs, true)),
+        received_at: Some(arkret_core::canonical::format_timestamp_canonical(now())),
         retry_after_ms: None,
     })
 }

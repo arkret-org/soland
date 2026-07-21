@@ -54,8 +54,10 @@ pub(super) async fn export_account(
             device_id: device.device_id,
             display_name: device.display_name,
             verification_state: device.verification_state,
-            created_at: device.created_at.to_rfc3339(),
-            revoked_at: device.revoked_at.map(|dt| dt.to_rfc3339()),
+            created_at: arkret_core::canonical::format_timestamp_canonical(device.created_at),
+            revoked_at: device
+                .revoked_at
+                .map(arkret_core::canonical::format_timestamp_canonical),
         })
         .collect::<Vec<_>>();
 
@@ -70,7 +72,7 @@ pub(super) async fn export_account(
             realm_id: meta.realm_id,
             discoverability: meta.discoverability,
             history_visibility: meta.history_visibility,
-            created_at: meta.created_at.to_rfc3339(),
+            created_at: arkret_core::canonical::format_timestamp_canonical(meta.created_at),
         })
         .collect();
 
@@ -94,7 +96,7 @@ pub(super) async fn export_account(
 
     json_ok(AccountExportOutcome {
         did: actor,
-        exported_at: now().to_rfc3339(),
+        exported_at: arkret_core::canonical::format_timestamp_canonical(now()),
         account: account_payload,
         profile,
         realms,
@@ -161,6 +163,7 @@ pub(crate) struct AccountLifecycleChange {
     pub state: String,
     pub changed_by: String,
     pub reason: Option<String>,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     pub changed_at: chrono::DateTime<chrono::Utc>,
     pub sessions_revoked: usize,
     pub devices_revoked: usize,
@@ -416,7 +419,7 @@ async fn append_account_state_change_audit(
         "to": next_state,
         "changed_by": changed_by,
         "reason": reason,
-        "timestamp": changed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "timestamp": arkret_core::canonical::format_timestamp_canonical(changed_at),
         "sessions_revoked": sessions_revoked,
         "devices_revoked": devices_revoked,
         "applet_delegated_sessions_revoked": applet_delegated_sessions_revoked,
@@ -644,9 +647,7 @@ pub(super) async fn deactivate_account(
         did: change.did,
         previous_state: change.previous_state,
         state: change.state,
-        deactivated_at: change
-            .changed_at
-            .to_rfc3339_opts(SecondsFormat::Millis, true),
+        deactivated_at: arkret_core::canonical::format_timestamp_canonical(change.changed_at),
         sessions_revoked: change.sessions_revoked,
         devices_revoked: change.devices_revoked,
         applet_delegated_sessions_revoked: change.applet_delegated_sessions_revoked,
@@ -792,7 +793,7 @@ pub(super) async fn erase_account(
     append_audit_redaction_marker(state, &actor).await;
 
     let completed_at = now();
-    let completed_at_wire = completed_at.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let completed_at_wire = arkret_core::canonical::format_timestamp_canonical(completed_at);
     let erasure_receipt = account_erasure_receipt(state, &actor, completed_at)?;
     let realm_erasure_receipts = affected_realms
         .iter()
@@ -1128,7 +1129,7 @@ fn erasure_retained_stub(
             .map_err(|error| AppError::internal(format!("erasure stub subject: {error}")))?,
         "scope": serde_json::to_value(scope)
             .map_err(|error| AppError::internal(format!("erasure stub scope: {error}")))?,
-        "completed_at": completed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "completed_at": arkret_core::canonical::format_timestamp_canonical(completed_at),
     }))
     .map_err(|error| AppError::internal(format!("erasure retained stub encode: {error}")))
 }

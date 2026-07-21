@@ -1054,7 +1054,7 @@ mod tests {
         assert_eq!(object.get("state").and_then(Value::as_str), Some("active"));
         assert_eq!(
             object.get("created_at").and_then(Value::as_str),
-            Some("2026-07-06T00:00:00Z")
+            Some("2026-07-06T00:00:00.000Z")
         );
         let short_name = object
             .get("display")

@@ -147,8 +147,9 @@ pub(super) async fn submit_agent_runtime_key_request(
     let proposed_requested_at = agent_record
         .approval_requested_at
         .unwrap_or_else(chrono::Utc::now);
-    let expires_at =
-        required_pairing_expires_at(&agent_record)?.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let expires_at = arkret_core::canonical::format_timestamp_canonical(
+        required_pairing_expires_at(&agent_record)?,
+    );
     let write = soland_application::identity::StoreAgentRuntimeApprovalCommand {
         agent_id: agent_id.to_owned(),
         pairing_request_id: body.pairing_request_id.to_string(),
@@ -186,13 +187,12 @@ pub(super) async fn submit_agent_runtime_key_request(
             pairing_failed_precondition("agent pairing metadata is incomplete")
                 .with_reason_detail("missing approval_notification_id")
         })?;
-    let requested_at = stored
-        .approval_requested_at
-        .ok_or_else(|| {
+    let requested_at = arkret_core::canonical::format_timestamp_canonical(
+        stored.approval_requested_at.ok_or_else(|| {
             pairing_failed_precondition("agent pairing metadata is incomplete")
                 .with_reason_detail("missing approval_requested_at")
-        })?
-        .to_rfc3339_opts(SecondsFormat::Millis, true);
+        })?,
+    );
     let projection_action = if existing_binding.is_none()
         && approval_request_id == proposed_approval_request_id
         && notification_id == proposed_notification_id
@@ -1476,8 +1476,9 @@ pub(super) fn pairing_request_binding_digest(
 ) -> Result<String, AppError> {
     let pairing_request_id = required_pairing_request_id(agent_record)?;
     let pairing_code = required_pairing_code(agent_record)?;
-    let expires_at = required_pairing_expires_at(agent_record)?
-        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let expires_at = arkret_core::canonical::format_timestamp_canonical(
+        required_pairing_expires_at(agent_record)?,
+    );
     let controller = Did::new(controller.to_owned())
         .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;
     let agent_id = Did::new(agent_id.to_owned())

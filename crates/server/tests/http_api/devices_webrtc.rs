@@ -12,8 +12,9 @@ fn device_message_target(kind: &str, content: Value) -> Value {
         "message_id": new_prefixed_uuid7("ak:device_message:"),
         "kind": kind,
         "content": content,
-        "expires_at": (chrono::Utc::now() + chrono::Duration::minutes(10))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(
+            chrono::Utc::now() + chrono::Duration::minutes(10)
+        ),
     })
 }
 
@@ -251,9 +252,10 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     let request_content = serde_json::json!({
         "transaction_id": "txn-device-pair-1",
         "from_device": new_device,
-        "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "expires_at": (chrono::Utc::now() + chrono::Duration::minutes(10))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "timestamp": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(
+            chrono::Utc::now() + chrono::Duration::minutes(10)
+        ),
         "methods": ["ak.sas.v1", "ak.qr.v1"],
         "purpose": "same_principal_device_authorization",
         "pairing_code": "pairing-code",
@@ -1078,7 +1080,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         vec![serde_json::json!({
             "actor_id": bob,
             "action": "ban",
-            "removed_at": chrono::Utc::now().to_rfc3339(),
+            "removed_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
         })],
     );
 
@@ -1211,8 +1213,8 @@ fn call_signal_envelope(
         "realm_id": DEMO_REALM_ID,
         "actor_id": actor,
         "device_id": device_id,
-        "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "sent_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
         "payload": {
             "call_id": call_id,
             "signal_type": signal_type,
@@ -1227,7 +1229,7 @@ fn call_signal_envelope(
         "alg": "EdDSA",
         "verification_method": format!("{actor}#{device_id}"),
         "event_digest": event_digest,
-        "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
         "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
     });
     envelope

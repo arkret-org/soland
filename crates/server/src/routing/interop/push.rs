@@ -742,7 +742,7 @@ mod tests {
     fn retained_push_target_acceptance_is_time_bounded() {
         let current = "ak:pseudonym:push:aaaaaaaaaaaaaaaaaaaaaa";
         let retained = "ak:pseudonym:push:bbbbbbbbbbbbbbbbbbbbbb";
-        let now = chrono::DateTime::parse_from_rfc3339("2026-06-19T00:00:00Z")
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-19T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
         let registration = json!({
@@ -750,7 +750,7 @@ mod tests {
             "retained_push_targets": [{
                 "push_target_id": retained,
                 "salt_epoch_id": "ak.push.salt_epoch.41",
-                "retained_until": "2026-06-19T01:00:00Z"
+                "retained_until": "2026-06-19T01:00:00.000Z"
             }]
         });
 

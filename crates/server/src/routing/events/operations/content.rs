@@ -637,7 +637,7 @@ pub fn validate_canonical_json_value_inner(
                     let canonical_seconds =
                         arkret_core::canonical::validate_timestamp_canonical(s).is_ok();
                     let canonical_millis =
-                        arkret_core::canonical::validate_timestamp_millis_canonical(s).is_ok();
+                        arkret_core::canonical::validate_timestamp_canonical(s).is_ok();
                     if !canonical_seconds && !canonical_millis {
                         return Err(
                             "timestamp must use canonical RFC 3339 UTC whole-second or fixed-millisecond form",

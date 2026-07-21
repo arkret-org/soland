@@ -222,8 +222,8 @@ pub(super) fn recovery_session_proof_summary(
         "recovery_session_id": record.recovery_session_id.as_str(),
         "ssk_generation": record.ssk_generation,
         "challenge": record.challenge.as_str(),
-        "created_at": record.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "expires_at": record.expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(record.created_at),
+        "expires_at": arkret_core::canonical::format_timestamp_canonical(record.expires_at),
     });
     let bytes = arkret_core::canonical::canonical_json_bytes(&transcript).ok()?;
     Some((

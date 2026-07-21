@@ -1168,7 +1168,7 @@ fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkre
         "realm_id": realm_id,
         "actor_id": actor_id,
         "actor_seq": 0,
-        "created_at": created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(created_at),
         "hlc": hlc,
         "prev_refs": [],
         "payload": row.get("payload").cloned().unwrap_or_else(|| json!({})),
@@ -1252,7 +1252,7 @@ mod tests {
     #[tokio::test]
     async fn events_query_enrich_keeps_redaction_tombstone_over_durable_plaintext() {
         let state = test_state();
-        let created_at = DateTime::parse_from_rfc3339("2026-07-06T10:00:00Z")
+        let created_at = DateTime::parse_from_rfc3339("2026-07-06T10:00:00.000Z")
             .unwrap()
             .with_timezone(&Utc);
         let revised_at = created_at + chrono::Duration::seconds(30);

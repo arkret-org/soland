@@ -5,7 +5,7 @@ use arkret_core::{
     Did, EventId, EventsFrontierFederationPeerState, EventsQueryPostRequestBody,
     EventsSubmitFederationRequestBody, RealmId,
 };
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
@@ -359,7 +359,7 @@ async fn peer_events_frontier(
         frontier_root,
         actor_seq_upper_bounds: typed_actor_frontier,
         witness_receipts: Vec::new(),
-        observed_at: observed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        observed_at: arkret_core::canonical::format_timestamp_canonical(observed_at),
         issuer: service_id,
         signature: signature
             .as_object()

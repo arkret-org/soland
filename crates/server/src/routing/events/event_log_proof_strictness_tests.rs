@@ -1273,7 +1273,7 @@ fn realm_create_shape_allows_world_readable_encrypted_history() {
                     "controller_organization": "did:web:organization.primary.example",
                     "recovery_controller_organizations": ["did:web:organization.recovery.example"]
                 },
-                "created_at": "2026-05-17T00:00:00Z"
+                "created_at": "2026-05-17T00:00:00.000Z"
             }
         }
     });
@@ -1570,14 +1570,14 @@ fn historical_data_event_grant_value(
         "subject": subject,
         "actions": [action],
         "resources": [DATA_EVENT_STRAND],
-        "issued_at": "2026-05-08T00:00:00Z"
+        "issued_at": "2026-05-08T00:00:00.000Z"
     });
     if let Some(parent_grant_id) = parent_grant_id {
         value["delegated_from"] = Value::String(parent_grant_id.to_owned());
     }
     if revoked {
         value["revoked"] = Value::Bool(true);
-        value["revoked_at"] = Value::String("2026-05-08T00:01:00Z".to_owned());
+        value["revoked_at"] = Value::String("2026-05-08T00:01:00.000Z".to_owned());
     }
     value
 }
@@ -1797,7 +1797,7 @@ fn data_event_object_with_refs(
 ) -> serde_json::Map<String, Value> {
     json!({
         "seal_ref": seal_ref,
-        "created_at": "2026-05-08T00:02:00Z",
+        "created_at": "2026-05-08T00:02:00.000Z",
         "auth_context": {
             "did": DATA_EVENT_ACTOR,
             "key_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -2081,7 +2081,7 @@ fn service_attested_device_authorize_object(
             "device_id": device_id.as_str(),
             "device_public_key": device_pubkey_mb,
             "authorized_by": authority_did,
-            "not_before": "2026-06-17T00:00:00Z",
+            "not_before": "2026-06-17T00:00:00.000Z",
             "enrollment_authority_binding": {
                 "kind": "service_attested",
                 "authority_did": authority_did,

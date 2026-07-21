@@ -111,7 +111,7 @@ pub(crate) fn frontier_signature_payload(
         "frontier_root": frontier_root.as_str(),
         "realm_id": realm_id.map(RealmId::as_str),
         "issuer": issuer.as_str(),
-        "observed_at": observed_at.to_rfc3339(),
+        "observed_at": arkret_core::canonical::format_timestamp_canonical(observed_at),
     })
 }
 
@@ -138,7 +138,7 @@ pub(crate) fn sign_frontier_root(
         "scheme": "ed25519-detached-jws",
         "verification_method": format!("{}#frontier-key", service_id.as_str()),
         "payload_digest": payload_digest,
-        "created_at": observed_at.to_rfc3339(),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(observed_at),
         "jws": jws,
         "signed_payload": signed_payload,
     }))
@@ -207,7 +207,7 @@ mod tests {
         );
         let actors = BTreeMap::from_iter(vec![(alice(), 7)]);
         let root = frontier_root(&frontier, &actors).unwrap();
-        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-20T00:00:00Z")
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-20T00:00:00.000Z")
             .unwrap()
             .with_timezone(&Utc);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7_u8; 32]);

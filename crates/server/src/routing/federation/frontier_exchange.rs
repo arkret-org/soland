@@ -356,7 +356,7 @@ mod tests {
             "heads": [],
             "issuer": "did:web:peer.example",
             "frontier_root": format!("sha256:{}", "a".repeat(64)),
-            "observed_at": "2026-01-01T00:00:00Z",
+            "observed_at": "2026-01-01T00:00:00.000Z",
             "signature": {"alg": "EdDSA", "value": "c2ln"}
         });
         let state: arkret_core::EventsFrontierFederationPeerState =

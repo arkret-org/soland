@@ -8,6 +8,29 @@ fn test_state() -> AppState {
     AppState::new(AppConfig::test_default(), Db { pool: None })
 }
 
+fn stage_pending_direct_binding(
+    state: &AppState,
+    realm_id: &str,
+    main_strand_id: &str,
+    actor: &str,
+    peer: &str,
+) {
+    let timestamp = now();
+    let pair_key = direct_pair_key(state, actor, peer).unwrap();
+    state.direct_conversation_bindings.lock().insert(
+        pair_key,
+        DirectConversationBindingRecord {
+            participants_unordered: sorted_participants(actor, peer),
+            realm_id: realm_id.to_owned(),
+            main_strand_id: main_strand_id.to_owned(),
+            binding_event_ref: crate::ids::generate_event_id(),
+            state: "pending".to_owned(),
+            created_at: timestamp,
+            updated_at: timestamp,
+        },
+    );
+}
+
 #[test]
 fn direct_realm_create_payload_is_sdk_schema_valid() {
     let state = test_state();
@@ -38,7 +61,7 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
     );
     assert_eq!(
         object.get("created_at").and_then(Value::as_str),
-        Some("2026-07-06T00:00:00Z")
+        Some("2026-07-06T00:00:00.000Z")
     );
 }
 
@@ -109,7 +132,7 @@ fn direct_strand_create_payload_is_sdk_schema_valid() {
     );
     assert_eq!(
         object.get("created_at").and_then(Value::as_str),
-        Some("2026-07-06T00:00:00Z")
+        Some("2026-07-06T00:00:00.000Z")
     );
 }
 
@@ -121,9 +144,17 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
     let alice = "did:web:alice.example";
     let bob = "did:web:bob.example";
 
+    stage_pending_direct_binding(&state, &realm_id, &main_strand_id, alice, bob);
     submit_direct_realm_genesis(&state, &realm_id, &main_strand_id, alice, bob)
         .await
         .unwrap();
+    let pair_key = direct_pair_key(&state, alice, bob).unwrap();
+    state
+        .direct_conversation_bindings
+        .lock()
+        .get_mut(&pair_key)
+        .expect("pending direct binding")
+        .state = "active".to_owned();
 
     assert!(
         crate::routing::spaces::space::realm_has_member_by_id(&state, &realm_id, bob).await,
@@ -225,6 +256,7 @@ async fn participant_leave_retires_direct_binding_and_blocks_reuse() {
     let bob = "did:web:bob.example";
     let pair_key = direct_pair_key(&state, alice, bob).unwrap();
 
+    stage_pending_direct_binding(&state, &realm_id, &main_strand_id, alice, bob);
     submit_direct_realm_genesis(&state, &realm_id, &main_strand_id, alice, bob)
         .await
         .unwrap();
@@ -243,15 +275,18 @@ async fn participant_leave_retires_direct_binding_and_blocks_reuse() {
     );
     assert!(active_direct_binding(&state, &pair_key).is_some());
 
+    let leave_payload = arkret_core::MembershipPayload::transition(
+        arkret_core::MembershipPayloadState::Leave,
+        arkret_core::Did::new(bob.to_owned()).unwrap(),
+        "direct conversation participant left",
+    )
+    .to_value()
+    .unwrap();
     let leave = arkret_core::Operation::create(
         direct_operation_id().unwrap(),
         arkret_core::RealmId::new(realm_id).unwrap(),
         arkret_core::events::EventKind::MEMBER_STATE,
-        json!({
-            "actor_id": bob,
-            "membership": "leave",
-            "sender": bob
-        }),
+        leave_payload,
     );
     crate::routing::accept_local_operations(&state, bob, std::slice::from_ref(&leave))
         .await

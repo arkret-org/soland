@@ -227,7 +227,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
             "action": "ui.kanban.archive_list",
             "outcome": "ok",
             "note": "user clicked Archive on list ak:space:demo",
-            "recorded_at": "2026-05-16T12:34:56Z",
+            "recorded_at": "2026-05-16T12:34:56.000Z",
         }))
         .send(&app_from_state(state.clone()))
         .await

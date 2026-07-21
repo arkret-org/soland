@@ -1059,7 +1059,7 @@ mod tests {
             "disclosure": "required",
             "event_id": "ak:event:01904100-0000-7000-8000-000000000702",
             "sender": "did:web:alice.example",
-            "hlc": "2026-06-14T10:00:00Z/node/1",
+            "hlc": "2026-06-14T10:00:00.000Z/node/1",
             "seal_ref": "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
         }))
         .unwrap();

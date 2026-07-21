@@ -252,7 +252,7 @@ fn read_cursor_payload(
             "event_id": event_id,
             "hlc": hlc
         },
-        "updated_at": "2026-05-21T00:00:00Z",
+        "updated_at": "2026-05-21T00:00:00.000Z",
     })
 }
 
@@ -271,7 +271,9 @@ fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>)
                 "device_id": marker.device_id.clone(),
                 "read_scope": marker.read_scope.clone(),
                 "position": marker.position.clone(),
-                "updated_at": marker.updated_at.to_rfc3339(),
+                "updated_at": arkret_core::canonical::format_timestamp_canonical(
+                    marker.updated_at
+                ),
             })
         })
         .collect()
@@ -440,7 +442,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
             },
             "mode": "block",
             "applies_to": ["messages", "mentions", "notifications"],
-            "created_at": "2026-05-21T00:00:00Z"
+            "created_at": "2026-05-21T00:00:00.000Z"
         }]
     });
     let put = submit_actor_private_event(
@@ -454,7 +456,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
             "key": "ak.account.blocklist",
             "owner": alice_actor,
             "body": plaintext_blocklist,
-            "updated_at": "2026-05-21T00:00:00Z",
+            "updated_at": "2026-05-21T00:00:00.000Z",
         }),
     )
     .await;
@@ -476,7 +478,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
             "key": "ak.account.blocklist",
             "owner": alice_actor,
             "body": encrypted_blocklist.clone(),
-            "updated_at": "2026-05-21T00:00:00Z",
+            "updated_at": "2026-05-21T00:00:00.000Z",
         }),
     )
     .await;

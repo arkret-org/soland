@@ -236,7 +236,7 @@ pub(super) fn event_proof_binding_bytes(
         })?;
     if proof.event_digest.as_str() != event_digest
         || proof.verification_method != verification_method
-        || arkret_core::canonical::format_timestamp_millis_canonical(proof.created_at) != created_at
+        || arkret_core::canonical::format_timestamp_canonical(proof.created_at) != created_at
     {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,

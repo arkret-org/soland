@@ -187,8 +187,12 @@ async fn audit_erasure_receipts(
                         (
                             peer.clone(),
                             AuditErasureReceiptPeerStatus {
-                                sent_at: status.sent_at.as_ref().map(|time| time.to_rfc3339()),
-                                acked_at: status.acked_at.as_ref().map(|time| time.to_rfc3339()),
+                                sent_at: status
+                                    .sent_at
+                                    .map(arkret_core::canonical::format_timestamp_canonical),
+                                acked_at: status
+                                    .acked_at
+                                    .map(arkret_core::canonical::format_timestamp_canonical),
                                 outcome: status.outcome.clone(),
                             },
                         )
@@ -204,7 +208,7 @@ async fn audit_erasure_receipts(
                     scope_realm_id: r.scope_realm_id.clone(),
                     fanout_status: r.fanout_status.clone(),
                     peer_status,
-                    recorded_at: r.recorded_at.to_rfc3339(),
+                    recorded_at: arkret_core::canonical::format_timestamp_canonical(r.recorded_at),
                     payload: r.payload.clone(),
                 }
             })

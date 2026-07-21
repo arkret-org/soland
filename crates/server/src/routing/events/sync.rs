@@ -31,7 +31,7 @@ pub(crate) use arkret_core::http::EventsQueryOutcome;
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use bytes::Bytes;
-pub(crate) use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
+pub(crate) use chrono::{DateTime, Duration as ChronoDuration, Utc};
 pub(crate) use futures_util::stream::StreamExt;
 pub(crate) use salvo::http::{StatusCode, header};
 pub(crate) use salvo::prelude::*;

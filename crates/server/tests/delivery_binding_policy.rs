@@ -89,7 +89,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
             "binding_source": "explicit",
             "recipient_service_id": "did:web:rogue.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
-            "resolved_at": "2026-05-19T00:00:00Z",
+            "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
     );
     match state.apply(&bad, &hlc) {
@@ -108,7 +108,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
             "binding_source": "explicit",
             "recipient_service_id": "did:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-bbbbbbbbbbbb",
-            "resolved_at": "2026-05-19T00:00:00Z",
+            "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
     );
     let effect = state.apply(&good, &hlc);
@@ -311,7 +311,7 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
             "binding_source": "did_document_default",
             "recipient_service_id": "did:web:principal.example",
             "did_document_digest": "sha256:deadbeef",
-            "resolved_at": "2026-05-19T00:00:00Z",
+            "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
     );
     match state.apply(&bad, &hlc) {

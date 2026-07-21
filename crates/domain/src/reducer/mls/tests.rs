@@ -104,7 +104,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
             "ssk_generation": 7,
             "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
             "welcome_digest": arkret_core::canonical::sha256_digest(b"opaque-welcome-bytes"),
-            "created_at": "2026-05-25T00:00:02Z",
+            "created_at": "2026-05-25T00:00:02.000Z",
             "signature": {
                 "kid": "did:web:alice.example#self-signing",
                 "alg": "EdDSA",
@@ -153,7 +153,7 @@ fn genesis_payload(group_id: &str, effective_scope: Value) -> Value {
         "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
         "ratchet_tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
         "governance_binding": genesis_binding(group_id, effective_scope),
-        "created_at": "2026-05-25T00:00:00Z"
+        "created_at": "2026-05-25T00:00:00.000Z"
     })
 }
 

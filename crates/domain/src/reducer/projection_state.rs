@@ -1049,7 +1049,9 @@ impl ProjectionState {
             "realm_id": strand.realm_id,
             "from": current_status,
             "to": next_status,
-            "timestamp": operation.created_at.to_rfc3339(),
+            "timestamp": arkret_core::canonical::format_timestamp_canonical(
+                operation.created_at
+            ),
             "kind": "incident.status.transition",
         }))
     }

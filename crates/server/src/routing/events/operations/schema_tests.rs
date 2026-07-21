@@ -24,7 +24,7 @@ mod invite_create_schema_tests {
                 "recipient_service_type": "principal_server"
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            "expires_at": "2026-06-14T10:00:00Z"
+            "expires_at": "2026-06-14T10:00:00.000Z"
         })
     }
 
@@ -44,7 +44,7 @@ mod invite_create_schema_tests {
         let mut payload = invite_payload();
         payload["event_id"] = json!("ak:event:01904100-0000-7000-8000-000000000701");
         payload["sender"] = json!("did:web:alice.example");
-        payload["hlc"] = json!("2026-06-14T10:00:00Z/node/1");
+        payload["hlc"] = json!("2026-06-14T10:00:00.000Z/node/1");
         payload["seal_ref"] = json!(
             "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
         );
@@ -263,7 +263,7 @@ mod key_backup_active_series_schema_tests {
                     "frontier_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                     "ssk_generation": 1
                 },
-                "issued_at": "2026-07-14T00:00:00Z",
+                "issued_at": "2026-07-14T00:00:00.000Z",
                 "auth_data": {
                     "verification_method": "did:web:alice.example#ssk-1",
                     "signature_algorithm": "Ed25519",
@@ -359,7 +359,7 @@ mod realm_key_share_schema_tests {
                 "to_epoch": 2
             },
             "ciphertext": "sealed-history-secret",
-            "created_at": "2026-07-05T00:00:00Z"
+            "created_at": "2026-07-05T00:00:00.000Z"
         })
     }
 
@@ -425,7 +425,7 @@ mod read_receipt_policy_schema_tests {
             "event_id": "ak:event:01904100-0000-7000-8000-000000000702",
             "accepted_event_id": "ak:event:01904100-0000-7000-8000-000000000702",
             "sender": "did:web:alice.example",
-            "hlc": "2026-06-14T10:00:00Z/node/1",
+            "hlc": "2026-06-14T10:00:00.000Z/node/1",
             "seal_ref": "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
         }));
         operation.canonical_event_digest = Some(
@@ -524,7 +524,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 "event_id": "ak:event:01904100-0000-7000-8000-000000000904",
                 "accepted_event_id": "ak:event:01904100-0000-7000-8000-000000000904",
                 "sender": "did:web:alice.example",
-                "hlc": "2026-07-06T00:00:00Z/node/1"
+                "hlc": "2026-07-06T00:00:00.000Z/node/1"
             }),
         );
         let schema =
@@ -594,7 +594,7 @@ mod realm_plaintext_visible_services_schema_tests {
                     "target_ref": "ak:message:01904100-0000-7000-8000-000000000903",
                     "appellant": "did:web:appellant.example",
                     "reason_text_ref": "appeal",
-                    "created_at": "2026-06-23T00:00:00Z"
+                    "created_at": "2026-06-23T00:00:00.000Z"
                 }),
             ),
             (
@@ -603,7 +603,7 @@ mod realm_plaintext_visible_services_schema_tests {
                     "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
                     "reviewer": "did:web:reviewer.example",
-                    "reviewed_at": "2026-06-23T00:00:00Z"
+                    "reviewed_at": "2026-06-23T00:00:00.000Z"
                 }),
             ),
             (
@@ -614,7 +614,7 @@ mod realm_plaintext_visible_services_schema_tests {
                     "reviewer": "did:web:reviewer.example",
                     "verdict": "uphold",
                     "reason_text_ref": "reviewed",
-                    "decided_at": "2026-06-23T00:00:00Z"
+                    "decided_at": "2026-06-23T00:00:00.000Z"
                 }),
             ),
             (
@@ -623,7 +623,7 @@ mod realm_plaintext_visible_services_schema_tests {
                     "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
                     "closer": "did:web:reviewer.example",
-                    "closed_at": "2026-06-23T00:00:00Z"
+                    "closed_at": "2026-06-23T00:00:00.000Z"
                 }),
             ),
         ];
@@ -729,8 +729,8 @@ mod agent_action_schema_tests {
                 "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "draft_content_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "approval_nonce": "nonce-01904100",
-                "approved_at": "2026-06-19T00:00:00Z",
-                "expires_at": "2026-06-19T00:10:00Z"
+                "approved_at": "2026-06-19T00:00:00.000Z",
+                "expires_at": "2026-06-19T00:10:00.000Z"
             }),
         );
 
@@ -765,7 +765,7 @@ mod agent_action_schema_tests {
                 "agent_id": "did:web:agent.example",
                 "controller_id": "did:web:alice.example",
                 "reason": "needs review",
-                "rejected_at": "2026-06-19T00:00:00Z"
+                "rejected_at": "2026-06-19T00:00:00.000Z"
             }),
         );
 
@@ -954,7 +954,7 @@ mod sdk_artifact_schema_tests {
 
     #[test]
     fn artifact_backed_kind_and_payload_validator_cover_cross_signing_publish() {
-        let issued_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let issued_at = arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now());
         let operation = cross_signing_publish(json!({
             "principal_id": "did:web:alice.example",
             "trust_domain": "ak:trust_domain:soland.local",
@@ -1022,7 +1022,7 @@ mod sdk_artifact_schema_tests {
 
     #[test]
     fn artifact_backed_kind_and_payload_validator_cover_cross_signing_reset() {
-        let issued_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let issued_at = arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now());
         // Round R2/R3 (T08) — trust_domain + reset_event_id are now wire-breaking
         // required fields.
         let operation = cross_signing_reset(json!({
@@ -1059,7 +1059,7 @@ mod sdk_artifact_schema_tests {
             "reset_reason_code": "rotation",
             "trust_domain": "ak:trust_domain:soland.local",
             "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
-            "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            "issued_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now())
         }));
         assert_eq!(
             validate_operation_schema_from_sdk_artifact("ak.cross_signing.reset", &missing_proof),
@@ -1079,7 +1079,7 @@ mod sdk_artifact_schema_tests {
                 "signature": "abc"
             },
             "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
-            "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            "issued_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now())
         }));
         assert!(
             validate_operation_schema(
@@ -1105,7 +1105,7 @@ mod sdk_artifact_schema_tests {
             },
             "trust_domain": "ak:trust_domain:soland.local",
             "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
-            "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            "issued_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now())
         }));
         assert_eq!(
             validate_cross_signing_reset_replay_batch(&[reset.clone(), reset.clone()]),
@@ -1125,8 +1125,11 @@ mod sdk_artifact_schema_tests {
             },
             "trust_domain": "ak:trust_domain:soland.local",
             "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000002",
-            "issued_at": (chrono::Utc::now() - chrono::Duration::seconds(CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS + 1))
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            "issued_at": arkret_core::canonical::format_timestamp_canonical(
+                chrono::Utc::now() - chrono::Duration::seconds(
+                    CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS + 1
+                )
+            )
         }));
         assert_eq!(
             validate_cross_signing_reset_payload(&stale),
@@ -1162,7 +1165,7 @@ mod derived_relation_and_morph_immutability_tests {
                 "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
                 "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
                 "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-                "not_before": "2026-06-22T14:45:51Z",
+                "not_before": "2026-06-22T14:45:51.000Z",
                 "enrollment_authority_binding": {
                     "kind": "service_attested",
                     "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
@@ -1190,7 +1193,7 @@ mod derived_relation_and_morph_immutability_tests {
                 "hpke_key": "z6LSDeviceHpkeKey",
                 "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
                 "authorized_by": "did:web:alice.example",
-                "not_before": "2026-05-30T00:00:00Z",
+                "not_before": "2026-05-30T00:00:00.000Z",
                 "device_signature": "c2ln",
                 "cross_signing_binding": {
                     "verification_method": "did:web:alice.example#ssk",

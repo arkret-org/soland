@@ -381,7 +381,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
     let did_public_key = test_ed25519_multibase_public(&did_signing);
     let update_public_key = test_ed25519_multibase_public(&update_signing);
     let next_update_public_key = test_ed25519_multibase_public(&next_update_signing);
-    let version_time = "2026-05-12T00:00:00Z";
+    let version_time = "2026-05-12T00:00:00.000Z";
     let proof = test_embedded_webvh_proof(
         "https://soland.example",
         "alice",
@@ -502,7 +502,7 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
             principal_endpoint: &endpoint,
             local_id: "bobwebvh",
             also_known_as: &["acct:alice@example.com".to_owned()],
-            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00Z")
+            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00.000Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
             root_seed: &[51u8; 32],
@@ -681,7 +681,7 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
             principal_endpoint: &endpoint,
             local_id: "rotation",
             also_known_as: &also_known_as,
-            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00Z")
+            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00.000Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
             root_seed: &root_seed,
@@ -711,7 +711,7 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
             did: &inception.did,
             local_id: "rotation",
             previous_entries: std::slice::from_ref(&inception.log_entry),
-            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-16T00:00:00Z")
+            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-16T00:00:00.000Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
             current_root_seed: &committed_root_seed,
@@ -747,7 +747,7 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
             did: &inception.did,
             local_id: "rotation",
             previous_entries: std::slice::from_ref(&inception.log_entry),
-            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-16T00:00:00Z")
+            version_time: chrono::DateTime::parse_from_rfc3339("2026-07-16T00:00:00.000Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
             current_root_seed: &committed_root_seed,

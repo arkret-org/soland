@@ -98,8 +98,8 @@ use submit::{
     submit_event_batch_outcome, submit_event_value_with_idempotency,
 };
 pub(in crate::routing) use submit::{
-    service_event_authoring_lock, submit_account_data_event_value, submit_event_value,
-    submit_mimi_event_value,
+    service_event_authoring_lock, submit_account_data_event_value, submit_applet_event_value,
+    submit_event_value, submit_mimi_event_value,
 };
 
 mod validation;

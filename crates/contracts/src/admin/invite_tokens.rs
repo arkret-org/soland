@@ -37,6 +37,15 @@ pub struct AdminInviteTokenItem {
     pub uses_allowed: u64,
     pub uses_completed: u64,
     pub uses_pending: u64,
+    #[serde(
+        default,
+        serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_optional_canonical_timestamp"
+    )]
     pub expires_at: Option<DateTime<Utc>>,
+    #[serde(
+        serialize_with = "arkret_core::canonical::serialize_canonical_timestamp",
+        deserialize_with = "arkret_core::canonical::deserialize_canonical_timestamp"
+    )]
     pub created_at: DateTime<Utc>,
 }

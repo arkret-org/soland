@@ -141,62 +141,20 @@ pub(super) fn accountability_grant_envelope_signed_by(
         == issuer
 }
 
-pub(super) fn accountability_grant_body(value: &Value) -> &Value {
-    value
-        .get("grant")
-        .filter(|grant| grant.is_object())
-        .or_else(|| value.get("value").filter(|grant| grant.is_object()))
-        .or_else(|| value.get("object").filter(|grant| grant.is_object()))
-        .unwrap_or(value)
-}
-
 pub(super) fn accountability_grant_value_active_for(
     value: &Value,
     issuer: &str,
     subject: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    let body = accountability_grant_body(value);
-    if body.get("issuer").and_then(Value::as_str) != Some(issuer) {
-        return false;
-    }
-    if body
-        .get("subject")
-        .or_else(|| body.get("subject_id"))
-        .or_else(|| body.get("principal_id"))
-        .and_then(Value::as_str)
-        != Some(subject)
-    {
-        return false;
-    }
-    if body
-        .get("grant_status")
-        .or_else(|| body.get("status"))
-        .and_then(Value::as_str)
-        .is_some_and(|status| !matches!(status, "active" | "granted"))
-    {
-        return false;
-    }
-    let Some(not_before) = accountability_grant_time(body, "not_before")
-        .or_else(|| accountability_grant_time(body, "issued_at"))
+    let Ok(grant) =
+        serde_json::from_value::<arkret_core::AccountabilityGrantPayload>(value.clone())
     else {
         return false;
     };
-    let Some(expires_at) = accountability_grant_time(body, "expires_at") else {
-        return false;
-    };
-    not_before <= now && now <= expires_at
-}
-
-pub(super) fn accountability_grant_time(
-    value: &Value,
-    field: &str,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
-        .map(|parsed| parsed.with_timezone(&chrono::Utc))
+    grant.issuer.as_str() == issuer
+        && grant.subject.as_str() == subject
+        && grant.validate_lifecycle_at(now).is_ok()
 }
 
 /// SEC-08 — server-side defence-in-depth for `ak.profile.mls.minimal_metadata_realm.v1`

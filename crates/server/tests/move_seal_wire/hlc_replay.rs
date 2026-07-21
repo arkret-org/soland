@@ -34,7 +34,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
             "alg": "EdDSA",
             "verification_method": "did:web:admin.example#k1",
             "payload_digest": payload_digest,
-            "created_at": "2026-05-08T00:00:00Z",
+            "created_at": "2026-05-08T00:00:00.000Z",
             "jws": dev_detached_jws(&body_bytes)
         }),
     );

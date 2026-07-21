@@ -390,9 +390,9 @@ async fn validate_moderation_franking_proof(
         ));
     }
     let received_at = required_string_field(object, "received_at", "franking_proof")?;
-    if !received_at.ends_with('Z') || chrono::DateTime::parse_from_rfc3339(received_at).is_err() {
+    if arkret_core::canonical::validate_timestamp_canonical(received_at).is_err() {
         return Err(AppError::invalid_param(
-            "franking_proof.received_at must be a UTC timestamp",
+            "franking_proof.received_at must be a canonical Arkret timestamp",
         ));
     }
     validate_franking_sender_claim(object)?;
@@ -938,7 +938,7 @@ async fn moderation_appeal_submit(
         "reason_text_ref": body.reason_text_ref,
         "evidence_refs": body.evidence_refs,
         "evidence_visibility": evidence_visibility,
-        "created_at": Utc::now().to_rfc3339(),
+        "created_at": arkret_core::canonical::format_timestamp_canonical(Utc::now()),
         "event_kind": arkret_core::events::EventKind::MODERATION_APPEAL_SUBMIT,
         "appeal_state": "submitted",
     });
@@ -976,7 +976,7 @@ mod report_safety_tests {
     const REALM: &str = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
     const TARGET: &str = "ak:message:01904100-0000-7000-8000-000000000777";
     const FRANKING_EVENT: &str = "ak:event:01904100-0000-7000-8000-000000000222";
-    const FRANKING_RECEIVED_AT: &str = "2026-04-30T00:00:00Z";
+    const FRANKING_RECEIVED_AT: &str = "2026-04-30T00:00:00.000Z";
     const REPORTER: &str = "did:web:alice.example";
 
     fn test_state() -> AppState {
@@ -1172,7 +1172,7 @@ mod report_safety_tests {
     #[tokio::test]
     async fn franking_backdated_outside_event_anchor_is_rejected() {
         let state = test_state();
-        seed_franking_event_anchor(&state, "2026-04-30T00:10:01Z").await;
+        seed_franking_event_anchor(&state, "2026-04-30T00:10:01.000Z").await;
         let proof = valid_franking();
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await

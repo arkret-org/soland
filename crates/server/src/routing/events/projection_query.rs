@@ -1148,6 +1148,7 @@ struct StrandProjectionView {
     strand_id: String,
     realm_id: String,
     state: ProjectionObjectState,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp")]
     state_changed_at: Option<DateTime<Utc>>,
     title: String,
     summary: Option<String>,
@@ -1156,8 +1157,10 @@ struct StrandProjectionView {
     list_space_id: Option<String>,
     rank: Option<String>,
     created_by: String,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     created_at: DateTime<Utc>,
     updated_by: Option<String>,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_optional_canonical_timestamp")]
     updated_at: Option<DateTime<Utc>>,
 }
 
@@ -1175,7 +1178,9 @@ struct RelationEdgeView {
     fields: BTreeMap<String, Value>,
     state: String,
     scope_circle_id: Option<String>,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     created_at: DateTime<Utc>,
+    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
     updated_at: DateTime<Utc>,
 }
 
