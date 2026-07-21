@@ -139,6 +139,15 @@ impl ProjectionState {
             .map(|msg| msg.realm_id.clone())
     }
 
+    /// Resolve the Circle scope inherited by an event targeting a Message.
+    pub fn message_circle_scope(&self, target_ref: &str) -> Option<String> {
+        self.message_by_target_ref(target_ref)
+            .and_then(|message| message.content.get("scope_circle_id"))
+            .and_then(Value::as_str)
+            .filter(|circle_id| circle_id.starts_with("ak:circle:"))
+            .map(ToOwned::to_owned)
+    }
+
     /// Projection-layer view of a single message that
     /// consults the parallel `redaction` cell. Returns:
     ///   - `Some(view)` with `content = Some(_)` for live messages (no redaction cell set, or set

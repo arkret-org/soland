@@ -27,10 +27,15 @@ pub(super) fn apply_via_lattice_registry(
     proj.apply_via_lattice_registry(operation, &state.hlc, &registry)
 }
 
-fn trusted_sidecar_member_reducer_operation(operation: &Operation, controller: &str) -> Operation {
+fn accepted_circle_member_reducer_operation(
+    operation: &Operation,
+    trusted_sidecar_controller: Option<&str>,
+) -> Operation {
     let mut contextual = operation.clone();
     if let Some(payload) = contextual.payload.as_object_mut() {
-        payload.insert("sender".to_owned(), Value::String(controller.to_owned()));
+        if let Some(controller) = trusted_sidecar_controller {
+            payload.insert("sender".to_owned(), Value::String(controller.to_owned()));
+        }
         payload.insert("manage_capability_verified".to_owned(), Value::Bool(true));
     }
     contextual
@@ -686,12 +691,11 @@ async fn project_accepted_operations_inner(
         // authenticated sidecar aggregate only, supply those values to the
         // reducer on an internal clone. Persistence, sync, and projection
         // events below continue to use the untouched wire-clean operation.
-        let reducer_context_operation = trusted_sidecar_member_controller
-            .filter(|_| {
-                kinds::canonical_kind_for_operation(operation)
-                    == Some(arkret_core::events::EventKind::CIRCLE_MEMBER_STATE)
-            })
-            .map(|controller| trusted_sidecar_member_reducer_operation(operation, controller));
+        let reducer_context_operation = (kinds::canonical_kind_for_operation(operation)
+            == Some(arkret_core::events::EventKind::CIRCLE_MEMBER_STATE))
+        .then(|| {
+            accepted_circle_member_reducer_operation(operation, trusted_sidecar_member_controller)
+        });
         let reducer_operation = reducer_context_operation.as_ref().unwrap_or(operation);
         let reducer_effect =
             if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
@@ -1364,7 +1368,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_sidecar_member_context_does_not_mutate_wire_operation() {
+    fn accepted_circle_member_context_does_not_mutate_wire_operation() {
         let operation = Operation::create(
             arkret_core::OperationId::new(
                 "ak:operation:0196419b-1000-7000-8000-000000000202".to_owned(),
@@ -1380,8 +1384,10 @@ mod tests {
             }),
         );
 
-        let contextual =
-            trusted_sidecar_member_reducer_operation(&operation, "did:web:controller.example");
+        let contextual = accepted_circle_member_reducer_operation(
+            &operation,
+            Some("did:web:controller.example"),
+        );
 
         assert!(operation.payload.get("sender").is_none());
         assert!(

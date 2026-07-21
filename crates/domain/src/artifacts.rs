@@ -400,6 +400,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn production_spec_artifacts_are_embedded() {
+        validate_embedded_artifacts().expect("production spec artifacts must be embedded");
+    }
+
+    #[test]
     fn operation_surface_helper_reads_catalog_groups() {
         let groups = operation_surface_groups();
         assert!(

@@ -188,7 +188,8 @@ impl InternalEventAdmission {
                 InternalEventBinding::MimiProvider { binding_ref } => {
                     object
                         .get("payload")
-                        .and_then(|payload| payload.get("mimi_provenance"))
+                        .and_then(|payload| payload.get("metadata"))
+                        .and_then(|metadata| metadata.get("mimi_provenance"))
                         .and_then(|provenance| provenance.get("mimi_room_binding_ref"))
                         .and_then(Value::as_str)
                         == Some(binding_ref.as_str())
@@ -918,6 +919,49 @@ mod received_at_stamp_tests {
                 .and_then(Value::as_str),
             Some("2026-07-07T05:20:58.398662+00:00")
         );
+    }
+}
+
+#[cfg(test)]
+mod internal_event_admission_tests {
+    use super::*;
+
+    fn mimi_session() -> SessionRecord {
+        let now = Utc::now();
+        SessionRecord {
+            token_hash: "mimi-session".to_owned(),
+            actor: "did:web:mimi.example".to_owned(),
+            device_id: "mimi-provider-facade".to_owned(),
+            audience: "soland".to_owned(),
+            session_public_key: None,
+            agent_session: None,
+            expires_at: now + Duration::minutes(5),
+            created_at: now,
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn mimi_provider_admission_reads_provenance_from_canonical_metadata() {
+        let admission = InternalEventAdmission::mimi_provider(
+            "ak:realm:01904100-0000-7000-8000-000000000001",
+            "did:web:mimi.example",
+            "ak:mimi-binding:01904100-0000-7000-8000-000000000001",
+        );
+        let object = json!({
+            "actor_id": "did:web:mimi.example",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
+            "kind": "ak.message.create",
+            "payload": {
+                "metadata": {
+                    "mimi_provenance": {
+                        "mimi_room_binding_ref": "ak:mimi-binding:01904100-0000-7000-8000-000000000001"
+                    }
+                }
+            }
+        });
+
+        assert!(admission.matches(&mimi_session(), object.as_object().unwrap()));
     }
 }
 

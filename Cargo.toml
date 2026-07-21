@@ -32,7 +32,7 @@ base64 = "0.22.1"
 bs58 = "0.5.1"
 bytes = "1.11.1"
 chrono = "0.4.45"
-arkret-core = { version = "0.3.0", path = "../arkret-rust-sdk/crates/core", default-features = false }
+arkret-core = { version = "0.3.0", path = "../arkret-rust-sdk/crates/core", default-features = false, features = ["embedded-artifacts"] }
 arkret-event-draft = { version = "0.3.0", path = "../arkret-rust-sdk/crates/event-draft", default-features = false }
 arkret-auth = { version = "0.3.0", path = "../arkret-rust-sdk/crates/auth", default-features = false }
 arkret-bootstrap = { version = "0.3.0", path = "../arkret-rust-sdk/crates/bootstrap", default-features = false }

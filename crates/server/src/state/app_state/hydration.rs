@@ -105,7 +105,19 @@ fn replay_projection_event(
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_name: &str,
 ) -> soland_storage::PersistenceResult<()> {
-    let operation = operation_from_projection_event(&event, projection_name)?;
+    let mut operation = operation_from_projection_event(&event, projection_name)?;
+    if event.event_kind == arkret_core::events::EventKind::CIRCLE_MEMBER_STATE {
+        let payload = operation.payload.as_object_mut().ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(format!(
+                "{projection_name} projection event {} has a non-object payload",
+                event.event_id
+            ))
+        })?;
+        // Projection events are written only after admission succeeds. Restore
+        // that trusted verdict on the reducer-only DTO; the canonical Event
+        // payload remains closed and never persists this internal field.
+        payload.insert("manage_capability_verified".to_owned(), Value::Bool(true));
+    }
     if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
         proj.apply(&operation, hydration_hlc)
     {

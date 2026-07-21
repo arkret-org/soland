@@ -71,7 +71,8 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .map_err(|error| AppError::internal(format!("MIMI Event serialize failed: {error}")))?;
     let binding_ref = envelope
         .get("payload")
-        .and_then(|payload| payload.get("mimi_provenance"))
+        .and_then(|payload| payload.get("metadata"))
+        .and_then(|metadata| metadata.get("mimi_provenance"))
         .and_then(|provenance| provenance.get("mimi_room_binding_ref"))
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::internal("MIMI room binding ref missing from Event payload"))?
@@ -320,7 +321,6 @@ pub(super) fn mimi_receipt(
 
 pub(super) struct MimiMappedContent {
     pub(super) content: Value,
-    pub(super) encrypted: bool,
     pub(super) policy: Value,
     pub(super) quarantine: Option<Value>,
     pub(super) status: &'static str,
@@ -350,8 +350,6 @@ pub(super) fn map_mimi_message_content(
         "plaintext_detected": plaintext_detected,
         "plaintext_guard": "not_e2ee",
     });
-    let mut encrypted = e2ee_boundary && !explicit_downgrade;
-
     if e2ee_boundary && explicit_downgrade {
         ensure_content_object(&mut content);
         let object = content.as_object_mut().expect("content object");
@@ -366,7 +364,6 @@ pub(super) fn map_mimi_message_content(
             "plaintext_guard": "marked_explicit_downgrade",
             "downgrade_marker": "mimi_bridge",
         });
-        encrypted = false;
     } else if e2ee_boundary {
         if let Some(binding) = transcript_binding {
             ensure_content_object(&mut content);
@@ -415,7 +412,6 @@ pub(super) fn map_mimi_message_content(
         }
         return Ok(MimiMappedContent {
             content,
-            encrypted: false,
             policy,
             quarantine: Some(quarantine),
             status: "quarantined",
@@ -424,7 +420,6 @@ pub(super) fn map_mimi_message_content(
 
     Ok(MimiMappedContent {
         content,
-        encrypted,
         policy,
         quarantine: None,
         status: "mapped",

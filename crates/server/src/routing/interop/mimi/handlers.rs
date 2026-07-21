@@ -302,23 +302,18 @@ pub(super) async fn mimi_room_message(
         "source_format": source_format,
         "accepted_at": arkret_core::canonical::format_timestamp_canonical(created_at),
     });
-    let projection_payload = json!({
+    let event_payload = json!({
         "strand_id": thread_id.clone(),
         "track_name": "discussion",
         "content": mapped_content.content.clone(),
-        "encrypted": mapped_content.encrypted,
-        "mimi_provenance": mimi_provenance.clone(),
-        "mimi_policy": mapped_content.policy.clone(),
-        "quarantine": mapped_content.quarantine.clone(),
+        "metadata": {
+            "mimi_provenance": mimi_provenance.clone(),
+            "mimi_policy": mapped_content.policy.clone(),
+            "quarantine": mapped_content.quarantine.clone(),
+        },
     });
-    persist_mimi_canonical_message_event(
-        state,
-        &event_id,
-        &realm_id,
-        created_at,
-        projection_payload.clone(),
-    )
-    .await?;
+    persist_mimi_canonical_message_event(state, &event_id, &realm_id, created_at, event_payload)
+        .await?;
 
     let _receipt = mimi_receipt(
         state,

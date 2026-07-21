@@ -795,6 +795,55 @@ async fn timeline_events_for_realm(
         }
     }
 
+    // Reactions are durable data-plane events attached to the discussion
+    // timeline. They must remain raw Event envelopes in account sync; clients
+    // derive the remove-wins reaction summary locally.
+    for record in state
+        .events_store()
+        .realm_events_newest_first(realm_id)
+        .await
+        .unwrap_or_default()
+    {
+        if !matches!(
+            record.kind.as_str(),
+            arkret_core::events::EventKind::REACTION_ADD
+                | arkret_core::events::EventKind::REACTION_REMOVE
+        ) || !seen.insert(record.event_id.clone())
+        {
+            continue;
+        }
+        let position = timestamp_position_with_tie_breaker(record.received_at, &record.event_id);
+        newest_position = newest_position.max(position);
+        if position <= after_position
+            || !realm_event_visible_to_session_with_projection(
+                state,
+                projection,
+                realm_id,
+                record.received_at,
+                Some(&record.actor_id),
+                session,
+            )
+            .await
+        {
+            continue;
+        }
+        let Some(event) = accepted_event(state, &record.event_id).await else {
+            continue;
+        };
+        let target_ref = event.payload.get("target_ref").and_then(Value::as_str);
+        let circle_scope = target_ref.and_then(|target| projection.message_circle_scope(target));
+        if !circle_scope_visible_to_session(
+            projection,
+            circle_scope.as_deref(),
+            record.received_at,
+            session,
+            Some(&record.actor_id),
+        ) {
+            continue;
+        }
+        timeline_entries.push((position, event));
+    }
+
     timeline_entries.sort_by_key(|left| left.0);
     (
         timeline_entries
