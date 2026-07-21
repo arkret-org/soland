@@ -76,17 +76,6 @@ fn sha256_json(value: &Value) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(&bytes)))
 }
 
-fn event_canonical_digest(event: &Value) -> String {
-    let mut canonical = event.clone();
-    if let Value::Object(object) = &mut canonical {
-        object.remove("proofs");
-        object.remove("unsigned");
-        object.remove("canonical_digest");
-        object.remove("canonical_hash");
-    }
-    sha256_json(&canonical)
-}
-
 fn signed_event(
     event_id: &str,
     actor_seq: u64,
@@ -97,30 +86,63 @@ fn signed_event(
     payload: Value,
 ) -> Value {
     let now = Utc::now();
-    let created_at = arkret_core::canonical::format_timestamp_canonical(now);
-    let mut event = json!({
-        "event_id": event_id,
-        "kind": kind,
-        "realm_id": realm_id,
-        "actor_id": actor,
-        "actor_seq": actor_seq,
-        "created_at": created_at,
-        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
-        "prev_refs": [],
-        "refs": [],
-        "payload": payload,
-        "proofs": [],
-    });
-    let event_digest = event_canonical_digest(&event);
-    event["proofs"] = json!([{
-        "kind": "detached_jws",
-        "alg": "EdDSA",
-        "verification_method": format!("{actor}#{device_id}"),
-        "event_digest": event_digest,
-        "created_at": created_at,
-        "jws": "dev-mode-fixture",
-    }]);
-    event
+    let actor = arkret_core::Did::new(actor.to_owned()).unwrap();
+    let verification_method = format!("{}#{device_id}", actor.as_str());
+    let mut event = arkret_core::Event::new_with_id_at(
+        arkret_core::EventId::new(event_id.to_owned()).unwrap(),
+        kind,
+        arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
+        actor.clone(),
+        actor_seq,
+        arkret_core::Hlc::new(format!(
+            "{:012x}-0000-00000000",
+            now.timestamp_millis().max(0) as u64
+        ))
+        .unwrap(),
+        payload,
+        now,
+    )
+    .unwrap();
+    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+        [21_u8; 32],
+        actor,
+        verification_method.clone(),
+    );
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .unwrap();
+    serde_json::to_value(event).unwrap()
+}
+
+fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
+    let verification_method = event["proofs"][0]["verification_method"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut typed: arkret_core::Event = serde_json::from_value(event.clone()).unwrap();
+    typed.prev_refs = prev_refs
+        .iter()
+        .map(|event_id| arkret_core::EventId::new((*event_id).to_owned()).unwrap())
+        .collect();
+    typed.proofs.clear();
+    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+        [21_u8; 32],
+        typed.actor_id.clone(),
+        verification_method.clone(),
+    );
+    let created_at = typed.created_at;
+    arkret_signatures::sign_event(
+        &mut typed,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .unwrap();
+    *event = serde_json::to_value(typed).unwrap();
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
@@ -196,6 +218,23 @@ async fn mls_lifecycle_end_to_end() {
     let alice_did = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone(), alice_did, alice_device, "Alice").await;
+    let event_signing_key = SigningKey::from_bytes(&[21_u8; 32]);
+    let mut alice_device_record = state
+        .test_persistence()
+        .devices()
+        .get(alice_did, alice_device)
+        .await
+        .unwrap()
+        .unwrap();
+    alice_device_record.payload["device_public_key"] =
+        json!(ed25519_public_multibase(&event_signing_key));
+    alice_device_record.verification_state = "verified".to_owned();
+    state
+        .test_persistence()
+        .devices()
+        .put(&alice_device_record)
+        .await
+        .unwrap();
     seed_cross_signing_generation(&state, alice_did, 3);
     let realm_id = "ak:realm:01904100-0000-7000-8000-00000000e2ee";
 
@@ -401,16 +440,72 @@ async fn mls_lifecycle_end_to_end() {
             }
         }),
     );
-    let create_resp = TestClient::post("http://server/_arkret/self/events")
+    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000e2ef";
+    let grant_created_at = realm_create["created_at"].as_str().unwrap();
+    let mut grant: arkret_core::CapabilityGrant = serde_json::from_value(json!({
+        "id": grant_id,
+        "schema": "ak.schema.capability.v1",
+        "realm_id": realm_id,
+        "issuer": alice_did,
+        "subject": alice_did,
+        "actions": ["ak.realm.admin", "ak.capability.grant", "ak.capability.revoke"],
+        "capability_action_registry_digest": arkret_core::current_capability_action_registry_digest().unwrap(),
+        "resources": [{
+            "kind": "realm",
+            "realm_id": realm_id,
+            "match_scope": "realm_wide"
+        }],
+        "issued_at": grant_created_at,
+        "proofs": []
+    }))
+    .unwrap();
+    let mut grant_proof = arkret_core::PayloadProof {
+        kind: arkret_core::proof_kind::DETACHED_JWS.to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method: format!("{alice_did}#{alice_device}"),
+        payload_digest: arkret_core::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+        created_at: chrono::DateTime::parse_from_rfc3339(grant_created_at)
+            .unwrap()
+            .with_timezone(&Utc),
+        domain: None,
+        audience: None,
+        proof_purpose: Some(arkret_core::PayloadProofPurpose::IssuerAttestation),
+        jws: "pending".to_owned(),
+    };
+    grant_proof.payload_digest = grant.payload_digest().unwrap();
+    grant_proof.jws = arkret_signatures::jws::sign_jws_ed25519(
+        &grant.canonical_proof_binding_bytes(&grant_proof).unwrap(),
+        &event_signing_key,
+    )
+    .unwrap();
+    grant.proofs.push(grant_proof);
+    let mut founding_grant = signed_event(
+        "ak:event:01904100-0000-7000-8000-00000000e2ef",
+        2,
+        alice_did,
+        alice_device,
+        realm_id,
+        arkret_core::events::EventKind::CAPABILITY_GRANT,
+        json!({"grant_id": grant_id, "grant": grant}),
+    );
+    set_event_prev_refs(
+        &mut founding_grant,
+        &[realm_create["event_id"].as_str().unwrap()],
+    );
+    let mut create_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&realm_create)
+        .json(&json!({"events": [realm_create, founding_grant]}))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(create_resp.status_code, Some(StatusCode::OK));
+    let create_status = create_resp.status_code;
+    if create_status != Some(StatusCode::OK) {
+        let error: Value = create_resp.take_json().await.unwrap_or(Value::Null);
+        panic!("Realm create failed with {create_status:?}: {error}");
+    }
 
-    let genesis = signed_event(
+    let mut genesis = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e1",
-        2,
+        3,
         alice_did,
         alice_device,
         realm_id,
@@ -427,6 +522,10 @@ async fn mls_lifecycle_end_to_end() {
             "governance_binding": governance_binding,
             "created_at": "2026-05-25T00:00:01.000Z"
         }),
+    );
+    set_event_prev_refs(
+        &mut genesis,
+        &["ak:event:01904100-0000-7000-8000-00000000e2ef"],
     );
     let genesis_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -476,9 +575,9 @@ async fn mls_lifecycle_end_to_end() {
     );
     claim_envelope["signature"]["sig"] = json!(claim_envelope_signature);
 
-    let welcome = signed_event(
+    let mut welcome = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e2",
-        3,
+        4,
         alice_did,
         alice_device,
         realm_id,
@@ -505,6 +604,10 @@ async fn mls_lifecycle_end_to_end() {
             "commit_ref": "ak:event:01904100-0000-7000-8000-00000000e2e3",
             "governance_binding": governance_binding
         }),
+    );
+    set_event_prev_refs(
+        &mut welcome,
+        &["ak:event:01904100-0000-7000-8000-00000000e2e1"],
     );
     let mut welcome_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -543,9 +646,9 @@ async fn mls_lifecycle_end_to_end() {
         "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
         "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1
     });
-    let commit = signed_event(
+    let mut commit = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e3",
-        4,
+        5,
         alice_did,
         alice_device,
         realm_id,
@@ -559,6 +662,10 @@ async fn mls_lifecycle_end_to_end() {
             "commit_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
             "governance_binding": commit_binding
         }),
+    );
+    set_event_prev_refs(
+        &mut commit,
+        &["ak:event:01904100-0000-7000-8000-00000000e2e2"],
     );
     let commit_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
