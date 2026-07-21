@@ -114,7 +114,7 @@ CREATE TABLE public.agent_principals (
     CONSTRAINT agent_principals_id_check CHECK (((id ~~ 'did:%'::text) AND (id !~ '[[:space:]#?]'::text))),
     CONSTRAINT agent_principals_pcr_id_check CHECK ((principal_control_realm_id ~ '^ak:realm:[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
     CONSTRAINT agent_principals_controller_authorization_ref_check CHECK ((controller_authorization_ref ~~ (id || '#%'::text))),
-    CONSTRAINT agent_principals_agent_slug_check CHECK ((agent_slug IS NULL) OR (agent_slug ~ '^[a-z0-9]([a-z0-9_-]{0,62}[a-z0-9])?$'::text)),
+    CONSTRAINT agent_principals_agent_slug_check CHECK ((agent_slug IS NULL) OR ((char_length(agent_slug) BETWEEN 1 AND 64) AND (octet_length(agent_slug) <= 256) AND (agent_slug !~ '[[:space:][:cntrl:]]'::text) AND (strpos(agent_slug, ':'::text) = 0) AND (strpos(agent_slug, '@'::text) = 0) AND (strpos(agent_slug, '/'::text) = 0) AND (strpos(agent_slug, '#'::text) = 0) AND (strpos(agent_slug, '?'::text) = 0) AND (strpos(agent_slug, E'\\') = 0))),
     CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['pending_runtime_key'::text, 'active'::text, 'paused'::text, 'deactivated'::text, 'pairing_expired'::text])))
 );
 

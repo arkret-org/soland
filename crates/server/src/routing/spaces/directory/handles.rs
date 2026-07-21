@@ -54,13 +54,7 @@ fn did_method_host_without_encoded_port(host: &str) -> &str {
 }
 
 fn valid_handle_domain_candidate(value: &str) -> Option<String> {
-    let domain = value.trim().trim_end_matches('.').to_ascii_lowercase();
-    if domain.is_empty() {
-        return None;
-    }
-    SdkHandle::parse(&format!("alice:{domain}"))
-        .ok()
-        .map(|handle| handle.domain().to_owned())
+    arkret_core::prepare_idna_domain(value).ok()
 }
 
 pub(super) fn handle_lookup(input: &str, default_domain: &str) -> Option<HandleLookup> {
@@ -93,26 +87,21 @@ pub(super) fn normalize_handle_parts(
     handle: &str,
     default_domain: &str,
 ) -> Option<(String, String)> {
-    let trimmed = handle.trim().to_ascii_lowercase();
+    let trimmed = handle.trim();
     if trimmed.is_empty() || trimmed.starts_with("did:") {
         return None;
     }
-    let without_acct = trimmed.strip_prefix("acct:").unwrap_or(trimmed.as_str());
-    let without_at_prefix = without_acct.strip_prefix('@').unwrap_or(without_acct);
-    let (localpart, authority) =
-        if let Some((localpart, authority)) = without_at_prefix.rsplit_once('@') {
-            (localpart, authority)
-        } else if let Some((localpart, authority)) = without_at_prefix.split_once(':') {
-            (localpart, authority)
+    let parsed = if trimmed.starts_with("acct:") {
+        SdkHandle::from_acct(trimmed).ok()?
+    } else {
+        let without_sigil = trimmed.strip_prefix('@').unwrap_or(trimmed);
+        if without_sigil.contains(':') || without_sigil.contains('@') {
+            SdkHandle::prepare(trimmed).ok()?
         } else {
-            (without_at_prefix, default_domain)
-        };
-    let localpart = localpart.trim();
-    let authority = authority.trim();
-    if localpart.is_empty() || authority.is_empty() {
-        return None;
-    }
-    Some((localpart.to_owned(), authority.to_owned()))
+            SdkHandle::prepare(&format!("{without_sigil}:{default_domain}")).ok()?
+        }
+    };
+    Some((parsed.localpart().to_owned(), parsed.domain().to_owned()))
 }
 
 pub(super) async fn handle_resolvable_to(
@@ -639,6 +628,7 @@ pub(super) async fn signed_handle_claim(
     let handle = SdkHandle::parse(&canonical_handle).map_err(|err| {
         AppError::internal(format!("handle claim handle construction failed: {err}"))
     })?;
+    let handle_alias = handle.to_acct();
     let subject = Did::new(did.to_owned()).map_err(|err| {
         AppError::internal(format!("invalid subject DID for handle claim: {err}"))
     })?;
@@ -664,7 +654,7 @@ pub(super) async fn signed_handle_claim(
     let mut claim = SdkHandleClaim {
         schema: arkret_core::HANDLE_CLAIM_SCHEMA.to_owned(),
         handle: Some(handle),
-        handle_aliases: vec![format!("acct:{localpart}@{handle_domain}")],
+        handle_aliases: vec![handle_alias],
         subject: Some(subject),
         issuer: Some(service_id.clone()),
         issuer_service_id: Some(signer_did.clone()),

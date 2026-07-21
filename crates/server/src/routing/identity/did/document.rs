@@ -161,9 +161,7 @@ fn valid_handle_domain_candidate(value: &str) -> Option<String> {
     if domain.is_empty() {
         return None;
     }
-    arkret_core::models::Handle::parse(&format!("alice:{domain}"))
-        .ok()
-        .map(|handle| handle.domain().to_owned())
+    arkret_core::prepare_idna_domain(&domain).ok()
 }
 
 fn with_default_also_known_as(

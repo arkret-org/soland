@@ -21,7 +21,7 @@ use arkret_core::http::{
 // `arkret_core::InviteReceivePolicy` also resolves at the crate root, but the
 // invite-addressing strong type lives under `model`; import it via the
 // `model` path to avoid binding the wrong same-named re-export.
-use arkret_core::models::{Handle as SdkHandle, InviteReceivePolicy};
+use arkret_core::models::InviteReceivePolicy;
 use arkret_core::{
     ACTOR_PROFILE_SCHEMA, AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody,
     AccountRegistrationAudit, AccountRegistrationAuditOutcome, AccountRegistrationEvidenceSummary,
@@ -59,9 +59,7 @@ use super::consent::{
     revoke_contact_managed_consent,
 };
 use super::did::require_embedded_webvh_registration_bearer;
-use super::{
-    AuthArgs, append_audit_log, bearer_token, normalize_localpart, now, sha256_hex, validate_did,
-};
+use super::{AuthArgs, append_audit_log, bearer_token, now, sha256_hex, validate_did};
 use crate::routing::validate_device_id;
 use crate::state::AppState;
 use crate::wire::SolandAccountRegisterOutcome;
@@ -78,24 +76,6 @@ pub(crate) async fn record_handle_release(
     let mut releases = state.handle_releases.lock();
     releases.insert(localpart.to_owned(), released_at);
     Ok(())
-}
-
-/// This Principal Server's handle domain. Handles are scoped to the server
-/// host, not to a DID method-specific identifier. Prefer the advertised public
-/// base URL so `did:webvh` service DIDs do not have to be parsed to recover a
-/// handle domain.
-fn principal_handle_domain(state: &AppState) -> String {
-    handle_domain_from_public_base_url(&state.config.public_base_url)
-        .or_else(|| {
-            did_host_candidate(&state.service_id)
-                .and_then(|host| valid_handle_domain_candidate(&host))
-        })
-        .unwrap_or_else(|| "soland.local".to_owned())
-}
-
-fn handle_domain_from_public_base_url(public_base_url: &str) -> Option<String> {
-    let url = reqwest::Url::parse(public_base_url).ok()?;
-    valid_handle_domain_candidate(url.host_str()?)
 }
 
 /// The account's Principal-Server-signed primary handle claim, re-derived on
@@ -321,20 +301,16 @@ fn account_localpart_view(record: AccountLocalpartRecord) -> AccountLocalpartVie
     }
 }
 
-fn normalize_account_localpart_for_request(
-    state: &AppState,
-    localpart: &str,
-) -> Result<String, AppError> {
-    let localpart = normalize_localpart(localpart);
+fn normalize_account_localpart_for_request(localpart: &str) -> Result<String, AppError> {
+    let localpart = localpart.trim();
+    let localpart = localpart.strip_prefix('@').unwrap_or(localpart);
     if localpart.is_empty() || localpart.contains(':') || localpart.contains('@') {
         return Err(AppError::invalid_param(
             "localpart must be a bare handle localpart",
         ));
     }
-    let domain = principal_handle_domain(state);
-    SdkHandle::parse(&format!("{localpart}:{domain}"))
-        .map_err(|_| AppError::invalid_param("localpart is not a valid handle localpart"))?;
-    Ok(localpart)
+    arkret_core::prepare_handle_localpart(localpart)
+        .map_err(|_| AppError::invalid_param("localpart is not a valid handle localpart"))
 }
 
 fn localpart_persistence_error(error: soland_application::ApplicationError) -> AppError {
@@ -462,16 +438,6 @@ fn evidence_secret_matches(
 
 fn normalized_registration_policy_label(value: &str) -> String {
     value.trim().trim_end_matches('.').to_ascii_lowercase()
-}
-
-fn valid_handle_domain_candidate(value: &str) -> Option<String> {
-    let domain = normalized_registration_policy_label(value);
-    if domain.is_empty() {
-        return None;
-    }
-    SdkHandle::parse(&format!("alice:{domain}"))
-        .ok()
-        .map(|handle| handle.domain().to_owned())
 }
 
 fn did_host_candidate(did: &str) -> Option<String> {
@@ -727,12 +693,7 @@ async fn local_account_register(
         .to_owned();
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &did)?;
 
-    let localpart = normalize_localpart(&body.handle);
-    if localpart.is_empty() {
-        return Err(AppError::invalid_param(
-            "handle localpart must not be empty",
-        ));
-    }
+    let localpart = normalize_account_localpart_for_request(&body.handle)?;
     let account_exists = state
         .identity_application()
         .account(&did)
@@ -874,7 +835,7 @@ async fn add_account_localpart(
     validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
     account_exists(state, &account_did).await?;
     let body = body.into_inner();
-    let localpart = normalize_account_localpart_for_request(state, &body.localpart)?;
+    let localpart = normalize_account_localpart_for_request(&body.localpart)?;
     let existing = state
         .identity_application()
         .account_localparts(&account_did)
@@ -922,7 +883,7 @@ async fn update_account_localpart(
     let account_did = account_did.into_inner();
     validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
     account_exists(state, &account_did).await?;
-    let localpart = normalize_account_localpart_for_request(state, &localpart.into_inner())?;
+    let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let body = body.into_inner();
     if body.is_primary != Some(true) {
         return Err(AppError::invalid_param(
@@ -968,7 +929,7 @@ async fn delete_account_localpart(
     let account_did = account_did.into_inner();
     validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
     account_exists(state, &account_did).await?;
-    let localpart = normalize_account_localpart_for_request(state, &localpart.into_inner())?;
+    let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let before = state
         .identity_application()
         .account_localparts(&account_did)
@@ -1556,10 +1517,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn handle_domain_prefers_public_base_url_host() {
+    fn account_localpart_uses_the_handle_preparation_profile() {
         assert_eq!(
-            handle_domain_from_public_base_url("https://Local.Host/base/path").as_deref(),
-            Some("local.host")
+            normalize_account_localpart_for_request("ＡＬＩＣＥ").unwrap(),
+            "alice"
+        );
+        assert_eq!(
+            normalize_account_localpart_for_request("小明").unwrap(),
+            "小明"
         );
     }
 
