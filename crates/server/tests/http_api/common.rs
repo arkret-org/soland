@@ -139,6 +139,47 @@ pub(crate) fn signed_federation_push_headers(
         destination_trust_domain,
         target_uri,
         body,
+        None,
+        None,
+    )
+}
+
+pub(crate) fn signed_federation_push_headers_with_idempotency(
+    origin: &str,
+    destination: &str,
+    destination_trust_domain: &str,
+    target_uri: &str,
+    body: &Value,
+    idempotency_key: &str,
+) -> Vec<(&'static str, String)> {
+    signed_federation_request_headers(
+        "POST",
+        origin,
+        destination,
+        destination_trust_domain,
+        target_uri,
+        body,
+        Some(destination_trust_domain),
+        Some(idempotency_key),
+    )
+}
+
+pub(crate) fn signed_federation_push_headers_same_trust(
+    origin: &str,
+    destination: &str,
+    trust_domain: &str,
+    target_uri: &str,
+    body: &Value,
+) -> Vec<(&'static str, String)> {
+    signed_federation_request_headers(
+        "POST",
+        origin,
+        destination,
+        trust_domain,
+        target_uri,
+        body,
+        Some(trust_domain),
+        None,
     )
 }
 
@@ -190,19 +231,28 @@ fn signed_federation_request_headers(
     destination_trust_domain: &str,
     target_uri: &str,
     body: &Value,
+    source_trust_domain_override: Option<&str>,
+    idempotency_key: Option<&str>,
 ) -> Vec<(&'static str, String)> {
     let body_bytes = arkret_core::canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let request_digest = format!("sha256:{}", hex::encode(Sha256::digest(&body_bytes)));
-    let source_trust_domain = trust_domain_from_service_id(origin);
+    let source_trust_domain = source_trust_domain_override
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| trust_domain_from_service_id(origin));
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
     let keyid = format!("{origin}#federation-fanout-key");
+    let covered_components = if idempotency_key.is_some() {
+        "\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\" \"request-canonical-digest\" \"idempotency-key\""
+    } else {
+        "\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\" \"request-canonical-digest\""
+    };
     let signature_params = format!(
-        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\" \"request-canonical-digest\");created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
+        "({covered_components});created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
     );
     let authority = authority_from_target_uri(target_uri);
-    let signature_base = format!(
+    let mut signature_base = format!(
         "\"@method\": {method}\n\
          \"@target-uri\": {target_uri}\n\
          \"@authority\": {authority}\n\
@@ -211,11 +261,14 @@ fn signed_federation_request_headers(
          \"destination-service-id\": {destination}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}\n\
-         \"request-canonical-digest\": {request_digest}\n\
-         \"@signature-params\": {signature_params}",
+         \"request-canonical-digest\": {request_digest}",
     );
+    if let Some(idempotency_key) = idempotency_key {
+        signature_base.push_str(&format!("\n\"idempotency-key\": {idempotency_key}"));
+    }
+    signature_base.push_str(&format!("\n\"@signature-params\": {signature_params}"));
     let signature = development_service_signing_key(origin).sign(signature_base.as_bytes());
-    vec![
+    let mut headers = vec![
         ("content-digest", content_digest),
         ("request-canonical-digest", request_digest),
         ("source-service-id", origin.to_owned()),
@@ -230,7 +283,11 @@ fn signed_federation_request_headers(
             "signature",
             format!("sig1=:{}:", STANDARD.encode(signature.to_bytes())),
         ),
-    ]
+    ];
+    if let Some(idempotency_key) = idempotency_key {
+        headers.push(("idempotency-key", idempotency_key.to_owned()));
+    }
+    headers
 }
 
 pub(crate) fn authority_from_target_uri(target_uri: &str) -> String {
@@ -820,6 +877,36 @@ pub(crate) fn signed_actor_private_event_envelope(
     )
 }
 
+pub(crate) async fn move_event_to_actor_realm_frontier(
+    state: &AppState,
+    token: &str,
+    actor: &str,
+    realm_id: &str,
+    event: &mut Value,
+) {
+    let frontier: Value = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .expect("HTTP fixture actor Realm frontier JSON");
+    let actor_seq = frontier["frontier"]["actor_seq"]
+        .as_u64()
+        .unwrap_or_else(|| {
+            panic!("HTTP fixture actor Realm frontier missing actor_seq: {frontier}")
+        })
+        + 1;
+    event["actor_seq"] = Value::Number(actor_seq.into());
+    event["prev_refs"] = frontier["frontier"]["event_id"]
+        .as_str()
+        .map(|event_id| serde_json::json!([event_id]))
+        .unwrap_or_else(|| serde_json::json!([]));
+    resign_canonical_event(event);
+}
+
 pub(crate) async fn submit_actor_private_event(
     state: AppState,
     token: &str,
@@ -829,7 +916,8 @@ pub(crate) async fn submit_actor_private_event(
     kind: &str,
     payload: Value,
 ) -> Value {
-    let event = signed_actor_private_event_envelope(actor, device_id, realm_id, kind, payload);
+    let mut event = signed_actor_private_event_envelope(actor, device_id, realm_id, kind, payload);
+    move_event_to_actor_realm_frontier(&state, token, actor, realm_id, &mut event).await;
     TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -849,7 +937,8 @@ pub(crate) async fn post_message_event(
     content: Value,
     encrypted: bool,
 ) -> StatusCode {
-    let event = signed_message_event_envelope(actor, realm_id, thread_id, content, encrypted);
+    let mut event = signed_message_event_envelope(actor, realm_id, thread_id, content, encrypted);
+    move_event_to_actor_realm_frontier(&state, token, actor, realm_id, &mut event).await;
     TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -871,7 +960,8 @@ pub(crate) async fn submit_message_event(
     if !encrypted {
         authorize_test_plaintext_message_service(&state, actor, realm_id).await;
     }
-    let event = signed_message_event_envelope(actor, realm_id, thread_id, content, encrypted);
+    let mut event = signed_message_event_envelope(actor, realm_id, thread_id, content, encrypted);
+    move_event_to_actor_realm_frontier(&state, token, actor, realm_id, &mut event).await;
     let mut response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)

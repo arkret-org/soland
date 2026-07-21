@@ -89,6 +89,7 @@ fn state_with_direct_binding() -> (AppState, arkret_core::RealmId) {
             main_strand_id: "ak:strand:01904100-0000-7000-8000-000000000601".to_owned(),
             binding_event_ref: "ak:event:01904100-0000-7000-8000-000000000601".to_owned(),
             state: "active".to_owned(),
+            authoring_context: None,
             created_at: now,
             updated_at: now,
         },

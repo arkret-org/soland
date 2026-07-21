@@ -234,6 +234,7 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
                 .unwrap(),
         },
         events: Vec::new(),
+        signer_key_evidence: Vec::new(),
         idempotency_key: None,
     };
     let err = SolandEventsSubmitRequestBody::validate_federation_service_binding(
@@ -259,6 +260,7 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
                 .unwrap(),
         },
         events: Vec::new(),
+        signer_key_evidence: Vec::new(),
         idempotency_key: None,
     };
 
@@ -287,6 +289,7 @@ fn federation_binding_accepts_registry_reducer_profile_digest() {
             .unwrap(),
         },
         events: Vec::new(),
+        signer_key_evidence: Vec::new(),
         idempotency_key: None,
     };
 

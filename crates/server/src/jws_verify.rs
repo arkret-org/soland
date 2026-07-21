@@ -188,6 +188,33 @@ pub async fn verify_jws_ed25519_async(
     .map_err(|error| error.to_string())
 }
 
+pub fn verify_jws_ed25519_with_document(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    issuer: &str,
+    document_value: &serde_json::Value,
+) -> Result<(), String> {
+    let document = serde_json::from_value::<DidDocument>(document_value.clone())
+        .map_err(|error| format!("historical DID document decode failed: {error}"))?;
+    let issuer_did = Did::new(issuer.to_owned()).map_err(|error| error.to_string())?;
+    if document.id != issuer_did {
+        return Err("historical DID document id does not match issuer".to_owned());
+    }
+    require_verification_method_in_document(&document, verification_method)?;
+    let resolver = ResolvedDidDocumentResolver {
+        document: &document,
+    };
+    arkret_identity::jws::verify_jws_ed25519(
+        canonical_bytes,
+        jws,
+        verification_method,
+        issuer,
+        &resolver,
+    )
+    .map_err(|error| error.to_string())
+}
+
 /// Verify a proof made by either a principal DID control method or one of the
 /// principal's currently-authorized device keys.
 ///
@@ -307,6 +334,90 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
     )
     .await
     .map_err(PrincipalAuthorizedJwsError::Verification)
+}
+
+/// Resolve the active local device-directory evidence needed to verify an
+/// original participant-signed Event on a remote Principal Server. The
+/// returned evidence is carried only in the service-authenticated federation
+/// wrapper; it never mutates the Event or its canonical digest.
+pub async fn federated_event_signer_evidence(
+    state: &AppState,
+    event: &arkret_core::Event,
+) -> Result<Vec<arkret_core::FederatedDeviceSigningKeyEvidence>, String> {
+    let actor_id = event.actor_id.as_str();
+    let prefix = format!("{actor_id}#");
+    let mut evidence = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for proof in &event.proofs {
+        let Some(device_id) = proof.verification_method.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Ok(device_id) = arkret_core::DeviceId::new(device_id.to_owned()) else {
+            // DID-control methods remain independently resolvable and do not
+            // use principal device-directory evidence.
+            continue;
+        };
+        if !seen.insert(proof.verification_method.clone()) {
+            continue;
+        }
+        evidence.push(
+            federated_device_signing_key_evidence(
+                state,
+                &event.actor_id,
+                &device_id,
+                &proof.verification_method,
+            )
+            .await?,
+        );
+    }
+    Ok(evidence)
+}
+
+pub async fn federated_device_signing_key_evidence(
+    state: &AppState,
+    actor_id: &arkret_core::Did,
+    device_id: &arkret_core::DeviceId,
+    verification_method: &str,
+) -> Result<arkret_core::FederatedDeviceSigningKeyEvidence, String> {
+    let expected_method = format!("{actor_id}#{device_id}");
+    if verification_method != expected_method {
+        return Err("device signing verification method is not actor_id#device_id".to_owned());
+    }
+    let facet =
+        crate::routing::identity::cross_signing::try_resolve_device_signing_directory_facet(
+            state,
+            actor_id.as_str(),
+            device_id.as_str(),
+        )
+        .await
+        .map_err(|error| format!("device signing directory unavailable: {error}"))?;
+    if !matches!(facet.status, arkret_core::DeviceStatus::Active) {
+        return Err("device signer is not active".to_owned());
+    }
+    let device_signing_key = facet
+        .signing_key_did
+        .ok_or_else(|| "device signer key is unavailable".to_owned())?;
+    let device_authorize_event_id = facet
+        .device_authorize_event_id
+        .ok_or_else(|| "device signer has no accepted authorization Event".to_owned())?;
+    let device_authorize_record = state
+        .events_store()
+        .get(device_authorize_event_id.as_str())
+        .await
+        .map_err(|error| format!("device authorization Event lookup failed: {error}"))?
+        .ok_or_else(|| "device authorization Event is unavailable".to_owned())?;
+    let device_authorize_event =
+        serde_json::from_value::<arkret_core::Event>(device_authorize_record.envelope)
+            .map_err(|error| format!("device authorization Event is invalid: {error}"))?;
+    Ok(arkret_core::FederatedDeviceSigningKeyEvidence {
+        actor_id: actor_id.clone(),
+        device_id: device_id.clone(),
+        verification_method: verification_method.to_owned(),
+        device_signing_key: arkret_core::DidKey::new(device_signing_key)
+            .map_err(|error| format!("device signer key is invalid: {error}"))?,
+        authorization_accepted_at: device_authorize_record.received_at,
+        device_authorize_event: Box::new(device_authorize_event),
+    })
 }
 
 /// The local service notary is anchored by the configured service identity

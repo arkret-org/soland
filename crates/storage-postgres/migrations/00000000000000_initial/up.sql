@@ -473,6 +473,7 @@ CREATE TABLE public.direct_conversation_bindings (
     main_strand_id uuid NOT NULL,
     binding_event_ref text NOT NULL,
     state text NOT NULL,
+    authoring_context jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -650,8 +651,24 @@ CREATE TABLE public.mls_key_packages (
     claimed_by_mls_group_id text,
     ssk_generation bigint,
     device_authorize_event_id text,
+    claimed_at bigint,
+    claim_expires_at bigint,
     consumed_at bigint,
     created_at bigint NOT NULL
+);
+
+CREATE TABLE public.peer_keypackage_claims (
+    source_service_id text NOT NULL,
+    claim_request_id text NOT NULL,
+    request_digest text NOT NULL,
+    state text NOT NULL,
+    outcome jsonb,
+    keypackage_id text,
+    claim_expires_at bigint,
+    expires_at bigint NOT NULL,
+    updated_at bigint NOT NULL,
+    CONSTRAINT peer_keypackage_claims_state_check CHECK (state IN ('claimed', 'claim_failed', 'expired', 'revoked')),
+    PRIMARY KEY (source_service_id, claim_request_id)
 );
 
 CREATE TABLE public.mls_welcomes (

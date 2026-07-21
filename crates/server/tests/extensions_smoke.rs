@@ -476,6 +476,8 @@ struct AppletMessageTransactionRequest<'a> {
     actor_id: &'a str,
     realm_id: &'a str,
     authorization_ref: &'a str,
+    actor_seq: u64,
+    prev_ref: &'a str,
     text: &'a str,
     idempotency_key: &'a str,
 }
@@ -491,6 +493,8 @@ async fn post_signed_applet_message_transaction(
         request.actor_id,
         request.realm_id,
         request.authorization_ref,
+        request.actor_seq,
+        request.prev_ref,
         request.text,
     );
     let body = json!({
@@ -545,6 +549,8 @@ fn applet_message_event(
     actor_id: &str,
     realm_id: &str,
     authorization_ref: &str,
+    actor_seq: u64,
+    prev_ref: &str,
     text: &str,
 ) -> Value {
     let now = chrono::Utc::now();
@@ -562,10 +568,10 @@ fn applet_message_event(
         "kind": "ak.message.create",
         "realm_id": realm_id,
         "actor_id": actor_id,
-        "actor_seq": 1,
+        "actor_seq": actor_seq,
         "created_at": created_at,
         "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
-        "prev_refs": [],
+        "prev_refs": [prev_ref],
         "refs": [],
         "payload": payload,
         "executed_by": package.service_id.to_string(),
@@ -713,6 +719,8 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
             actor_id: &ghost_actor_id,
             realm_id,
             authorization_ref: &message_grant_ref,
+            actor_seq: 2,
+            prev_ref: provision["profile_event_ref"].as_str().unwrap(),
             text: &transaction_text,
             idempotency_key: &transaction_idempotency_key,
         },
@@ -773,6 +781,8 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
             actor_id: &ghost_actor_id,
             realm_id,
             authorization_ref: &message_grant_ref,
+            actor_seq: 2,
+            prev_ref: provision["profile_event_ref"].as_str().unwrap(),
             text: "after revoke",
             idempotency_key: &rejected_idempotency_key,
         },

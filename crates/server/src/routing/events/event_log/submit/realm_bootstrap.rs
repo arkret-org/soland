@@ -29,7 +29,15 @@ pub(super) async fn submit_realm_bootstrap_batch(
     state: &AppState,
     session: &SessionRecord,
     envelopes: Vec<Value>,
+    internal_admissions: Option<&[InternalEventAdmission]>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
+    if internal_admissions.is_some_and(|admissions| admissions.len() != envelopes.len()) {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "Realm bootstrap federation admission cardinality mismatch",
+        ));
+    }
     let typed_events = envelopes
         .iter()
         .cloned()
@@ -79,9 +87,16 @@ pub(super) async fn submit_realm_bootstrap_batch(
     };
     let contexts = std::slice::from_ref(&context);
     let mut validated = Vec::with_capacity(envelopes.len());
-    for envelope in &envelopes {
+    for (index, envelope) in envelopes.iter().enumerate() {
         validated.push(
-            validate_event_envelope_with_context(state, session, envelope, contexts, None).await?,
+            validate_event_envelope_with_context(
+                state,
+                session,
+                envelope,
+                contexts,
+                internal_admissions.and_then(|admissions| admissions.get(index)),
+            )
+            .await?,
         );
     }
     validate_actor_chain(&validated)?;
@@ -260,10 +275,8 @@ pub(super) async fn submit_realm_bootstrap_batch(
             );
         }
     }
-    for (parsed, envelope) in validated.iter().zip(envelopes.iter()) {
-        if !session.token_hash.starts_with("federation:") {
-            enqueue_peer_event_fanout(state, parsed, envelope).await;
-        }
+    if !session.token_hash.starts_with("federation:") {
+        enqueue_peer_event_batch_fanout(state, &validated, &envelopes).await;
     }
     organizations::record_realm_organizations_from_event(state, &unit.realm_id, &envelopes[0])
         .await;
@@ -298,6 +311,16 @@ pub(super) async fn submit_realm_bootstrap_batch(
 }
 
 fn validate_actor_chain(events: &[ValidatedEventEnvelope]) -> Result<(), SubmitOneError> {
+    if events
+        .first()
+        .is_none_or(|first| first.actor_seq != 1 || !first.prev_refs.is_empty())
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            "ordinary Realm bootstrap must begin the Realm-scoped actor chain at actor_seq=1",
+        ));
+    }
     for pair in events.windows(2) {
         let previous = &pair[0];
         let current = &pair[1];

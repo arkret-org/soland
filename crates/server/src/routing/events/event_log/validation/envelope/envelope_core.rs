@@ -284,8 +284,8 @@ pub(crate) async fn validate_event_envelope_with_context(
     // application sub-payload it carries). Gate / review enforcement happens at
     // the later `join` transition, not on the knock itself.
     let is_member_self_knock = member_self_knock(object, &session.actor);
-    let is_authorized_internal_adapter =
-        internal_admission.is_some_and(|admission| admission.matches(session, object));
+    let is_authorized_internal_adapter = internal_admission
+        .is_some_and(|admission| admission.authorizes_realm_membership_bypass(session, object));
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
         && !is_invitee_invite_cancel
@@ -323,6 +323,15 @@ pub(crate) async fn validate_event_envelope_with_context(
         object,
         is_self_principal_pcr_bootstrap_create,
     )?;
+    capability_grant_proofs::validate_capability_grant_proofs(
+        state,
+        session,
+        &kind,
+        &actor_id,
+        object,
+        internal_admission,
+    )
+    .await?;
     validate_data_event_capability_refs(state, &actor_id, &realm_id, &kind, object)?;
     validate_cba_effect_planes(object)?;
     validate_control_move_seal_basis(
@@ -446,8 +455,24 @@ pub(crate) async fn validate_event_envelope_with_context(
         &canonical_digest,
     )
     .await?;
-    validate_event_proofs(object, state, session, &actor_id, &canonical_digest).await?;
-    enforce_device_generation_fence(state, object, &actor_id, is_identity_anchor_authorize).await?;
+    validate_event_proofs(
+        object,
+        state,
+        session,
+        &actor_id,
+        &canonical_digest,
+        internal_admission,
+    )
+    .await?;
+    enforce_device_generation_fence(
+        state,
+        session,
+        object,
+        &actor_id,
+        is_identity_anchor_authorize,
+        internal_admission,
+    )
+    .await?;
     reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
     let device_id =
         event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
@@ -469,9 +494,11 @@ pub(crate) async fn validate_event_envelope_with_context(
 
 async fn enforce_device_generation_fence(
     state: &AppState,
+    session: &SessionRecord,
     object: &serde_json::Map<String, Value>,
     actor_id: &str,
     is_identity_anchor_authorize: bool,
+    internal_admission: Option<&InternalEventAdmission>,
 ) -> Result<(), EventValidationError> {
     let root_anchor = object
         .get("refs")
@@ -485,6 +512,20 @@ async fn enforce_device_generation_fence(
             })
         });
     if root_anchor || is_identity_anchor_authorize {
+        return Ok(());
+    }
+    if let Some(verification_method) = object
+        .get("proofs")
+        .and_then(Value::as_array)
+        .and_then(|proofs| proofs.first())
+        .and_then(|proof| proof.get("verification_method"))
+        .and_then(Value::as_str)
+        && internal_admission.is_some_and(|admission| {
+            admission
+                .signer_key_evidence(session, object, verification_method)
+                .is_some()
+        })
+    {
         return Ok(());
     }
     let Some(generation) =

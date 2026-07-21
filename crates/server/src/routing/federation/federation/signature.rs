@@ -331,6 +331,12 @@ fn verify_inbound_peer_http_signature_inner(
     let method = req.method().as_str().to_owned();
     let outer_params = signature_params(req, "signature-input")?;
     validate_signature_params(&outer_params, &source_service_id, "outer")?;
+    let idempotency_key = req
+        .headers()
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let outer_base = peer_http_signature_base(
         &method,
         &target_uri,
@@ -341,6 +347,7 @@ fn verify_inbound_peer_http_signature_inner(
         &source_trust_domain,
         &destination_trust_domain,
         request_digest.as_deref(),
+        idempotency_key,
         endpoint_digest.as_deref(),
         &outer_params,
     );
@@ -441,6 +448,7 @@ fn peer_http_signature_base(
     source_trust_domain: &str,
     destination_trust_domain: &str,
     request_digest: Option<&str>,
+    idempotency_key: Option<&str>,
     destination_service_endpoint_digest: Option<&str>,
     signature_params: &str,
 ) -> String {
@@ -455,6 +463,7 @@ fn peer_http_signature_base(
             SignatureBaseComponent::required("source-trust-domain", source_trust_domain),
             SignatureBaseComponent::required("destination-trust-domain", destination_trust_domain),
             SignatureBaseComponent::optional("request-canonical-digest", request_digest),
+            SignatureBaseComponent::optional("idempotency-key", idempotency_key),
             SignatureBaseComponent::optional(
                 "destination-service-endpoint-digest",
                 destination_service_endpoint_digest,

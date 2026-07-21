@@ -166,7 +166,7 @@ pub async fn enqueue_outbound(
     })
 }
 
-fn rfc9421_sign(
+pub(crate) fn rfc9421_sign(
     state: &AppState,
     mut headers: reqwest::header::HeaderMap,
     method: &str,
@@ -183,7 +183,7 @@ fn rfc9421_sign(
     let created = now_unix_secs();
     let expires = created + 300;
     let keyid = super::federation_service_signature_key_id(&state.service_id);
-    let covered = [
+    let mut covered = vec![
         "\"@method\"",
         "\"@target-uri\"",
         "\"@authority\"",
@@ -193,8 +193,12 @@ fn rfc9421_sign(
         "\"source-trust-domain\"",
         "\"destination-trust-domain\"",
         "\"request-canonical-digest\"",
-    ]
-    .join(" ");
+    ];
+    let idempotency_key = header_value(&headers, "idempotency-key");
+    if idempotency_key.is_some() {
+        covered.push("\"idempotency-key\"");
+    }
+    let covered = covered.join(" ");
     let signature_params = format!(
         "({covered});created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
     );
@@ -219,6 +223,7 @@ fn rfc9421_sign(
             SignatureBaseComponent::required("source-trust-domain", &source_trust_domain),
             SignatureBaseComponent::required("destination-trust-domain", &destination_trust_domain),
             SignatureBaseComponent::required("request-canonical-digest", &request_canonical_digest),
+            SignatureBaseComponent::optional("idempotency-key", idempotency_key.as_deref()),
         ],
         &signature_params,
     );
@@ -245,7 +250,7 @@ fn authority_from_target_url(target_url: &str) -> String {
         .unwrap_or_else(|| host.to_owned())
 }
 
-fn insert_header_if_valid(
+pub(crate) fn insert_header_if_valid(
     headers: &mut reqwest::header::HeaderMap,
     name: &'static str,
     value: &str,
@@ -267,7 +272,7 @@ fn trust_domain_from_service_id(service_id: &str) -> String {
 }
 
 /// Compute the RFC 9530 `Content-Digest` header value for a body.
-fn content_digest_header_value(body: &[u8]) -> String {
+pub(crate) fn content_digest_header_value(body: &[u8]) -> String {
     super::rfc9530_content_digest(body)
 }
 

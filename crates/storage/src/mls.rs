@@ -24,8 +24,61 @@ pub struct MlsKeyPackageRow {
     pub claimed_by_mls_group_id: Option<String>,
     pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<String>,
+    /// Unix seconds at which the single-use claim was accepted.
+    pub claimed_at: Option<i64>,
+    /// Claim authorization deadline. An unconsumed row is terminally
+    /// revoked at or after this instant.
+    pub claim_expires_at: Option<i64>,
+    /// Unix seconds at which the target device consumed the accepted claim.
     pub consumed_at: Option<i64>,
     pub created_at: i64,
+}
+
+/// Durable terminal result for a peer KeyPackage claim request.
+///
+/// `(source_service_id, claim_request_id)` is the protocol idempotency key.
+/// `request_digest` prevents a caller from reusing that key for a different
+/// canonical request. `outcome` is the exact serialized success response and
+/// is absent for the opaque `claim_failed` terminal state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PeerKeyPackageClaimLedgerRecord {
+    pub source_service_id: String,
+    pub claim_request_id: String,
+    pub request_digest: String,
+    pub state: String,
+    pub outcome: Option<Value>,
+    /// Single-use KeyPackage transitioned by this ledger row. Absent for an
+    /// opaque failure row.
+    pub keypackage_id: Option<String>,
+    /// Protocol claim deadline, distinct from `expires_at` (ledger retention).
+    pub claim_expires_at: Option<i64>,
+    pub expires_at: i64,
+    pub updated_at: i64,
+}
+
+/// One candidate CAS attempt for a peer claim. The storage adapter must make
+/// the KeyPackage transition and terminal ledger insert atomic.
+pub struct PeerKeyPackageClaimAttempt<'a> {
+    pub keypackage_id: &'a str,
+    pub mls_group_id: &'a str,
+    pub ssk_generation: Option<u64>,
+    pub device_authorize_event_id: Option<&'a str>,
+    pub claimed_at: i64,
+    pub claim_expires_at: i64,
+    pub ledger: &'a PeerKeyPackageClaimLedgerRecord,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PeerKeyPackageClaimAttemptResult {
+    Claimed(MlsKeyPackageRow),
+    Existing(PeerKeyPackageClaimLedgerRecord),
+    KeyPackageUnavailable,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PeerKeyPackageClaimLedgerWriteResult {
+    Inserted,
+    Existing(PeerKeyPackageClaimLedgerRecord),
 }
 /// G3.S1 — durable Welcome envelope row (per recipient device).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,7 +122,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
     async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Atomically claim the named KeyPackage for `mls_group_id`. Returns
     /// `Ok(Some(record))` on success (with `claimed_by_mls_group_id` /
-    /// `consumed_at` filled in), `Ok(None)` if the row is already
+    /// claim-window fields filled in), `Ok(None)` if the row is already
     /// claimed or does not exist. The CAS check + update happens
     /// inside the store so two concurrent callers see at-most-one win.
     async fn try_claim(
@@ -79,12 +132,42 @@ pub trait MlsKeyPackageStore: Send + Sync {
         intended_realm_id: Option<&str>,
         ssk_generation: Option<u64>,
         device_authorize_event_id: Option<&str>,
+        claimed_at: i64,
+        claim_expires_at: Option<i64>,
+    ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
+    /// Mark an already claimed ordinary KeyPackage consumed by the same MLS
+    /// group. A consume at or after the claim deadline fails closed.
+    async fn consume_claim(
+        &self,
+        id: &str,
+        mls_group_id: &str,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
+    /// Read a peer claim ledger row without revealing KeyPackage inventory.
+    async fn get_peer_claim(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
+    /// Atomically claim one ordinary KeyPackage and persist the exact terminal
+    /// success outcome. Last-resort rows are never eligible on this path.
+    async fn try_claim_peer(
+        &self,
+        attempt: PeerKeyPackageClaimAttempt<'_>,
+    ) -> PersistenceResult<PeerKeyPackageClaimAttemptResult>;
+    /// Persist a terminal outcome that does not transition a KeyPackage, such
+    /// as the intentionally opaque `claim_failed` result.
+    async fn record_peer_claim_terminal(
+        &self,
+        record: &PeerKeyPackageClaimLedgerRecord,
+    ) -> PersistenceResult<PeerKeyPackageClaimLedgerWriteResult>;
+    /// Revoke expired, still-unconsumed peer claims atomically with their
+    /// ledger transitions. Returns newly revoked KeyPackage ids.
+    async fn revoke_expired_peer_claims(&self, now: i64) -> PersistenceResult<Vec<String>>;
     /// Snapshot all rows. Diagnostics + the integration test rely on it.
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
     /// All rows claimed by `mls_group_id` (excluding the sentinel
-    /// `"revoked"` claims). Ordered by `consumed_at` then `id` so callers
+    /// `"revoked"` claims). Ordered by `claimed_at` then `id` so callers
     /// get a stable leaf iteration order. Feeds the minimal-metadata
     /// author-credential admission view (encryption-and-audit.md §2.10.3).
     async fn list_claimed_by_group(

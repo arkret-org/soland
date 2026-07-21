@@ -418,6 +418,8 @@ struct DirectConversationBindingRow {
     binding_event_ref: String,
     #[diesel(sql_type = Text)]
     state: String,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    authoring_context: Option<Value>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -433,6 +435,7 @@ impl DirectConversationBindingRow {
                 main_strand_id: ids::format_typed_uuid("strand", &self.main_strand_id),
                 binding_event_ref: self.binding_event_ref,
                 state: self.state,
+                authoring_context: self.authoring_context,
                 created_at: self.created_at,
                 updated_at: self.updated_at,
             },
@@ -440,7 +443,7 @@ impl DirectConversationBindingRow {
     }
 }
 const DIRECT_BINDING_COLUMNS: &str = "participants_key, participants_unordered, realm_id, \
-     main_strand_id, binding_event_ref, state, created_at, updated_at";
+     main_strand_id, binding_event_ref, state, authoring_context, created_at, updated_at";
 #[async_trait]
 impl DirectConversationBindingStore for PgDirectConversationBindingStore {
     async fn get(
@@ -473,14 +476,15 @@ impl DirectConversationBindingStore for PgDirectConversationBindingStore {
         sql_query(
             "INSERT INTO direct_conversation_bindings \
              (participants_key, participants_unordered, realm_id, main_strand_id, \
-              binding_event_ref, state, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+              binding_event_ref, state, authoring_context, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (participants_key) DO UPDATE SET \
                 participants_unordered = EXCLUDED.participants_unordered, \
                 realm_id = EXCLUDED.realm_id, \
                 main_strand_id = EXCLUDED.main_strand_id, \
                 binding_event_ref = EXCLUDED.binding_event_ref, \
                 state = EXCLUDED.state, \
+                authoring_context = EXCLUDED.authoring_context, \
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<Text, _>(participants_key)
@@ -489,6 +493,7 @@ impl DirectConversationBindingStore for PgDirectConversationBindingStore {
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.main_strand_id))
         .bind::<Text, _>(&record.binding_event_ref)
         .bind::<Text, _>(&record.state)
+        .bind::<Nullable<Jsonb>, _>(&record.authoring_context)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)

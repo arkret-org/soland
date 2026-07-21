@@ -8,7 +8,7 @@ use soland_storage::{AppletTransactionReplayBegin, AppletTransactionReplayRecord
 
 use super::signature::VerifiedInboundTransactionSignature;
 use super::types::AppletRecord;
-use crate::routing::events::event_log::submit_event_value;
+use crate::routing::events::event_log::submit_applet_event_value;
 use crate::state::AppState;
 
 pub(super) async fn process_verified_transaction(
@@ -59,7 +59,15 @@ pub(super) async fn process_verified_transaction(
             }
         };
         let session = applet_event_session(state, &event);
-        match submit_event_value(state, &session, envelope).await {
+        match submit_applet_event_value(
+            state,
+            &session,
+            envelope,
+            &source_service_id,
+            event.authorization_ref.clone(),
+        )
+        .await
+        {
             Ok(outcome) => {
                 tracing::debug!(
                     event_id = %outcome.event_id,

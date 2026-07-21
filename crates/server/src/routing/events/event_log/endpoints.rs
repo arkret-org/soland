@@ -702,11 +702,17 @@ async fn events_frontier(
         ));
     }
 
+    // A combined actor + Realm selector is the realm-scoped actor frontier
+    // used for authoring. Realm-only remains the Seal frontier surface.
+    let actor_realm_selector = actor_id.as_ref().zip(realm_selector.as_ref());
+
     // Realm selector → Realm Seal view `{realm_id, seal_id,
     // control_event_set_root, state_root, hlc}`: the registered sourcing for
     // single-leaf Control Move `seal_basis` (`leaves=[seal_id]`) and
-    // DataEvent `seal_ref`. Takes precedence when both selectors are passed.
-    if let Some(realm_value) = realm_selector {
+    // DataEvent `seal_ref`.
+    if actor_realm_selector.is_none()
+        && let Some(realm_value) = realm_selector.as_ref()
+    {
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
         let own_pcr = soland_domain::identity::principal_control_realm_for_did(&session.actor);
@@ -717,7 +723,7 @@ async fn events_frontier(
                 &realm_value,
             )
             .await?;
-        let accessible = realm_value == own_pcr
+        let accessible = realm_value == &own_pcr
             || managed_agent_pcr
             || crate::routing::spaces::space::realm_id_accessible(
                 state,
@@ -835,6 +841,12 @@ async fn events_frontier(
             .get("realm_id")
             .and_then(Value::as_str)
             .or(record.realm_id.as_deref());
+        if realm_selector
+            .as_deref()
+            .is_some_and(|realm_id| record_realm_id != Some(realm_id))
+        {
+            continue;
+        }
         let managed_actor_event_visible = managed_actor_pcr
             .as_deref()
             .is_some_and(|pcr_id| record_realm_id == Some(pcr_id));

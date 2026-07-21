@@ -1,0 +1,242 @@
+use super::*;
+
+pub(super) async fn validate_capability_grant_proofs(
+    state: &AppState,
+    session: &SessionRecord,
+    kind: &str,
+    actor_id: &str,
+    object: &serde_json::Map<String, Value>,
+    internal_admission: Option<&crate::routing::events::event_log::submit::InternalEventAdmission>,
+) -> Result<(), EventValidationError> {
+    if kind != arkret_core::events::EventKind::CAPABILITY_GRANT {
+        return Ok(());
+    }
+    let payload: arkret_core::CapabilityGrantPayload = serde_json::from_value(
+        object.get("payload").cloned().unwrap_or(Value::Null),
+    )
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("invalid capability grant payload: {error}"),
+        )
+    })?;
+    let Some(grant) = payload.grant else {
+        // The active schema also permits the compact grant-id/actions/resource
+        // carrier. It has no nested proof object; its Event proof remains the
+        // complete authenticity boundary.
+        return Ok(());
+    };
+    if grant.id != payload.grant_id {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "capability grant id does not match payload.grant_id",
+        ));
+    }
+    if grant.issuer.as_str() != actor_id {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "capability grant issuer must equal the Event actor",
+        ));
+    }
+    if grant.proofs.is_empty() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "capability grant must carry an issuer proof",
+        ));
+    }
+
+    for proof in &grant.proofs {
+        proof.validate_production().map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                format!("invalid capability grant proof: {error}"),
+            )
+        })?;
+        if proof.proof_purpose.is_some()
+            && proof.proof_purpose != Some(arkret_core::PayloadProofPurpose::IssuerAttestation)
+        {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "capability grant proof purpose must be issuer_attestation",
+            ));
+        }
+        if proof.verification_method != grant.issuer.as_str()
+            && !proof
+                .verification_method
+                .starts_with(&format!("{}#", grant.issuer))
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                "capability grant proof verification method must be rooted in the issuer",
+            ));
+        }
+        let binding = grant
+            .canonical_proof_binding_bytes(proof)
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    format!("invalid capability grant proof binding: {error}"),
+                )
+            })?;
+        if !super::proofs::verify_with_federated_signer_evidence(
+            internal_admission,
+            session,
+            object,
+            &proof.verification_method,
+            &binding,
+            &proof.jws,
+        )? {
+            crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+                &binding,
+                &proof.jws,
+                &proof.verification_method,
+                grant.issuer.as_str(),
+                state,
+            )
+            .await
+            .map_err(|error| {
+                tracing::debug!(%error, "capability grant proof JWS verification failed");
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    "capability grant proof JWS verification failed",
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use ed25519_dalek::SigningKey;
+    use serde_json::json;
+    use soland_storage_postgres::Db;
+
+    use super::*;
+
+    fn state() -> AppState {
+        AppState::new(
+            crate::config::AppConfig {
+                object_storage: crate::config::ObjectStorageConfig::local(
+                    std::env::temp_dir().join("soland-capability-grant-proof-test"),
+                ),
+                did_resolver_allow_methods: vec!["key".to_owned()],
+                jws_replay_window_seconds: 0,
+                ..crate::config::AppConfig::test_default()
+            },
+            Db { pool: None },
+        )
+    }
+
+    fn signed_payload() -> (String, Value) {
+        let signing_key = SigningKey::from_bytes(&[31_u8; 32]);
+        let multibase = arkret_core::ed25519_pubkey_to_did_key_multibase(
+            signing_key.verifying_key().as_bytes(),
+        );
+        let issuer = format!("did:key:{multibase}");
+        let verification_method = format!("{issuer}#{multibase}");
+        let mut grant: arkret_core::CapabilityGrant = serde_json::from_value(json!({
+            "id": "ak:grant:01904100-0000-7000-8000-000000000013",
+            "schema": "ak.schema.capability.v1",
+            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
+            "issuer": issuer,
+            "subject": issuer,
+            "actions": ["ak.realm.configure"],
+            "resources": [{
+                "kind": "realm",
+                "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
+                "match_scope": "realm_wide"
+            }],
+            "issued_at": "2026-07-21T08:00:00Z",
+            "proofs": []
+        }))
+        .expect("grant fixture");
+        let mut proof = arkret_core::PayloadProof {
+            kind: arkret_core::proof_kind::DETACHED_JWS.to_owned(),
+            alg: "EdDSA".to_owned(),
+            verification_method,
+            payload_digest: grant.payload_digest().expect("grant digest"),
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-07-21T08:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            domain: None,
+            audience: None,
+            proof_purpose: Some(arkret_core::PayloadProofPurpose::IssuerAttestation),
+            jws: String::new(),
+        };
+        proof.jws = arkret_signatures::sign_eddsa_detached_jws(
+            &signing_key,
+            &grant
+                .canonical_proof_binding_bytes(&proof)
+                .expect("grant proof binding"),
+        )
+        .expect("grant proof signature");
+        grant.proofs.push(proof);
+        let grant_id = grant.id.clone();
+        (
+            issuer,
+            json!({
+                "grant_id": grant_id,
+                "grant": grant
+            }),
+        )
+    }
+
+    fn session(actor: &str, state: &AppState) -> SessionRecord {
+        let created_at = chrono::Utc::now();
+        SessionRecord {
+            token_hash: "capability-grant-proof-test".to_owned(),
+            actor: actor.to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+            audience: state.service_id.clone(),
+            session_public_key: None,
+            agent_session: None,
+            expires_at: created_at + chrono::Duration::minutes(1),
+            created_at,
+            revoked_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn accepts_valid_issuer_attestation_and_rejects_digest_drift() {
+        let state = state();
+        let (issuer, mut payload) = signed_payload();
+        let session = session(&issuer, &state);
+        let event = json!({"payload": payload.clone()});
+        validate_capability_grant_proofs(
+            &state,
+            &session,
+            arkret_core::events::EventKind::CAPABILITY_GRANT,
+            &issuer,
+            event.as_object().unwrap(),
+            None,
+        )
+        .await
+        .expect("valid capability grant proof");
+
+        payload["grant"]["proofs"][0]["payload_digest"] =
+            json!(format!("sha256:{}", "0".repeat(64)));
+        let event = json!({"payload": payload});
+        assert!(
+            validate_capability_grant_proofs(
+                &state,
+                &session,
+                arkret_core::events::EventKind::CAPABILITY_GRANT,
+                &issuer,
+                event.as_object().unwrap(),
+                None,
+            )
+            .await
+            .is_err()
+        );
+    }
+}

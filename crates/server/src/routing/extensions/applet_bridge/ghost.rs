@@ -169,16 +169,18 @@ pub(super) async fn build_ghost_accountability_grant_event(
     grant.validate_lifecycle_at(now).map_err(|error| {
         AppError::invalid_param(format!("accountability_grant invalid: {error}"))
     })?;
-    let event = arkret_event_draft::accountability_grant_event(
+    let (actor_seq, prev_refs) = next_actor_frontier(state, service_id.as_str(), realm_id).await?;
+    let mut event = arkret_event_draft::accountability_grant_event(
         &grant,
         realm_id.clone(),
-        next_actor_seq(state, service_id.as_str()).await?,
+        actor_seq,
         next_hlc(state)?,
         None,
     )
     .map_err(|error| {
         AppError::internal(format!("accountability grant event build failed: {error}"))
     })?;
+    event.prev_refs = prev_refs;
     formal_event_from_sdk_event(state, event, service_id)
 }
 
@@ -233,16 +235,19 @@ pub(super) async fn build_ghost_profile_create_event(
         authorization_ref.to_owned(),
         applet_id,
     );
+    let (actor_seq, prev_refs) =
+        next_actor_frontier(state, ghost_actor_id.as_str(), realm_id).await?;
     let mut event = request
         .profile_create_event(
             realm_id.clone(),
-            next_actor_seq(state, ghost_actor_id.as_str()).await?,
+            actor_seq,
             next_hlc(state)?,
             Some(&authorization),
         )
         .map_err(|error| {
             AppError::internal(format!("profile create event build failed: {error}"))
         })?;
+    event.prev_refs = prev_refs;
     event
         .refs
         .push(EventRef::new(authorization_ref, "authorized_by"));
@@ -252,6 +257,8 @@ pub(super) async fn build_ghost_profile_create_event(
 pub(super) async fn persist_formal_applet_event(
     state: &AppState,
     event: FormalAppletEvent,
+    service_id: &Did,
+    authorization_ref: Option<String>,
 ) -> Result<(), AppError> {
     let now = chrono::Utc::now();
     let session = SessionRecord {
@@ -267,16 +274,22 @@ pub(super) async fn persist_formal_applet_event(
     };
     let envelope = serde_json::to_value(event.event)
         .map_err(|error| AppError::internal(format!("event serialize failed: {error}")))?;
-    crate::routing::events::event_log::submit_event_value(state, &session, envelope)
-        .await
-        .map_err(|error| {
-            AppError::new(
-                soland_http::error::ErrorCode::InvalidParam,
-                format!("applet formal Event admission failed: {}", error.message),
-            )
-            .with_status(error.status)
-            .with_wire_code(error.code)
-        })?;
+    crate::routing::events::event_log::submit_applet_event_value(
+        state,
+        &session,
+        envelope,
+        service_id.as_str(),
+        authorization_ref,
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(
+            soland_http::error::ErrorCode::InvalidParam,
+            format!("applet formal Event admission failed: {}", error.message),
+        )
+        .with_status(error.status)
+        .with_wire_code(error.code)
+    })?;
     Ok(())
 }
 
@@ -339,13 +352,34 @@ pub(super) fn production_payload_proof(
     })
 }
 
-pub(super) async fn next_actor_seq(state: &AppState, actor_id: &str) -> Result<u64, AppError> {
-    state
+pub(super) async fn next_actor_frontier(
+    state: &AppState,
+    actor_id: &str,
+    realm_id: &RealmId,
+) -> Result<(u64, Vec<arkret_core::EventId>), AppError> {
+    let records = state
         .events_store()
-        .max_actor_seq(actor_id)
+        .list_for_actor(actor_id)
         .await
-        .map(|seq| seq.unwrap_or(0) + 1)
-        .map_err(|error| AppError::internal(format!("event sequence lookup failed: {error}")))
+        .map_err(|error| AppError::internal(format!("event frontier lookup failed: {error}")))?;
+    let scoped = records
+        .into_iter()
+        .filter(|record| record.realm_id.as_deref() == Some(realm_id.as_str()))
+        .collect::<Vec<_>>();
+    let max_seq = scoped
+        .iter()
+        .map(|record| record.actor_seq)
+        .max()
+        .unwrap_or(0);
+    let prev_refs = scoped
+        .into_iter()
+        .filter(|record| record.actor_seq == max_seq && max_seq > 0)
+        .map(|record| {
+            arkret_core::EventId::new(record.event_id)
+                .map_err(|error| AppError::internal(format!("stored Event id invalid: {error}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((max_seq + 1, prev_refs))
 }
 
 pub(super) fn next_hlc(state: &AppState) -> Result<Hlc, AppError> {

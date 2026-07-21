@@ -75,6 +75,8 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 claimed_by_mls_group_id: kp.claimed_by,
                 ssk_generation: kp.ssk_generation,
                 device_authorize_event_id: kp.device_authorize_event_id,
+                claimed_at: kp.claimed_at,
+                claim_expires_at: kp.claim_expires_at,
                 consumed_at: kp.consumed_at,
                 created_at: kp.created_at,
             });
@@ -88,7 +90,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             keypackage_id,
             group_id,
             intended_realm_id,
-            consumed_at,
+            claimed_at,
             ..
         } => {
             if let Err(error) = state
@@ -99,7 +101,11 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     intended_realm_id.as_deref(),
                     None,
                     None,
-                    *consumed_at,
+                    *claimed_at,
+                    operation
+                        .payload
+                        .get("claim_expires_at")
+                        .and_then(Value::as_i64),
                 )
                 .await
             {

@@ -98,12 +98,15 @@ use submit::{
     submit_event_batch_outcome, submit_event_value_with_idempotency,
 };
 pub(in crate::routing) use submit::{
-    service_event_authoring_lock, submit_account_data_event_value, submit_event_value,
-    submit_mimi_event_value,
+    InternalEventAdmission, service_event_authoring_lock, submit_account_data_event_value,
+    submit_applet_event_value, submit_event_value, submit_mimi_event_value,
 };
 
 mod validation;
 use validation::*;
+pub(in crate::routing) use validation::{
+    validate_event_envelope_with_context, validate_federated_device_signing_key_evidence,
+};
 mod sdk_projection;
 pub(crate) use sdk_projection::*;
 

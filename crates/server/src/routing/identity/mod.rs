@@ -23,6 +23,7 @@ pub(crate) fn persistence_session_identity(
 }
 
 pub(super) mod account;
+pub(crate) use account::{project_canonical_direct_binding, validate_direct_binding_operation};
 pub(super) mod account_data;
 pub(crate) mod agents;
 pub(crate) mod auth;

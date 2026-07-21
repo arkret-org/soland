@@ -2,6 +2,7 @@ use super::minimal_metadata_author::{
     minimal_metadata_author_context, validate_minimal_metadata_author_proof,
 };
 use super::*;
+use crate::routing::events::event_log::submit::InternalEventAdmission;
 
 pub(crate) async fn validate_event_proofs(
     object: &serde_json::Map<String, Value>,
@@ -9,6 +10,7 @@ pub(crate) async fn validate_event_proofs(
     session: &SessionRecord,
     actor_id: &str,
     expected_payload_digest: &str,
+    internal_admission: Option<&InternalEventAdmission>,
 ) -> Result<(), EventValidationError> {
     let proofs = object
         .get("proofs")
@@ -184,39 +186,106 @@ pub(crate) async fn validate_event_proofs(
             // device-set projection. DID control/delegation methods resolve
             // from the DID document and retain the high-risk freshness gate.
             // Both branches use the SDK detached-JWS verifier.
-            crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+            if !verify_with_federated_signer_evidence(
+                internal_admission,
+                session,
+                object,
+                &verification_method,
                 &proof_binding_bytes,
                 &jws,
-                &verification_method,
-                &signer_controller,
-                state,
-            )
-            .await
-            .map_err(|error| {
-                use crate::jws_verify::PrincipalAuthorizedJwsError;
+            )? {
+                crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+                    &proof_binding_bytes,
+                    &jws,
+                    &verification_method,
+                    &signer_controller,
+                    state,
+                )
+                .await
+                .map_err(|error| {
+                    use crate::jws_verify::PrincipalAuthorizedJwsError;
 
-                match error {
-                    PrincipalAuthorizedJwsError::HighRiskDidFreshness(reason) => {
-                        tracing::debug!(%reason, "event proof DID freshness gate failed");
-                        event_validation_error(
-                            StatusCode::BAD_REQUEST,
-                            "stale_did_document",
-                            "event proof DID document is stale or unavailable for verification",
-                        )
+                    match error {
+                        PrincipalAuthorizedJwsError::HighRiskDidFreshness(reason) => {
+                            tracing::debug!(%reason, "event proof DID freshness gate failed");
+                            event_validation_error(
+                                StatusCode::BAD_REQUEST,
+                                "stale_did_document",
+                                "event proof DID document is stale or unavailable for verification",
+                            )
+                        }
+                        PrincipalAuthorizedJwsError::Verification(reason) => {
+                            tracing::debug!(%reason, "event proof JWS verification failed");
+                            event_validation_error(
+                                StatusCode::BAD_REQUEST,
+                                "invalid_proof",
+                                "event proof JWS verification failed",
+                            )
+                        }
                     }
-                    PrincipalAuthorizedJwsError::Verification(reason) => {
-                        tracing::debug!(%reason, "event proof JWS verification failed");
-                        event_validation_error(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_proof",
-                            "event proof JWS verification failed",
-                        )
-                    }
-                }
-            })?;
+                })?;
+            }
         }
     }
     Ok(())
+}
+
+pub(super) fn verify_with_federated_signer_evidence(
+    internal_admission: Option<&InternalEventAdmission>,
+    session: &SessionRecord,
+    object: &serde_json::Map<String, Value>,
+    verification_method: &str,
+    canonical_bytes: &[u8],
+    jws: &str,
+) -> Result<bool, EventValidationError> {
+    if let Some(multibase) = internal_admission.and_then(|admission| {
+        admission.applet_signer_key_multibase(session, object, verification_method)
+    }) {
+        let material = arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
+            value: multibase.to_owned(),
+        };
+        arkret_signatures::Ed25519DetachedJwsVerifier::new()
+            .verify_detached_jws(jws, canonical_bytes, &material)
+            .map_err(|error| {
+                tracing::debug!(%error, "applet formal Event proof JWS verification failed");
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    "applet formal Event proof JWS verification failed",
+                )
+            })?;
+        return Ok(true);
+    }
+    let Some(evidence) = internal_admission
+        .and_then(|admission| admission.signer_key_evidence(session, object, verification_method))
+    else {
+        return Ok(false);
+    };
+    let multibase = evidence
+        .device_signing_key
+        .as_str()
+        .strip_prefix("did:key:")
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "federated signer evidence must carry an Ed25519 did:key",
+            )
+        })?;
+    let material = arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
+        value: multibase.to_owned(),
+    };
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(jws, canonical_bytes, &material)
+        .map_err(|error| {
+            tracing::debug!(%error, "federated Event proof JWS verification failed");
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "federated Event proof JWS verification failed",
+            )
+        })?;
+    Ok(true)
 }
 
 pub(super) fn event_proof_binding_bytes(

@@ -134,8 +134,26 @@ pub(in crate::routing) struct InternalEventAdmission {
 
 #[derive(Debug, Clone)]
 enum InternalEventBinding {
-    MimiProvider { binding_ref: String },
-    AccountData { owner: String, key: String },
+    MimiProvider {
+        binding_ref: String,
+    },
+    AccountData {
+        owner: String,
+        key: String,
+    },
+    AppletFormal {
+        service_id: String,
+        authorization_ref: Option<String>,
+        signer_key_multibase: String,
+    },
+    PeerDirectBinding {
+        subject_id: String,
+        signer_key_evidence: Vec<arkret_core::FederatedDeviceSigningKeyEvidence>,
+    },
+    PeerFederatedEvent {
+        event_id: String,
+        signer_key_evidence: Vec<arkret_core::FederatedDeviceSigningKeyEvidence>,
+    },
 }
 
 impl InternalEventAdmission {
@@ -174,6 +192,65 @@ impl InternalEventAdmission {
         }
     }
 
+    pub(in crate::routing) fn peer_direct_binding(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        device_id: impl Into<String>,
+        subject_id: impl Into<String>,
+        signer_key_evidence: Vec<arkret_core::FederatedDeviceSigningKeyEvidence>,
+    ) -> Self {
+        Self {
+            realm_id: realm_id.into(),
+            actor_id: actor_id.into(),
+            kind: arkret_core::events::EventKind::DIRECT_CONVERSATION_BOUND.to_owned(),
+            device_id: device_id.into(),
+            binding: InternalEventBinding::PeerDirectBinding {
+                subject_id: subject_id.into(),
+                signer_key_evidence,
+            },
+        }
+    }
+
+    pub(in crate::routing) fn applet_formal(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        kind: impl Into<String>,
+        service_id: impl Into<String>,
+        authorization_ref: Option<String>,
+        signer_key_multibase: impl Into<String>,
+    ) -> Self {
+        Self {
+            realm_id: realm_id.into(),
+            actor_id: actor_id.into(),
+            kind: kind.into(),
+            device_id: "applet-service".to_owned(),
+            binding: InternalEventBinding::AppletFormal {
+                service_id: service_id.into(),
+                authorization_ref,
+                signer_key_multibase: signer_key_multibase.into(),
+            },
+        }
+    }
+
+    pub(in crate::routing) fn peer_federated_event(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        device_id: impl Into<String>,
+        event_id: impl Into<String>,
+        signer_key_evidence: Vec<arkret_core::FederatedDeviceSigningKeyEvidence>,
+    ) -> Self {
+        Self {
+            realm_id: realm_id.into(),
+            actor_id: actor_id.into(),
+            kind: String::new(),
+            device_id: device_id.into(),
+            binding: InternalEventBinding::PeerFederatedEvent {
+                event_id: event_id.into(),
+                signer_key_evidence,
+            },
+        }
+    }
+
     pub(in crate::routing::events::event_log) fn matches(
         &self,
         session: &SessionRecord,
@@ -183,7 +260,8 @@ impl InternalEventAdmission {
             && session.device_id == self.device_id
             && object.get("actor_id").and_then(Value::as_str) == Some(self.actor_id.as_str())
             && object.get("realm_id").and_then(Value::as_str) == Some(self.realm_id.as_str())
-            && object.get("kind").and_then(Value::as_str) == Some(self.kind.as_str())
+            && (self.kind.is_empty()
+                || object.get("kind").and_then(Value::as_str) == Some(self.kind.as_str()))
             && match &self.binding {
                 InternalEventBinding::MimiProvider { binding_ref } => {
                     object
@@ -200,7 +278,109 @@ impl InternalEventAdmission {
                             && payload.get("key").and_then(Value::as_str) == Some(key.as_str())
                     })
                 }
+                InternalEventBinding::AppletFormal {
+                    service_id,
+                    authorization_ref,
+                    ..
+                } => {
+                    let service_executes = self.actor_id == *service_id
+                        || object.get("executed_by").and_then(Value::as_str)
+                            == Some(service_id.as_str());
+                    let signer_is_service = object
+                        .get("proofs")
+                        .and_then(Value::as_array)
+                        .is_some_and(|proofs| {
+                            proofs.iter().any(|proof| {
+                                proof.get("verification_method").and_then(Value::as_str)
+                                    == Some(service_id.as_str())
+                                    || proof
+                                        .get("verification_method")
+                                        .and_then(Value::as_str)
+                                        .is_some_and(|method| {
+                                            method.starts_with(&format!("{service_id}#"))
+                                        })
+                            })
+                        });
+                    let authorization_matches = authorization_ref.as_ref().is_none_or(|expected| {
+                        object.get("authorization_ref").and_then(Value::as_str)
+                            == Some(expected.as_str())
+                    });
+                    service_executes && signer_is_service && authorization_matches
+                }
+                InternalEventBinding::PeerDirectBinding { subject_id, .. } => object
+                    .get("payload")
+                    .and_then(|payload| payload.get("participants_unordered"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|participants| {
+                        participants
+                            .iter()
+                            .any(|participant| participant.as_str() == Some(subject_id.as_str()))
+                    }),
+                InternalEventBinding::PeerFederatedEvent { event_id, .. } => {
+                    object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
+                }
             }
+    }
+
+    pub(in crate::routing::events::event_log) fn signer_key_evidence(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+        verification_method: &str,
+    ) -> Option<&arkret_core::FederatedDeviceSigningKeyEvidence> {
+        if !self.matches(session, object) {
+            return None;
+        }
+        let evidence = match &self.binding {
+            InternalEventBinding::PeerDirectBinding {
+                signer_key_evidence,
+                ..
+            }
+            | InternalEventBinding::PeerFederatedEvent {
+                signer_key_evidence,
+                ..
+            } => signer_key_evidence,
+            _ => return None,
+        };
+        evidence.iter().find(|entry| {
+            entry.actor_id.as_str() == self.actor_id
+                && entry.verification_method == verification_method
+                && entry.validate_shape().is_ok()
+        })
+    }
+
+    pub(in crate::routing::events::event_log) fn applet_signer_key_multibase(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+        verification_method: &str,
+    ) -> Option<&str> {
+        if !self.matches(session, object) {
+            return None;
+        }
+        let InternalEventBinding::AppletFormal {
+            service_id,
+            signer_key_multibase,
+            ..
+        } = &self.binding
+        else {
+            return None;
+        };
+        (verification_method == service_id
+            || verification_method.starts_with(&format!("{service_id}#")))
+        .then_some(signer_key_multibase.as_str())
+    }
+
+    pub(in crate::routing::events::event_log) fn authorizes_realm_membership_bypass(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+    ) -> bool {
+        self.matches(session, object)
+            && !matches!(
+                &self.binding,
+                InternalEventBinding::PeerFederatedEvent { .. }
+            )
     }
 }
 
@@ -376,7 +556,7 @@ pub(super) async fn submit_event_batch_outcome(
         return submit_identity_anchor_batch(state, session, envelopes).await;
     }
     if batch_begins_realm_create(&envelopes) {
-        return submit_realm_bootstrap_batch(state, session, envelopes).await;
+        return submit_realm_bootstrap_batch(state, session, envelopes, None).await;
     }
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
@@ -449,6 +629,67 @@ pub(super) async fn submit_event_batch_outcome(
     ))
 }
 
+async fn direct_bootstrap_source_is_contact_authority(
+    state: &AppState,
+    source_service_id: &str,
+    events: &[Value],
+) -> bool {
+    let Some(first) = events.first() else {
+        return false;
+    };
+    if event_string_field_from_value(first, "kind").as_deref()
+        != Some(arkret_core::events::EventKind::REALM_CREATE)
+    {
+        return false;
+    }
+    let Some(creator) = event_string_field_from_value(first, "actor_id") else {
+        return false;
+    };
+    let realm = first.get("payload").cloned().and_then(|payload| {
+        serde_json::from_value::<arkret_core::RealmCreatePayload>(payload)
+            .ok()
+            .map(|payload| payload.object)
+    });
+    if realm
+        .as_ref()
+        .is_none_or(|realm| arkret_core::DirectConversationRealmRole::validate(realm).is_err())
+    {
+        return false;
+    }
+    let peer = events.iter().find_map(|event| {
+        if event_string_field_from_value(event, "kind").as_deref()
+            != Some(arkret_core::events::EventKind::MEMBER_STATE)
+        {
+            return None;
+        }
+        let payload = event.get("payload")?;
+        if payload.get("membership").and_then(Value::as_str) != Some("join") {
+            return None;
+        }
+        let peer = payload.get("actor_id").and_then(Value::as_str)?;
+        if peer == creator {
+            return None;
+        }
+        let binding = payload.get("delivery_binding")?;
+        (binding.get("recipient_service_id").and_then(Value::as_str)
+            == Some(state.service_id.as_str()))
+        .then(|| peer.to_owned())
+    });
+    let Some(peer) = peer else {
+        return false;
+    };
+    state
+        .contact_application()
+        .contact_any(&creator, &peer)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|contact| {
+            contact.status == "accepted"
+                && contact.peer_service_id.as_deref() == Some(source_service_id)
+        })
+}
+
 pub(crate) async fn submit_federation_events(
     state: &AppState,
     req: &Request,
@@ -471,8 +712,39 @@ pub(crate) async fn submit_federation_events(
     let EventsSubmitFederationRequestBody {
         service_binding_ref,
         events,
+        signer_key_evidence,
         idempotency_key: _,
     } = submit;
+    if signer_key_evidence.len() > arkret_core::MAX_FEDERATED_EVENT_SIGNER_EVIDENCE
+        || signer_key_evidence.iter().any(|evidence| {
+            evidence.validate_shape().is_err()
+                || !events
+                    .iter()
+                    .any(|event| evidence.matches_event_proof(event, &evidence.verification_method))
+        })
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "invalid federation signer_key_evidence",
+        );
+        return;
+    }
+    for evidence in &signer_key_evidence {
+        if let Err(error) =
+            super::validate_federated_device_signing_key_evidence(state, evidence).await
+        {
+            tracing::debug!(%error, "federated device authorization evidence rejected");
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "federation signer_key_evidence has no valid portable device authorization",
+            );
+            return;
+        }
+    }
 
     let trust_headers =
         match crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(
@@ -724,6 +996,102 @@ pub(crate) async fn submit_federation_events(
             }
         };
 
+    if batch_begins_realm_create(&events) {
+        let Some(actor) = events
+            .first()
+            .and_then(|event| event_string_field_from_value(event, "actor_id"))
+        else {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "missing_param",
+                "actor_id is required",
+            );
+            return;
+        };
+        let ordinary_origin =
+            crate::routing::federation::federation::federation_actor_origin_acceptable(
+                state,
+                &actor,
+                &source_service_id,
+                &binding_realm,
+            )
+            .await;
+        if !ordinary_origin
+            && !direct_bootstrap_source_is_contact_authority(state, &source_service_id, &events)
+                .await
+        {
+            render_error(
+                res,
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "Realm bootstrap actor is not authorized for the source service",
+            );
+            return;
+        }
+        for event in &events {
+            if let Err(rejection) = profile_gate.enforce_event(event) {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    rejection.code,
+                    &rejection.message,
+                );
+                return;
+            }
+        }
+        let device_id = signer_key_evidence
+            .iter()
+            .find(|evidence| evidence.actor_id.as_str() == actor)
+            .map(|evidence| evidence.device_id.to_string())
+            .unwrap_or_else(|| format!("federation:{source_trust_domain}"));
+        let session = SessionRecord {
+            token_hash: format!("federation:{source_trust_domain}:{request_hash}"),
+            actor: actor.clone(),
+            device_id: device_id.clone(),
+            audience: state.service_id.clone(),
+            session_public_key: None,
+            agent_session: None,
+            expires_at: created_at + Duration::minutes(5),
+            created_at,
+            revoked_at: None,
+        };
+        let admissions = events
+            .iter()
+            .map(|event| {
+                InternalEventAdmission::peer_federated_event(
+                    event_string_field_from_value(event, "realm_id").unwrap_or_default(),
+                    actor.clone(),
+                    device_id.clone(),
+                    event_string_field_from_value(event, "event_id").unwrap_or_default(),
+                    signer_key_evidence.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        match submit_realm_bootstrap_batch(state, &session, events, Some(admissions.as_slice()))
+            .await
+        {
+            Ok(outcome) => res.render(Json(outcome)),
+            Err(error) => render_submit_one_error(res, error),
+        }
+        return;
+    }
+
+    if !crate::routing::events::event_log::realm_is_indexed(state, &binding_realm)
+        && events.iter().any(|event| {
+            event_string_field_from_value(event, "kind").as_deref()
+                != Some(arkret_core::events::EventKind::INVITE_CREATE)
+        })
+    {
+        render_error(
+            res,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "federation_dependencies_pending",
+            "the referenced Realm bootstrap has not arrived yet",
+        );
+        return;
+    }
+
     for envelope in events {
         let id = event_string_field_from_value(&envelope, "event_id")
             .unwrap_or_else(|| "unknown".to_owned());
@@ -751,6 +1119,48 @@ pub(crate) async fn submit_federation_events(
                 detail: Some("actor_id must be a DID".to_owned()),
             });
             continue;
+        }
+        if event_string_field_from_value(&envelope, "kind").as_deref()
+            == Some(arkret_core::events::EventKind::MLS_WELCOME)
+        {
+            let Some(payload) = envelope.get("payload") else {
+                rejected.push(EventsSubmitRejectedItem {
+                    id,
+                    reason_code: "schema_violation".to_owned(),
+                    detail: Some("MLS Welcome payload is required".to_owned()),
+                });
+                continue;
+            };
+            match crate::routing::mls::validate_federated_welcome_peer_claim(
+                state,
+                &source_service_id,
+                &binding_realm,
+                &actor,
+                payload,
+            )
+            .await
+            {
+                Ok(()) => {}
+                Err("peer_claim_welcome_pending") => {
+                    render_error(
+                        res,
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "federation_dependencies_pending",
+                        "the Welcome peer claim ledger entry is not available yet",
+                    );
+                    return;
+                }
+                Err(_) => {
+                    rejected.push(EventsSubmitRejectedItem {
+                        id,
+                        reason_code: "failed_precondition".to_owned(),
+                        detail: Some(
+                            "MLS Welcome is not bound to the authenticated peer claim".to_owned(),
+                        ),
+                    });
+                    continue;
+                }
+            }
         }
         // SOL-02-007 — bind the envelope actor to the authenticated source
         // service BEFORE constructing a session, instead of leaving author
@@ -784,11 +1194,17 @@ pub(crate) async fn submit_federation_events(
             continue;
         }
         let device_id = event_string_field_from_value(&envelope, "device_id")
+            .or_else(|| {
+                signer_key_evidence
+                    .iter()
+                    .find(|evidence| evidence.actor_id.as_str() == actor)
+                    .map(|evidence| evidence.device_id.to_string())
+            })
             .unwrap_or_else(|| format!("federation:{source_trust_domain}"));
         let session = SessionRecord {
             token_hash: format!("federation:{source_trust_domain}:{}", request_hash),
-            actor,
-            device_id,
+            actor: actor.clone(),
+            device_id: device_id.clone(),
             audience: state.service_id.clone(),
             session_public_key: None,
             agent_session: None,
@@ -796,7 +1212,23 @@ pub(crate) async fn submit_federation_events(
             created_at,
             revoked_at: None,
         };
-        match submit_event_value(state, &session, envelope).await {
+        let admission = InternalEventAdmission::peer_federated_event(
+            binding_realm.clone(),
+            actor,
+            device_id,
+            id.clone(),
+            signer_key_evidence.clone(),
+        );
+        match submit_event_value_with_context(
+            state,
+            &session,
+            envelope,
+            &[],
+            None,
+            Some(&admission),
+        )
+        .await
+        {
             Ok(response) => {
                 accepted.push(response.event_id.clone());
                 if response.duplicate {
@@ -804,6 +1236,15 @@ pub(crate) async fn submit_federation_events(
                 }
             }
             Err(error) => {
+                if error.code == "dependency_missing" {
+                    render_error(
+                        res,
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "federation_dependencies_pending",
+                        "a predecessor Event has not arrived yet",
+                    );
+                    return;
+                }
                 if let Some(event_id) = error.quarantine_event_id {
                     quarantine.push(event_id);
                 } else {
@@ -871,7 +1312,8 @@ use preflight::*;
 pub(in crate::routing::events::event_log) use value::submit_event_value_with_idempotency;
 use value::*;
 pub(in crate::routing) use value::{
-    submit_account_data_event_value, submit_event_value, submit_mimi_event_value,
+    submit_account_data_event_value, submit_applet_event_value, submit_event_value,
+    submit_mimi_event_value,
 };
 
 #[cfg(test)]

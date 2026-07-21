@@ -12,10 +12,11 @@ use super::payload_shape::{
 };
 
 const E2EE_RELAXED_PROFILE: &str = "ak.profile.e2ee_relaxed.v1";
-const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 3] = [
+const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 4] = [
     "ak.event_envelope.v1",
     "ak.profile.core_event_store.v1",
     "ak.proof.event_digest.v1",
+    arkret_core::DIRECT_CONVERSATION_REALM_ROLE_FEATURE,
 ];
 
 pub(crate) fn canonical_json_hash(value: &Value) -> Option<String> {
@@ -238,6 +239,7 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
 }
 
 mod applet;
+mod capability_grant_proofs;
 mod capability_refs;
 mod control_move;
 mod envelope_core;

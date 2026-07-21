@@ -886,6 +886,7 @@ pub fn describe(
                 "ak.profile.mimi_interop.v1".to_owned(),
                 "ak.profile.file_transfer.v1".to_owned(),
                 "ak.profile.webrtc_media.v1".to_owned(),
+                arkret_core::DIRECT_CONVERSATION_REALM_PROFILE.to_owned(),
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
             // advertise `ak.profile.media_service_binding.v1` whenever the
@@ -935,6 +936,7 @@ pub fn describe(
         takedown_contact: None,
         rate_limits: None,
         supported_features: vec![
+            arkret_core::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
             "org.arkret.soland.feature.auth.logout".to_owned(),
             "org.arkret.soland.feature.contacts.request".to_owned(),
             "org.arkret.soland.feature.contacts.respond".to_owned(),

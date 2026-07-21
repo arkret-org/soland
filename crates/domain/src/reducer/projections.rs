@@ -305,7 +305,7 @@ pub struct KeyPackageLifetime {
 ///
 /// One per `(actor_id, device_id, keypackage_id)`. Ordinary packages use
 /// an atomic CAS claim that flips `claimed_by` from `None` to `Some(group_id)`
-/// and sets `consumed_at`; last-resort packages keep the row published and
+/// and sets its claim window; last-resort packages keep the row published and
 /// bind reuse to a single Realm.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsKeyPackage {
@@ -334,8 +334,11 @@ pub struct MlsKeyPackage {
     /// `device_authorize_event_id` is present.
     pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<String>,
-    /// Unix seconds at which the CAS claim happened (mirrors
-    /// `claimed_by`).
+    /// Unix seconds at which the CAS claim happened (mirrors `claimed_by`).
+    pub claimed_at: Option<i64>,
+    /// Claim authorization deadline for a single-use package.
+    pub claim_expires_at: Option<i64>,
+    /// Unix seconds at which the target device consumed the claim.
     pub consumed_at: Option<i64>,
     pub created_at: i64,
 }

@@ -138,6 +138,47 @@ pub(in crate::routing) async fn submit_account_data_event_value(
     submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission)).await
 }
 
+pub(in crate::routing) async fn submit_applet_event_value(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: Value,
+    service_id: &str,
+    authorization_ref: Option<String>,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let realm_id = event_string_field_from_value(&envelope, "realm_id").ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "realm_id is required",
+        )
+    })?;
+    let actor_id = event_string_field_from_value(&envelope, "actor_id").ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "actor_id is required",
+        )
+    })?;
+    let kind = event_string_field_from_value(&envelope, "kind").ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "kind is required",
+        )
+    })?;
+    let admission = InternalEventAdmission::applet_formal(
+        realm_id,
+        actor_id,
+        kind,
+        service_id,
+        authorization_ref,
+        arkret_core::ed25519_pubkey_to_did_key_multibase(
+            state.notary_signing_key().verifying_key().as_bytes(),
+        ),
+    );
+    submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission)).await
+}
+
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
     state: &AppState,
     session: &SessionRecord,
@@ -245,9 +286,15 @@ pub(super) async fn submit_event_value_with_context(
     {
         return Err(realm_already_exists_error());
     }
-    if let Some(max_seq) = existing_records
+    let scoped_actor_records = existing_records
         .iter()
-        .filter(|record| record.actor_id == parsed.actor_id)
+        .filter(|record| {
+            record.actor_id == parsed.actor_id
+                && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
+        })
+        .collect::<Vec<_>>();
+    if let Some(max_seq) = scoped_actor_records
+        .iter()
         .map(|record| record.actor_seq)
         .max()
         && parsed.actor_seq < max_seq
@@ -258,15 +305,33 @@ pub(super) async fn submit_event_value_with_context(
             "actor_seq is older than the accepted actor frontier",
         ));
     }
+    if parsed.prev_refs.is_empty() && parsed.actor_seq != 1 {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "a Realm-scoped actor-chain genesis must use actor_seq=1",
+        ));
+    }
     for prev_ref in &parsed.prev_refs {
-        if !existing_records
+        let predecessor = existing_records
             .iter()
-            .any(|record| record.event_id == *prev_ref)
-        {
+            .find(|record| record.event_id == *prev_ref);
+        if predecessor.is_none() {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
                 "dependency_missing",
                 "prev_refs must reference accepted events",
+            ));
+        }
+        let predecessor = predecessor.expect("presence checked above");
+        if predecessor.actor_id != parsed.actor_id
+            || predecessor.realm_id.as_deref() != Some(parsed.realm_id.as_str())
+            || predecessor.actor_seq.saturating_add(1) != parsed.actor_seq
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "prev_refs must reference the preceding actor sequence in the same Realm",
             ));
         }
     }
@@ -791,7 +856,7 @@ pub(super) async fn submit_event_value_with_context(
     let outbox = if session.token_hash.starts_with("federation:") {
         Vec::new()
     } else {
-        peer_event_fanout_records(state, &parsed, &envelope_for_bootstrap)
+        peer_event_fanout_records(state, &parsed, &envelope_for_bootstrap).await
     };
     let accepted_response =
         event_submit_response(state, EventsSubmitStatus::Accepted, parsed.event_id.clone()).await;

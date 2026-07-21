@@ -118,7 +118,7 @@ pub(super) async fn enqueue_peer_event_fanout(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) {
-    for record in peer_event_fanout_records(state, parsed, envelope) {
+    for record in peer_event_fanout_records(state, parsed, envelope).await {
         if let Err(error) = state.federation_outbox_store().enqueue(&record).await {
             tracing::warn!(
                 %error,
@@ -131,7 +131,117 @@ pub(super) async fn enqueue_peer_event_fanout(
     }
 }
 
-pub(super) fn peer_event_fanout_records(
+/// Preserve a protocol-atomic local Event batch as one federation request.
+/// Realm founding units cannot be split into independent outbox rows because
+/// receivers must validate and commit create + founding grant + closed facets
+/// as one transaction.
+pub(super) async fn enqueue_peer_event_batch_fanout(
+    state: &AppState,
+    parsed_events: &[ValidatedEventEnvelope],
+    envelopes: &[Value],
+) {
+    let Some(first) = parsed_events.first() else {
+        return;
+    };
+    if parsed_events.len() != envelopes.len() {
+        tracing::error!("peer Event batch fanout cardinality mismatch");
+        return;
+    }
+    let peers = dynamic_peer_event_targets(state, first, &envelopes[0]);
+    if peers.is_empty() {
+        return;
+    }
+    let events = match envelopes
+        .iter()
+        .cloned()
+        .map(serde_json::from_value::<Event>)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::warn!(%error, realm_id = %first.realm_id, "failed to type check peer Event batch");
+            return;
+        }
+    };
+    let mut signer_key_evidence = Vec::new();
+    let mut evidence_methods = std::collections::BTreeSet::new();
+    for event in &events {
+        let evidence = match crate::jws_verify::federated_event_signer_evidence(state, event).await
+        {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                tracing::warn!(%error, event_id = %event.event_id, "failed to resolve peer Event batch signer evidence");
+                return;
+            }
+        };
+        for entry in evidence {
+            if evidence_methods.insert(entry.verification_method.clone()) {
+                signer_key_evidence.push(entry);
+            }
+        }
+    }
+    let binding_payload = json!({
+        "domain": "ak.peer.events.command.submit.service_binding.v1",
+        "realm_id": first.realm_id,
+        "event_ids": parsed_events.iter().map(|event| event.event_id.as_str()).collect::<Vec<_>>(),
+        "canonical_digests": parsed_events.iter().map(|event| event.canonical_digest.as_str()).collect::<Vec<_>>(),
+    });
+    let now = chrono::Utc::now().timestamp();
+    for peer in peers {
+        let Some(service_binding_ref) =
+            service_binding_ref_for_target(first, &binding_payload, &peer)
+        else {
+            tracing::warn!(peer_did = %peer.service_id, realm_id = %first.realm_id, "failed to build peer Event batch service binding");
+            continue;
+        };
+        if peer.service_id == state.service_id {
+            continue;
+        }
+        let mut hasher_input = Vec::new();
+        hasher_input.extend_from_slice(state.service_id.as_bytes());
+        hasher_input.extend_from_slice(b"|");
+        hasher_input.extend_from_slice(peer.service_id.as_bytes());
+        for parsed in parsed_events {
+            hasher_input.extend_from_slice(b"|");
+            hasher_input.extend_from_slice(parsed.event_id.as_bytes());
+            hasher_input.extend_from_slice(b"|");
+            hasher_input.extend_from_slice(parsed.canonical_digest.as_bytes());
+        }
+        let idempotency_key = format!("ak:outbox:event-batch:{}", sha256_hex(&hasher_input));
+        let body = EventsSubmitFederationRequestBody {
+            service_binding_ref,
+            events: events.clone(),
+            signer_key_evidence: signer_key_evidence.clone(),
+            idempotency_key: Some(idempotency_key.clone()),
+        };
+        let Some(payload_json) = canonical::canonical_json_bytes(&body)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        else {
+            tracing::warn!(peer_did = %peer.service_id, realm_id = %first.realm_id, "failed to encode peer Event batch");
+            continue;
+        };
+        let record = soland_storage::FederationOutboxRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            peer_did: peer.service_id,
+            peer_url: peer.url.trim_end_matches('/').to_owned(),
+            endpoint: "/_arkret/peer/events".to_owned(),
+            idempotency_key,
+            payload_json,
+            attempts: 0,
+            next_attempt_at: now,
+            last_status: None,
+            last_response_excerpt: None,
+            created_at: now,
+            delivered_at: None,
+        };
+        if let Err(error) = state.federation_outbox_store().enqueue(&record).await {
+            tracing::warn!(%error, peer_did = %record.peer_did, realm_id = %first.realm_id, "failed to enqueue peer Event batch fanout");
+        }
+    }
+}
+
+pub(super) async fn peer_event_fanout_records(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
@@ -162,6 +272,14 @@ pub(super) fn peer_event_fanout_records(
             return Vec::new();
         }
     };
+    let signer_key_evidence =
+        match crate::jws_verify::federated_event_signer_evidence(state, &event).await {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                tracing::warn!(%error, event_id, "failed to resolve peer Event signer evidence");
+                return Vec::new();
+            }
+        };
     let now = chrono::Utc::now().timestamp();
     let mut records = Vec::new();
     for peer in peers {
@@ -196,6 +314,7 @@ pub(super) fn peer_event_fanout_records(
         let body = EventsSubmitFederationRequestBody {
             service_binding_ref,
             events: vec![event.clone()],
+            signer_key_evidence: signer_key_evidence.clone(),
             idempotency_key: Some(idempotency_key.clone()),
         };
         let payload = match canonical::canonical_json_bytes(&body)

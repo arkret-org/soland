@@ -156,7 +156,7 @@ use crate::{JsonResult, json_ok};
 mod social;
 use social::*;
 pub(crate) use social::{
-    direct_binding_matches_projection, project_canonical_direct_binding,
+    accepted_contact_for_pair, direct_binding_matches_projection, project_canonical_direct_binding,
     retire_direct_bindings_for_operation, validate_direct_binding_operation,
 };
 mod lifecycle;
@@ -1425,11 +1425,76 @@ async fn direct_conversation_resolve(
             main_strand_id: None,
             binding_event_ref: None,
             created: Some(false),
-            binding_event: None,
+            authoring_kind: None,
+            claim_authorization_draft: None,
+            materialization_draft: None,
         });
     }
+    if let Some((binding, materialization_draft)) = pending_direct_materialization(state, &pair_key)
+    {
+        return json_ok(direct_resolve_response(
+            binding,
+            false,
+            DirectConversationResolveState::AuthoringRequired,
+            Some(materialization_draft),
+        ));
+    }
+    let remote_peer_service_id = contact
+        .peer_service_id
+        .as_deref()
+        .filter(|service_id| *service_id != state.service_id);
+    if let Some(peer_service_id) = remote_peer_service_id {
+        if let Some(signed_claim) = body.peer_claim_request.as_ref() {
+            let (binding, created, materialization_draft) =
+                complete_remote_direct_binding_with_realm(
+                    state,
+                    &pair_key,
+                    &session.actor,
+                    &session.device_id,
+                    &peer,
+                    &contact,
+                    signed_claim,
+                )
+                .await?;
+            return json_ok(direct_resolve_response(
+                binding,
+                created,
+                DirectConversationResolveState::AuthoringRequired,
+                materialization_draft,
+            ));
+        }
+        let (binding, claim_authorization_draft) = prepare_remote_direct_keypackage_claim(
+            state,
+            &pair_key,
+            &session.actor,
+            &peer,
+            peer_service_id,
+        )
+        .await?;
+        return json_ok(DirectConversationResolveOutcome {
+            state: DirectConversationResolveState::AuthoringRequired,
+            realm_id: Some(RealmId::new(binding.realm_id).map_err(|error| {
+                AppError::internal(format!("reserved direct realm id invalid: {error}"))
+            })?),
+            main_strand_id: Some(StrandId::new(binding.main_strand_id).map_err(|error| {
+                AppError::internal(format!("reserved direct strand id invalid: {error}"))
+            })?),
+            binding_event_ref: None,
+            created: Some(false),
+            authoring_kind: Some(
+                arkret_core::DirectConversationAuthoringKind::RemoteKeypackageClaim,
+            ),
+            claim_authorization_draft: Some(claim_authorization_draft),
+            materialization_draft: None,
+        });
+    }
+    if body.peer_claim_request.is_some() {
+        return Err(AppError::invalid_param(
+            "peer_claim_request is only valid for a remote direct conversation peer",
+        ));
+    }
     ensure_direct_peer_resolvable(state, &peer).await?;
-    let (binding, created, binding_event) = create_direct_binding_with_realm(
+    let (binding, created, materialization_draft) = create_direct_binding_with_realm(
         state,
         &pair_key,
         &session.actor,
@@ -1438,7 +1503,7 @@ async fn direct_conversation_resolve(
         &contact,
     )
     .await?;
-    let resolve_state = if binding_event.is_some() {
+    let resolve_state = if materialization_draft.is_some() {
         DirectConversationResolveState::AuthoringRequired
     } else {
         DirectConversationResolveState::Found
@@ -1447,7 +1512,7 @@ async fn direct_conversation_resolve(
         binding,
         created,
         resolve_state,
-        binding_event,
+        materialization_draft,
     ))
 }
 

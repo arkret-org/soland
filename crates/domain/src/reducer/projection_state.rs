@@ -225,8 +225,8 @@ pub struct ProjectionState {
     pub realm_organization_statements:
         BTreeMap<(String, String, String), RealmOrganizationStatementState>,
     /// G3.S1 — published MLS KeyPackages keyed by `keypackage_id`. Each
-    /// row is per `(actor_id, device_id)`; the `claimed_by` /
-    /// `consumed_at` slots flip on a successful CAS claim.
+    /// row is per `(actor_id, device_id)`; the `claimed_by` / claim-window
+    /// slots flip on a successful CAS claim.
     pub mls_key_packages: BTreeMap<String, MlsKeyPackage>,
     /// G3.S1 — per-device Welcome queue. Outer key names the recipient
     /// actor and device; the inner Vec is the FIFO of pending Welcomes.

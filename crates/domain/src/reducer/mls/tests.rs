@@ -225,18 +225,19 @@ fn keypackage_publish_then_claim_succeeds() {
         ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed {
             keypackage_id,
             group_id,
-            consumed_at,
+            claimed_at,
             ..
         }) => {
             assert_eq!(keypackage_id, "ak:mls_keypackage:01");
             assert_eq!(group_id, "ak:mls_group:abc");
-            assert_eq!(consumed_at, 200);
+            assert_eq!(claimed_at, 200);
         }
         other => panic!("expected KeyPackageClaimed, got {other:?}"),
     }
     let row = state.mls_key_packages.get("ak:mls_keypackage:01").unwrap();
     assert_eq!(row.claimed_by.as_deref(), Some("ak:mls_group:abc"));
-    assert_eq!(row.consumed_at, Some(200));
+    assert_eq!(row.claimed_at, Some(200));
+    assert_eq!(row.consumed_at, None);
 }
 
 #[test]
@@ -292,7 +293,8 @@ fn keypackage_claim_twice_second_fails() {
     // First claim's group must still own the row — losers don't overwrite.
     let row = state.mls_key_packages.get("ak:mls_keypackage:02").unwrap();
     assert_eq!(row.claimed_by.as_deref(), Some("ak:mls_group:first"));
-    assert_eq!(row.consumed_at, Some(200));
+    assert_eq!(row.claimed_at, Some(200));
+    assert_eq!(row.consumed_at, None);
 }
 
 #[test]

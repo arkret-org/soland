@@ -8,6 +8,85 @@ fn test_state() -> AppState {
     AppState::new(AppConfig::test_default(), Db { pool: None })
 }
 
+fn remote_test_state(peer_service_id: &str) -> AppState {
+    let mut config = AppConfig::test_default();
+    config.development_mode = true;
+    config.federation_peers = vec![format!("http://127.0.0.1:4101|{peer_service_id}")];
+    AppState::new(config, Db { pool: None })
+}
+
+fn install_active_direct_binding_fixture(
+    state: &AppState,
+    pair_key: &str,
+    realm_id: &str,
+    main_strand_id: &str,
+    alice: &str,
+    bob: &str,
+) {
+    let timestamp = now();
+    state.direct_conversation_bindings.lock().insert(
+        pair_key.to_owned(),
+        DirectConversationBindingRecord {
+            participants_unordered: sorted_participants(alice, bob),
+            realm_id: realm_id.to_owned(),
+            main_strand_id: main_strand_id.to_owned(),
+            binding_event_ref: crate::ids::generate_event_id(),
+            state: "active".to_owned(),
+            authoring_context: None,
+            created_at: timestamp,
+            updated_at: timestamp,
+        },
+    );
+    assert!(active_direct_binding(state, pair_key).is_some());
+}
+
+#[tokio::test]
+async fn remote_direct_claim_draft_is_durable_and_transport_bound() {
+    let peer_service_id = "did:web:beta.example";
+    let state = remote_test_state(peer_service_id);
+    let actor = "did:web:alice.example";
+    let peer = "did:web:bob.example";
+    let pair_key = direct_pair_key(&state, actor, peer).unwrap();
+    let (binding, draft) =
+        prepare_remote_direct_keypackage_claim(&state, &pair_key, actor, peer, peer_service_id)
+            .await
+            .unwrap();
+    assert_eq!(binding.state, "authoring_required");
+    assert_eq!(draft.request.requester.as_str(), actor);
+    assert_eq!(draft.request.target_principal_id.as_str(), peer);
+    assert_eq!(draft.request.intended_realm_id.as_str(), binding.realm_id);
+    assert_eq!(
+        draft.request.strand_id.as_ref().unwrap().as_str(),
+        binding.main_strand_id
+    );
+    assert_eq!(draft.request.pair_key.as_ref().unwrap().as_str(), pair_key);
+    assert_eq!(
+        draft.transport_binding.source_service_id.as_str(),
+        state.service_id
+    );
+    assert_eq!(
+        draft.transport_binding.destination_service_id.as_str(),
+        peer_service_id
+    );
+    let persisted = state
+        .test_persistence()
+        .direct_conversation_bindings()
+        .get(&pair_key)
+        .await
+        .unwrap()
+        .expect("durable authoring reservation");
+    assert!(persisted.authoring_context.is_some());
+
+    let (_, retry_draft) =
+        prepare_remote_direct_keypackage_claim(&state, &pair_key, actor, peer, peer_service_id)
+            .await
+            .unwrap();
+    assert_eq!(
+        retry_draft.request.claim_request_id,
+        draft.request.claim_request_id
+    );
+}
+
 #[test]
 fn direct_realm_create_payload_is_sdk_schema_valid() {
     let state = test_state();
@@ -120,10 +199,19 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
     let main_strand_id = crate::ids::generate("strand");
     let alice = "did:web:alice.example";
     let bob = "did:web:bob.example";
+    let pair_key = direct_pair_key(&state, alice, bob).unwrap();
 
-    submit_direct_realm_genesis(&state, &realm_id, &main_strand_id, alice, bob)
+    submit_direct_realm_genesis(&state, &realm_id, &main_strand_id, alice, bob, None)
         .await
         .unwrap();
+    install_active_direct_binding_fixture(
+        &state,
+        &pair_key,
+        &realm_id,
+        &main_strand_id,
+        alice,
+        bob,
+    );
 
     assert!(
         crate::routing::spaces::space::realm_has_member_by_id(&state, &realm_id, bob).await,
@@ -217,7 +305,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
 }
 
 #[tokio::test]
-async fn participant_leave_retires_direct_binding_and_blocks_reuse() {
+async fn participant_leave_retires_direct_binding() {
     let state = test_state();
     let realm_id = crate::ids::generate_realm_id();
     let main_strand_id = crate::ids::generate("strand");
@@ -225,23 +313,17 @@ async fn participant_leave_retires_direct_binding_and_blocks_reuse() {
     let bob = "did:web:bob.example";
     let pair_key = direct_pair_key(&state, alice, bob).unwrap();
 
-    submit_direct_realm_genesis(&state, &realm_id, &main_strand_id, alice, bob)
+    submit_direct_realm_genesis(&state, &realm_id, &main_strand_id, alice, bob, None)
         .await
         .unwrap();
-    let timestamp = now();
-    state.direct_conversation_bindings.lock().insert(
-        pair_key.clone(),
-        DirectConversationBindingRecord {
-            participants_unordered: sorted_participants(alice, bob),
-            realm_id: realm_id.clone(),
-            main_strand_id,
-            binding_event_ref: crate::ids::generate_event_id(),
-            state: "active".to_owned(),
-            created_at: timestamp,
-            updated_at: timestamp,
-        },
+    install_active_direct_binding_fixture(
+        &state,
+        &pair_key,
+        &realm_id,
+        &main_strand_id,
+        alice,
+        bob,
     );
-    assert!(active_direct_binding(&state, &pair_key).is_some());
 
     let leave = arkret_core::Operation::create(
         direct_operation_id().unwrap(),
@@ -249,8 +331,7 @@ async fn participant_leave_retires_direct_binding_and_blocks_reuse() {
         arkret_core::events::EventKind::MEMBER_STATE,
         json!({
             "actor_id": bob,
-            "membership": "leave",
-            "sender": bob
+            "membership": "leave"
         }),
     );
     crate::routing::accept_local_operations(&state, bob, std::slice::from_ref(&leave))

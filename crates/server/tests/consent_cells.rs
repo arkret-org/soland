@@ -308,7 +308,40 @@ async fn submit_event(
     actor_seq: u64,
     payload: Value,
 ) -> Value {
-    let event = signed_event(seed, actor, realm_id, kind, actor_seq, payload);
+    let frontier: Value = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .send(app)
+    .await
+    .take_json()
+    .await
+    .expect("actor Realm frontier JSON");
+    let accepted_seq = frontier["frontier"]["actor_seq"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("actor Realm frontier missing actor_seq: {frontier}"));
+    let prev_refs = frontier["frontier"]["event_id"]
+        .as_str()
+        .map(|event_id| {
+            vec![
+                arkret_core::EventId::new(event_id.to_owned())
+                    .expect("actor Realm frontier Event id is canonical"),
+            ]
+        })
+        .unwrap_or_default();
+    assert!(
+        actor_seq >= accepted_seq + 1,
+        "fixture-requested actor_seq must not precede the accepted frontier"
+    );
+    let event = signed_event_with_prev_refs(
+        seed,
+        actor,
+        realm_id,
+        kind,
+        accepted_seq + 1,
+        payload,
+        prev_refs,
+    );
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -369,21 +402,55 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
     )
     .expect("Realm create fixture Event id is canonical");
     let grant_id = ids::generate_grant_id();
-    let grant_proof = serde_json::to_value(arkret_core::PayloadProof {
+    let mut grant: arkret_core::CapabilityGrant = serde_json::from_value(serde_json::json!({
+        "id": grant_id,
+        "schema": "ak.schema.capability.v1",
+        "realm_id": realm_id,
+        "issuer": actor,
+        "subject": actor,
+        "actions": [
+            "ak.realm.admin",
+            "ak.capability.grant",
+            "ak.capability.revoke"
+        ],
+        "capability_action_registry_digest": arkret_core::current_capability_action_registry_digest().unwrap(),
+        "resources": [{
+            "kind": "realm",
+            "realm_id": realm_id,
+            "match_scope": "realm_wide"
+        }],
+        "issued_at": created_at,
+        "proofs": []
+    }))
+    .expect("founding capability grant fixture decodes");
+    let verification_method = format!(
+        "{actor}#{}",
+        actor
+            .strip_prefix("did:key:")
+            .expect("founding grant actor uses did:key")
+    );
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let mut grant_proof = arkret_core::PayloadProof {
         kind: arkret_core::proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
-        verification_method: format!("{actor}#founding-grant"),
-        payload_digest: arkret_core::Hash::new(format!("sha256:{}", "0".repeat(64)))
-            .expect("fixture payload digest"),
+        verification_method,
+        payload_digest: grant.payload_digest().expect("founding grant digest"),
         created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
             .expect("fixture created_at")
             .with_timezone(&Utc),
         domain: None,
         audience: None,
         proof_purpose: Some(arkret_core::PayloadProofPurpose::IssuerAttestation),
-        jws: "eyJhbGciOiJFZERTQSJ9..c2lnbmF0dXJl".to_owned(),
-    })
-    .expect("founding grant proof serializes");
+        jws: String::new(),
+    };
+    grant_proof.jws = arkret_signatures::sign_eddsa_detached_jws(
+        &signing_key,
+        &grant
+            .canonical_proof_binding_bytes(&grant_proof)
+            .expect("founding grant proof binding"),
+    )
+    .expect("founding grant proof signature");
+    grant.proofs.push(grant_proof);
     let founding = signed_event_with_prev_refs(
         seed,
         actor,
@@ -392,26 +459,7 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
         2,
         serde_json::json!({
             "grant_id": grant_id,
-            "grant": {
-                "id": grant_id,
-                "schema": "ak.schema.capability.v1",
-                "realm_id": realm_id,
-                "issuer": actor,
-                "subject": actor,
-                "actions": [
-                    "ak.realm.admin",
-                    "ak.capability.grant",
-                    "ak.capability.revoke"
-                ],
-                "capability_action_registry_digest": arkret_core::current_capability_action_registry_digest().unwrap(),
-                "resources": [{
-                    "kind": "realm",
-                    "realm_id": realm_id,
-                    "match_scope": "realm_wide"
-                }],
-                "issued_at": created_at,
-                "proofs": [grant_proof]
-            }
+            "grant": grant
         }),
         vec![create_event_id],
     );

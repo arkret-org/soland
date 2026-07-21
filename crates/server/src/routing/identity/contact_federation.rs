@@ -20,7 +20,7 @@ use arkret_core::{
     InviteReceiveAction, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
     Proof, RealmId, canonical, proof_kind,
 };
-use chrono::SecondsFormat;
+use chrono::{Duration, SecondsFormat};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -85,10 +85,9 @@ pub(crate) async fn federate_contact_fact(
         // already projected the fact for both holders.
         return Ok(false);
     }
-    let Some(peer_url) = crate::routing::federation::federation::peer_url_for_service_id(
-        state,
-        recipient_service_id,
-    ) else {
+    if crate::routing::federation::federation::peer_url_for_service_id(state, recipient_service_id)
+        .is_none()
+    {
         tracing::warn!(
             recipient_service_id,
             issuer,
@@ -97,7 +96,7 @@ pub(crate) async fn federate_contact_fact(
              fact stays local"
         );
         return Ok(false);
-    };
+    }
 
     let fact_kind = PeerContactFactKind::from_wire(fact_kind)
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
@@ -110,15 +109,78 @@ pub(crate) async fn federate_contact_fact(
         fact_payload,
         contact_event_id,
     )?;
+    enqueue_signed_contact_fact(
+        state,
+        recipient_service_id,
+        subject_id,
+        fact_kind,
+        introduction_evidence,
+        contact_event,
+    )
+    .await
+}
+
+/// Deliver an already accepted participant-signed fact without rebuilding or
+/// re-signing its Event envelope. Direct-conversation bindings use this path:
+/// their signature and canonical digest participate in the cross-PS winner
+/// selection and therefore MUST survive transport byte-for-byte.
+pub(crate) async fn federate_signed_contact_fact(
+    state: &AppState,
+    subject_id: &str,
+    recipient_service_id: &str,
+    contact_event: Event,
+) -> Result<bool, AppError> {
+    let recipient_service_id = recipient_service_id.trim();
+    if recipient_service_id.is_empty() || recipient_service_id == state.service_id {
+        return Ok(false);
+    }
+    if crate::routing::federation::federation::peer_url_for_service_id(state, recipient_service_id)
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let fact_kind = PeerContactFactKind::from_wire(contact_event.kind.as_str())
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    enqueue_signed_contact_fact(
+        state,
+        recipient_service_id,
+        subject_id,
+        fact_kind,
+        None,
+        contact_event,
+    )
+    .await
+}
+
+async fn enqueue_signed_contact_fact(
+    state: &AppState,
+    recipient_service_id: &str,
+    subject_id: &str,
+    fact_kind: PeerContactFactKind,
+    introduction_evidence: Option<ContactIntroductionEvidence>,
+    contact_event: Event,
+) -> Result<bool, AppError> {
+    let peer_url = crate::routing::federation::federation::peer_url_for_service_id(
+        state,
+        recipient_service_id,
+    )
+    .ok_or_else(|| AppError::internal("configured contact federation peer disappeared"))?;
+    let issuer = contact_event.actor_id.to_string();
     let idempotency_key = contact_delivery_idempotency_key(
         &state.service_id,
         recipient_service_id,
         fact_kind.as_str(),
-        issuer,
+        &issuer,
         subject_id,
         &contact_event,
     );
-    let delivery = PeerContactDeliveryRequest::new(
+    let signer_key_evidence =
+        crate::jws_verify::federated_event_signer_evidence(state, &contact_event)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("contact Event signer evidence: {error}"))
+            })?;
+    let mut delivery = PeerContactDeliveryRequest::new(
         contact_event,
         PeerContactAddress {
             subject_id: Did::new(subject_id.to_owned())
@@ -132,6 +194,7 @@ pub(crate) async fn federate_contact_fact(
         introduction_evidence,
         idempotency_key,
     );
+    delivery.signer_key_evidence = signer_key_evidence;
     let payload_bytes = canonical::canonical_json_bytes(&delivery)
         .map_err(|error| AppError::internal(format!("contact delivery canonicalize: {error}")))?;
     let payload_json = String::from_utf8(payload_bytes)
@@ -325,18 +388,29 @@ async fn peer_contacts_submit(
         }
     }
 
-    let outcome = project_delivered_contact_fact(
-        state,
-        fact_kind,
-        &issuer,
-        &subject_id,
-        &serde_json::to_value(&payload).map_err(|error| {
-            AppError::internal(format!("contact payload encode failed: {error}"))
-        })?,
-        delivery.contact_event.event_id.as_str(),
-        source_service_id.as_deref(),
-    )
-    .await?;
+    let outcome = if delivery.fact_kind == PeerContactFactKind::DirectConversationBound {
+        accept_delivered_direct_binding(
+            state,
+            &delivery.contact_event,
+            &subject_id,
+            source_service_id.as_deref(),
+            &delivery.signer_key_evidence,
+        )
+        .await?
+    } else {
+        project_delivered_contact_fact(
+            state,
+            fact_kind,
+            &issuer,
+            &subject_id,
+            &serde_json::to_value(&payload).map_err(|error| {
+                AppError::internal(format!("contact payload encode failed: {error}"))
+            })?,
+            delivery.contact_event.event_id.as_str(),
+            source_service_id.as_deref(),
+        )
+        .await?
+    };
 
     super::append_audit_log(
         state,
@@ -357,6 +431,175 @@ async fn peer_contacts_submit(
         received_at: Some(now().to_rfc3339_opts(SecondsFormat::Secs, true)),
         retry_after_ms: None,
     })
+}
+
+async fn accept_delivered_direct_binding(
+    state: &AppState,
+    event: &Event,
+    subject_id: &str,
+    source_service_id: Option<&str>,
+    signer_key_evidence: &[arkret_core::FederatedDeviceSigningKeyEvidence],
+) -> Result<&'static str, AppError> {
+    for evidence in signer_key_evidence {
+        crate::routing::events::event_log::validate_federated_device_signing_key_evidence(
+            state, evidence,
+        )
+        .await
+        .map_err(|error| {
+            super::super::events::peer::schema_violation(format!(
+                "invalid direct binding signer authorization evidence: {error}"
+            ))
+        })?;
+    }
+    let payload: arkret_core::DirectConversationBoundPayload =
+        serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
+            AppError::internal(format!("direct binding payload encode failed: {error}"))
+        })?)
+        .map_err(|_| {
+            super::super::events::peer::schema_violation(
+                "invalid ak.direct_conversation.bound payload",
+            )
+        })?;
+    let issuer = event.actor_id.as_str();
+    if issuer == subject_id
+        || !payload
+            .participants_unordered
+            .iter()
+            .any(|participant| participant.as_str() == issuer)
+        || !payload
+            .participants_unordered
+            .iter()
+            .any(|participant| participant.as_str() == subject_id)
+    {
+        return Err(super::super::events::peer::schema_violation(
+            "direct binding issuer and contact subject must be its two participants",
+        ));
+    }
+    let contact = state
+        .contact_application()
+        .contact_any(issuer, subject_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            super::super::events::peer::schema_violation(
+                "direct binding references no accepted local contact",
+            )
+        })?;
+    if contact.status != "accepted"
+        || source_service_id.is_none()
+        || contact.peer_service_id.as_deref() != source_service_id
+    {
+        return Err(super::super::events::peer::schema_violation(
+            "direct binding source service does not match the accepted contact",
+        ));
+    }
+
+    // Realm Events and the principal-scoped binding travel on independent
+    // durable federation rails. A binding may legitimately arrive first; make
+    // that condition retryable instead of permanently dead-lettering a valid
+    // signed fact as a schema error.
+    let referenced_events = payload
+        .member_event_refs
+        .iter()
+        .chain(std::iter::once(&payload.main_strand_create_ref))
+        .chain(std::iter::once(&payload.mls_genesis_event_ref))
+        .chain(std::iter::once(&payload.mls_commit_event_ref))
+        .chain(std::iter::once(&payload.mls_welcome_event_ref));
+    for event_ref in referenced_events {
+        let available = state
+            .events_store()
+            .get(event_ref.as_str())
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .is_some();
+        if !available {
+            return Err(AppError::new(
+                soland_http::error::ErrorCode::TemporarilyUnavailable,
+                "direct binding dependencies have not arrived yet",
+            )
+            .with_status(StatusCode::SERVICE_UNAVAILABLE)
+            .with_wire_code("direct_binding_dependencies_pending"));
+        }
+    }
+
+    let created_at = now();
+    let federation_device_id = "federation:contact-binding";
+    let session = soland_storage::SessionRecord {
+        token_hash: format!("peer-contact-binding:{}", event.event_id),
+        actor: issuer.to_owned(),
+        device_id: federation_device_id.to_owned(),
+        audience: state.service_id.clone(),
+        session_public_key: None,
+        agent_session: None,
+        expires_at: created_at + Duration::minutes(5),
+        created_at,
+        revoked_at: None,
+    };
+    let envelope = serde_json::to_value(event)
+        .map_err(|error| AppError::internal(format!("direct binding encode failed: {error}")))?;
+    let admission = crate::routing::events::event_log::InternalEventAdmission::peer_direct_binding(
+        event.realm_id.to_string(),
+        issuer,
+        federation_device_id,
+        subject_id,
+        signer_key_evidence.to_vec(),
+    );
+    let parsed = crate::routing::events::event_log::validate_event_envelope_with_context(
+        state,
+        &session,
+        &envelope,
+        &[],
+        Some(&admission),
+    )
+    .await
+    .map_err(|error| {
+        super::super::events::peer::schema_violation(format!(
+            "direct binding Event rejected: {} ({})",
+            error.message, error.code
+        ))
+    })?;
+    let operation =
+        crate::routing::events::event_log::projection_operation_from_event(&parsed, &envelope)
+            .ok_or_else(|| {
+                super::super::events::peer::schema_violation(
+                    "direct binding Event cannot be projected",
+                )
+            })?;
+    super::account::validate_direct_binding_operation(state, &operation)
+        .await
+        .map_err(super::super::events::peer::schema_violation)?;
+
+    if let Some(existing) = state
+        .events_store()
+        .get(&parsed.event_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        if existing.canonical_digest != parsed.canonical_digest {
+            return Err(super::super::events::peer::schema_violation(
+                "direct binding Event id collides with different canonical bytes",
+            ));
+        }
+        return Ok("duplicate");
+    }
+    state
+        .events_store()
+        .put(soland_storage::CanonicalEventRecord {
+            event_id: parsed.event_id,
+            actor_id: parsed.actor_id,
+            actor_seq: parsed.actor_seq,
+            realm_id: Some(parsed.realm_id),
+            kind: parsed.kind,
+            schema_id: parsed.schema_id,
+            canonical_digest: parsed.canonical_digest,
+            canonical_bytes: parsed.canonical_bytes,
+            envelope,
+            received_at: created_at,
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    super::account::project_canonical_direct_binding(state, &operation).await;
+    Ok("accepted")
 }
 
 fn validate_contact_introduction_evidence_digest(

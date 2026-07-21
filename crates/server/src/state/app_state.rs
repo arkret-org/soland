@@ -65,6 +65,10 @@ mod hydration;
 
 use hydration::*;
 
+const PEER_KEYPACKAGE_CLAIM_WINDOW_SECS: i64 = 60;
+const PEER_KEYPACKAGE_CLAIM_MAX_PER_WINDOW: u32 = 5;
+const PEER_KEYPACKAGE_CLAIM_TRACKER_MAX_ENTRIES: usize = 16_384;
+
 /// Single-process service state. Every long-lived data surface lives behind
 /// `persistence` (a `dyn PersistenceStore`); the few remaining fields are
 /// either non-record state (config, db pool, hlc, authz engine) or runtime
@@ -163,6 +167,10 @@ pub struct AppState {
     /// probe counters; backs the timing-side-channel rate limit in
     /// `directory::private_contact_discovery`.
     pub(crate) psi_probe_tracker: Arc<Mutex<BTreeMap<(String, String), PsiProbeRecord>>>,
+    /// Protocol-level peer KeyPackage claim quota keyed by
+    /// `(source_service_id, target_principal_id)`. The generic HTTP limiter
+    /// remains the transport-wide outer bound.
+    peer_keypackage_claim_rate_tracker: Arc<Mutex<BTreeMap<(String, String), PsiProbeRecord>>>,
     /// Spec `identity/key-management.md` §7.8 — per-principal rolling-24h
     /// counter of full-ciphertext key-backup downloads; backs the
     /// anti-bulk-dump quota in `identity::key_backup::unlock_key_backup`.
@@ -771,6 +779,7 @@ impl AppState {
             account_registration_policy: Arc::new(Mutex::new(AccountRegistrationPolicy::default())),
             account_registration_rate_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             psi_probe_tracker: Arc::new(Mutex::new(BTreeMap::new())),
+            peer_keypackage_claim_rate_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             key_backup_download_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             moderation_report_rate_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             moderation_franking_replay_nonces: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1315,8 +1324,10 @@ impl AppState {
             }
         }
 
-        // Hydrate the direct-conversation binding projection (sorted
-        // participant pair → binding) from durable storage.
+        // Only unfinished client-authoring reservations are authoritative in
+        // the private binding table. Active/retired bindings are rebuilt below
+        // from accepted participant-signed ak.direct_conversation.bound Events;
+        // a stale materialized row can never become protocol truth at boot.
         let bindings = self
             .persistence
             .direct_conversation_bindings()
@@ -1324,9 +1335,50 @@ impl AppState {
             .await?;
         {
             let mut map = self.direct_conversation_bindings.lock();
+            map.clear();
             for (participants_key, record) in bindings {
-                map.entry(participants_key).or_insert(record);
+                if record.state == "authoring_required" {
+                    map.insert(participants_key, record);
+                }
             }
+        }
+
+        let mut direct_binding_records = self
+            .events_store()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .filter(|record| {
+                record.kind == arkret_core::events::EventKind::DIRECT_CONVERSATION_BOUND
+            })
+            .collect::<Vec<_>>();
+        // Fold active candidates before explicit retirements so a retirement
+        // can resolve its supersedes_binding_ref regardless of storage order.
+        direct_binding_records.sort_by_key(|record| {
+            let retired = record
+                .envelope
+                .get("payload")
+                .and_then(|payload| payload.get("binding_state"))
+                .and_then(serde_json::Value::as_str)
+                == Some("retired");
+            (retired, record.received_at, record.event_id.clone())
+        });
+        for record in direct_binding_records {
+            let Some(operation) =
+                crate::routing::events::event_log::projection_operation_from_canonical_record(
+                    &record,
+                )
+            else {
+                tracing::warn!(event_id = %record.event_id, "ignored unprojectable direct binding during hydration");
+                continue;
+            };
+            if let Err(reason) =
+                crate::routing::identity::validate_direct_binding_operation(self, &operation).await
+            {
+                tracing::warn!(event_id = %record.event_id, reason, "ignored invalid direct binding during hydration");
+                continue;
+            }
+            crate::routing::identity::project_canonical_direct_binding(self, &operation).await;
         }
 
         let lifecycle_records = self.persistence.account_lifecycle().snapshot_all().await?;
@@ -1630,6 +1682,41 @@ impl AppState {
             count: entry.count,
             retry_after_ms,
         }
+    }
+
+    /// Record a new peer KeyPackage claim attempt. Duplicate deliveries are
+    /// checked against the durable idempotency ledger before this method is
+    /// called and therefore do not consume quota.
+    pub fn peer_keypackage_claim_rate_limited(
+        &self,
+        source_service_id: &str,
+        target_principal_id: &str,
+    ) -> bool {
+        let mut map = self.peer_keypackage_claim_rate_tracker.lock();
+        let now = chrono::Utc::now();
+        let window = chrono::Duration::seconds(PEER_KEYPACKAGE_CLAIM_WINDOW_SECS);
+        let expires_before = now - window;
+        map.retain(|_, record| record.last_probe_at >= expires_before);
+        let key = (source_service_id.to_owned(), target_principal_id.to_owned());
+        if !map.contains_key(&key) {
+            evict_oldest_entries(
+                &mut map,
+                PEER_KEYPACKAGE_CLAIM_TRACKER_MAX_ENTRIES,
+                |record| record.last_probe_at.timestamp_millis(),
+            );
+        }
+        let entry = map.entry(key).or_insert(PsiProbeRecord {
+            count: 0,
+            window_started_at: now,
+            last_probe_at: now,
+        });
+        if now - entry.window_started_at > window {
+            entry.count = 0;
+            entry.window_started_at = now;
+        }
+        entry.count = entry.count.saturating_add(1);
+        entry.last_probe_at = now;
+        entry.count > PEER_KEYPACKAGE_CLAIM_MAX_PER_WINDOW
     }
 
     /// Spec `identity/key-management.md` §7.8 — record a full-ciphertext
@@ -4072,7 +4159,7 @@ impl soland_application::events::MlsKeyPackageMaintenancePort
             if self
                 .0
                 .mls_key_packages()
-                .try_claim(&row.id, "revoked", None, None, None, retired_at)
+                .try_claim(&row.id, "revoked", None, None, None, retired_at, None)
                 .await?
                 .is_some()
             {
@@ -4202,6 +4289,40 @@ mod membership_hydration_tests {
         );
 
         assert_eq!(state.notary_signing_key().to_bytes(), resolved_seed);
+    }
+
+    #[tokio::test]
+    async fn active_direct_binding_rows_are_not_boot_authority() {
+        let state = AppState::new(AppConfig::test_default(), Db { pool: None });
+        let now = chrono::Utc::now();
+        state
+            .test_persistence()
+            .direct_conversation_bindings()
+            .put(
+                "sha256:stale-private-row",
+                &DirectConversationBindingRecord {
+                    participants_unordered: vec![
+                        "did:web:alice.example".to_owned(),
+                        "did:web:bob.example".to_owned(),
+                    ],
+                    realm_id: "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+                    main_strand_id: "ak:strand:01904100-0000-7000-8000-000000000002".to_owned(),
+                    binding_event_ref: "ak:event:01904100-0000-7000-8000-000000000003".to_owned(),
+                    state: "active".to_owned(),
+                    authoring_context: None,
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+            .await
+            .expect("seed stale materialized binding row");
+
+        state.hydrate().await.expect("hydrate application state");
+
+        assert!(
+            state.direct_conversation_bindings.lock().is_empty(),
+            "active bindings must be rebuilt from accepted signed Events, not private rows"
+        );
     }
 
     fn member_state_event(realm_id: &str, member: &str, membership: &str) -> CanonicalEventRecord {
@@ -4405,6 +4526,8 @@ mod membership_hydration_tests {
                 claimed_by_mls_group_id: None,
                 ssk_generation: None,
                 device_authorize_event_id: Some("ak:event:auth".to_owned()),
+                claimed_at: None,
+                claim_expires_at: None,
                 consumed_at: None,
                 created_at: 1,
             })

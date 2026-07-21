@@ -20,8 +20,10 @@ mod direct;
 #[cfg(test)]
 use direct::*;
 pub(crate) use direct::{
-    active_direct_binding, create_direct_binding_with_realm, direct_binding_matches_projection,
-    direct_pair_key, ensure_direct_peer_resolvable, project_canonical_direct_binding,
+    active_direct_binding, complete_remote_direct_binding_with_realm,
+    create_direct_binding_with_realm, direct_binding_matches_projection, direct_pair_key,
+    ensure_direct_peer_resolvable, pending_direct_materialization,
+    prepare_remote_direct_keypackage_claim, project_canonical_direct_binding,
     retire_direct_bindings_for_operation, validate_direct_binding_operation,
 };
 
@@ -1319,7 +1321,7 @@ pub(crate) fn direct_resolve_response(
     binding: DirectConversationBindingRecord,
     created: bool,
     state: DirectConversationResolveState,
-    binding_event: Option<arkret_core::Event>,
+    materialization_draft: Option<arkret_core::DirectConversationMaterializationDraft>,
 ) -> DirectConversationResolveOutcome {
     DirectConversationResolveOutcome {
         state,
@@ -1333,7 +1335,11 @@ pub(crate) fn direct_resolve_response(
             EventId::new(binding.binding_event_ref).expect("direct conversation event id is valid"),
         ),
         created: Some(created),
-        binding_event,
+        authoring_kind: (state == DirectConversationResolveState::AuthoringRequired).then_some(
+            arkret_core::DirectConversationAuthoringKind::DirectConversationMaterialization,
+        ),
+        claim_authorization_draft: None,
+        materialization_draft,
     }
 }
 

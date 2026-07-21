@@ -50,6 +50,7 @@ DROP TABLE IF EXISTS invite_locators CASCADE;
 DROP TABLE IF EXISTS key_backups CASCADE;
 DROP TABLE IF EXISTS mls_commits CASCADE;
 DROP TABLE IF EXISTS mls_key_packages CASCADE;
+DROP TABLE IF EXISTS peer_keypackage_claims CASCADE;
 DROP TABLE IF EXISTS mls_welcomes CASCADE;
 DROP TABLE IF EXISTS moderation_actions CASCADE;
 DROP TABLE IF EXISTS moderation_reports CASCADE;

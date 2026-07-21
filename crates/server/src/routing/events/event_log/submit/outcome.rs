@@ -39,7 +39,11 @@ pub(super) async fn enforce_sibling_fork_limit(
     let prev_frontier_digest = prev_frontier_digest(&parsed.prev_refs)?;
     let sibling_count = existing_records
         .iter()
-        .filter(|record| record.actor_id == parsed.actor_id && record.actor_seq == parsed.actor_seq)
+        .filter(|record| {
+            record.actor_id == parsed.actor_id
+                && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
+                && record.actor_seq == parsed.actor_seq
+        })
         .filter_map(|record| stored_prev_frontier_digest(record).ok())
         .filter(|digest| digest == &prev_frontier_digest)
         .count();

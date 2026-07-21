@@ -1300,6 +1300,7 @@ async fn production_rejects_dev_proof_type_field() {
         &session,
         "did:web:alice.example",
         "sha256:dead",
+        None,
     )
     .await
     .expect_err("production must reject dev-proof shape");
@@ -1328,6 +1329,7 @@ async fn development_rejects_dev_proof_type_field_even_when_hash_matches() {
         &session,
         "did:web:alice.example",
         "sha256:dead",
+        None,
     )
     .await
     .expect_err("development mode must reject the non-SDK proof shape");
@@ -1363,6 +1365,7 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
         &session,
         "did:web:alice.example",
         &arkret_core::canonical::sha256_digest(canonical_bytes),
+        None,
     )
     .await
     .expect_err("production must reject unsigned/fake JWS proofs");
@@ -1405,6 +1408,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
         &session,
         "did:web:alice.example",
         &arkret_core::canonical::sha256_digest(canonical_bytes),
+        None,
     )
     .await
     .expect_err("stale/missing DID document must fail closed before JWS verify");

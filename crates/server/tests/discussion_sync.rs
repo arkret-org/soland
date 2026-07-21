@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use arkret_core::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
@@ -15,7 +14,6 @@ use soland_domain::reducer::{
 use soland_storage::{RealmInviteRecord, RealmMetaRecord};
 use soland_storage_postgres::Db;
 
-static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(1_000);
 static ALICE_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([21_u8; 32]));
 static BOB_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([22_u8; 32]));
 static CAROL_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([23_u8; 32]));
@@ -171,13 +169,16 @@ async fn admit_member(
     });
     let event_id = new_prefixed_uuid7("ak:event:");
     let event = signed_event(
+        &state,
+        owner_token,
         &event_id,
         owner_did,
         owner_device_id,
         realm_id,
         "ak.member.state",
         payload,
-    );
+    )
+    .await;
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {owner_token}"), true)
         .json(&event)
@@ -240,13 +241,16 @@ async fn accept_invite(
     });
     let event_id = new_prefixed_uuid7("ak:event:");
     let event = signed_event(
+        &state,
+        token,
         &event_id,
         actor_did,
         device_id,
         realm_id,
         "ak.invite.accept",
         payload,
-    );
+    )
+    .await;
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -273,13 +277,16 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
     });
     let event_id = new_prefixed_uuid7("ak:event:");
     let event = signed_event(
+        &state,
+        token,
         &event_id,
         ALICE_DID.as_str(),
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         realm_id,
         "ak.message.create",
         payload,
-    );
+    )
+    .await;
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -423,13 +430,16 @@ async fn send_circle_scoped_encrypted_message(
         }
     });
     let event = signed_event(
+        &state,
+        token,
         &event_id,
         actor_id,
         device_id,
         realm_id,
         "ak.message.create",
         payload,
-    );
+    )
+    .await;
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -455,7 +465,10 @@ async fn submit_projection_event(
     payload: Value,
 ) -> String {
     let event_id = new_prefixed_uuid7("ak:event:");
-    let event = signed_event(&event_id, actor_id, device_id, realm_id, kind, payload);
+    let event = signed_event(
+        &state, token, &event_id, actor_id, device_id, realm_id, kind, payload,
+    )
+    .await;
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -481,7 +494,10 @@ async fn submit_projection_event_status(
     payload: Value,
 ) -> (u16, String) {
     let event_id = new_prefixed_uuid7("ak:event:");
-    let event = signed_event(&event_id, actor_id, device_id, realm_id, kind, payload);
+    let event = signed_event(
+        &state, token, &event_id, actor_id, device_id, realm_id, kind, payload,
+    )
+    .await;
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -492,7 +508,9 @@ async fn submit_projection_event_status(
     (status, body)
 }
 
-fn signed_event(
+async fn signed_event(
+    state: &AppState,
+    token: &str,
     event_id: &str,
     actor_id: &str,
     device_id: &str,
@@ -500,6 +518,28 @@ fn signed_event(
     kind: &str,
     payload: Value,
 ) -> Value {
+    let frontier: Value = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?actor_id={actor_id}&realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .expect("discussion actor Realm frontier JSON");
+    let actor_seq = frontier["frontier"]["actor_seq"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("discussion actor Realm frontier missing actor_seq: {frontier}"))
+        + 1;
+    let prev_refs = frontier["frontier"]["event_id"]
+        .as_str()
+        .map(|event_id| {
+            vec![
+                arkret_core::EventId::new(event_id.to_owned())
+                    .expect("discussion actor Realm frontier Event id is canonical"),
+            ]
+        })
+        .unwrap_or_default();
     let now = chrono::Utc::now();
     let actor = arkret_core::Did::new(actor_id.to_owned()).expect("fixture actor DID");
     let verification_method = actor_id.strip_prefix("did:key:").map_or_else(
@@ -511,7 +551,7 @@ fn signed_event(
         kind,
         arkret_core::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
         actor.clone(),
-        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        actor_seq,
         arkret_core::Hlc::new(format!(
             "{:012x}-0000-00000000",
             now.timestamp_millis().max(0) as u64
@@ -521,6 +561,7 @@ fn signed_event(
         now,
     )
     .expect("SDK Event builder accepts discussion fixture");
+    event.prev_refs = prev_refs;
     let seed = if actor_id == BOB_DID.as_str() {
         [22_u8; 32]
     } else if actor_id == CAROL_DID.as_str() {

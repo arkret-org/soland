@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use arkret_core::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
@@ -9,8 +7,6 @@ use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry};
 use soland_storage::RealmMetaRecord;
 use soland_storage_postgres::Db;
-
-static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(2_000);
 
 fn test_event_signer_did() -> String {
     let key = ed25519_dalek::SigningKey::from_bytes(&[21_u8; 32]);
@@ -164,6 +160,8 @@ fn signed_actor_private_event_envelope(
     realm_id: &str,
     kind: &str,
     payload: Value,
+    actor_seq: u64,
+    prev_event_id: Option<&str>,
 ) -> Value {
     let now = chrono::Utc::now();
     let actor_id = arkret_core::Did::new(actor.to_owned()).expect("fixture actor DID");
@@ -177,7 +175,7 @@ fn signed_actor_private_event_envelope(
         kind,
         arkret_core::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
         actor_id.clone(),
-        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        actor_seq,
         arkret_core::Hlc::new(format!(
             "{:012x}-0000-00000000",
             now.timestamp_millis().max(0) as u64
@@ -187,6 +185,12 @@ fn signed_actor_private_event_envelope(
         now,
     )
     .expect("SDK Event builder accepts actor-private fixture");
+    if let Some(prev_event_id) = prev_event_id {
+        event.prev_refs.push(
+            arkret_core::EventId::new(prev_event_id.to_owned())
+                .expect("accepted actor frontier Event id"),
+        );
+    }
     let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
         [21_u8; 32],
         actor_id,
@@ -211,7 +215,33 @@ async fn submit_actor_private_event(
     kind: &str,
     payload: Value,
 ) -> Value {
-    let event = signed_actor_private_event_envelope(actor, device_id, realm_id, kind, payload);
+    let frontier: Value = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .expect("actor Realm frontier JSON");
+    let accepted_seq = frontier["frontier"]["actor_seq"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("actor Realm frontier missing actor_seq: {frontier}"));
+    let prev_event_id = frontier["frontier"]["event_id"].as_str();
+    assert_eq!(
+        accepted_seq == 0,
+        prev_event_id.is_none(),
+        "actor Realm frontier must pair sequence and Event id: {frontier}"
+    );
+    let event = signed_actor_private_event_envelope(
+        actor,
+        device_id,
+        realm_id,
+        kind,
+        payload,
+        accepted_seq + 1,
+        prev_event_id,
+    );
     TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)

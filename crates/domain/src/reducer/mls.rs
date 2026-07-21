@@ -183,6 +183,8 @@ pub fn apply_keypackage_publish(
         claimed_by: None,
         ssk_generation: trust_binding.ssk_generation,
         device_authorize_event_id: trust_binding.device_authorize_event_id,
+        claimed_at: None,
+        claim_expires_at: None,
         consumed_at: None,
         created_at,
     };
@@ -224,7 +226,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
         return reject("mls_keypackage_group_missing");
     };
 
-    let consumed_at = op.created_at.timestamp();
+    let claimed_at = op.created_at.timestamp();
     let Some(row) = state.mls_key_packages.get_mut(id) else {
         return reject(REASON_KEYPACKAGE_NOT_FOUND);
     };
@@ -236,7 +238,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
         return reject(REASON_KEYPACKAGE_ALREADY_CLAIMED);
     }
     // Lifetime check — RFC 9420 §10. Stale KeyPackages can't be claimed.
-    if consumed_at >= row.lifetime.not_after {
+    if claimed_at >= row.lifetime.not_after {
         return reject(arkret_core::ReasonCode::KEYPACKAGE_EXPIRED);
     }
     let trust_binding = match keypackage_claim_trust_binding(payload) {
@@ -268,8 +270,17 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
             row.last_resort_realm_id = Some(realm_id.to_owned());
         }
     } else {
+        let claim_expires_at = payload
+            .get("claim_expires_at")
+            .and_then(Value::as_i64)
+            .unwrap_or(row.lifetime.not_after);
+        if claim_expires_at <= claimed_at || claim_expires_at > row.lifetime.not_after {
+            return reject(arkret_core::ReasonCode::KEYPACKAGE_EXPIRED);
+        }
         row.claimed_by = Some(group_id.to_owned());
-        row.consumed_at = Some(consumed_at);
+        row.claimed_at = Some(claimed_at);
+        row.claim_expires_at = Some(claim_expires_at);
+        row.consumed_at = None;
     }
 
     ProjectionEffectOut::Mls(MlsEffect::KeyPackageClaimed {
@@ -277,7 +288,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
         group_id: group_id.to_owned(),
         intended_realm_id,
         last_resort: row.last_resort,
-        consumed_at,
+        claimed_at,
     })
 }
 

@@ -368,7 +368,7 @@ pub enum MlsEffect {
         group_id: String,
         intended_realm_id: Option<String>,
         last_resort: bool,
-        consumed_at: i64,
+        claimed_at: i64,
     },
     /// `apply_welcome_enqueue` — a Welcome envelope was appended to the
     /// per-`(recipient_actor_id, recipient_device_id)` queue.

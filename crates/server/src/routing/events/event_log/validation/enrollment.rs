@@ -108,6 +108,115 @@ pub(crate) async fn validate_device_enrollment_authority_binding(
     Ok(())
 }
 
+/// Verify the portable trust anchor carried with a federated device key.
+///
+/// The source Principal Server attests only that this authorization remains
+/// active. The destination independently verifies that the original
+/// `ak.device.authorize` Event binds the advertised key to the principal and
+/// was signed by the DID-designated enrollment authority.
+pub(crate) async fn validate_federated_device_signing_key_evidence(
+    state: &AppState,
+    evidence: &arkret_core::FederatedDeviceSigningKeyEvidence,
+) -> Result<(), String> {
+    evidence
+        .validate_shape()
+        .map_err(|error| error.to_string())?;
+    evidence
+        .device_authorize_event
+        .validate_proof_bindings()
+        .map_err(|error| format!("device authorization proof binding: {error}"))?;
+    if evidence.device_authorize_event.proofs.is_empty() {
+        return Err("portable device authorization must contain an authority proof".to_owned());
+    }
+    if evidence.authorization_accepted_at > crate::wire::now() + chrono::Duration::minutes(5) {
+        return Err("device authorization accepted_at is in the future".to_owned());
+    }
+
+    let envelope = serde_json::to_value(evidence.device_authorize_event.as_ref())
+        .map_err(|error| format!("device authorization Event serialize: {error}"))?;
+    let object = envelope
+        .as_object()
+        .ok_or_else(|| "device authorization Event must be an object".to_owned())?;
+    let binding = object
+        .get("payload")
+        .and_then(Value::as_object)
+        .and_then(|payload| payload.get("enrollment_authority_binding"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| "device authorization enrollment binding is missing".to_owned())?;
+    let historical_designation = resolve_enrollment_authority_designation_at(
+        state,
+        evidence.actor_id.as_str(),
+        evidence.authorization_accepted_at,
+    )
+    .await
+    .ok_or_else(|| {
+        "principal DID enrollment designation is unavailable at authorization accepted_at"
+            .to_owned()
+    })?;
+    if event_string_field(binding, &["authority_did"]).as_deref()
+        != Some(historical_designation.service_endpoint.as_str())
+        || event_string_field(binding, &["authorization_ref"]).as_deref()
+            != Some(historical_designation.service_id.as_str())
+    {
+        return Err(
+            "device authorization does not match the accepted-at DID enrollment designation"
+                .to_owned(),
+        );
+    }
+
+    let executed_by = evidence
+        .device_authorize_event
+        .executed_by
+        .as_ref()
+        .ok_or_else(|| "service-attested device authorization requires executed_by".to_owned())?;
+    let authorization_ref = evidence
+        .device_authorize_event
+        .authorization_ref
+        .as_ref()
+        .ok_or_else(|| {
+            "service-attested device authorization requires authorization_ref".to_owned()
+        })?;
+    if event_string_field(binding, &["authority_did"]).as_deref() != Some(executed_by.as_str())
+        || event_string_field(binding, &["authorization_ref"]).as_deref()
+            != Some(authorization_ref.as_str())
+    {
+        return Err("device authorization envelope and enrollment binding do not match".to_owned());
+    }
+    for proof in &evidence.device_authorize_event.proofs {
+        if proof.domain.is_some() || proof.audience.is_some() {
+            return Err(
+                "portable device authorization proofs must omit service-specific domain and audience"
+                    .to_owned(),
+            );
+        }
+        let proof_controller = proof
+            .verification_method
+            .split_once('#')
+            .map_or(proof.verification_method.as_str(), |(did, _)| did);
+        if proof_controller != executed_by.as_str() {
+            return Err("device authorization proof is not rooted in executed_by".to_owned());
+        }
+        let signing_bytes = proof
+            .canonical_binding_bytes(&evidence.actor_id)
+            .map_err(|error| format!("device authorization proof transcript: {error}"))?;
+        let authority_document = did_document_at(
+            state,
+            executed_by.as_str(),
+            evidence.authorization_accepted_at,
+        )
+        .await?;
+        crate::jws_verify::verify_jws_ed25519_with_document(
+            &signing_bytes,
+            &proof.jws,
+            &proof.verification_method,
+            executed_by.as_str(),
+            &authority_document,
+        )
+        .map_err(|error| format!("device authorization authority proof: {error}"))?;
+    }
+    Ok(())
+}
+
 /// The `ArkretDeviceEnrollmentAuthority` designation read from a principal DID
 /// document's `service` array: the entry `id` (matched against
 /// `authorization_ref`) and its `serviceEndpoint` DID (matched against
@@ -134,6 +243,53 @@ async fn resolve_enrollment_authority_designation(
         .ok()
         .flatten()?;
     enrollment_authority_designation_from_document(&record.did_document, principal_did)
+}
+
+async fn resolve_enrollment_authority_designation_at(
+    state: &AppState,
+    principal_did: &str,
+    accepted_at: chrono::DateTime<chrono::Utc>,
+) -> Option<EnrollmentAuthorityDesignation> {
+    let document = did_document_at(state, principal_did, accepted_at)
+        .await
+        .ok()?;
+    enrollment_authority_designation_from_document(&document, principal_did)
+}
+
+async fn did_document_at(
+    state: &AppState,
+    did: &str,
+    accepted_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, String> {
+    let typed_did = arkret_core::Did::new(did.to_owned()).map_err(|error| error.to_string())?;
+    if typed_did.method() == "key" {
+        let document = crate::jws_verify::resolve_did_document_async(state, &typed_did).await?;
+        return serde_json::to_value(document)
+            .map_err(|error| format!("did:key document encode failed: {error}"));
+    }
+    let mut history = state
+        .did_application()
+        .log_events(did)
+        .await
+        .map_err(|error| format!("DID history lookup failed: {error}"))?;
+    history.sort_by_key(|entry| (entry.created_at, entry.seq));
+    if let Some(document) = history.into_iter().rev().find_map(|entry| {
+        (entry.created_at <= accepted_at)
+            .then(|| entry.operation.get("state").cloned())
+            .flatten()
+    }) {
+        return Ok(document);
+    }
+    let current = state
+        .did_application()
+        .document(did)
+        .await
+        .map_err(|error| format!("DID document lookup failed: {error}"))?
+        .ok_or_else(|| "DID document history is unavailable".to_owned())?;
+    if current.updated_at <= accepted_at {
+        return Ok(current.did_document);
+    }
+    Err("DID document history is unavailable at authorization accepted_at".to_owned())
 }
 
 fn enrollment_authority_designation_from_document(
