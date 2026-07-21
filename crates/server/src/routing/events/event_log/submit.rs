@@ -67,6 +67,19 @@ fn stamp_projection_operation_received_at(
     );
 }
 
+fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
+    if envelopes.len() != 1 {
+        return false;
+    }
+    let Ok(event) = serde_json::from_value::<arkret_core::Event>(envelopes[0].clone()) else {
+        return false;
+    };
+    event.kind.as_str() == arkret_core::events::EventKind::REALM_CREATE
+        && event.executed_by.as_ref() != Some(&event.actor_id)
+        && arkret_bootstrap::materialize_managed_agent_pcr_control(std::slice::from_ref(&event))
+            .is_ok()
+}
+
 #[derive(Debug)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) event_id: String,
@@ -504,7 +517,7 @@ pub(super) async fn submit_event_batch_outcome(
     if batch_contains_identity_anchor(&envelopes) {
         return submit_identity_anchor_batch(state, session, envelopes).await;
     }
-    if batch_begins_realm_create(&envelopes) {
+    if batch_begins_realm_create(&envelopes) && !batch_is_managed_agent_pcr_create(&envelopes) {
         return submit_realm_bootstrap_batch(state, session, envelopes, None).await;
     }
     let mut accepted = Vec::new();
@@ -1310,6 +1323,64 @@ mod received_at_stamp_tests {
                 .and_then(Value::as_str),
             Some("2026-07-07T05:20:58.398Z")
         );
+    }
+}
+
+#[cfg(test)]
+mod managed_agent_pcr_batch_tests {
+    use super::*;
+
+    fn managed_agent_create_value() -> Value {
+        let realm_id =
+            RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe".to_owned()).unwrap();
+        let agent_id = arkret_core::Did::new("did:web:agent.example".to_owned()).unwrap();
+        let mut event = arkret_core::Event::new(
+            arkret_core::events::EventKind::REALM_CREATE,
+            realm_id,
+            agent_id,
+            1,
+            arkret_core::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
+            json!({
+                "object": {
+                    "id": "ak:realm:01999999-0000-7000-8000-00000000cafe",
+                    "created_by": "did:web:agent.example",
+                    "fields": {"purpose": "principal_control"},
+                    "notary": {"type": "single_did", "did": "did:web:agent.example"},
+                }
+            }),
+        )
+        .unwrap();
+        event.executed_by =
+            Some(arkret_core::Did::new("did:web:alice.example".to_owned()).unwrap());
+        event.authorization_ref = Some("did:web:agent.example#managed-controller".to_owned());
+        event.effects = vec![
+            arkret_bootstrap::managed_agent_principal_control_create_effect(
+                &event.realm_id,
+                event.actor_seq,
+            )
+            .unwrap(),
+        ];
+        serde_json::to_value(event).unwrap()
+    }
+
+    #[test]
+    fn delegated_managed_agent_create_bypasses_ordinary_bootstrap_router() {
+        assert!(batch_is_managed_agent_pcr_create(&[
+            managed_agent_create_value()
+        ]));
+    }
+
+    #[test]
+    fn ordinary_or_multi_event_create_stays_on_ordinary_bootstrap_router() {
+        let mut ordinary = managed_agent_create_value();
+        ordinary.as_object_mut().unwrap().remove("executed_by");
+        assert!(!batch_is_managed_agent_pcr_create(&[ordinary]));
+
+        let managed = managed_agent_create_value();
+        assert!(!batch_is_managed_agent_pcr_create(&[
+            managed.clone(),
+            managed,
+        ]));
     }
 }
 

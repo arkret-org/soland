@@ -771,7 +771,6 @@ pub(crate) async fn validate_delegated_agent_envelope(
     state: &AppState,
     envelope: &serde_json::Map<String, Value>,
     controller_id: &str,
-    allow_realm_founding_grant: bool,
 ) -> Result<(), AppError> {
     if managed_agent_envelope_uses_root_anchor(envelope) {
         return Err(failed_precondition(
@@ -813,9 +812,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
             | "ak.self.agent.resume"
             | "ak.self.agent.deactivate"
     );
-    if !kind_is_delegated_control
-        && !(allow_realm_founding_grant && kind == arkret_core::events::EventKind::CAPABILITY_GRANT)
-    {
+    if !kind_is_delegated_control {
         return Err(failed_precondition(
             "controller delegation does not cover this Agent Event kind",
             "managed_agent_delegation_scope",

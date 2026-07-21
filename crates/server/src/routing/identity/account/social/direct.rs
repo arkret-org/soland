@@ -1775,7 +1775,7 @@ fn reserve_direct_binding(
     // value so the resolver plan and the participant-created group cannot
     // diverge.
     let mls_group_id = arkret_core::base64url_encode(realm_id.as_bytes());
-    let created_at = direct_now_seconds();
+    let created_at = direct_now();
     let binding = DirectConversationBindingRecord {
         participants_unordered: sorted_participants(actor, peer),
         realm_id: realm_id.clone(),
@@ -2032,7 +2032,7 @@ pub(super) fn direct_operation_id() -> Result<arkret_core::OperationId, &'static
         .map_err(|_| "generated invalid operation id")
 }
 
-pub(super) fn direct_now_seconds() -> chrono::DateTime<chrono::Utc> {
+pub(super) fn direct_now() -> chrono::DateTime<chrono::Utc> {
     now()
 }
 
@@ -2063,7 +2063,7 @@ pub(super) fn direct_realm_create_operation(
     realm_scope: arkret_core::RealmId,
     creator: &str,
 ) -> Result<arkret_core::Operation, &'static str> {
-    let created_at = direct_now_seconds();
+    let created_at = direct_now();
     let payload = direct_realm_create_payload(state, realm_scope.clone(), creator, created_at)?;
     let mut operation = arkret_core::Operation::create(
         direct_operation_id()?,
@@ -2081,7 +2081,7 @@ pub(super) fn direct_member_join_operation(
     member: &str,
     contact: Option<&ContactRecord>,
 ) -> Result<arkret_core::Operation, &'static str> {
-    let created_at = direct_now_seconds();
+    let created_at = direct_now();
     let mut payload = direct_member_join_payload(realm_scope.clone(), member)?;
     if let Some(recipient_service_id) = contact
         .and_then(|contact| contact.peer_service_id.as_deref())
@@ -2162,7 +2162,7 @@ pub(super) fn direct_strand_create_operation(
     main_strand_id: &str,
     creator: &str,
 ) -> Result<arkret_core::Operation, &'static str> {
-    let created_at = direct_now_seconds();
+    let created_at = direct_now();
     let payload =
         direct_strand_create_payload(realm_scope.clone(), main_strand_id, creator, created_at)?;
     let mut operation = arkret_core::Operation::create(

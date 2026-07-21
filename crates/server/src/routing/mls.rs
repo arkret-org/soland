@@ -64,7 +64,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_storage::{
     MlsKeyPackageRow, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
-    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
+    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, SessionRecord,
 };
 
 use crate::routing::system::extract::AuthArgs;
@@ -1503,6 +1503,7 @@ async fn consume_keypackages(
             "consumer_device_id must match the calling session",
         ));
     }
+    validate_direct_keypackage_consume(state, &session, &body).await?;
     let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
     let group_id = consume_group_ref(&body);
     let consume_realm_id = body.realm_id.as_ref().map(ToString::to_string);
@@ -1532,6 +1533,17 @@ async fn consume_keypackages(
                     continue;
                 }
                 consumed.push(keypackage_id);
+                continue;
+            }
+            Ok(Some(record)) if record.consumed_at.is_some() => {
+                if record.actor_id == session.actor
+                    && record.device_id == session.device_id
+                    && record.claimed_by_mls_group_id.as_deref() == Some(group_id.as_str())
+                {
+                    consumed.push(keypackage_id);
+                } else {
+                    failures.push(keypackage_ref_failure(keypackage_id, "claim_mismatch"));
+                }
                 continue;
             }
             Ok(Some(_)) => {}
@@ -1575,6 +1587,138 @@ async fn consume_keypackages(
         }
     }
     json_ok(KeyPackagesConsumeOutcome { consumed, failures })
+}
+
+async fn validate_direct_keypackage_consume(
+    state: &AppState,
+    session: &SessionRecord,
+    body: &KeyPackagesConsumeRequestBody,
+) -> Result<(), AppError> {
+    let Some(realm_id) = body.realm_id.as_ref().map(ToString::to_string) else {
+        return Ok(());
+    };
+    if !state
+        .projection
+        .lock()
+        .realm_is_direct_conversation(&realm_id)
+    {
+        return Ok(());
+    }
+    if body.key_package_refs.len() != 1
+        || body.claim_ids.len() != 1
+        || body.welcome_ref.is_none()
+        || body.strand_id.is_none()
+        || body.mls_group_id.is_none()
+        || body.epoch.is_none()
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Direct Conversation KeyPackage consume requires one exact claim and binding context",
+        ));
+    }
+    let binding = state
+        .direct_conversation_bindings
+        .lock()
+        .values()
+        .find(|binding| binding.state == "active" && binding.realm_id == realm_id)
+        .cloned()
+        .filter(|binding| {
+            crate::routing::identity::account::direct_binding_matches_projection(state, binding)
+        })
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "Direct Conversation binding is not canonical and active",
+            )
+        })?;
+    if body.strand_id.as_ref().map(ToString::to_string) != Some(binding.main_strand_id.clone()) {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Direct Conversation consume Strand differs from the canonical binding",
+        ));
+    }
+    let binding_event = state
+        .event_query_application()
+        .accepted_event(&binding.binding_event_ref)
+        .await
+        .map_err(|error| AppError::internal(format!("direct binding lookup failed: {error}")))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "canonical direct binding Event is missing",
+            )
+        })?;
+    let binding_event = serde_json::from_value::<arkret_core::Event>(binding_event.envelope)
+        .map_err(|error| {
+            AppError::internal(format!("stored direct binding Event invalid: {error}"))
+        })?;
+    let binding_payload = serde_json::from_value::<arkret_core::DirectConversationBoundPayload>(
+        serde_json::to_value(binding_event.payload).map_err(|error| {
+            AppError::internal(format!("stored direct binding payload invalid: {error}"))
+        })?,
+    )
+    .map_err(|_| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            "canonical direct binding payload is invalid",
+        )
+    })?;
+    let welcome_ref = body.welcome_ref.as_deref().expect("checked above");
+    if binding_payload.mls_welcome_event_ref.as_str() != welcome_ref
+        || body.mls_group_id.as_deref() != Some(binding_payload.mls_group_id.as_str())
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "KeyPackage consume does not reference the canonical binding Welcome",
+        ));
+    }
+    let welcome_event = state
+        .event_query_application()
+        .accepted_event(welcome_ref)
+        .await
+        .map_err(|error| AppError::internal(format!("direct Welcome lookup failed: {error}")))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "canonical direct Welcome Event is missing",
+            )
+        })?;
+    let welcome_event = serde_json::from_value::<arkret_core::Event>(welcome_event.envelope)
+        .map_err(|error| {
+            AppError::internal(format!("stored direct Welcome Event invalid: {error}"))
+        })?;
+    if welcome_event.realm_id.as_str() != realm_id {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "canonical direct Welcome belongs to another Realm",
+        ));
+    }
+    let welcome = serde_json::from_value::<arkret_core::MlsWelcomePayload>(
+        serde_json::to_value(welcome_event.payload).map_err(|error| {
+            AppError::internal(format!("stored direct Welcome payload invalid: {error}"))
+        })?,
+    )
+    .map_err(|_| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            "canonical direct Welcome payload is invalid",
+        )
+    })?;
+    let claim_id = &body.claim_ids[0];
+    let key_package_id = &body.key_package_refs[0];
+    if welcome.recipient_principal_id.as_str() != session.actor
+        || welcome.recipient_device_id.as_str() != session.device_id
+        || welcome.mls_group_id.as_str() != binding_payload.mls_group_id.as_str()
+        || Some(welcome.epoch) != body.epoch
+        || welcome.claim_id.as_str() != claim_id
+        || !claim_id.starts_with(&format!("{key_package_id}:"))
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "KeyPackage consume claim differs from the canonical direct Welcome",
+        ));
+    }
+    Ok(())
 }
 
 #[endpoint(
