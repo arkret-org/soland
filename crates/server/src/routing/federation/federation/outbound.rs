@@ -103,10 +103,21 @@ pub(super) async fn enqueue_outbound_for(
     // signing path so the body bytes the dispatcher POSTs are identical
     // to what the signature transcript covers — important once full
     // RFC 9421 signing lands.
-    let payload_bytes = arkret_core::canonical::canonical_json_bytes(&payload)
-        .unwrap_or_else(|_| serde_json::to_vec(&payload).unwrap_or_default());
-    let payload_json =
-        String::from_utf8(payload_bytes.clone()).unwrap_or_else(|_| payload.to_string());
+    let payload_bytes = match arkret_core::canonical::canonical_json_bytes(&payload) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                resource_kind,
+                resource_id,
+                peer = %peer.did,
+                "failed to canonicalize federation outbox body"
+            );
+            return;
+        }
+    };
+    let payload_json = String::from_utf8(payload_bytes)
+        .expect("Arkret canonical JSON serialization always produces UTF-8");
     // Deterministic Idempotency-Key per spec `federation.md` §8.5 —
     // `sha256(origin || destination || resource_kind || resource_id)`
     // gives the (origin, destination, key) tuple the receiver dedupes

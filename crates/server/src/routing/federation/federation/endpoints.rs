@@ -895,10 +895,7 @@ pub(crate) async fn federation_seals_push(
         )
         .with_wire_code("federation_origin_denied"));
     }
-    let body_value = serde_json::to_value(&body).map_err(|error| {
-        AppError::internal(format!("federation seals push body serialize: {error}"))
-    })?;
-    super::verify_inbound_peer_http_signature(state, req, Some(&body_value)).await?;
+    super::verify_inbound_peer_http_signature(state, req, true).await?;
     //   3. bind every Move the Seal encapsulates (its `delta` entries) to the authenticated origin,
     //      exactly like the sibling `federation_transaction` / `federation_push_operations` tracks
     //      run `federation_actor_origin_acceptable` per operation. A signed peer MUST NOT be able

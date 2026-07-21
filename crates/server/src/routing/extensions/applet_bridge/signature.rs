@@ -38,14 +38,19 @@ pub(super) async fn require_inbound_transaction_signature(
             .expect("state injected")
             .clone();
         let idempotency_key = applet_required_header(req, "idempotency-key")?;
-        let payload = req.payload().await.map_err(|error| {
-            AppError::bad_json(format!("unable to read applet transaction body: {error}"))
+        http_signature::reject_content_encoding(req, || {
+            applet_signature_error_invalid(
+                "applet signed JSON requests must not use Content-Encoding",
+            )
         })?;
-        let transaction =
-            serde_json::from_slice::<serde_json::Value>(payload).map_err(|error| {
-                AppError::bad_json(format!("invalid applet transaction JSON: {error}"))
-            })?;
-        verify_inbound_transaction_signature(&state, req, &transaction, &idempotency_key).await
+        let payload = req
+            .payload()
+            .await
+            .map_err(|error| {
+                AppError::bad_json(format!("unable to read applet transaction body: {error}"))
+            })?
+            .to_vec();
+        verify_inbound_transaction_signature(&state, req, &payload, &idempotency_key).await
     }
     .await;
 
@@ -75,18 +80,9 @@ pub(super) async fn require_inbound_transaction_signature(
 async fn verify_inbound_transaction_signature(
     state: &AppState,
     req: &Request,
-    transaction: &serde_json::Value,
+    body_bytes: &[u8],
     idempotency_key: &str,
 ) -> Result<VerifiedInboundTransactionSignature, AppError> {
-    let source_service_id = transaction
-        .get("source_service_id")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            applet_signature_error_invalid(
-                "signed applet transaction body requires source_service_id",
-            )
-        })?;
-
     // §7.3.1 ordering: a transaction push carrying only `Authorization: Bearer`
     // (no `Signature` / `Signature-Input`) MUST be rejected before any other
     // work. This is the cheapest, highest-priority gate and is what separates a
@@ -101,11 +97,7 @@ async fn verify_inbound_transaction_signature(
     // §7.3.1 line 456: verify the body hash matches `Content-Digest` before
     // validating the signature transcript. The signed body MUST be the
     // canonical request body.
-    let body_digests = http_signature::canonical_body_digests(transaction, |error| {
-        AppError::invalid_param(format!(
-            "applet transaction body is not canonical JSON: {error}"
-        ))
-    })?;
+    let body_digests = http_signature::exact_body_digests(body_bytes);
     let request_digest = body_digests.request_digest;
     let expected_content_digest = body_digests.content_digest;
     let content_digest = applet_required_header(req, "content-digest")?;
@@ -114,6 +106,22 @@ async fn verify_inbound_transaction_signature(
             "Content-Digest does not cover the canonical inbound transaction body",
         ));
     }
+    http_signature::validate_canonical_json_body(body_bytes, |error| {
+        applet_signature_error_invalid(format!(
+            "applet transaction body is not canonical JSON: {error}"
+        ))
+    })?;
+    let transaction = serde_json::from_slice::<serde_json::Value>(body_bytes).map_err(|error| {
+        applet_signature_error_invalid(format!("invalid applet transaction JSON: {error}"))
+    })?;
+    let source_service_id = transaction
+        .get("source_service_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            applet_signature_error_invalid(
+                "signed applet transaction body requires source_service_id",
+            )
+        })?;
 
     // Bound trust headers MUST be consistent with the body / this service
     // (`http_signature_invalid`).

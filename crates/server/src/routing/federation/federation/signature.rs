@@ -3,7 +3,6 @@ use std::time::{Duration as StdDuration, Instant};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use soland_http::error::AppError;
 use soland_http::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
@@ -72,18 +71,12 @@ pub(super) fn validate_federation_headers(
 
 pub(super) async fn verify_inbound_push_http_signature(
     state: &AppState,
-    req: &Request,
+    req: &mut Request,
     body: &arkret_core::FederationPushOperationsRequestBody,
 ) -> Result<(), AppError> {
-    let body_value = serde_json::to_value(body).map_err(|error| {
-        AppError::internal(format!(
-            "federation push body serialization failed: {error}"
-        ))
-    })?;
     verify_inbound_federation_http_signature(
         state,
         req,
-        &body_value,
         body.origin.as_str(),
         body.destination.as_str(),
         "federation_push",
@@ -93,18 +86,12 @@ pub(super) async fn verify_inbound_push_http_signature(
 
 pub(super) async fn verify_inbound_transaction_http_signature(
     state: &AppState,
-    req: &Request,
+    req: &mut Request,
     body: &arkret_core::FederationTransactionRequestBody,
 ) -> Result<(), AppError> {
-    let body_value = serde_json::to_value(body).map_err(|error| {
-        AppError::internal(format!(
-            "federation transaction body serialization failed: {error}"
-        ))
-    })?;
     verify_inbound_federation_http_signature(
         state,
         req,
-        &body_value,
         body.origin.as_str(),
         body.destination.as_str(),
         "federation_transaction",
@@ -114,12 +101,25 @@ pub(super) async fn verify_inbound_transaction_http_signature(
 
 async fn verify_inbound_federation_http_signature(
     state: &AppState,
-    req: &Request,
-    body_value: &Value,
+    req: &mut Request,
     body_origin: &str,
     body_destination: &str,
     metric_label: &'static str,
 ) -> Result<(), AppError> {
+    http_signature::reject_content_encoding(req, || {
+        AppError::new(
+            soland_http::error::ErrorCode::SchemaViolation,
+            "federation signed JSON requests must not use Content-Encoding",
+        )
+        .with_status(StatusCode::BAD_REQUEST)
+    })?;
+    let body_bytes = req
+        .payload()
+        .await
+        .map_err(|error| {
+            AppError::bad_json(format!("unable to read federation request body: {error}"))
+        })?
+        .to_vec();
     // Capture the bucket start as a plain local, run the synchronous verify
     // body, then on failure pad the response timing asynchronously (no worker
     // blocking) — see `apply_federation_auth_failure_delay`.
@@ -127,7 +127,7 @@ async fn verify_inbound_federation_http_signature(
     let outcome = verify_inbound_federation_http_signature_inner(
         state,
         req,
-        body_value,
+        &body_bytes,
         body_origin,
         body_destination,
         metric_label,
@@ -141,18 +141,12 @@ async fn verify_inbound_federation_http_signature(
 fn verify_inbound_federation_http_signature_inner(
     state: &AppState,
     req: &Request,
-    body_value: &Value,
+    body_bytes: &[u8],
     body_origin: &str,
     body_destination: &str,
     metric_label: &'static str,
 ) -> Result<(), AppError> {
-    let body_digests = http_signature::canonical_body_digests(body_value, |error| {
-        AppError::new(
-            soland_http::error::ErrorCode::SchemaViolation,
-            format!("federation request body is not canonical JSON: {error}"),
-        )
-        .with_status(StatusCode::BAD_REQUEST)
-    })?;
+    let body_digests = http_signature::exact_body_digests(body_bytes);
     let expected_content_digest = body_digests.content_digest;
     let expected_request_digest = body_digests.request_digest;
     validate_federation_request_binding(&state.config.trust_domain, req, &expected_request_digest)?;
@@ -171,6 +165,13 @@ fn verify_inbound_federation_http_signature_inner(
             "Request-Canonical-Digest does not match federation canonical request body",
         ));
     }
+    http_signature::validate_canonical_json_body(body_bytes, |error| {
+        AppError::new(
+            soland_http::error::ErrorCode::SchemaViolation,
+            format!("federation request body is not canonical JSON: {error}"),
+        )
+        .with_status(StatusCode::BAD_REQUEST)
+    })?;
 
     let source_service_id = required_header(req, "source-service-id")?;
     let destination_service_id = required_header(req, "destination-service-id")?;
@@ -249,13 +250,33 @@ fn verify_inbound_federation_http_signature_inner(
 /// Content-Digest in the latter case.
 pub(in crate::routing) async fn verify_inbound_peer_http_signature(
     state: &AppState,
-    req: &Request,
-    body: Option<&Value>,
+    req: &mut Request,
+    has_body: bool,
 ) -> Result<(), AppError> {
+    if has_body {
+        http_signature::reject_content_encoding(req, || {
+            AppError::new(
+                soland_http::error::ErrorCode::SchemaViolation,
+                "peer signed JSON requests must not use Content-Encoding",
+            )
+            .with_status(StatusCode::BAD_REQUEST)
+        })?;
+    }
+    let body_bytes = match has_body {
+        true => Some(
+            req.payload()
+                .await
+                .map_err(|error| {
+                    AppError::bad_json(format!("unable to read peer request body: {error}"))
+                })?
+                .to_vec(),
+        ),
+        false => None,
+    };
     // Bucket-normalize the failure timing without blocking a tokio worker:
     // run the synchronous verify body, then async-pad on the error path.
     let started_at = Instant::now();
-    let outcome = verify_inbound_peer_http_signature_inner(state, req, body);
+    let outcome = verify_inbound_peer_http_signature_inner(state, req, body_bytes.as_deref());
     if outcome.is_err() {
         apply_federation_auth_failure_delay(started_at).await;
     }
@@ -265,17 +286,11 @@ pub(in crate::routing) async fn verify_inbound_peer_http_signature(
 fn verify_inbound_peer_http_signature_inner(
     state: &AppState,
     req: &Request,
-    body: Option<&Value>,
+    body_bytes: Option<&[u8]>,
 ) -> Result<(), AppError> {
-    let body_digests = match body {
-        Some(value) => {
-            let body_digests = http_signature::canonical_body_digests(value, |error| {
-                AppError::new(
-                    soland_http::error::ErrorCode::SchemaViolation,
-                    format!("peer request body is not canonical JSON: {error}"),
-                )
-                .with_status(StatusCode::BAD_REQUEST)
-            })?;
+    let body_digests = match body_bytes {
+        Some(bytes) => {
+            let body_digests = http_signature::exact_body_digests(bytes);
             validate_federation_request_binding(
                 &state.config.trust_domain,
                 req,
@@ -301,6 +316,16 @@ fn verify_inbound_peer_http_signature_inner(
                 "Request-Canonical-Digest does not match peer canonical request body",
             ));
         }
+        http_signature::validate_canonical_json_body(
+            body_bytes.expect("body digests exist only for bodied requests"),
+            |error| {
+                AppError::new(
+                    soland_http::error::ErrorCode::SchemaViolation,
+                    format!("peer request body is not canonical JSON: {error}"),
+                )
+                .with_status(StatusCode::BAD_REQUEST)
+            },
+        )?;
         (Some(content_digest), Some(request_digest))
     } else {
         (None, None)

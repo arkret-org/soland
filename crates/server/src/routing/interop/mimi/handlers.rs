@@ -31,7 +31,7 @@ pub(super) async fn mimi_key_material(
 ) -> JsonResult<MimiKeyMaterialOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi key material")?;
-    verify_mimi_write_service_proof(state, req, &body, None)?;
+    verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -76,7 +76,7 @@ pub(super) async fn mimi_room_update(
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi room update")?;
     let room_uri = mimi_room_uri(state, &room_id);
-    verify_mimi_write_service_proof(state, req, &body, Some(&room_uri))?;
+    verify_mimi_write_service_proof(state, req, Some(&room_uri)).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -148,7 +148,7 @@ pub(super) async fn mimi_notify(
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi notify")?;
     let room_uri = mimi_room_uri(state, &room_id);
-    verify_mimi_write_service_proof(state, req, &body, Some(&room_uri))?;
+    verify_mimi_write_service_proof(state, req, Some(&room_uri)).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -221,7 +221,7 @@ pub(super) async fn mimi_room_message(
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi submit message")?;
     let room_uri = mimi_room_uri(state, &room_id);
-    verify_mimi_write_service_proof(state, req, &body, Some(&room_uri))?;
+    verify_mimi_write_service_proof(state, req, Some(&room_uri)).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -431,7 +431,7 @@ pub(super) async fn mimi_consent_request(
         .get("requester_id")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("mimi consent request requires requester_id"))?;
-    verify_mimi_consent_write_authority(state, req, aa, &body, requester).await?;
+    verify_mimi_consent_write_authority(state, req, aa, requester).await?;
     let target_holder = mimi_consent_target_holder(&body);
     let scope = body
         .get("purpose")
@@ -488,7 +488,7 @@ pub(super) async fn mimi_consent_update(
     let granted = matches!(body.decision, arkret_core::MimiConsentDecision::Accept);
     let consent_id = body.consent_id.as_str();
     let actor_id = body.actor_id.as_str();
-    verify_mimi_consent_update_authority(state, req, aa, &body, &body_value).await?;
+    verify_mimi_consent_update_authority(state, req, aa, &body).await?;
     let materialized =
         materialize_mimi_consent_update_by_id(state, consent_id, actor_id, granted).await?;
     let updated_at = now();
@@ -528,9 +528,8 @@ pub(super) fn mimi_consent_target_holder(body: &Value) -> Option<&str> {
 
 pub(super) async fn verify_mimi_consent_write_authority(
     state: &AppState,
-    req: &Request,
+    req: &mut Request,
     aa: AuthArgs,
-    body: &Value,
     expected_actor: &str,
 ) -> Result<(), AppError> {
     if request_has_bearer_session(req) {
@@ -542,17 +541,16 @@ pub(super) async fn verify_mimi_consent_write_authority(
         }
         return Ok(());
     }
-    verify_mimi_write_service_proof(state, req, body, None)
+    verify_mimi_write_service_proof(state, req, None).await
 }
 
 const MIMI_OPERATION_PROOF_WINDOW_SECONDS: i64 = 300;
 
 async fn verify_mimi_consent_update_authority(
     state: &AppState,
-    req: &Request,
+    req: &mut Request,
     aa: AuthArgs,
     body: &MimiUpdateConsentRequestBody,
-    body_value: &Value,
 ) -> Result<(), AppError> {
     if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
@@ -562,7 +560,7 @@ async fn verify_mimi_consent_update_authority(
             ));
         }
     } else {
-        verify_mimi_write_service_proof(state, req, body_value, None)?;
+        verify_mimi_write_service_proof(state, req, None).await?;
     }
 
     verify_mimi_consent_actor_proof(state, body).await
@@ -704,7 +702,7 @@ pub(super) async fn mimi_identifiers_query(
 ) -> JsonResult<MimiIdentifierQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi identifiers query")?;
-    verify_mimi_write_service_proof(state, req, &body, None)?;
+    verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -773,7 +771,7 @@ pub(super) async fn mimi_report_abuse(
 ) -> JsonResult<MimiReportAbuseOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
-    verify_mimi_write_service_proof(state, req, &body, None)?;
+    verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -988,7 +986,7 @@ pub(super) async fn mimi_proxy_download(
 ) -> JsonResult<MimiProxyDownloadOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi proxy download")?;
-    verify_mimi_write_service_proof(state, req, &body, None)?;
+    verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }

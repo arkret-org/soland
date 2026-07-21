@@ -1,9 +1,8 @@
 use super::*;
 
-pub(super) fn verify_mimi_write_service_proof(
+pub(super) async fn verify_mimi_write_service_proof(
     state: &AppState,
-    req: &Request,
-    body: &Value,
+    req: &mut Request,
     room_uri: Option<&str>,
 ) -> Result<(), AppError> {
     let signature_present =
@@ -14,9 +13,15 @@ pub(super) fn verify_mimi_write_service_proof(
         ));
     }
 
-    let body_digests = http_signature::canonical_body_digests(body, |error| {
-        AppError::invalid_param(format!("MIMI request body is not canonical JSON: {error}"))
+    http_signature::reject_content_encoding(req, || {
+        mimi_signature_error_invalid("MIMI signed JSON requests must not use Content-Encoding")
     })?;
+    let body_bytes = req
+        .payload()
+        .await
+        .map_err(|error| AppError::bad_json(format!("unable to read MIMI request body: {error}")))?
+        .to_vec();
+    let body_digests = http_signature::exact_body_digests(&body_bytes);
     let expected_content_digest = body_digests.content_digest;
     let content_digest = mimi_required_header(req, "content-digest")?;
     if content_digest != expected_content_digest {
@@ -31,6 +36,9 @@ pub(super) fn verify_mimi_write_service_proof(
             "Request-Canonical-Digest does not match the canonical MIMI request body",
         ));
     }
+    http_signature::validate_canonical_json_body(&body_bytes, |error| {
+        mimi_signature_error_invalid(format!("MIMI request body is not canonical JSON: {error}"))
+    })?;
 
     let source_service_id = mimi_required_header(req, "source-service-id")?;
     if !source_service_id.starts_with("did:") {
