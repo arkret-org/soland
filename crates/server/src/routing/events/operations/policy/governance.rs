@@ -4,8 +4,12 @@ pub(super) fn validate_direct_conversation_realm_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if active_direct_conversation_binding_for_realm(state, operation.realm_id.as_str()).is_none() {
+    if !is_direct_conversation_realm(state, operation.realm_id.as_str()) {
         return Ok(());
+    }
+    let binding = active_direct_conversation_binding_for_realm(state, operation.realm_id.as_str());
+    if kinds::operation_is_message_create(operation) && binding.is_none() {
+        return Err("direct_conversation_member_count_invalid");
     }
     if kinds::operation_is_invite(operation) {
         return Err("direct_conversation_invite_forbidden");
@@ -619,7 +623,38 @@ pub(super) fn direct_conversation_member_state_guard(
         .payload
         .get("membership")
         .and_then(Value::as_str)?;
-    let binding = active_direct_conversation_binding_for_realm(state, operation.realm_id.as_str())?;
+    if !is_direct_conversation_realm(state, operation.realm_id.as_str()) {
+        return None;
+    }
+    let Some(binding) =
+        active_direct_conversation_binding_for_realm(state, operation.realm_id.as_str())
+    else {
+        if membership == "join"
+            && operation.payload.get("reason").and_then(Value::as_str)
+                == Some("direct_conversation_bootstrap")
+        {
+            let target = membership_target(operation)?;
+            let reserved_participant =
+                state
+                    .direct_conversation_bindings
+                    .lock()
+                    .values()
+                    .any(|binding| {
+                        binding.state == "pending"
+                            && binding.realm_id == operation.realm_id.as_str()
+                            && binding.participants_unordered.len() == 2
+                            && binding
+                                .participants_unordered
+                                .iter()
+                                .any(|participant| participant == target)
+                    });
+            if reserved_participant {
+                return None;
+            }
+        }
+        return matches!(membership, "invite" | "join")
+            .then_some("direct_conversation_member_count_invalid");
+    };
     if binding.participants_unordered.len() != 2 {
         return Some("direct_conversation_member_count_invalid");
     }
@@ -638,14 +673,23 @@ pub(super) fn direct_conversation_member_state_guard(
     }
 }
 
+pub(super) fn is_direct_conversation_realm(state: &AppState, realm_id: &str) -> bool {
+    state
+        .projection
+        .lock()
+        .realm_is_direct_conversation(realm_id)
+}
+
 pub(super) fn active_direct_conversation_binding_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Option<soland_storage::DirectConversationBindingRecord> {
-    state
+    let binding = state
         .direct_conversation_bindings
         .lock()
         .values()
         .find(|binding| binding.state == "active" && binding.realm_id == realm_id)
-        .cloned()
+        .cloned()?;
+    crate::routing::identity::account::direct_binding_matches_projection(state, &binding)
+        .then_some(binding)
 }

@@ -215,3 +215,51 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         "direct peer must pass realm event visibility for post-join messages"
     );
 }
+
+#[tokio::test]
+async fn participant_leave_retires_direct_binding_and_blocks_reuse() {
+    let state = test_state();
+    let realm_id = crate::ids::generate_realm_id();
+    let main_strand_id = crate::ids::generate("strand");
+    let alice = "did:web:alice.example";
+    let bob = "did:web:bob.example";
+    let pair_key = direct_pair_key(&state, alice, bob).unwrap();
+
+    submit_direct_realm_genesis(&state, &realm_id, &main_strand_id, alice, bob)
+        .await
+        .unwrap();
+    let timestamp = now();
+    state.direct_conversation_bindings.lock().insert(
+        pair_key.clone(),
+        DirectConversationBindingRecord {
+            participants_unordered: sorted_participants(alice, bob),
+            realm_id: realm_id.clone(),
+            main_strand_id,
+            binding_event_ref: crate::ids::generate_event_id(),
+            state: "active".to_owned(),
+            created_at: timestamp,
+            updated_at: timestamp,
+        },
+    );
+    assert!(active_direct_binding(&state, &pair_key).is_some());
+
+    let leave = arkret_core::Operation::create(
+        direct_operation_id().unwrap(),
+        arkret_core::RealmId::new(realm_id).unwrap(),
+        arkret_core::events::EventKind::MEMBER_STATE,
+        json!({
+            "actor_id": bob,
+            "membership": "leave",
+            "sender": bob
+        }),
+    );
+    crate::routing::accept_local_operations(&state, bob, std::slice::from_ref(&leave))
+        .await
+        .unwrap();
+
+    assert!(active_direct_binding(&state, &pair_key).is_none());
+    assert_eq!(
+        state.direct_conversation_bindings.lock()[&pair_key].state,
+        "retired"
+    );
+}

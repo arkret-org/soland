@@ -267,6 +267,8 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
             )?;
         }
         validate_direct_conversation_realm_policy(state, operation)?;
+        crate::routing::identity::account::validate_direct_binding_operation(state, operation)
+            .await?;
         validate_circle_create_policy(state, operation).await?;
         validate_circle_management_policy(state, operation).await?;
         validate_member_state_policy(state, operation).await?;

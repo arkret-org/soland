@@ -753,6 +753,9 @@ async fn project_accepted_operations_inner(
         // Mirrors the canonical wire kinds the reducer dispatches into
         // `ProjectionState::{space_containers,strands,morphs}`.
         write_through_projection(state, operation).await;
+        crate::routing::identity::account::retire_direct_bindings_for_operation(state, operation)
+            .await;
+        crate::routing::identity::account::project_canonical_direct_binding(state, operation).await;
         if kinds::canonical_kind_string(operation)
             == arkret_core::events::EventKind::RELATION_CREATE
         {

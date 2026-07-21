@@ -81,14 +81,324 @@ pub(crate) fn active_direct_binding(
     state: &AppState,
     pair_key: &str,
 ) -> Option<DirectConversationBindingRecord> {
-    state
+    let binding = state
         .direct_conversation_bindings
         .lock()
         .get(pair_key)
         .filter(|binding| {
             binding.state == "active" && valid_contact_event_ref(&binding.binding_event_ref)
         })
-        .cloned()
+        .cloned()?;
+    direct_binding_matches_projection(state, &binding).then_some(binding)
+}
+
+pub(crate) fn direct_binding_matches_projection(
+    state: &AppState,
+    binding: &DirectConversationBindingRecord,
+) -> bool {
+    if binding.participants_unordered.len() != 2 {
+        return false;
+    }
+    let projection = state.projection.lock();
+    if !projection.realm_is_direct_conversation(&binding.realm_id)
+        || projection.realm_is_destroyed(&binding.realm_id)
+        || projection.realm_is_tombstoned(&binding.realm_id)
+    {
+        return false;
+    }
+    let active_members: BTreeSet<_> = projection
+        .members_of_realm(&binding.realm_id)
+        .into_iter()
+        .map(|membership| membership.member.as_str())
+        .collect();
+    let participants: BTreeSet<_> = binding
+        .participants_unordered
+        .iter()
+        .map(String::as_str)
+        .collect();
+    if active_members != participants {
+        return false;
+    }
+    projection
+        .strands
+        .get(&binding.main_strand_id)
+        .is_some_and(|strand| {
+            strand.realm_id == binding.realm_id
+                && strand.scope_circle_id.is_none()
+                && strand.state == soland_domain::reducer::ObjectLifecycleState::Active
+                && strand
+                    .tracks
+                    .get(arkret_core::STRAND_TRACK_NAME_DISCUSSION)
+                    .is_some_and(|discussion| {
+                        discussion.enabled != Some(false) && discussion.is_primary == Some(true)
+                    })
+        })
+}
+
+pub(crate) async fn retire_direct_bindings_for_operation(
+    state: &AppState,
+    operation: &arkret_core::Operation,
+) {
+    let kind = soland_domain::kinds::canonical_kind_for_operation(operation);
+    let member_ended = kind == Some(arkret_core::events::EventKind::MEMBER_STATE)
+        && matches!(
+            operation.payload.get("membership").and_then(Value::as_str),
+            Some("leave" | "ban")
+        );
+    let realm_ended = matches!(
+        kind,
+        Some(
+            arkret_core::events::EventKind::REALM_TOMBSTONE
+                | arkret_core::events::EventKind::REALM_DESTROY
+        )
+    );
+    let archived_strand = (kind == Some(arkret_core::events::EventKind::STRAND_ARCHIVE))
+        .then(|| operation.payload.get("target_ref").and_then(Value::as_str))
+        .flatten();
+    if !member_ended && !realm_ended && archived_strand.is_none() {
+        return;
+    }
+    let member = member_ended
+        .then(|| crate::routing::events::operations::membership_target(operation))
+        .flatten();
+    let retired = {
+        let mut bindings = state.direct_conversation_bindings.lock();
+        bindings
+            .iter_mut()
+            .filter_map(|(pair_key, binding)| {
+                let affected = binding.state == "active"
+                    && binding.realm_id == operation.realm_id.as_str()
+                    && (realm_ended
+                        || member.is_some_and(|member| {
+                            binding
+                                .participants_unordered
+                                .iter()
+                                .any(|participant| participant == member)
+                        })
+                        || archived_strand.is_some_and(|strand| strand == binding.main_strand_id));
+                affected.then(|| {
+                    binding.state = "retired".to_owned();
+                    binding.updated_at = now();
+                    (pair_key.clone(), binding.clone())
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    for (pair_key, binding) in retired {
+        if let Err(error) = state
+            .contact_application()
+            .save_direct_binding(&pair_key, binding)
+            .await
+        {
+            tracing::error!(%error, %pair_key, "failed to persist retired direct binding");
+        }
+    }
+}
+
+fn direct_binding_payload_from_operation(
+    operation: &arkret_core::Operation,
+) -> Result<arkret_core::DirectConversationBoundPayload, &'static str> {
+    let mut payload = operation.payload.clone();
+    let object = payload
+        .as_object_mut()
+        .ok_or("direct_conversation_binding_invalid")?;
+    for projection_field in ["event_id", "sender", "hlc"] {
+        object.remove(projection_field);
+    }
+    serde_json::from_value(payload).map_err(|_| "direct_conversation_binding_invalid")
+}
+
+pub(crate) async fn validate_direct_binding_operation(
+    state: &AppState,
+    operation: &arkret_core::Operation,
+) -> Result<(), &'static str> {
+    if soland_domain::kinds::canonical_kind_for_operation(operation)
+        != Some(arkret_core::events::EventKind::DIRECT_CONVERSATION_BOUND)
+    {
+        return Ok(());
+    }
+    let payload = direct_binding_payload_from_operation(operation)?;
+    let issuer = operation
+        .payload
+        .get("sender")
+        .and_then(Value::as_str)
+        .ok_or("direct_conversation_binding_invalid")?;
+    if !payload
+        .participants_unordered
+        .iter()
+        .any(|participant| participant.as_str() == issuer)
+    {
+        return Err("direct_conversation_binding_invalid");
+    }
+    let trust_domain = arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
+        .map_err(|_| "direct_conversation_binding_invalid")?;
+    payload
+        .validate_pair_key(trust_domain)
+        .map_err(|_| "direct_conversation_binding_invalid")?;
+
+    if payload.binding_state == arkret_core::DirectConversationAuthoredBindingState::Retired {
+        let supersedes = payload
+            .supersedes_binding_ref
+            .as_ref()
+            .ok_or("direct_conversation_binding_invalid")?;
+        let current = state
+            .direct_conversation_bindings
+            .lock()
+            .get(payload.pair_key.as_str())
+            .cloned()
+            .ok_or("direct_conversation_binding_invalid")?;
+        return (current.binding_event_ref == supersedes.as_str())
+            .then_some(())
+            .ok_or("direct_conversation_binding_invalid");
+    }
+
+    let candidate = DirectConversationBindingRecord {
+        participants_unordered: payload
+            .participants_unordered
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        realm_id: payload.realm_id.to_string(),
+        main_strand_id: payload.main_strand_id.to_string(),
+        binding_event_ref: operation
+            .payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        state: "active".to_owned(),
+        created_at: payload.created_at,
+        updated_at: now(),
+    };
+    if !direct_binding_matches_projection(state, &candidate) {
+        return Err("direct_conversation_binding_invalid");
+    }
+    let left = payload.participants_unordered[0].as_str();
+    let right = payload.participants_unordered[1].as_str();
+    let contact = state
+        .contact_application()
+        .contact_any(left, right)
+        .await
+        .map_err(|_| "direct_conversation_binding_invalid")?
+        .ok_or("direct_conversation_binding_invalid")?;
+    if contact.status != "accepted" {
+        return Err("direct_conversation_binding_invalid");
+    }
+    let verified_contact_refs: BTreeSet<_> = contact_fact_refs(&contact).into_iter().collect();
+    if payload.contact_refs.is_empty()
+        || payload
+            .contact_refs
+            .iter()
+            .any(|reference| !verified_contact_refs.contains(reference.as_str()))
+    {
+        return Err("direct_conversation_binding_invalid");
+    }
+    Ok(())
+}
+
+pub(crate) async fn project_canonical_direct_binding(
+    state: &AppState,
+    operation: &arkret_core::Operation,
+) {
+    if soland_domain::kinds::canonical_kind_for_operation(operation)
+        != Some(arkret_core::events::EventKind::DIRECT_CONVERSATION_BOUND)
+    {
+        return;
+    }
+    let Ok(payload) = direct_binding_payload_from_operation(operation) else {
+        return;
+    };
+    let Some(event_ref) = operation
+        .payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return;
+    };
+    let pair_key = payload.pair_key.to_string();
+    if payload.binding_state == arkret_core::DirectConversationAuthoredBindingState::Retired {
+        let retired = {
+            let mut bindings = state.direct_conversation_bindings.lock();
+            bindings.get_mut(&pair_key).and_then(|binding| {
+                (payload
+                    .supersedes_binding_ref
+                    .as_ref()
+                    .map(ToString::to_string)
+                    == Some(binding.binding_event_ref.clone()))
+                .then(|| {
+                    binding.state = "retired".to_owned();
+                    binding.updated_at = now();
+                    binding.clone()
+                })
+            })
+        };
+        if let Some(binding) = retired
+            && let Err(error) = state
+                .contact_application()
+                .save_direct_binding(&pair_key, binding)
+                .await
+        {
+            tracing::error!(%error, %pair_key, "failed to persist canonical direct binding retirement");
+        }
+        return;
+    }
+
+    let incoming_digest = operation
+        .canonical_event_digest
+        .as_deref()
+        .unwrap_or_default();
+    if incoming_digest.is_empty() {
+        return;
+    }
+    let current = state
+        .direct_conversation_bindings
+        .lock()
+        .get(&pair_key)
+        .cloned();
+    if let Some(current) = current.as_ref()
+        && current.binding_event_ref != event_ref
+        && direct_binding_matches_projection(state, current)
+    {
+        let current_digest = state
+            .event_query_application()
+            .accepted_event(&current.binding_event_ref)
+            .await
+            .ok()
+            .flatten()
+            .map(|event| event.canonical_digest);
+        if current_digest
+            .as_deref()
+            .is_some_and(|digest| digest >= incoming_digest)
+        {
+            return;
+        }
+    }
+    let binding = DirectConversationBindingRecord {
+        participants_unordered: payload
+            .participants_unordered
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        realm_id: payload.realm_id.to_string(),
+        main_strand_id: payload.main_strand_id.to_string(),
+        binding_event_ref: event_ref,
+        state: "active".to_owned(),
+        created_at: payload.created_at,
+        updated_at: now(),
+    };
+    if let Err(error) = state
+        .contact_application()
+        .save_direct_binding(&pair_key, binding.clone())
+        .await
+    {
+        tracing::error!(%error, %pair_key, "failed to persist canonical direct binding projection");
+        return;
+    }
+    state
+        .direct_conversation_bindings
+        .lock()
+        .insert(pair_key, binding);
 }
 
 /// Spec contact-and-direct-conversation.md §6 step5 / §7 / §8 — resolve(create=true)
@@ -121,7 +431,14 @@ pub(crate) async fn create_direct_binding_with_realm(
     actor_device_id: &str,
     peer: &str,
     contact: &ContactRecord,
-) -> Result<(DirectConversationBindingRecord, bool), AppError> {
+) -> Result<
+    (
+        DirectConversationBindingRecord,
+        bool,
+        Option<arkret_core::Event>,
+    ),
+    AppError,
+> {
     // Reserve the canonical binding under lock so concurrent resolves for the
     // same pair collapse onto a single realm. The reservation holds the
     // generated realm/strand ids; we release the lock before the (async) event
@@ -129,9 +446,12 @@ pub(crate) async fn create_direct_binding_with_realm(
     let reservation = {
         let mut guard = state.direct_conversation_bindings.lock();
         if let Some(existing) = guard.get(pair_key) {
-            if existing.state == "active" && valid_contact_event_ref(&existing.binding_event_ref) {
+            if existing.state == "active"
+                && valid_contact_event_ref(&existing.binding_event_ref)
+                && direct_binding_matches_projection(state, existing)
+            {
                 DirectBindingReservation::Existing(existing.clone())
-            } else if existing.state == "pending" {
+            } else if matches!(existing.state.as_str(), "pending" | "authoring_required") {
                 DirectBindingReservation::Pending(existing.binding_event_ref.clone())
             } else {
                 reserve_direct_binding(pair_key, actor, peer, &mut guard)
@@ -149,7 +469,7 @@ pub(crate) async fn create_direct_binding_with_realm(
         mls_group_id,
         reserved,
     ) = match reservation {
-        DirectBindingReservation::Existing(binding) => return Ok((binding, false)),
+        DirectBindingReservation::Existing(binding) => return Ok((binding, false, None)),
         DirectBindingReservation::Pending(binding_event_ref) => {
             return wait_for_pending_direct_binding(state, pair_key, &binding_event_ref).await;
         }
@@ -240,13 +560,14 @@ pub(crate) async fn create_direct_binding_with_realm(
         return Err(error);
     }
 
-    // Genesis succeeded — write the binding through to durable storage so the
-    // canonical pair → (realm_id, main_strand_id) projection survives restart.
-    let active_binding = activate_reserved_direct_binding(state, pair_key, &reserved)?;
+    // Genesis succeeded, but the participant has not signed the canonical
+    // binding Event yet. Persist only an authoring reservation; canonical
+    // Event projection is the sole transition to `active`.
+    let staged_binding = stage_reserved_direct_binding(state, pair_key, &reserved)?;
 
     if let Err(error) = state
         .contact_application()
-        .save_direct_binding(pair_key, active_binding.clone())
+        .save_direct_binding(pair_key, staged_binding.clone())
         .await
     {
         let removed = {
@@ -269,7 +590,7 @@ pub(crate) async fn create_direct_binding_with_realm(
             "failed to persist direct binding: {error}"
         )));
     }
-    if let Err(error) = publish_reserved_direct_binding(state, pair_key, &active_binding) {
+    if let Err(error) = publish_reserved_direct_binding(state, pair_key, &staged_binding) {
         if let Err(delete_error) = state
             .contact_application()
             .delete_direct_binding(pair_key)
@@ -287,7 +608,7 @@ pub(crate) async fn create_direct_binding_with_realm(
     let binding_fact = arkret_core::DirectConversationBoundPayload {
         pair_key: arkret_core::Hash::new(pair_key.to_owned())
             .map_err(|error| AppError::internal(format!("stored pair key is invalid: {error}")))?,
-        participants_unordered: active_binding
+        participants_unordered: staged_binding
             .participants_unordered
             .iter()
             .map(|participant| arkret_core::Did::new(participant.clone()))
@@ -317,8 +638,8 @@ pub(crate) async fn create_direct_binding_with_realm(
         main_strand_create_ref: arkret_core::EventId::new(main_strand_create_ref).map_err(
             |error| AppError::internal(format!("stored strand event ref is invalid: {error}")),
         )?,
-        created_at: active_binding.created_at,
-        binding_state: None,
+        created_at: staged_binding.created_at,
+        binding_state: arkret_core::DirectConversationAuthoredBindingState::Active,
         supersedes_binding_ref: None,
     };
     let trust_domain = arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
@@ -332,34 +653,54 @@ pub(crate) async fn create_direct_binding_with_realm(
         })?;
     let binding_fact_payload = serde_json::to_value(binding_fact)
         .map_err(|error| AppError::internal(format!("direct binding encoding failed: {error}")))?;
-    let _ = crate::routing::events::projection::append_projection_event(
-        state,
-        ProjectionEventRecord {
-            event_id: reserved.binding_event_ref.clone(),
-            realm_id: soland_domain::identity::principal_control_realm_for_did(actor),
-            event_kind: "ak.direct_conversation.bound".to_owned(),
-            operation_type: "direct_conversation_binding_fact".to_owned(),
-            operation_id: None,
-            sender: Some(actor.to_owned()),
-            payload: binding_fact_payload.clone(),
-            created_at: active_binding.created_at,
-            received_at: chrono::Utc::now(),
-        },
-    )
-    .await;
-    // Binding fact (spec §6) — the canonical pair → (realm_id, main_strand_id)
-    // signed fact / projection. Recorded after the realm + membership + main
-    // Strand are all live so it only ever references a verifiable realm.
+    // The participant device signs and submits the returned draft through the
+    // canonical Event endpoint. Issuing the draft is auditable, but MUST NOT
+    // append a projection record that could be mistaken for a signed fact.
     append_audit_log(
         state,
         Some(actor),
-        "ak.direct_conversation.bound",
-        binding_fact_payload,
+        "ak.direct_conversation.binding_draft_issued",
+        binding_fact_payload.clone(),
         "accepted",
     )
     .await;
 
-    Ok((active_binding, true))
+    let binding_event = unsigned_direct_binding_event(
+        state,
+        actor,
+        &reserved.binding_event_ref,
+        binding_fact_payload,
+    )?;
+
+    Ok((staged_binding, false, Some(binding_event)))
+}
+
+fn unsigned_direct_binding_event(
+    state: &AppState,
+    actor: &str,
+    event_id: &str,
+    payload: Value,
+) -> Result<arkret_core::Event, AppError> {
+    let realm_id = arkret_core::RealmId::new(
+        soland_domain::identity::principal_control_realm_for_did(actor),
+    )
+    .map_err(|error| AppError::internal(format!("direct binding PCR id invalid: {error}")))?;
+    let actor_id = arkret_core::Did::new(actor.to_owned())
+        .map_err(|error| AppError::internal(format!("direct binding actor invalid: {error}")))?;
+    let hlc = arkret_core::Hlc::new(state.hlc.now())
+        .map_err(|error| AppError::internal(format!("direct binding HLC invalid: {error}")))?;
+    let mut event = arkret_core::Event::new(
+        arkret_core::events::EventKind::DIRECT_CONVERSATION_BOUND,
+        realm_id,
+        actor_id,
+        0,
+        hlc,
+        payload,
+    )
+    .map_err(|error| AppError::internal(format!("direct binding Event invalid: {error}")))?;
+    event.event_id = arkret_core::EventId::new(event_id.to_owned())
+        .map_err(|error| AppError::internal(format!("direct binding event id invalid: {error}")))?;
+    Ok(event)
 }
 
 fn reserve_direct_binding(
@@ -375,14 +716,15 @@ fn reserve_direct_binding(
     let peer_member_event_ref = crate::ids::generate_event_id();
     let main_strand_create_ref = crate::ids::generate_event_id();
     let mls_group_id = crate::ids::generate("mls_group");
+    let created_at = direct_now_seconds();
     let binding = DirectConversationBindingRecord {
         participants_unordered: sorted_participants(actor, peer),
         realm_id: realm_id.clone(),
         main_strand_id: main_strand_id.clone(),
         binding_event_ref,
         state: "pending".to_owned(),
-        created_at: now(),
-        updated_at: now(),
+        created_at,
+        updated_at: created_at,
     };
     guard.insert(pair_key.to_owned(), binding.clone());
     DirectBindingReservation::Reserved {
@@ -396,14 +738,14 @@ fn reserve_direct_binding(
     }
 }
 
-pub(super) fn activate_reserved_direct_binding(
+pub(super) fn stage_reserved_direct_binding(
     state: &AppState,
     pair_key: &str,
     reserved: &DirectConversationBindingRecord,
 ) -> Result<DirectConversationBindingRecord, AppError> {
-    let mut active = reserved.clone();
-    active.state = "active".to_owned();
-    active.updated_at = now();
+    let mut staged = reserved.clone();
+    staged.state = "authoring_required".to_owned();
+    staged.updated_at = now();
     let guard = state.direct_conversation_bindings.lock();
     let still_reserved = guard
         .get(pair_key)
@@ -414,7 +756,7 @@ pub(super) fn activate_reserved_direct_binding(
             "direct conversation binding reservation was superseded",
         ));
     }
-    Ok(active)
+    Ok(staged)
 }
 
 pub(super) fn publish_reserved_direct_binding(
@@ -440,7 +782,14 @@ pub(super) async fn wait_for_pending_direct_binding(
     state: &AppState,
     pair_key: &str,
     binding_event_ref: &str,
-) -> Result<(DirectConversationBindingRecord, bool), AppError> {
+) -> Result<
+    (
+        DirectConversationBindingRecord,
+        bool,
+        Option<arkret_core::Event>,
+    ),
+    AppError,
+> {
     for _ in 0..DIRECT_BINDING_PENDING_POLL_ATTEMPTS {
         tokio::time::sleep(std::time::Duration::from_millis(
             DIRECT_BINDING_PENDING_POLL_DELAY_MS,
@@ -455,7 +804,7 @@ pub(super) async fn wait_for_pending_direct_binding(
             Some(binding)
                 if binding.binding_event_ref == binding_event_ref && binding.state == "active" =>
             {
-                return Ok((binding, false));
+                return Ok((binding, false, None));
             }
             Some(binding) if binding.binding_event_ref == binding_event_ref => {}
             _ => {
@@ -821,26 +1170,15 @@ pub(super) fn direct_realm_create_payload(
         .map_err(|_| "invalid direct realm creator DID")?;
     let trust_domain = arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone())
         .map_err(|_| "invalid direct realm trust domain")?;
-    let mut realm = arkret_core::models::Realm::new(
+    let payload = arkret_core::direct_conversation_realm_create_payload(
         realm_scope,
-        "Direct conversation",
         creator_did.clone(),
         trust_domain,
         arkret_core::NotaryProfile::SingleDid,
         arkret_core::NotaryValue::single_did(creator_did),
+        created_at,
     );
-    realm.security_class = Some(arkret_core::SecurityClass::Standard);
-    realm.default_discoverability = arkret_core::Discoverability::InviteOnly;
-    realm.default_join_rule = arkret_core::JoinRule::Closed;
-    realm.history_visibility = arkret_core::HistoryVisibility::Joined;
-    realm.encryption_profile = arkret_core::EncryptionProfile::MlsRfc9420;
-    realm.federation_policy = Some(arkret_core::FederationPolicy::Restricted);
-    realm.created_at = created_at;
-    serde_json::to_value(arkret_core::models::RealmCreatePayload {
-        object: realm,
-        initial_relations: None,
-    })
-    .map_err(|_| "direct realm create payload serialization failed")
+    serde_json::to_value(payload).map_err(|_| "direct realm create payload serialization failed")
 }
 
 pub(super) fn direct_realm_create_operation(
@@ -882,11 +1220,10 @@ pub(super) fn direct_member_join_payload(
 ) -> Result<Value, &'static str> {
     let member_did =
         arkret_core::Did::new(member.to_owned()).map_err(|_| "invalid direct peer member DID")?;
-    arkret_core::models::MembershipPayload::join(
+    arkret_core::direct_conversation_member_join_payload(
         realm_scope,
         member_did,
         arkret_core::models::DeliveryStatus::Unroutable,
-        "direct_conversation_peer_bootstrap",
     )
     .to_value()
     .map_err(|_| "direct peer member join payload serialization failed")
@@ -902,18 +1239,13 @@ pub(super) fn direct_strand_create_payload(
         .map_err(|_| "generated invalid direct conversation strand id")?;
     let creator_did = arkret_core::Did::new(creator.to_owned())
         .map_err(|_| "invalid direct strand creator DID")?;
-    let mut strand = arkret_core::models::Strand::discussion(
+    let payload = arkret_core::direct_conversation_main_strand_create_payload(
         strand_id,
         realm_scope,
-        "Direct conversation",
         creator_did,
+        created_at,
     );
-    strand.created_at = created_at;
-    serde_json::to_value(arkret_core::models::StrandCreatePayload {
-        object: strand,
-        initial_relations: None,
-    })
-    .map_err(|_| "direct strand create payload serialization failed")
+    serde_json::to_value(payload).map_err(|_| "direct strand create payload serialization failed")
 }
 
 pub(super) fn direct_strand_create_operation(

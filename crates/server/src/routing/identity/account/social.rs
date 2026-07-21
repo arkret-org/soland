@@ -20,8 +20,9 @@ mod direct;
 #[cfg(test)]
 use direct::*;
 pub(crate) use direct::{
-    active_direct_binding, create_direct_binding_with_realm, direct_pair_key,
-    ensure_direct_peer_resolvable,
+    active_direct_binding, create_direct_binding_with_realm, direct_binding_matches_projection,
+    direct_pair_key, ensure_direct_peer_resolvable, project_canonical_direct_binding,
+    retire_direct_bindings_for_operation, validate_direct_binding_operation,
 };
 
 #[endpoint(
@@ -1318,6 +1319,7 @@ pub(crate) fn direct_resolve_response(
     binding: DirectConversationBindingRecord,
     created: bool,
     state: DirectConversationResolveState,
+    binding_event: Option<arkret_core::Event>,
 ) -> DirectConversationResolveOutcome {
     DirectConversationResolveOutcome {
         state,
@@ -1331,6 +1333,7 @@ pub(crate) fn direct_resolve_response(
             EventId::new(binding.binding_event_ref).expect("direct conversation event id is valid"),
         ),
         created: Some(created),
+        binding_event,
     }
 }
 

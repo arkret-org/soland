@@ -30,6 +30,54 @@ fn state_with_direct_binding() -> (AppState, arkret_core::RealmId) {
         arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000601".to_owned())
             .unwrap();
     let now = chrono::Utc::now();
+    let alice = arkret_core::Did::new("did:web:alice.example".to_owned()).unwrap();
+    let bob = arkret_core::Did::new("did:web:bob.example".to_owned()).unwrap();
+    let strand_id =
+        arkret_core::StrandId::new("ak:strand:01904100-0000-7000-8000-000000000601").unwrap();
+    let realm_create = op(
+        realm_id.clone(),
+        "000000000691",
+        arkret_core::events::EventKind::REALM_CREATE,
+        serde_json::to_value(arkret_core::direct_conversation_realm_create_payload(
+            realm_id.clone(),
+            alice.clone(),
+            arkret_core::TypedTrustDomainId::new(state.config.trust_domain.clone()).unwrap(),
+            arkret_core::NotaryProfile::SingleDid,
+            arkret_core::NotaryValue::single_did(alice.clone()),
+            now,
+        ))
+        .unwrap(),
+    );
+    let peer_join = op(
+        realm_id.clone(),
+        "000000000692",
+        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_core::direct_conversation_member_join_payload(
+            realm_id.clone(),
+            bob,
+            arkret_core::models::DeliveryStatus::Unroutable,
+        )
+        .to_value()
+        .unwrap(),
+    );
+    let strand_create = op(
+        realm_id.clone(),
+        "000000000693",
+        arkret_core::events::EventKind::STRAND_CREATE,
+        serde_json::to_value(arkret_core::direct_conversation_main_strand_create_payload(
+            strand_id,
+            realm_id.clone(),
+            alice,
+            now,
+        ))
+        .unwrap(),
+    );
+    {
+        let mut projection = state.projection.lock();
+        projection.apply(&realm_create, &state.hlc);
+        projection.apply(&peer_join, &state.hlc);
+        projection.apply(&strand_create, &state.hlc);
+    }
     state.direct_conversation_bindings.lock().insert(
         "did:web:alice.example\0did:web:bob.example".to_owned(),
         DirectConversationBindingRecord {
@@ -739,6 +787,46 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
             .await
             .unwrap_err(),
         "direct_conversation_third_party_member_forbidden"
+    );
+}
+
+#[tokio::test]
+async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
+    let (state, realm_id) = state_with_direct_binding();
+    state.direct_conversation_bindings.lock().clear();
+
+    let invite = op(
+        realm_id.clone(),
+        "000000000604",
+        arkret_core::events::EventKind::INVITE_CREATE,
+        json!({
+            "invite_id": "ak:invite:01904100-0000-7000-8000-000000000604",
+            "inviter": "did:web:alice.example",
+            "invitee": "did:web:charlie.example"
+        }),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[invite])
+            .await
+            .unwrap_err(),
+        "direct_conversation_invite_forbidden"
+    );
+
+    let member_add = op(
+        realm_id,
+        "000000000605",
+        arkret_core::events::EventKind::MEMBER_STATE,
+        json!({
+            "actor_id": "did:web:charlie.example",
+            "membership": "join",
+            "sender": "did:web:alice.example"
+        }),
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[member_add])
+            .await
+            .unwrap_err(),
+        "direct_conversation_member_count_invalid"
     );
 }
 

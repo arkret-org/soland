@@ -216,6 +216,9 @@ pub(crate) async fn build_sync_snapshot(
                     title: (!title.trim().is_empty()).then_some(title),
                     summary,
                     join_rule,
+                    collaboration_role: projection
+                        .realm_is_direct_conversation(&realm_id)
+                        .then_some(arkret_core::CollaborationRealmRole::DirectConversation),
                 },
                 e2ee_epoch: arkret_core::WindowStartNullableE2eeEpoch::Null(()),
             });

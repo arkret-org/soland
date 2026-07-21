@@ -1164,6 +1164,7 @@ impl ProjectionState {
                     "ak:cell:ak.component.realm.create.v1:{realm_id}"
                 )) {
                     let entry = serde_json::json!({
+                        "object": payload_object.cloned(),
                         "owner": owner,
                         "title": title,
                         "security_class": payload_security_class,

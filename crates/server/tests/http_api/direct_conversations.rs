@@ -13,6 +13,89 @@ use super::common::*;
 const BOB_DID: &str = "did:web:bob.example";
 const BOB_PAIRWISE_DID: &str = "did:peer:2.ezbobpairwise";
 const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
+const ALICE_SIGNING_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+
+async fn submit_direct_binding_draft(state: AppState, token: &str, draft: &Value) {
+    let actor = draft["actor_id"].as_str().expect("binding actor");
+    let signing_key = test_ephemeral_device_signing_key(actor, ALICE_SIGNING_DEVICE);
+    let now = chrono::Utc::now();
+    state
+        .test_persistence()
+        .devices()
+        .put(&soland_storage::DeviceInventoryRecord {
+            actor: actor.to_owned(),
+            device_id: ALICE_SIGNING_DEVICE.to_owned(),
+            display_name: Some("Direct Binding Test Device".to_owned()),
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({
+                "device_id": ALICE_SIGNING_DEVICE,
+                "verification": "verified",
+                "device_public_key": test_ed25519_multibase_public(&signing_key),
+                "device_authorize_event_id": "ak:event:01904100-0000-7000-8000-a11ce00000aa",
+                "enrollment_authority_binding": {
+                    "kind": "service_attested",
+                    "authority_did": "did:web:auth.example",
+                    "authorization_ref": format!("{actor}#device-enrollment")
+                }
+            }),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+    let mut frontier_response = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?actor_id={actor}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    let (actor_seq, prev_event_id) = if frontier_response.status_code == Some(StatusCode::OK) {
+        let frontier: Value = frontier_response.take_json().await.unwrap();
+        let observed_seq = frontier["frontier"]["actor_seq"].as_u64().unwrap_or(0);
+        (
+            observed_seq + 1,
+            frontier["frontier"]["event_id"]
+                .as_str()
+                .map(ToOwned::to_owned),
+        )
+    } else {
+        (1, None)
+    };
+    let event = signed_canonical_event(
+        draft["event_id"].as_str().expect("binding event id"),
+        draft["kind"].as_str().expect("binding event kind"),
+        actor,
+        ALICE_SIGNING_DEVICE,
+        draft["realm_id"].as_str().expect("binding PCR"),
+        actor_seq,
+        prev_event_id.iter().map(String::as_str).collect(),
+        draft["payload"].clone(),
+    );
+    let mut event: arkret_core::Event = serde_json::from_value(event).unwrap();
+    event.proofs.clear();
+    let verification_method = format!("{actor}#{ALICE_SIGNING_DEVICE}");
+    let signer = arkret_signatures::Ed25519MoveSigner::new(
+        signing_key,
+        arkret_core::Did::new(actor.to_owned()).unwrap(),
+        verification_method.clone(),
+    );
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .unwrap();
+    let mut response = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state))
+        .await;
+    let status = response.status_code;
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, Some(StatusCode::OK), "body: {body}");
+}
 
 fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublish {
     let principal_id = Did::new(principal.to_owned()).unwrap();
@@ -363,8 +446,9 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
             .take_json()
             .await
             .unwrap();
-    assert_eq!(created["state"], "created");
-    assert_eq!(created["created"], true);
+    assert_eq!(created["state"], "authoring_required", "body: {created}");
+    assert_eq!(created["created"], false);
+    assert!(created["binding_event"].is_object(), "body: {created}");
     assert!(created.get("canonical").is_none(), "body: {created}");
     assert!(created.get("reason_code").is_none(), "body: {created}");
     assert!(
@@ -424,6 +508,8 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .unwrap()
         .expect("direct MLS genesis should initialize epoch 0");
     assert_eq!(genesis.epoch, 0);
+
+    submit_direct_binding_draft(state.clone(), &alice, &created["binding_event"]).await;
 
     let found: Value = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -502,19 +588,26 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
     };
 
     let (first, second): (Value, Value) = tokio::join!(create_a, create_b);
-    assert_eq!(first["realm_id"], second["realm_id"]);
-    assert_eq!(first["main_strand_id"], second["main_strand_id"]);
-    assert_eq!(first["binding_event_ref"], second["binding_event_ref"]);
-    assert_eq!(
-        [
-            first["created"].as_bool().unwrap(),
-            second["created"].as_bool().unwrap()
-        ]
-        .into_iter()
-        .filter(|created| *created)
-        .count(),
-        1,
-        "exactly one concurrent request should create the binding: {first} {second}"
-    );
+    let (authoring, waiting) = if first["state"] == "authoring_required" {
+        (&first, &second)
+    } else {
+        (&second, &first)
+    };
+    assert_eq!(authoring["state"], "authoring_required", "{first} {second}");
+    assert_eq!(authoring["created"], false);
+    assert_eq!(waiting["error"]["code"], "temporarily_unavailable");
+    submit_direct_binding_draft(state.clone(), &alice, &authoring["binding_event"]).await;
+    let found: Value = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(found["state"], "found", "body: {found}");
+    assert_eq!(found["realm_id"], authoring["realm_id"]);
+    assert_eq!(found["main_strand_id"], authoring["main_strand_id"]);
+    assert_eq!(found["binding_event_ref"], authoring["binding_event_ref"]);
     assert_eq!(state.test_direct_conversation_bindings().lock().len(), 1);
 }

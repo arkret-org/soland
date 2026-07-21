@@ -285,6 +285,20 @@ impl ProjectionState {
         }
     }
 
+    /// Identifies the registered Direct Conversation Realm role from the
+    /// immutable genesis object. Unknown, incomplete, or malformed role
+    /// declarations fail closed and never fall back to member-count or title
+    /// heuristics.
+    pub fn realm_is_direct_conversation(&self, realm_id: &str) -> bool {
+        self.realm_create_log(realm_id)
+            .and_then(|entries| entries.last())
+            .and_then(|entry| entry.get("object"))
+            .and_then(|object| {
+                serde_json::from_value::<arkret_core::models::Realm>(object.clone()).ok()
+            })
+            .is_some_and(|realm| arkret_core::DirectConversationRealmRole::matches(&realm))
+    }
+
     /// True when the `ak.component.realm.destroy.v1` cell has a Value.
     pub fn realm_is_destroyed(&self, realm_id: &str) -> bool {
         let Ok(cell_id) =

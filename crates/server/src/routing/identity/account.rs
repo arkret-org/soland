@@ -155,6 +155,10 @@ use crate::{JsonResult, json_ok};
 
 mod social;
 use social::*;
+pub(crate) use social::{
+    direct_binding_matches_projection, project_canonical_direct_binding,
+    retire_direct_bindings_for_operation, validate_direct_binding_operation,
+};
 mod lifecycle;
 // Re-export the lifecycle surface so external paths
 // (`crate::routing::identity::account::set_account_lifecycle_state`, etc.,
@@ -1411,6 +1415,7 @@ async fn direct_conversation_resolve(
             binding,
             false,
             DirectConversationResolveState::Found,
+            None,
         ));
     }
     if !body.create {
@@ -1420,10 +1425,11 @@ async fn direct_conversation_resolve(
             main_strand_id: None,
             binding_event_ref: None,
             created: Some(false),
+            binding_event: None,
         });
     }
     ensure_direct_peer_resolvable(state, &peer).await?;
-    let (binding, created) = create_direct_binding_with_realm(
+    let (binding, created, binding_event) = create_direct_binding_with_realm(
         state,
         &pair_key,
         &session.actor,
@@ -1432,12 +1438,17 @@ async fn direct_conversation_resolve(
         &contact,
     )
     .await?;
-    let resolve_state = if created {
-        DirectConversationResolveState::Created
+    let resolve_state = if binding_event.is_some() {
+        DirectConversationResolveState::AuthoringRequired
     } else {
         DirectConversationResolveState::Found
     };
-    json_ok(direct_resolve_response(binding, created, resolve_state))
+    json_ok(direct_resolve_response(
+        binding,
+        created,
+        resolve_state,
+        binding_event,
+    ))
 }
 
 fn account_response(account: AccountRecord, state: &AppState) -> SolandAccountRegisterOutcome {
