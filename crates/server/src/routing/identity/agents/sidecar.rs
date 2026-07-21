@@ -514,6 +514,7 @@ async fn ensure_sidecar_mls_genesis(
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
         "realm_id": realm_id,
+        "circle_id": circle_id,
         "effective_scope": effective_scope,
         "mls_group_id": group_id,
         "previous_epoch": 0,

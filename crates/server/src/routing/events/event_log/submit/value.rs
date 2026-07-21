@@ -91,6 +91,7 @@ pub(in crate::routing) async fn submit_event_value(
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
         == Some(arkret_core::events::EventKind::REALM_CREATE)
+        && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
@@ -159,6 +160,7 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
         == Some(arkret_core::events::EventKind::REALM_CREATE)
+        && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,

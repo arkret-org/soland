@@ -2033,7 +2033,9 @@ pub(super) fn direct_operation_id() -> Result<arkret_core::OperationId, &'static
 }
 
 pub(super) fn direct_now() -> chrono::DateTime<chrono::Utc> {
-    now()
+    let current = now();
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(current.timestamp_millis())
+        .expect("current timestamp milliseconds are representable")
 }
 
 pub(super) fn direct_realm_create_payload(

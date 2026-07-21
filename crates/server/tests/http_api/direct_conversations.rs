@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_core::{
-    CrossSigningPublish, KeyFormat, NonEmptyString, PublishedKey, SubordinateSignedKey,
-    SubordinateSignedKeyBinding, TypedTrustDomainId,
+    CrossSigningPublish, KeyFormat, MoveSigner as _, NonEmptyString, PublishedKey,
+    SubordinateSignedKey, SubordinateSignedKeyBinding, TypedTrustDomainId,
 };
 use chrono::Utc;
 
@@ -90,15 +90,28 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
     for draft in drafts {
         let mut draft = (*draft).clone();
         if draft["kind"] == arkret_core::events::EventKind::CAPABILITY_GRANT {
-            draft["payload"]["grant"]["proofs"] = serde_json::json!([{
-                "kind": arkret_core::proof_kind::DETACHED_JWS,
-                "alg": "EdDSA",
-                "verification_method": verification_method,
-                "payload_digest": format!("sha256:{}", "0".repeat(64)),
-                "created_at": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                "proof_purpose": "issuer_attestation",
-                "jws": "eyJhbGciOiJFZERTQSJ9..c2lnbmF0dXJl"
-            }]);
+            let mut grant: arkret_core::CapabilityGrant =
+                serde_json::from_value(draft["payload"]["grant"].clone()).unwrap();
+            grant.proofs = vec![
+                serde_json::from_value(serde_json::json!({
+                    "kind": arkret_core::proof_kind::DETACHED_JWS,
+                    "alg": "EdDSA",
+                    "verification_method": verification_method,
+                    "payload_digest": format!("sha256:{}", "0".repeat(64)),
+                    "created_at": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    "proof_purpose": "issuer_attestation",
+                    "jws": "pending"
+                }))
+                .unwrap(),
+            ];
+            grant.proofs[0].payload_digest = grant.payload_digest().unwrap();
+            let binding = grant
+                .canonical_proof_binding_bytes(&grant.proofs[0])
+                .unwrap();
+            let signature = signer.sign_payload(&binding).unwrap();
+            grant.proofs[0].alg = signature.alg;
+            grant.proofs[0].jws = signature.jws;
+            draft["payload"]["grant"] = serde_json::to_value(grant).unwrap();
         }
         let mut event: arkret_core::Event = serde_json::from_value(draft).unwrap();
         event.actor_seq = actor_seq;
