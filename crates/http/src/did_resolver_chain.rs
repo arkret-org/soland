@@ -25,11 +25,11 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use arkret_core::{Did, Error};
 use arkret_identity::{
     CompositeDidResolver, DidDocument, DidKeyResolver, DidResolver, DidWebResolver,
-    DidWebvhResolver,
+    DidWebvhResolver, IdentityError,
 };
+use arkret_wire::Did;
 use parking_lot::RwLock;
 use serde_json::Value;
 
@@ -111,11 +111,14 @@ impl SolandDidResolver {
         did: &Did,
         did_document: Value,
         seq: u64,
-    ) -> Result<DidDocument, Error> {
-        let document: DidDocument = serde_json::from_value(did_document)
-            .map_err(|e| Error::Protocol(format!("local DID document decode failed: {e}")))?;
+    ) -> Result<DidDocument, IdentityError> {
+        let document: DidDocument = serde_json::from_value(did_document).map_err(|e| {
+            IdentityError::Protocol(format!("local DID document decode failed: {e}"))
+        })?;
         if &document.id != did {
-            return Err(Error::Protocol("local DID document id mismatch".to_owned()));
+            return Err(IdentityError::Protocol(
+                "local DID document id mismatch".to_owned(),
+            ));
         }
         document.validate()?;
         let mut snapshot = self.local_snapshot.write();
@@ -145,19 +148,19 @@ impl SolandDidResolver {
     pub(crate) fn cache_application_webvh_record(
         &self,
         record: soland_application::identity::DidDocumentState,
-    ) -> Result<DidDocument, Error> {
-        let did = Did::new(record.did).map_err(Error::from)?;
+    ) -> Result<DidDocument, IdentityError> {
+        let did = Did::new(record.did).map_err(IdentityError::from)?;
         self.document_from_parts(&did, record.did_document, record.seq)
     }
 
-    pub async fn resolve_did_async(&self, did: &Did) -> Result<DidDocument, Error> {
+    pub async fn resolve_did_async(&self, did: &Did) -> Result<DidDocument, IdentityError> {
         if !self.method_allowed(did.method()) {
-            return Err(Error::Protocol("DID method not allowed".to_owned()));
+            return Err(IdentityError::Protocol("DID method not allowed".to_owned()));
         }
         if let Some(document) = self.cached_document(did) {
             return Ok(document);
         }
-        self.fallback.resolve_did(did).map_err(Into::into)
+        self.fallback.resolve_did(did)
     }
 }
 
