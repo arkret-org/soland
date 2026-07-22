@@ -188,20 +188,6 @@ dependencies = [
  "arkret-signatures",
  "arkret-state",
  "arkret-wire",
- "chrono",
- "chrono-tz",
- "getrandom 0.4.3",
- "hex",
- "hmac 0.13.0",
- "regex",
- "salvo",
- "salvo-oapi",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "subtle",
- "unicode-normalization",
- "zeroize",
 ]
 
 [[package]]
