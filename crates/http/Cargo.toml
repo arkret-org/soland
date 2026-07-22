@@ -35,6 +35,8 @@ arkret-identity.workspace = true
 arkret-keystore = { workspace = true, features = ["keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"] }
 arkret-mls.workspace = true
 arkret-models-collaboration.workspace = true
+arkret-models-discovery.workspace = true
+arkret-models-integration.workspace = true
 arkret-models-crypto.workspace = true
 arkret-policy.workspace = true
 arkret-schema.workspace = true
