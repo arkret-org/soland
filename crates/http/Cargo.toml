@@ -23,7 +23,7 @@ base64.workspace = true
 bs58.workspace = true
 bytes.workspace = true
 chrono = { workspace = true, features = ["serde"] }
-arkret-core = { workspace = true, features = ["client", "salvo"] }
+arkret-core = { workspace = true, features = ["salvo"] }
 arkret-event-draft.workspace = true
 arkret-auth.workspace = true
 arkret-bootstrap.workspace = true

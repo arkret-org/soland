@@ -30,7 +30,7 @@ base64 = {workspace = true}
 bs58 = {workspace = true}
 bytes = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}
-arkret-core = {workspace = true,features = ["client", "salvo"]}
+arkret-core = {workspace = true,features = ["salvo"]}
 arkret-bootstrap.workspace = true
 arkret-crypto = {workspace = true,features = ["account-data"]}
 arkret-http-client.workspace = true
