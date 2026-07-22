@@ -75,6 +75,7 @@ tracing-subscriber = {workspace = true,features = ["env-filter", "json"]}
 uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
+arkret-policy.workspace = true
 proptest = {workspace = true}
 salvo = {workspace = true,features = ["test"]}
 soland-domain = {workspace = true}

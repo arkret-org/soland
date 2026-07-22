@@ -493,7 +493,8 @@ fn service_binding_ref_for_target(
         delivery_binding_frontier,
         destination_service_type: "principal_server".to_owned(),
         reducer_profile_digest: Hash::new(
-            arkret_core::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST.to_owned(),
+            arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST
+                .to_owned(),
         )
         .ok()?,
     })

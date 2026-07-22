@@ -1,54 +1,26 @@
-use arkret_core::{InviteCreatePayloadWireExt as _, Operation};
+use arkret_core::Operation;
+use arkret_models_collaboration::governance::membership_invite::{
+    InviteCreatePayload, validate_invite_create_wire_keys,
+};
+use arkret_schema::event_payload_validator_catalog;
 use serde_json::Value;
 
 use super::*;
 
 pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<(), &'static str> {
     let wire_payload = invite_create_wire_payload(&operation.payload);
-    validate_invite_create_known_fields(&wire_payload)?;
-    let invite_id = operation
-        .payload
-        .get("invite_id")
-        .and_then(Value::as_str)
-        .ok_or("ak.invite.create operation requires invite_id")?;
-    if arkret_core::InviteId::new(invite_id.to_owned()).is_err() {
-        return Err("ak.invite.create invite_id must be ak:invite:<uuidv7>");
-    }
-    let target = operation
-        .payload
-        .get("invite_delivery_target")
-        .and_then(Value::as_object)
-        .ok_or("invite_delivery_target must be an object")?;
-    let recipient_service_id = target
-        .get("recipient_service_id")
-        .and_then(Value::as_str)
-        .ok_or("invite_delivery_target.recipient_service_id is required")?;
-    if arkret_core::Did::new(recipient_service_id.to_owned()).is_err() {
-        return Err("invite_delivery_target.recipient_service_id must be a DID");
-    }
-    if let Some(service_type) = target.get("recipient_service_type").and_then(Value::as_str)
-        && service_type != "principal_server"
-    {
-        return Err("invite_delivery_target.recipient_service_type must be principal_server");
-    }
-    let digest = operation
-        .payload
-        .get("introduction_evidence_digest")
-        .and_then(Value::as_str)
-        .ok_or("introduction_evidence_digest is required")?;
-    if arkret_core::Hash::new(digest.to_owned()).is_err() {
-        return Err("introduction_evidence_digest must be a hash");
-    }
-    let expires_at = operation
-        .payload
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .ok_or("expires_at is required")?;
-    if arkret_core::canonical::validate_timestamp_canonical(expires_at).is_err() {
-        return Err("expires_at must be a canonical timestamp");
-    }
-    arkret_core::InviteCreatePayload::from_wire_value(&wire_payload)
+    event_payload_validator_catalog()
+        .map_err(|_| "operation payload validator catalog is unavailable")?
+        .validate_payload("ak.invite.create", &wire_payload)
         .map_err(|_| "operation payload violates SDK artifact schema")?;
+    validate_invite_create_wire_keys(&wire_payload)
+        .map_err(|_| "operation payload carries unsupported fields")?;
+    let payload: InviteCreatePayload = serde_json::from_value(wire_payload)
+        .map_err(|_| "operation payload violates SDK artifact schema")?;
+    payload
+        .invite_delivery_target
+        .validate()
+        .map_err(|_| "invite_delivery_target is invalid")?;
     Ok(())
 }
 
@@ -85,41 +57,6 @@ pub(crate) fn validate_key_backup_active_series_payload(
     )
     .map(|_| ())
     .map_err(|_| "ak.key_backup.active_series payload violates SDK artifact schema")
-}
-
-fn validate_invite_create_known_fields(payload: &Value) -> Result<(), &'static str> {
-    let object = payload
-        .as_object()
-        .ok_or("ak.invite.create payload must be an object")?;
-    for field in object.keys() {
-        if field.starts_with("x_") {
-            continue;
-        }
-        match field.as_str() {
-            "invite_id"
-            | "invitee"
-            | "invite_delivery_target"
-            | "introduction_evidence_digest"
-            | "expires_at"
-            | "reason" => {}
-            "inviter" => {
-                return Err(
-                    "ak.invite.create payload must not carry inviter; use envelope.actor_id",
-                );
-            }
-            "invite_token" => {
-                return Err("ak.invite.create payload must not carry invite_token");
-            }
-            "state" => {
-                return Err("ak.invite.create payload must not carry state");
-            }
-            "role" => {
-                return Err("ak.invite.create payload role must use x_role");
-            }
-            _ => return Err("ak.invite.create payload carries unsupported field"),
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn validate_invite_third_party_payload(

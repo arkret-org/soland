@@ -45,6 +45,7 @@ arkret-mls = { version = "0.3.0", path = "../arkret-rust-sdk/crates/mls", defaul
 arkret-models-crypto = { version = "0.3.0", path = "../arkret-rust-sdk/crates/models-crypto", default-features = false }
 arkret-models-collaboration = { version = "0.3.0", path = "../arkret-rust-sdk/crates/models-collaboration", default-features = false }
 arkret-policy = { version = "0.3.0", path = "../arkret-rust-sdk/crates/policy", default-features = false }
+arkret-schema = { version = "0.3.0", path = "../arkret-rust-sdk/crates/schema", default-features = false }
 arkret-server = { version = "0.3.0", path = "../arkret-rust-sdk/crates/server", default-features = false }
 arkret-signatures = { version = "0.3.0", path = "../arkret-rust-sdk/crates/signatures", default-features = false }
 arkret-state = { version = "0.3.0", path = "../arkret-rust-sdk/crates/state", default-features = false }

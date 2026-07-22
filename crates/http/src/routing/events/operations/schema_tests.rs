@@ -74,7 +74,7 @@ mod invite_create_schema_tests {
 
         assert_eq!(
             validate_operation_schema(&operation, schema),
-            Err("ak.invite.create payload must not carry inviter; use envelope.actor_id")
+            Err("operation payload violates SDK artifact schema")
         );
     }
 
@@ -116,7 +116,7 @@ mod invite_create_schema_tests {
 
         assert_eq!(
             validate_operation_schema(&operation, schema),
-            Err("ak.invite.create invite_id must be ak:invite:<uuidv7>")
+            Err("operation payload violates SDK artifact schema")
         );
     }
 
@@ -130,7 +130,7 @@ mod invite_create_schema_tests {
 
         assert_eq!(
             validate_operation_schema(&operation, schema),
-            Err("expires_at must be a canonical timestamp")
+            Err("operation payload violates SDK artifact schema")
         );
     }
 }

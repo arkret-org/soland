@@ -68,7 +68,8 @@ impl SolandEventsSubmitRequestBody {
                     .to_owned(),
             ));
         }
-        let expected_reducer_digest = arkret_core::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST;
+        let expected_reducer_digest =
+            arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST;
         let actual_reducer_digest = binding.reducer_profile_digest.to_string();
         if actual_reducer_digest != expected_reducer_digest {
             return Err((

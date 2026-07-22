@@ -599,7 +599,7 @@ fn peer_submit_body(event: &Value) -> Value {
             "membership_frontier": [event_id],
             "delivery_binding_frontier": [PEER_DELIVERY_FRONTIER],
             "destination_service_type": "principal_server",
-            "reducer_profile_digest": arkret_core::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
+            "reducer_profile_digest": arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
         },
         "events": [wire_event],
         "idempotency_key": format!("ak:outbox:event:{event_id}"),

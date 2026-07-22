@@ -284,7 +284,7 @@ fn federation_binding_accepts_registry_reducer_profile_digest() {
             delivery_binding_frontier: vec![event_id],
             destination_service_type: "principal_server".to_owned(),
             reducer_profile_digest: arkret_core::Hash::new(
-                arkret_core::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
+                arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
             )
             .unwrap(),
         },
