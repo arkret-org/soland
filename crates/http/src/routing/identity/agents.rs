@@ -302,7 +302,7 @@ mod tests {
         let expires_at = chrono::DateTime::parse_from_rfc3339("2999-01-01T00:00:00.000Z")
             .expect("fixed future expiry")
             .with_timezone(&chrono::Utc);
-        let signing_input = arkret_core::agent::agent_key_pair_proof_signing_input(
+        let signing_input = arkret_signatures::agent::agent_key_pair_proof_signing_input(
             verification_method.to_owned(),
             pairing_request_id,
             service_id.to_owned(),
