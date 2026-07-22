@@ -82,13 +82,25 @@ pub(crate) async fn validate_event_envelope_with_context(
         ));
     }
     let managed_agent_delegation = if actor_id != session.actor {
-        crate::routing::identity::managed_agent_pcr::validate_delegated_agent_envelope(
+        match crate::routing::identity::managed_agent_pcr::validate_delegated_agent_envelope(
             state,
             object,
             &session.actor,
         )
         .await
-        .is_ok()
+        {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(
+                    %actor_id,
+                    session_actor = %session.actor,
+                    error_code = %error.code,
+                    error_message = %error.message,
+                    "delegated managed Agent Event validation failed"
+                );
+                false
+            }
+        }
     } else {
         false
     };
