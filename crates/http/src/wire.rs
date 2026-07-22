@@ -1,4 +1,3 @@
-pub use arkret_core::ops::HardeningStatus;
 use arkret_core::{
     AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
     ClaimedProfileEntry, Did, MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH,
@@ -17,6 +16,7 @@ pub use arkret_core::{
     SessionGrantIntrospectGrant, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
     SessionGrantIntrospectStatus, SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
+pub use arkret_models_discovery::ops::HardeningStatus;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -172,7 +172,7 @@ pub struct OutboundPushBridgeExamples {
 // Shared `/_floria/integration/describe` manifest shape: re-exported from
 // the SDK contracts crate (the authoritative definition shared by floria,
 // soland, and coauth) instead of a local copy.
-pub use arkret_core::integration::{
+pub use arkret_models_integration::integration::{
     IntegrationDependencyDescriptor, IntegrationDescribeOutcome, IntegrationSurfaceDescriptor,
 };
 
