@@ -35,14 +35,16 @@ pub(crate) async fn admin_get_seal_dag(
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let seal_store = state.projection_application().seal_store();
-    let leaf_ids = seal_store.list_leaves(&realm).map_err(|e| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("seal_store.list_leaves failed: {e}"),
-        )
-        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-    })?;
+    let leaf_ids = state
+        .projection_application()
+        .realm_seal_leaves(&realm)
+        .map_err(|e| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("seal_store.list_leaves failed: {e}"),
+            )
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
 
     // Materialise each leaf into the wire `SealLeaf`.
     // Normal Seals carry only delta; compaction Seals may materialize
@@ -52,7 +54,7 @@ pub(crate) async fn admin_get_seal_dag(
         std::collections::BTreeSet::new();
     let mut latest_state_root: Option<String> = None;
     for leaf_id in &leaf_ids {
-        let Ok(Some(seal)) = seal_store.get(leaf_id) else {
+        let Ok(Some(seal)) = state.projection_application().seal_by_id(leaf_id) else {
             continue;
         };
         let signers: Vec<String> = match &seal.notary_signature {
@@ -161,8 +163,7 @@ pub(crate) async fn admin_compact_seal_dag(
     // from the view.
     let leaves = state
         .projection_application()
-        .seal_store()
-        .list_leaves(&realm)
+        .realm_seal_leaves(&realm)
         .map_err(|e| AppError::new(ErrorCode::InternalError, format!("list_leaves failed: {e}")))?;
     if leaves.is_empty() {
         return Err(AppError::new(
@@ -171,19 +172,15 @@ pub(crate) async fn admin_compact_seal_dag(
         )
         .with_status(StatusCode::CONFLICT));
     }
-    let view = arkret_state::effective_seal_view(
-        &leaves,
-        &realm,
-        state.projection_application().seal_store(),
-        state.projection_application().cell_store(),
-        state.projection_application().cell_registry(),
-    )
-    .map_err(|e| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("effective_seal_view failed: {e}"),
-        )
-    })?;
+    let view = state
+        .projection_application()
+        .effective_seal_view(&leaves, &realm)
+        .map_err(|e| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("effective_seal_view failed: {e}"),
+            )
+        })?;
 
     // Step 2: sign + apply the compaction Seal with the operator's
     // per-admin key so the Seal's `verification_method` carries
@@ -207,18 +204,13 @@ pub(crate) async fn admin_compact_seal_dag(
     })?;
 
     let verifier = crate::routing::federation::move_seal::select_jws_verifier(state);
-    let effect = arkret_state::apply_seal(
-        &compaction,
-        state.projection_application().move_store(),
-        state.projection_application().seal_store(),
-        state.projection_application().cell_store(),
-        state.projection_application().cell_registry(),
-        verifier,
-    )
-    .map_err(|e| {
-        AppError::new(ErrorCode::Conflict, format!("apply compaction seal: {e}"))
-            .with_status(StatusCode::CONFLICT)
-    })?;
+    let effect = state
+        .projection_application()
+        .apply_seal(&compaction, verifier)
+        .map_err(|e| {
+            AppError::new(ErrorCode::Conflict, format!("apply compaction seal: {e}"))
+                .with_status(StatusCode::CONFLICT)
+        })?;
 
     // Compaction Seals accept zero new moves by definition; surface
     // `control_event_count: 0`.
@@ -276,11 +268,10 @@ pub(crate) async fn admin_prune_seal_dag(
         .with_status(StatusCode::BAD_REQUEST)
     })?;
 
-    let seal_store = state.projection_application().seal_store();
-
     // Load the candidate Seal.
-    let candidate = seal_store
-        .get(&candidate_id)
+    let candidate = state
+        .projection_application()
+        .seal_by_id(&candidate_id)
         .map_err(|e| {
             AppError::new(
                 ErrorCode::InternalError,
@@ -311,12 +302,15 @@ pub(crate) async fn admin_prune_seal_dag(
     }
 
     // Successor count — direct successors in the DAG.
-    let successors = seal_store.successors(&realm, &candidate_id).map_err(|e| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("seal_store.successors failed: {e}"),
-        )
-    })?;
+    let successors = state
+        .projection_application()
+        .seal_successors(&realm, &candidate_id)
+        .map_err(|e| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("seal_store.successors failed: {e}"),
+            )
+        })?;
     let successor_count = successors.len();
 
     // Compaction-witness count: starting at each direct successor, count
@@ -335,18 +329,21 @@ pub(crate) async fn admin_prune_seal_dag(
         if !visited.insert(next_id.as_str().to_owned()) {
             continue;
         }
-        if let Ok(Some(succ_seal)) = seal_store.get(&next_id) {
+        if let Ok(Some(succ_seal)) = state.projection_application().seal_by_id(&next_id) {
             if succ_seal.kind.is_compaction() {
                 compaction_witnesses = compaction_witnesses.saturating_add(1);
             }
-            if let Ok(next_succs) = seal_store.successors(&realm, &next_id) {
+            if let Ok(next_succs) = state
+                .projection_application()
+                .seal_successors(&realm, &next_id)
+            {
                 stack.extend(next_succs);
             }
         }
     }
 
     // Genesis check through the active SealStore backend.
-    let is_genesis = match seal_store.genesis(&realm) {
+    let is_genesis = match state.projection_application().genesis_seal_id(&realm) {
         Ok(Some(g)) => g.as_str() == candidate_id.as_str(),
         _ => false,
     };
@@ -410,8 +407,9 @@ pub(crate) async fn admin_prune_seal_dag(
     // returns the candidate's parents (so callers can audit the new DAG
     // shape if desired); we surface the *successor* ids that were
     // rewired, which is what the prune actually touched.
-    let _parents = seal_store
-        .prune_predecessor(&realm, &candidate_id)
+    let _parents = state
+        .projection_application()
+        .prune_seal_predecessor(&realm, &candidate_id)
         .map_err(|e| {
             AppError::new(
                 ErrorCode::Conflict,

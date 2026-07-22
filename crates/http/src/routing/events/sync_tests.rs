@@ -979,8 +979,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     project_member_identity_update(&state, &first_op);
 
     {
-        let registry = state.member_identity_registry();
-        let snapshot = registry.snapshot_for_actor(realm, actor).unwrap();
+        let snapshot = state.member_identity_snapshot(realm, actor).unwrap();
         assert_eq!(snapshot.identity_event_ids, vec![first_event_id.to_owned()]);
     }
 
@@ -1007,8 +1006,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     );
     project_member_identity_update(&state, &second_op);
 
-    let registry = state.member_identity_registry();
-    let snapshot = registry.snapshot_for_actor(realm, actor).unwrap();
+    let snapshot = state.member_identity_snapshot(realm, actor).unwrap();
     // The `ak:event:` replaces edge drops the predecessor: only the second
     // event remains effective, and the stored id is the typed event id.
     assert_eq!(

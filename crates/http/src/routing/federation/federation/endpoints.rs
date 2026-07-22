@@ -846,12 +846,11 @@ pub(crate) async fn federation_seals_pull(
     let realm = RealmId::new(realm_id).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let leaves = state
         .projection_application()
-        .seal_store()
-        .list_leaves(&realm)
+        .realm_seal_leaves(&realm)
         .unwrap_or_default();
     let mut seals: Vec<arkret_core::Seal> = Vec::with_capacity(leaves.len());
     for leaf in &leaves {
-        if let Ok(Some(a)) = state.projection_application().seal_store().get(leaf) {
+        if let Ok(Some(a)) = state.projection_application().seal_by_id(leaf) {
             seals.push(a);
         }
     }
@@ -935,7 +934,7 @@ pub(crate) async fn federation_seals_push(
             }
         };
         for move_id in &seal.delta {
-            let issuer = match state.projection_application().move_store().get(move_id) {
+            let issuer = match state.projection_application().move_by_id(move_id) {
                 Ok(Some(enclosed_move)) => enclosed_move.issuer.as_str().to_owned(),
                 Ok(None) => match realm_events
                     .iter()

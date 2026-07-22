@@ -1542,8 +1542,7 @@ fn insert_data_event_seal(state: &AppState, covered: Vec<arkret_core::MoveId>) -
         hlc: arkret_core::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
         kind: arkret_core::SealKind::Normal,
     };
-    arkret_state::state::SealStore::put(state.projection_application().seal_store(), &seal)
-        .unwrap();
+    state.projection_application().test_put_seal(&seal).unwrap();
     seal_id.as_str().to_owned()
 }
 
@@ -1622,16 +1621,17 @@ fn insert_historical_data_event_grant(
         reason: None,
         issuer_seq: None,
     };
-    arkret_state::state::CellStore::append_sealed_effects(
-        state.projection_application().cell_store(),
-        &realm,
-        &seal_id,
-        &[(
-            cell,
-            arkret_state::lattice::SealedOp::new(move_id.clone(), op),
-        )],
-    )
-    .unwrap();
+    state
+        .projection_application()
+        .test_append_sealed_effects(
+            &realm,
+            &seal_id,
+            &[(
+                cell,
+                arkret_state::lattice::SealedOp::new(move_id.clone(), op),
+            )],
+        )
+        .unwrap();
     insert_data_event_seal(state, vec![move_id])
 }
 
@@ -1687,22 +1687,23 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
         reason: None,
         issuer_seq: None,
     };
-    arkret_state::state::CellStore::append_sealed_effects(
-        state.projection_application().cell_store(),
-        &realm,
-        &seal_id,
-        &[
-            (
-                parent_cell,
-                arkret_state::lattice::SealedOp::new(parent_move_id.clone(), parent_op),
-            ),
-            (
-                child_cell,
-                arkret_state::lattice::SealedOp::new(child_move_id.clone(), child_op),
-            ),
-        ],
-    )
-    .unwrap();
+    state
+        .projection_application()
+        .test_append_sealed_effects(
+            &realm,
+            &seal_id,
+            &[
+                (
+                    parent_cell,
+                    arkret_state::lattice::SealedOp::new(parent_move_id.clone(), parent_op),
+                ),
+                (
+                    child_cell,
+                    arkret_state::lattice::SealedOp::new(child_move_id.clone(), child_op),
+                ),
+            ],
+        )
+        .unwrap();
     insert_data_event_seal(state, vec![parent_move_id, child_move_id])
 }
 
@@ -1791,13 +1792,10 @@ fn insert_historical_data_event_grant_with_e2ee_state(
         ));
     }
 
-    arkret_state::state::CellStore::append_sealed_effects(
-        state.projection_application().cell_store(),
-        &realm,
-        &seal_id,
-        &ops,
-    )
-    .unwrap();
+    state
+        .projection_application()
+        .test_append_sealed_effects(&realm, &seal_id, &ops)
+        .unwrap();
     insert_data_event_seal(state, move_ids)
 }
 

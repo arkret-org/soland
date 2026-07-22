@@ -91,7 +91,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
     // Index handle-claim evidence by subject DID so account rows can pick
     // up issuer / binding-state metadata when a directory-issued claim is
     // cached locally.
-    let claims = state.member_identity_registry().snapshot_handle_claims();
+    let claims = state.handle_claims_snapshot();
     let claims_by_subject: BTreeMap<String, Vec<HandleClaimEvidenceRecord>> = claims;
 
     let accounts = state

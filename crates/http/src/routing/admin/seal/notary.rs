@@ -252,7 +252,7 @@ pub(crate) async fn admin_get_notary(
 /// submit a reconfig Move that writes the new notary cell value.
 ///
 /// Builds a Move signed by the service admin signer
-/// (`service_admin_signer`), submits via `state.projection_application().move_store().put_pending`,
+/// (`service_admin_signer`), submits via the projection application's pending-Move command,
 /// and triggers one signing pass via `crate::notary::run_one_signing_pass`
 /// so the Move folds into a fresh Seal immediately when the server is
 /// the round leader. Returns `status="accepted"` (Move stashed +
@@ -374,8 +374,7 @@ pub(crate) async fn admin_reconfigure_notary(
     // Stash pending; if put_pending fails, that's a hard 500.
     state
         .projection_application()
-        .move_store()
-        .put_pending(&signed_move)
+        .put_pending_move(&signed_move)
         .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
 
     // Best-effort: trigger one signing pass on this admin's Space — if

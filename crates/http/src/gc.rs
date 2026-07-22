@@ -11,7 +11,6 @@
 //!   - `bin/soland-gc-scan.rs` — `cargo run --bin soland-gc-scan -- --realm-id <id> --dry-run`.
 
 use arkret_core::{Move, MoveId, RealmId};
-use arkret_state::state::union_predecessor_covered_events;
 
 use crate::state::AppState;
 
@@ -35,21 +34,20 @@ pub struct GcCandidate {
 ///   - The Move is NOT in any current leaf coverage set.
 ///   - The Move is NOT in the pending pool (`list_pending_for_notary`).
 pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandidate> {
-    let move_store = state.projection_application().move_store();
-    let seal_store = state.projection_application().seal_store();
+    let projections = state.projection_application();
 
     // 1) Pending Move IDs — never GC.
-    let pending: Vec<Move> = move_store
-        .list_pending_for_notary(realm_id, None, 4096)
+    let pending: Vec<Move> = projections
+        .pending_moves_for_notary(realm_id, None, 4096)
         .unwrap_or_default();
     let pending_ids: std::collections::HashSet<String> =
         pending.iter().map(|m| m.id.to_string()).collect();
 
     // 2) Union of current leaf-Seal coverage. Moves still covered by live leaves are also out of
     //    scope for GC.
-    let leaves = seal_store.list_leaves(realm_id).unwrap_or_default();
+    let leaves = projections.realm_seal_leaves(realm_id).unwrap_or_default();
     let mut live_coverage: std::collections::HashSet<String> = std::collections::HashSet::new();
-    if let Ok(covered) = union_predecessor_covered_events(&leaves, seal_store) {
+    if let Ok(covered) = projections.predecessor_covered_events(&leaves) {
         live_coverage.extend(covered.into_iter().map(|move_id| move_id.to_string()));
     }
 
@@ -57,7 +55,7 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
     let mut candidates: Vec<GcCandidate> = Vec::new();
     let mut cursor: Option<MoveId> = None;
     loop {
-        let page = match move_store.list_sealed(realm_id, cursor.as_ref(), 256) {
+        let page = match projections.sealed_moves(realm_id, cursor.as_ref(), 256) {
             Ok(page) if !page.is_empty() => page,
             _ => break,
         };

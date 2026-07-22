@@ -10,9 +10,8 @@
 //!
 //! Both endpoints back onto in-memory SDK store implementations on
 //! [`AppState`]. Production deployments will swap to Pg-backed
-//! implementations behind the same trait surface; the handlers don't
-//! care because they go through `&dyn MoveStore` / `&dyn SealStore`
-//! / `&dyn CellStore` / `&dyn CellRegistry` types.
+//! implementations behind the same application service; handlers never
+//! receive the underlying Move/Seal/Cell stores or registry.
 //!
 //! JWS shape verification rejects mangled, empty, or sentinel signatures
 //! and validates the protected-header `alg`. In production mode, full
@@ -24,10 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_core::{Event, Move, MoveId, NotarySig, RealmId, Seal, SealId, SealKind};
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_state::lattice::SealedOp;
-use arkret_state::state::{
-    SealEffect, SealReject, StoreError, apply_seal, control_event_set_root,
-    union_predecessor_covered_events, verify_move,
-};
+use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -250,8 +246,7 @@ async fn device_generation_event_seal_context(
     }
     let cas_frontier_refs = state
         .projection_application()
-        .seal_store()
-        .list_leaves(realm_id)
+        .realm_seal_leaves(realm_id)
         .map_err(|error| {
             AppError::new(
                 ErrorCode::FrontierUnavailable,
@@ -404,8 +399,7 @@ async fn try_apply_device_generation_event_seal(
     let _guard = generation_lock.lock().await;
     if let Some(existing) = state
         .projection_application()
-        .seal_store()
-        .get(&seal.id)
+        .seal_by_id(&seal.id)
         .map_err(|error| {
             AppError::new(
                 ErrorCode::InternalError,
@@ -433,8 +427,7 @@ async fn try_apply_device_generation_event_seal(
     };
     if !state
         .projection_application()
-        .seal_store()
-        .predecessors_known(&seal.predecessor_refs)
+        .seal_predecessors_known(&seal.predecessor_refs)
         .map_err(|error| {
             AppError::new(
                 ErrorCode::InternalError,
@@ -453,11 +446,10 @@ async fn try_apply_device_generation_event_seal(
             "B-model Event Seal predecessors differ from the complete accepted generation frontier",
         ));
     }
-    let predecessor_coverage = union_predecessor_covered_events(
-        &seal.predecessor_refs,
-        state.projection_application().seal_store(),
-    )
-    .map_err(app_error_from_seal_reject)?;
+    let predecessor_coverage = state
+        .projection_application()
+        .predecessor_covered_events(&seal.predecessor_refs)
+        .map_err(app_error_from_seal_reject)?;
     if seal
         .delta
         .iter()
@@ -495,8 +487,7 @@ async fn try_apply_device_generation_event_seal(
         for predecessor in &seal.predecessor_refs {
             let value = state
                 .projection_application()
-                .seal_store()
-                .get(predecessor)
+                .seal_by_id(predecessor)
                 .map_err(|error| {
                     AppError::new(
                         ErrorCode::InternalError,
@@ -799,8 +790,7 @@ async fn try_apply_device_generation_event_seal(
 
     match state
         .projection_application()
-        .event_seal_committer()
-        .commit_if_frontier(seal, &context.cas_frontier_refs, &new_ops, &target)
+        .commit_event_seal_if_frontier(seal, &context.cas_frontier_refs, &new_ops, &target)
     {
         Ok(true) => {}
         Ok(false) => {
@@ -866,8 +856,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
     let _guard = admission_lock.lock().await;
     if let Some(mut existing) = state
         .projection_application()
-        .seal_store()
-        .get(&seal.id)
+        .seal_by_id(&seal.id)
         .map_err(|error| {
             AppError::new(
                 ErrorCode::InternalError,
@@ -891,8 +880,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
 
     let mut leaves = state
         .projection_application()
-        .seal_store()
-        .list_leaves(&seal.realm_id)
+        .realm_seal_leaves(&seal.realm_id)
         .map_err(|error| {
             AppError::new(
                 ErrorCode::FrontierUnavailable,
@@ -905,9 +893,10 @@ pub(crate) async fn apply_managed_agent_event_seal(
             "managed Agent PCR Seal predecessors differ from the complete accepted frontier",
         ));
     }
-    let current =
-        union_predecessor_covered_events(&leaves, state.projection_application().seal_store())
-            .map_err(app_error_from_seal_reject)?;
+    let current = state
+        .projection_application()
+        .predecessor_covered_events(&leaves)
+        .map_err(app_error_from_seal_reject)?;
 
     let records = state
         .event_query_application()
@@ -1000,8 +989,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         .map(|leaf| {
             state
                 .projection_application()
-                .seal_store()
-                .get(leaf)
+                .seal_by_id(leaf)
                 .map_err(|error| {
                     AppError::new(
                         ErrorCode::InternalError,
@@ -1093,8 +1081,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         .collect::<Vec<_>>();
     match state
         .projection_application()
-        .event_seal_committer()
-        .commit_if_frontier(seal, &leaves, &new_ops, &target)
+        .commit_event_seal_if_frontier(seal, &leaves, &new_ops, &target)
     {
         Ok(true) => {}
         Ok(false) => {
@@ -1142,15 +1129,10 @@ pub(crate) async fn apply_inbound_seal(
         return Ok(effect);
     }
     let verifier = select_jws_verifier(state);
-    apply_seal(
-        seal,
-        state.projection_application().move_store(),
-        state.projection_application().seal_store(),
-        state.projection_application().cell_store(),
-        state.projection_application().cell_registry(),
-        verifier,
-    )
-    .map_err(app_error_from_seal_reject)
+    state
+        .projection_application()
+        .apply_seal(seal, verifier)
+        .map_err(app_error_from_seal_reject)
 }
 
 /// Response from `POST /_soland/peer/moves`.
@@ -1190,10 +1172,11 @@ async fn submit_move(
     // failures (bad sig, bad effect shape) early without committing
     // the Move to sealed storage.
     let pre_state = std::collections::BTreeMap::new();
-    let registry = state.projection_application().cell_registry();
-
     let verifier = select_jws_verifier(state);
-    if let Err(reject) = verify_move(&move_obj, &pre_state, registry, verifier) {
+    if let Err(reject) = state
+        .projection_application()
+        .verify_move(&move_obj, &pre_state, verifier)
+    {
         return Ok(salvo::writing::Json(SubmitMoveOutcome {
             move_id: move_obj.id.as_str().to_owned(),
             state: "rejected".to_owned(),
@@ -1219,8 +1202,7 @@ async fn submit_move(
 
     state
         .projection_application()
-        .move_store()
-        .put_pending(&move_obj)
+        .put_pending_move(&move_obj)
         .map_err(|e| {
             AppError::new(ErrorCode::InternalError, e.to_string())
                 .with_status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -1266,8 +1248,6 @@ async fn submit_seal(
     let _session = aa.authenticated_session(state, req).await?;
     let seal = body.into_inner();
 
-    let cell_store = state.projection_application().cell_store();
-    let registry = state.projection_application().cell_registry();
     // The shared admission path selects the canonical Event rail for a
     // B-model principal-control Realm and the legacy Move rail elsewhere.
     // Device-generation Seals always receive real device-key verification,
@@ -1299,10 +1279,9 @@ async fn submit_seal(
     let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell
         .as_ref()
         .and_then(|cell_id| state.projection_application().cell_value(cell_id));
-    if let Err(error) =
-        state
-            .projection_application()
-            .reload_cells_from_store(&seal.realm_id, cell_store, registry)
+    if let Err(error) = state
+        .projection_application()
+        .reload_cells_from_store(&seal.realm_id)
     {
         tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_seal");
     }

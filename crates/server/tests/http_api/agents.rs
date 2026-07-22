@@ -216,7 +216,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
             .await
             .unwrap();
     }
-    state.test_seal_store().put(&bootstrap_seal).unwrap();
+    state.test_put_seal(&bootstrap_seal).unwrap();
 
     state
         .test_persistence()

@@ -221,7 +221,6 @@ pub(super) async fn delivery_binding_handover_witness(
     ) {
         match state
             .projection_application()
-            .cell_store()
             .sealed_ops_for_cell(&realm_id, &cell_ref)
         {
             Ok(ops) => {

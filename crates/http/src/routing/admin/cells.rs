@@ -12,7 +12,7 @@
 //! check; rate limiting comes from the global RateLimiter middleware.
 //!
 //! The lattice + bottom_policy resolution is delegated to
-//! `state.projection_application().cell_registry().resolve(realm_id, &cell)`. Both single-cell and
+//! `state.projection_application().resolve_cell(realm_id, &cell)`. Both single-cell and
 //! list reads require an explicit Realm scope so product Space subjects are
 //! never mistaken for security boundaries.
 
@@ -167,8 +167,7 @@ async fn admin_get_cell(
 
     let binding = state
         .projection_application()
-        .cell_registry()
-        .resolve(&realm, &cell_ref)
+        .resolve_cell(&realm, &cell_ref)
         .map_err(|e| {
             AppError::new(
                 ErrorCode::NotFound,
@@ -247,14 +246,16 @@ async fn admin_list_cells(
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);
 
-    let cell_refs = state.projection_application().cell_store();
-    let all_cells = cell_refs.list_cells(&realm).map_err(|e| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("cell_store list_cells failed: {e}"),
-        )
-        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-    })?;
+    let all_cells = state
+        .projection_application()
+        .realm_cells(&realm)
+        .map_err(|e| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("cell_store list_cells failed: {e}"),
+            )
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
 
     // Filter by family prefix (post-list to keep CellStore trait minimal).
     let prefix_match = |cell: &CellRef| -> bool {
@@ -286,11 +287,7 @@ async fn admin_list_cells(
 
     let mut cells_out = Vec::with_capacity(cell_states.len());
     for (cell, cell_state) in cell_states {
-        let binding = match state
-            .projection_application()
-            .cell_registry()
-            .resolve(&realm, &cell)
-        {
+        let binding = match state.projection_application().resolve_cell(&realm, &cell) {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(cell = %cell.as_str(), error = %e, "cell_registry.resolve failed during list; skipping");

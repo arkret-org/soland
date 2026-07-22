@@ -37,7 +37,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arkret_core::{RealmId, Seal, SealId};
-use arkret_state::state::SealStore;
 use arkret_state::{PruneCandidate, PruneEligibility};
 
 use crate::state::AppState;
@@ -113,11 +112,11 @@ pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> Compactor
     };
     report.realms_scanned = realms.len();
     let policy = state.config().compaction_policy();
-    let seal_store = state.projection_application().seal_store();
+    let projections = state.projection_application();
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     for realm_id in &realms {
-        let candidates = match collect_candidate_seals(seal_store, realm_id, per_realm_limit) {
+        let candidates = match collect_candidate_seals(projections, realm_id, per_realm_limit) {
             Ok(c) => c,
             Err(error) => {
                 tracing::warn!(
@@ -134,11 +133,11 @@ pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> Compactor
             if pruned_this_realm >= per_realm_limit {
                 break;
             }
-            let Ok(Some(candidate)) = seal_store.get(&candidate_id) else {
+            let Ok(Some(candidate)) = projections.seal_by_id(&candidate_id) else {
                 continue;
             };
             report.candidates_evaluated += 1;
-            let diagnostics = evaluate_candidate(seal_store, realm_id, &candidate, now_ms);
+            let diagnostics = evaluate_candidate(projections, realm_id, &candidate, now_ms);
             let prune_candidate = PruneCandidate {
                 candidate: &candidate,
                 age_seconds: diagnostics.age_seconds,
@@ -148,7 +147,7 @@ pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> Compactor
             };
             match policy.is_eligible(&prune_candidate) {
                 PruneEligibility::Eligible => {
-                    match seal_store.prune_predecessor(realm_id, &candidate_id) {
+                    match projections.prune_seal_predecessor(realm_id, &candidate_id) {
                         Ok(_) => {
                             report.pruned.push(candidate_id.as_str().to_owned());
                             pruned_this_realm += 1;
@@ -181,12 +180,12 @@ pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> Compactor
 /// Returns seal ids in BFS order from the leaves; that's a stable
 /// traversal that doesn't favor any particular fork.
 fn collect_candidate_seals(
-    seal_store: &dyn SealStore,
+    projections: &soland_application::projection::ProjectionApplicationService,
     realm_id: &RealmId,
     per_realm_limit: usize,
 ) -> Result<Vec<SealId>, String> {
-    let leaves = seal_store
-        .list_leaves(realm_id)
+    let leaves = projections
+        .realm_seal_leaves(realm_id)
         .map_err(|e| e.to_string())?;
     let mut visited: BTreeSet<String> = BTreeSet::new();
     // Initialize visited with leaves so we don't propose them as
@@ -206,7 +205,7 @@ fn collect_candidate_seals(
             break;
         }
         // Inspect this seal's parents — they become candidates.
-        let seal: Seal = match seal_store.get(&next).map_err(|e| e.to_string())? {
+        let seal: Seal = match projections.seal_by_id(&next).map_err(|e| e.to_string())? {
             Some(a) => a,
             None => continue,
         };
@@ -233,14 +232,14 @@ struct CandidateDiagnostics {
 }
 
 fn evaluate_candidate(
-    seal_store: &dyn SealStore,
+    projections: &soland_application::projection::ProjectionApplicationService,
     realm_id: &RealmId,
     candidate: &Seal,
     now_ms: i64,
 ) -> CandidateDiagnostics {
     let candidate_id = candidate.id.clone();
-    let successors = seal_store
-        .successors(realm_id, &candidate_id)
+    let successors = projections
+        .seal_successors(realm_id, &candidate_id)
         .unwrap_or_default();
     let successor_count = successors.len();
     let mut compaction_witnesses: u32 = 0;
@@ -250,16 +249,16 @@ fn evaluate_candidate(
         if !visited.insert(next_id.as_str().to_owned()) {
             continue;
         }
-        if let Ok(Some(succ_seal)) = seal_store.get(&next_id) {
+        if let Ok(Some(succ_seal)) = projections.seal_by_id(&next_id) {
             if succ_seal.kind.is_compaction() {
                 compaction_witnesses = compaction_witnesses.saturating_add(1);
             }
-            if let Ok(next_succs) = seal_store.successors(realm_id, &next_id) {
+            if let Ok(next_succs) = projections.seal_successors(realm_id, &next_id) {
                 stack.extend(next_succs);
             }
         }
     }
-    let is_genesis = match seal_store.genesis(realm_id) {
+    let is_genesis = match projections.genesis_seal_id(realm_id) {
         Ok(Some(g)) => g.as_str() == candidate_id.as_str(),
         _ => false,
     };

@@ -40,10 +40,7 @@ use arkret_core::{
     CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId,
 };
 use arkret_state::lattice::{CellState, SealedOp};
-use arkret_state::state::{
-    StoreError, apply_seal, compute_state_root, control_event_set_root, effective_seal_view,
-    effective_state_at, leaf_union_proof, verify_move,
-};
+use arkret_state::state::{StoreError, compute_state_root, control_event_set_root};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::SigningKey;
@@ -121,10 +118,11 @@ impl NotaryWorker {
         }
 
         // Step 2: list pending Moves (oldest first).
-        let pending = state
-            .projection_application()
-            .move_store()
-            .list_pending_for_notary(realm_id, None, max_control_moves)?;
+        let pending = state.projection_application().pending_moves_for_notary(
+            realm_id,
+            None,
+            max_control_moves,
+        )?;
         if pending.is_empty() {
             return Ok(None);
         }
@@ -137,14 +135,10 @@ impl NotaryWorker {
 
         // Step 4: pre-state under the current view. For genesis this is
         // empty.
-        let view = effective_seal_view(
-            &leaves,
-            realm_id,
-            state.projection_application().seal_store(),
-            state.projection_application().cell_store(),
-            state.projection_application().cell_registry(),
-        )
-        .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
+        let view = state
+            .projection_application()
+            .effective_seal_view(&leaves, realm_id)
+            .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
 
         // Recompute pre_state map (effective_seal_view returns state_root
         // but we need the per-cell map for verify_move).
@@ -173,12 +167,10 @@ impl NotaryWorker {
                 rejected.push((m.id.clone(), format!("replay_window: {reject}")));
                 continue;
             }
-            match verify_move(
-                &m,
-                &pre_state,
-                state.projection_application().cell_registry(),
-                verifier,
-            ) {
+            match state
+                .projection_application()
+                .verify_move(&m, &pre_state, verifier)
+            {
                 Ok(()) => accepted.push(m),
                 Err(reject) => rejected.push((m.id.clone(), reject.to_string())),
             }
@@ -256,15 +248,10 @@ impl NotaryWorker {
         // the SDK pipeline and writes Seal + marks Moves sealed.
         // Reuse `verifier` from step 5; same closure satisfies the
         // `Copy` bound apply_seal's `F: Copy` requires.
-        let effect = apply_seal(
-            &seal,
-            state.projection_application().move_store(),
-            state.projection_application().seal_store(),
-            state.projection_application().cell_store(),
-            state.projection_application().cell_registry(),
-            verifier,
-        )
-        .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
+        let effect = state
+            .projection_application()
+            .apply_seal(&seal, verifier)
+            .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
 
         // Refresh ProjectionState::cells
         // from the now-updated CellStore so cell-keyed reads see the new
@@ -279,11 +266,10 @@ impl NotaryWorker {
         let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell
             .as_ref()
             .and_then(|cell_id| state.projection_application().cell_value(cell_id));
-        if let Err(error) = state.projection_application().reload_cells_from_store(
-            realm_id,
-            state.projection_application().cell_store(),
-            state.projection_application().cell_registry(),
-        ) {
+        if let Err(error) = state
+            .projection_application()
+            .reload_cells_from_store(realm_id)
+        {
             tracing::warn!(
                 error = %error,
                 "notary worker failed to refresh ProjectionState::cells after apply_seal"
@@ -347,7 +333,6 @@ impl NotaryWorker {
         };
         let ops = state
             .projection_application()
-            .cell_store()
             .sealed_ops_for_cell(realm_id, &notary_cell)?;
         if ops.is_empty() {
             // Genesis Realm — no notary cell yet. Implicit "service_id is
@@ -357,8 +342,7 @@ impl NotaryWorker {
         // Resolve via cell registry to get the lattice, then join.
         let binding = state
             .projection_application()
-            .cell_registry()
-            .resolve(realm_id, &notary_cell)
+            .resolve_cell(realm_id, &notary_cell)
             .map_err(|e| NotaryError::Store(format!("notary cell resolve: {e}")))?;
         let resolved = binding.lattice.join(&notary_cell, &ops);
         let CellState::Value(value) = resolved else {
@@ -444,14 +428,11 @@ impl NotaryWorker {
         realm_id: &RealmId,
         staleness_ms: u64,
     ) -> Result<bool, NotaryError> {
-        let leaves = state
-            .projection_application()
-            .seal_store()
-            .list_leaves(realm_id)?;
+        let leaves = state.projection_application().realm_seal_leaves(realm_id)?;
         let Some(leaf_id) = leaves.first() else {
             return Ok(false);
         };
-        let Some(seal) = state.projection_application().seal_store().get(leaf_id)? else {
+        let Some(seal) = state.projection_application().seal_by_id(leaf_id)? else {
             return Ok(false);
         };
         // The Seal.hlc carries a 12-hex physical-millis prefix per the
@@ -475,14 +456,10 @@ impl NotaryWorker {
         realm_id: &RealmId,
         leaves: &[SealId],
     ) -> Result<BTreeMap<CellRef, CellState>, NotaryError> {
-        effective_state_at(
-            leaves,
-            realm_id,
-            state.projection_application().seal_store(),
-            state.projection_application().cell_store(),
-            state.projection_application().cell_registry(),
-        )
-        .map_err(|e| NotaryError::Store(format!("effective state: {e}")))
+        state
+            .projection_application()
+            .effective_state_at(leaves, realm_id)
+            .map_err(|e| NotaryError::Store(format!("effective state: {e}")))
     }
 
     /// Predict the state_root after the accepted Moves' effects are
@@ -499,14 +476,9 @@ impl NotaryWorker {
         let mut ops_by_cell: BTreeMap<CellRef, Vec<SealedOp>> = BTreeMap::new();
         let covered: BTreeSet<MoveId> = covered_event_digests.iter().cloned().collect();
         // Seed with all currently-known cells.
-        for cell in state
-            .projection_application()
-            .cell_store()
-            .list_cells(realm_id)?
-        {
+        for cell in state.projection_application().realm_cells(realm_id)? {
             let ops: Vec<SealedOp> = state
                 .projection_application()
-                .cell_store()
                 .sealed_ops_for_cell(realm_id, &cell)?
                 .into_iter()
                 .filter(|op| covered.contains(&op.move_id))
@@ -530,8 +502,7 @@ impl NotaryWorker {
         for (cell, ops) in ops_by_cell {
             let binding = state
                 .projection_application()
-                .cell_registry()
-                .resolve(realm_id, &cell)
+                .resolve_cell(realm_id, &cell)
                 .map_err(|e| NotaryError::Store(format!("predict cell resolve: {e}")))?;
             let resolved = binding.lattice.join(&cell, &ops);
             post_state.insert(cell, resolved);
@@ -548,7 +519,7 @@ impl NotaryWorker {
     ) -> Result<u64, NotaryError> {
         let mut max_seq = 0u64;
         for id in predecessor_refs {
-            if let Some(seal) = state.projection_application().seal_store().get(id)? {
+            if let Some(seal) = state.projection_application().seal_by_id(id)? {
                 max_seq = max_seq.max(seal.notary_seq);
             }
         }
@@ -648,37 +619,25 @@ impl NotaryWorker {
         state: &AppState,
         realm_id: &RealmId,
     ) -> Result<Vec<SealId>, NotaryError> {
-        let leaves = state
-            .projection_application()
-            .seal_store()
-            .list_leaves(realm_id)?;
+        let leaves = state.projection_application().realm_seal_leaves(realm_id)?;
         if !leaves.is_empty() {
             return Ok(leaves);
         }
 
-        if let Some(genesis_id) = state
-            .projection_application()
-            .seal_store()
-            .genesis(realm_id)?
+        if let Some(genesis_id) = state.projection_application().genesis_seal_id(realm_id)?
             && state
                 .projection_application()
-                .seal_store()
-                .get(&genesis_id)?
+                .seal_by_id(&genesis_id)?
                 .is_some()
         {
             return Ok(vec![genesis_id]);
         }
 
         let genesis = self.build_genesis_seal(state, realm_id)?;
-        let effect = apply_seal(
-            &genesis,
-            state.projection_application().move_store(),
-            state.projection_application().seal_store(),
-            state.projection_application().cell_store(),
-            state.projection_application().cell_registry(),
-            select_jws_verifier(state),
-        )
-        .map_err(|reject| NotaryError::ApplySeal(format!("genesis: {reject}")))?;
+        let effect = state
+            .projection_application()
+            .apply_seal(&genesis, select_jws_verifier(state))
+            .map_err(|reject| NotaryError::ApplySeal(format!("genesis: {reject}")))?;
 
         Ok(vec![effect.seal])
     }
@@ -763,24 +722,16 @@ fn materialize_genesis_if_empty(
     realm_id: &RealmId,
 ) -> Result<Vec<SealId>, NotaryError> {
     let _guard = GENESIS_MATERIALIZE_LOCK.lock();
-    let leaves = state
-        .projection_application()
-        .seal_store()
-        .list_leaves(realm_id)?;
+    let leaves = state.projection_application().realm_seal_leaves(realm_id)?;
     if !leaves.is_empty() {
         return Ok(leaves);
     }
     let genesis = worker.build_genesis_seal(state, realm_id)?;
     let verifier = select_jws_verifier(state);
-    let effect = apply_seal(
-        &genesis,
-        state.projection_application().move_store(),
-        state.projection_application().seal_store(),
-        state.projection_application().cell_store(),
-        state.projection_application().cell_registry(),
-        verifier,
-    )
-    .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
+    let effect = state
+        .projection_application()
+        .apply_seal(&genesis, verifier)
+        .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
     tracing::info!(
         realm_id = %realm_id,
         seal_id = %effect.seal,
@@ -807,16 +758,13 @@ pub fn ensure_realm_seal_head(
     state: &AppState,
     realm_id: &RealmId,
 ) -> Result<Option<Seal>, NotaryError> {
-    let leaves = state
-        .projection_application()
-        .seal_store()
-        .list_leaves(realm_id)?;
+    let leaves = state.projection_application().realm_seal_leaves(realm_id)?;
     if leaves.is_empty() {
         return Ok(None);
     }
     let mut head: Option<Seal> = None;
     for leaf in &leaves {
-        let Some(seal) = state.projection_application().seal_store().get(leaf)? else {
+        let Some(seal) = state.projection_application().seal_by_id(leaf)? else {
             continue;
         };
         let replace = head.as_ref().is_none_or(|current| {
@@ -862,10 +810,7 @@ pub fn ensure_materialized_event_seal(
 ) -> Result<MaterializedEventSealView, NotaryError> {
     let _guard = EVENT_SEAL_MATERIALIZE_LOCK.lock();
     let worker = NotaryWorker::for_service(state.service_id().clone());
-    let mut leaves = state
-        .projection_application()
-        .seal_store()
-        .list_leaves(realm_id)?;
+    let mut leaves = state.projection_application().realm_seal_leaves(realm_id)?;
     if let Some(requirement) = generation_fence {
         leaves = requirement.accepted_frontier_refs.clone();
     }
@@ -885,15 +830,16 @@ pub fn ensure_materialized_event_seal(
         predecessor_seals.push(
             state
                 .projection_application()
-                .seal_store()
-                .get(leaf)?
+                .seal_by_id(leaf)?
                 .ok_or_else(|| NotaryError::Store(format!("Seal leaf {leaf} is missing")))?,
         );
     }
     let current = if leaves.is_empty() {
         BTreeSet::new()
     } else {
-        leaf_union_proof(&leaves, state.projection_application().seal_store())
+        state
+            .projection_application()
+            .seal_leaf_union_proof(&leaves)
             .map_err(|error| NotaryError::Store(format!("read Seal coverage: {error}")))?
             .into_iter()
             .flat_map(|proof| proof.covered_event_digests)
@@ -1020,8 +966,7 @@ pub fn ensure_materialized_event_seal(
         .collect::<Vec<_>>();
     match state
         .projection_application()
-        .event_seal_committer()
-        .commit_if_frontier(&seal, &seal.predecessor_refs, &new_ops, &target)
+        .commit_event_seal_if_frontier(&seal, &seal.predecessor_refs, &new_ops, &target)
     {
         Ok(true) => {}
         Ok(false) => {
@@ -1092,8 +1037,7 @@ fn materialized_event_seal_view(
             pending.push(
                 state
                     .projection_application()
-                    .seal_store()
-                    .get(predecessor)?
+                    .seal_by_id(predecessor)?
                     .ok_or_else(|| {
                         NotaryError::Store(format!("Seal predecessor {predecessor} is missing"))
                     })?,
