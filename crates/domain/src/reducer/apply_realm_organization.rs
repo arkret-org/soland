@@ -33,10 +33,10 @@
 //! `threshold_quorum` statements (no `delegation_ref`) project directly.
 
 use arkret_core::Operation;
-use arkret_core::models::{
-    NoDelegationResolver, RealmOrganizationControlScope, RealmOrganizationPayload,
-    SignatureMaterial, verify_realm_organization_statement,
+use arkret_models_collaboration::{
+    RealmOrganizationControlScope, RealmOrganizationPayload, SignatureMaterial,
 };
+use arkret_policy::{NoDelegationResolver, verify_realm_organization_statement};
 
 use super::{ProjectionEffect, ProjectionState, RealmOrganizationStatementState};
 

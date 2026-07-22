@@ -384,14 +384,14 @@ pub(super) async fn validate_realm_organization_policy(
         return Ok(());
     }
     // Organization side — strong-typed parse + SDK verifier (fail-closed).
-    let payload: arkret_core::models::RealmOrganizationPayload =
+    let payload: arkret_models_collaboration::RealmOrganizationPayload =
         serde_json::from_value(operation.payload.clone())
             .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)?;
-    arkret_core::models::verify_realm_organization_statement(
+    arkret_policy::verify_realm_organization_statement(
         &payload,
         &operation.realm_id,
         chrono::Utc::now(),
-        &arkret_core::models::NoDelegationResolver,
+        &arkret_policy::NoDelegationResolver,
     )
     .map_err(|_| "organization_statement_unverified")?;
 

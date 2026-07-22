@@ -5026,7 +5026,9 @@ version = "0.3.0"
 dependencies = [
  "arkret-core",
  "arkret-lattice-registry",
+ "arkret-models-collaboration",
  "arkret-models-crypto",
+ "arkret-policy",
  "arkret-state",
  "arkret-wire",
  "base64",
