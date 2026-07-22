@@ -946,7 +946,7 @@ fn cursor_binding_record(
 fn cursor_app_error(error: CursorAuthorityError) -> AppError {
     match error {
         CursorAuthorityError::InvalidParam(message) => AppError::invalid_param(message)
-            .with_reason_code(arkret_core::ReasonCode::INVALID_CURSOR),
+            .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
         CursorAuthorityError::Expired => AppError::new(
             soland_http::error::ErrorCode::CursorExpired,
             "cursor has expired",

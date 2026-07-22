@@ -58,7 +58,7 @@ impl FederationTrustHeaders {
         expected: &arkret_core::TypedTrustDomainId,
     ) -> Result<(), &'static str> {
         if self.destination_trust_domain != *expected {
-            return Err(arkret_core::ReasonCode::CROSS_DOMAIN_REPLAY_REJECTED);
+            return Err(arkret_wire::ReasonCode::CROSS_DOMAIN_REPLAY_REJECTED);
         }
         Ok(())
     }
@@ -84,7 +84,7 @@ pub(crate) enum HeaderViolation {
 
 impl HeaderViolation {
     pub(crate) fn error_code(&self) -> &'static str {
-        arkret_core::ErrorCode::SCHEMA_VIOLATION
+        arkret_wire::ErrorCode::SCHEMA_VIOLATION
     }
 
     pub(crate) fn message(&self) -> String {
@@ -153,7 +153,7 @@ pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
         object.insert("accepted".to_owned(), Value::Array(Vec::new()));
         object.insert(
             "reason_code".to_owned(),
-            Value::String(arkret_core::ErrorCode::HISTORICAL_ONLY.to_owned()),
+            Value::String(arkret_wire::ErrorCode::HISTORICAL_ONLY.to_owned()),
         );
         object.insert(HISTORICAL_ONLY_MARKER.to_owned(), Value::Bool(true));
         object.insert("original_outcome".to_owned(), original_outcome);
@@ -189,7 +189,7 @@ pub(crate) fn delivery_binding_stale_response(
         extra: Default::default(),
     };
     error_envelope_with_details(
-        arkret_core::ErrorCode::DELIVERY_BINDING_STALE,
+        arkret_wire::ErrorCode::DELIVERY_BINDING_STALE,
         "delivery binding is stale; rebind to the new recipient service",
         details,
     )
@@ -200,7 +200,7 @@ pub(crate) fn delivery_binding_stale_response(
 /// already been handed over to the new recipient.
 pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_id: &Did) -> Value {
     error_envelope_with_details(
-        arkret_core::ErrorCode::DELIVERY_BINDING_HANDED_OVER,
+        arkret_wire::ErrorCode::DELIVERY_BINDING_HANDED_OVER,
         "delivery binding has already been handed over to the new recipient",
         json!({
             "new_recipient_service_id": new_recipient_service_id.as_str(),

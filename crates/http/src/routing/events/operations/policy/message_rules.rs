@@ -42,7 +42,7 @@ pub(super) fn validate_reaction_scope_policy(
     if realm_ids_match(operation.realm_id.as_str(), &target_realm) {
         Ok(())
     } else {
-        Err(arkret_core::error::ReasonCode::REACTION_SCOPE_MISMATCH)
+        Err(arkret_wire::ReasonCode::REACTION_SCOPE_MISMATCH)
     }
 }
 
@@ -567,7 +567,7 @@ pub async fn validate_content_encryption_floor(
                     && !encryption_profile_requires_content_encryption(Some(profile))
                     && realm_requires_content_encryption(state, operation.realm_id.as_str()).await
                 {
-                    return Err(arkret_core::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR);
+                    return Err(arkret_wire::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR);
                 }
             }
             _ => {}

@@ -743,7 +743,7 @@ async fn validate_active_agent_accountability(
         .ok_or_else(|| {
             failed_precondition(
                 "managed Agent provisioning accountability reference is missing",
-                arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+                arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
             )
         })?;
     let query = ActiveAgentAccountabilityQuery {
@@ -760,7 +760,7 @@ async fn validate_active_agent_accountability(
     if !active {
         return Err(failed_precondition(
             "managed Agent accountability grant is missing or inactive",
-            arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+            arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
         ));
     }
     Ok(())

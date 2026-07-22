@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(error.code, "failed_precondition");
         assert_eq!(
             error.message,
-            arkret_core::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+            arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
         );
     }
 }

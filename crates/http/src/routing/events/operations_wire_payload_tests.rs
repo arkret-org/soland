@@ -9,7 +9,7 @@ fn consent_revoke_empty_observed_dots_rejected() {
         "observed_dots": [],
     }))
     .unwrap_err();
-    assert_eq!(err.0, arkret_core::ErrorCode::SCHEMA_VIOLATION);
+    assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn consent_revoke_rejects_untyped_consent_id() {
         ],
     }))
     .unwrap_err();
-    assert_eq!(err.0, arkret_core::ErrorCode::SCHEMA_VIOLATION);
+    assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
 }
 
 #[test]

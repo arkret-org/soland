@@ -241,7 +241,7 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
         &req.service_binding_ref,
     )
     .unwrap_err();
-    assert_eq!(err.0, arkret_core::ErrorCode::SCHEMA_VIOLATION);
+    assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
 }
 
 #[test]
@@ -268,7 +268,7 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
         &req.service_binding_ref,
     )
     .unwrap_err();
-    assert_eq!(err.0, arkret_core::ReasonCode::REDUCER_PROFILE_MISMATCH);
+    assert_eq!(err.0, arkret_wire::ReasonCode::REDUCER_PROFILE_MISMATCH);
 }
 
 #[test]

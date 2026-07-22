@@ -1014,7 +1014,7 @@ pub(crate) fn validate_durability_policy(
         .ok_or(DURABILITY_POLICY_INVALID)?;
     // scheme gate: organizational recovery requires a deliverable history_secret.
     if content_scheme_rank(effective_scheme) < content_scheme_rank(Some("mls-exporter-aead-v1")) {
-        return Err(arkret_core::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE);
+        return Err(arkret_wire::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE);
     }
     if mode == "threshold" {
         let threshold = policy

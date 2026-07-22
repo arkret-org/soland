@@ -951,7 +951,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
     assert_eq!(err.status, StatusCode::BAD_REQUEST);
     assert_eq!(
         err.code,
-        arkret_core::ReasonCode::EFFECTIVE_SCOPE_REDUCER_MANAGED
+        arkret_wire::ReasonCode::EFFECTIVE_SCOPE_REDUCER_MANAGED
     );
 }
 
@@ -1946,7 +1946,7 @@ fn data_event_capability_ref_reports_upstream_revoked_parent() {
     )
     .expect_err("child capability_ref with revoked parent must reject");
 
-    assert_eq!(err.code, arkret_core::ReasonCode::GRANT_REVOKED_UPSTREAM);
+    assert_eq!(err.code, arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM);
     assert!(err.message.contains("revoked upstream"));
 }
 

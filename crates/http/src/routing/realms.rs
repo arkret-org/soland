@@ -359,7 +359,7 @@ async fn post_realm_link(
 
 /// Map a reducer rejection reason code into the protocol error family.
 fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
-    let code = if reason == arkret_core::ReasonCode::REALM_LINK_SELF_REFERENCE {
+    let code = if reason == arkret_wire::ReasonCode::REALM_LINK_SELF_REFERENCE {
         soland_http::error::ErrorCode::SchemaViolation
     } else {
         soland_http::error::ErrorCode::FailedPrecondition

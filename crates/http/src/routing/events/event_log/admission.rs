@@ -55,7 +55,7 @@ impl SolandEventsSubmitRequestBody {
             for entry in frontier {
                 if !seen.insert(entry.as_str()) {
                     return Err((
-                        arkret_core::ErrorCode::SCHEMA_VIOLATION,
+                        arkret_wire::ErrorCode::SCHEMA_VIOLATION,
                         format!("{name} contains duplicate entry {:?}", entry.as_str()),
                     ));
                 }
@@ -63,7 +63,7 @@ impl SolandEventsSubmitRequestBody {
         }
         if binding.destination_service_type.trim().is_empty() {
             return Err((
-                arkret_core::ErrorCode::SCHEMA_VIOLATION,
+                arkret_wire::ErrorCode::SCHEMA_VIOLATION,
                 "service_binding_ref.destination_service_type MUST be a non-empty string"
                     .to_owned(),
             ));
@@ -73,7 +73,7 @@ impl SolandEventsSubmitRequestBody {
         let actual_reducer_digest = binding.reducer_profile_digest.to_string();
         if actual_reducer_digest != expected_reducer_digest {
             return Err((
-                arkret_core::ReasonCode::REDUCER_PROFILE_MISMATCH,
+                arkret_wire::ReasonCode::REDUCER_PROFILE_MISMATCH,
                 format!(
                     "service_binding_ref.reducer_profile_digest mismatch: expected {expected_reducer_digest}, got {actual_reducer_digest}"
                 ),

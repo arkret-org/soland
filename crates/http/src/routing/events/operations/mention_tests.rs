@@ -109,7 +109,7 @@ mod reaction_and_window_policy_tests {
             );
             assert_eq!(
                 validate_reaction_target_kind(arkret_core::events::EventKind::REACTION_ADD, &op),
-                Err(arkret_core::error::ReasonCode::REACTION_TARGET_UNSUPPORTED),
+                Err(arkret_wire::ReasonCode::REACTION_TARGET_UNSUPPORTED),
                 "target {target} must be rejected",
             );
         }
@@ -221,7 +221,7 @@ mod reaction_and_window_policy_tests {
             "failed_precondition"
         );
         assert_eq!(
-            operation_policy_reason_code(arkret_core::error::ReasonCode::REACTION_SCOPE_MISMATCH).1,
+            operation_policy_reason_code(arkret_wire::ReasonCode::REACTION_SCOPE_MISMATCH).1,
             "failed_precondition"
         );
         assert_eq!(

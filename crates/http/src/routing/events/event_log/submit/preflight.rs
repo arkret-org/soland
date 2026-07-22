@@ -14,7 +14,7 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
     let envelope_value = match operation.payload.get("claim_envelope") {
         Some(value) => value.clone(),
         None => {
-            return Some(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
+            return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
         }
     };
     let envelope =
@@ -22,12 +22,12 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
             Ok(envelope) => envelope,
             Err(_) => {
                 return Some(
-                    arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned(),
+                    arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned(),
                 );
             }
         };
     if envelope.requester_did.as_str() != actor_id {
-        return Some(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
+        return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
     }
     let sender_device_id = operation
         .payload
@@ -77,7 +77,7 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
         .and_then(Value::as_str)
     {
         let Ok(recipient) = arkret_core::Did::new(recipient_actor_id.to_owned()) else {
-            return Some(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
+            return Some(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
         };
         if !crate::routing::mls::current_agent_key_authorization_matches(
             state,
@@ -86,7 +86,7 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
         )
         .await
         {
-            return Some(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
+            return Some(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
         }
     }
     if crate::routing::identity::auth::is_device_revoked(

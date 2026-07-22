@@ -1412,11 +1412,11 @@ pub(crate) async fn claim_keypackages_for_request(
                 soland_application::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND => {
                     AppError::not_found("KeyPackage not found").with_wire_code(reason)
                 }
-                arkret_core::ReasonCode::KEYPACKAGE_EXPIRED => {
+                arkret_wire::ReasonCode::KEYPACKAGE_EXPIRED => {
                     AppError::new(ErrorCode::FailedPrecondition, "KeyPackage lifetime expired")
                         .with_wire_code(reason)
                 }
-                arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH => AppError::new(
+                arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH => AppError::new(
                     ErrorCode::FailedPrecondition,
                     "KeyPackage cross-signing generation mismatch",
                 )

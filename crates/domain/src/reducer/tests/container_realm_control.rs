@@ -67,7 +67,7 @@ fn container_move_uses_canonical_position_cell_and_enforces_cas() {
     );
     assert!(matches!(
         rejected,
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ErrorCode::CAS_CONFLICT
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ErrorCode::CAS_CONFLICT
     ));
     assert_eq!(state.cell_value(&cell_id), Some(&current));
 
@@ -145,7 +145,7 @@ fn container_rebalance_is_atomic_against_order_digest() {
     );
     assert!(matches!(
         rejected,
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ErrorCode::CAS_CONFLICT
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ErrorCode::CAS_CONFLICT
     ));
     assert_eq!(state.cell_value(&cell_id), Some(&current));
 }
@@ -232,7 +232,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
     );
     assert!(matches!(
         downgrade,
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ErrorCode::SCHEMA_VIOLATION
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ErrorCode::SCHEMA_VIOLATION
     ));
     assert_eq!(
         state.realm_digest_algorithm(REALM_ID).as_deref(),

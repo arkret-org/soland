@@ -404,7 +404,7 @@ pub fn check_realm_link_admissible(
         })
         .and_then(|link| arkret_core::RealmLinkStatus::parse(&link.status));
     if current_status.is_some_and(|current| !current.can_transition_to(next_status)) {
-        return Err(arkret_core::ReasonCode::REALM_LINK_INVALID_TRANSITION);
+        return Err(arkret_wire::ReasonCode::REALM_LINK_INVALID_TRANSITION);
     }
     Ok(())
 }
@@ -556,7 +556,7 @@ mod tests {
         assert!(matches!(
             effect,
             crate::reducer::ProjectionEffect::Rejected { reason }
-                if reason == arkret_core::ReasonCode::REALM_LINK_INVALID_TRANSITION
+                if reason == arkret_wire::ReasonCode::REALM_LINK_INVALID_TRANSITION
         ));
     }
 

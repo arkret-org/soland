@@ -383,7 +383,7 @@ impl MediaProviderKind {
                 ErrorCode::InvalidParam,
                 format!("unknown media focus provider `{value}`"),
             )
-            .with_wire_code(arkret_core::ReasonCode::UNKNOWN_FOCUS_TYPE)),
+            .with_wire_code(arkret_wire::ReasonCode::UNKNOWN_FOCUS_TYPE)),
         }
     }
 
@@ -595,7 +595,7 @@ async fn handle_rtc_token(
             "actor was removed from the call (ban) and cannot re-issue a join token",
         )
         .with_status(StatusCode::FORBIDDEN)
-        .with_wire_code(arkret_core::ReasonCode::CALL_PARTICIPANT_REMOVED));
+        .with_wire_code(arkret_wire::ReasonCode::CALL_PARTICIPANT_REMOVED));
     }
     let media_epoch = media_service_epoch_for_realm(state, body.realm_id.as_str())?;
 
@@ -615,7 +615,7 @@ async fn handle_rtc_token(
                 body.focus_id, session_focus
             ),
         )
-        .with_wire_code(arkret_core::ReasonCode::FOCUS_MISMATCH));
+        .with_wire_code(arkret_wire::ReasonCode::FOCUS_MISMATCH));
     }
     let focus = media_epoch.focus(&session_focus).ok_or_else(|| {
         focus_unavailable_error("selected focus is not present in media_service epoch")
@@ -638,7 +638,7 @@ async fn handle_rtc_token(
             ErrorCode::FailedPrecondition,
             format!("e2ee_key_source `{e2ee_key_source}` is not authorized by media_service epoch"),
         )
-        .with_wire_code(arkret_core::ReasonCode::E2EE_KEY_SOURCE_UNAUTHORISED));
+        .with_wire_code(arkret_wire::ReasonCode::E2EE_KEY_SOURCE_UNAUTHORISED));
     }
 
     // MEDIA-1 — token TTL defaults to 300s and is capped at the spec ceiling
@@ -1332,12 +1332,12 @@ fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
 
 fn token_issuer_unauthorised(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::FailedPrecondition, message)
-        .with_wire_code(arkret_core::ReasonCode::TOKEN_ISSUER_UNAUTHORISED)
+        .with_wire_code(arkret_wire::ReasonCode::TOKEN_ISSUER_UNAUTHORISED)
 }
 
 fn focus_unavailable_error(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::FailedPrecondition, message)
-        .with_wire_code(arkret_core::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT)
+        .with_wire_code(arkret_wire::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT)
 }
 
 #[endpoint(

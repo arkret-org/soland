@@ -88,7 +88,7 @@ impl ProjectionState {
         };
         if object.contains_key("default_scope_circle_id") {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         }
         // The Space's own optional scope MUST reference an active Circle in
@@ -227,7 +227,7 @@ impl ProjectionState {
         if let Some(patch) = patch {
             if patch.contains_key("default_scope_circle_id") {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
             }
             let candidate_kind = patch
@@ -671,21 +671,21 @@ impl ProjectionState {
                 if parent.scope_circle_id.as_deref() == child_scope_circle_id {
                     Ok(())
                 } else {
-                    Err(arkret_core::ErrorCode::POLICY_VIOLATION)
+                    Err(arkret_wire::ErrorCode::POLICY_VIOLATION)
                 }
             }
             arkret_core::ChildScopePolicy::RequireScopeCircleId { scope_circle_id } => {
                 if Some(scope_circle_id.as_str()) == child_scope_circle_id {
                     Ok(())
                 } else {
-                    Err(arkret_core::ErrorCode::POLICY_VIOLATION)
+                    Err(arkret_wire::ErrorCode::POLICY_VIOLATION)
                 }
             }
             arkret_core::ChildScopePolicy::RequireE2ee {} => {
                 if self.child_scope_is_e2ee(child_scope_circle_id, child_realm_id) {
                     Ok(())
                 } else {
-                    Err(arkret_core::ErrorCode::POLICY_VIOLATION)
+                    Err(arkret_wire::ErrorCode::POLICY_VIOLATION)
                 }
             }
         }
@@ -738,7 +738,7 @@ fn child_scope_policy_from_object(
     };
     serde_json::from_value(policy.clone())
         .map(Some)
-        .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
+        .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
 }
 
 fn validate_space_wip_policy(
@@ -748,7 +748,7 @@ fn validate_space_wip_policy(
     let limit = fields.get("wip_limit");
     let enforcement = fields.get("wip_limit_enforcement");
     if kind != "list" && (limit.is_some() || enforcement.is_some()) {
-        return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     }
     if let Some(limit) = limit
         && (!limit
@@ -756,7 +756,7 @@ fn validate_space_wip_policy(
             .is_some_and(|limit| (1..=100_000).contains(&limit))
             || enforcement.is_none())
     {
-        return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     }
     if let Some(enforcement) = enforcement
         && (limit.is_none()
@@ -765,7 +765,7 @@ fn validate_space_wip_policy(
                 Some("warn" | "reject" | "require_review")
             ))
     {
-        return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     }
     Ok(())
 }

@@ -622,7 +622,7 @@ async fn verify_ephemeral_device_proof(
 
 fn ephemeral_proof_invalid(message: impl Into<String>) -> soland_http::error::AppError {
     soland_http::error::AppError::invalid_param(message)
-        .with_reason_code(arkret_core::ReasonCode::PROOF_INVALID)
+        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }
 
 #[cfg(test)]

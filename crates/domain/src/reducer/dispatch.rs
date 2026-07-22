@@ -633,7 +633,7 @@ fn apply_member_identity_update_dispatch(
     }
     if segment != "member_identity" {
         return ProjectionEffect::Rejected {
-            reason: arkret_core::ReasonCode::MEMBER_IDENTITY_UNKNOWN_SEGMENT.to_owned(),
+            reason: arkret_wire::ReasonCode::MEMBER_IDENTITY_UNKNOWN_SEGMENT.to_owned(),
         };
     }
     ProjectionEffect::MemberIdentityProjected {

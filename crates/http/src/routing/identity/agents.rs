@@ -1103,7 +1103,7 @@ mod tests {
 
         assert_eq!(
             err.wire_code(),
-            arkret_core::ReasonCode::SIDECAR_CREATE_DENIED
+            arkret_wire::ReasonCode::SIDECAR_CREATE_DENIED
         );
     }
 

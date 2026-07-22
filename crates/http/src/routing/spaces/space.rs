@@ -135,7 +135,7 @@ fn operation_reject_to_app_error(reason: &'static str) -> AppError {
     let error = AppError::new(ErrorCode::FailedPrecondition, reason.to_owned())
         .with_status(status)
         .with_wire_code(wire_code);
-    if reason == arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
+    if reason == arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
         error.with_reason_code(reason)
     } else if wire_code == "failed_precondition" && reason != wire_code {
         error.with_top_level_reason(reason)
@@ -1432,7 +1432,7 @@ mod tests {
 
     #[test]
     fn operation_rejection_keeps_organization_approval_as_reason_code() {
-        let reason = arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL;
+        let reason = arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL;
         let error = operation_reject_to_app_error(reason);
 
         assert_eq!(error.http_status(), salvo::http::StatusCode::CONFLICT);

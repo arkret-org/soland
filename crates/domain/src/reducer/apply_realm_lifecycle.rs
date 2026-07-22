@@ -908,7 +908,7 @@ impl ProjectionState {
                 .map(ToOwned::to_owned)
             else {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
             };
             Some(creator)
@@ -1003,7 +1003,7 @@ impl ProjectionState {
             .unwrap_or_else(|| "sha256".to_owned());
         if arkret_core::canonical::digest_suite(&payload_digest_algorithm).is_err() {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
+                reason: arkret_wire::ErrorCode::UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
             };
         }
         if kind == arkret_core::events::EventKind::REALM_UPDATE
@@ -1017,7 +1017,7 @@ impl ProjectionState {
             && operation_touches_digest_algorithm(operation)
         {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         }
         if let Some(ref new_td) = payload_trust_domain {
@@ -1025,7 +1025,7 @@ impl ProjectionState {
             // typed id validator.
             if arkret_core::TypedTrustDomainId::new(new_td.clone()).is_err() {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
             }
             // Compare against any prior locked value. Any mismatch is a
@@ -1036,7 +1036,7 @@ impl ProjectionState {
                 && locked_td != new_td.as_str()
             {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_core::ReasonCode::CROSS_DOMAIN_REPLAY_REJECTED.to_owned(),
+                    reason: arkret_wire::ReasonCode::CROSS_DOMAIN_REPLAY_REJECTED.to_owned(),
                 };
             }
         }
@@ -1099,7 +1099,7 @@ impl ProjectionState {
                 Some(id) => {
                     if arkret_core::RealmId::new(id).is_err() {
                         return ProjectionEffect::Rejected {
-                            reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                            reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                         };
                     }
                     if id == realm_id {
@@ -1115,7 +1115,7 @@ impl ProjectionState {
             && payload_successor_realm_id.is_some()
         {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         }
 
@@ -1510,7 +1510,7 @@ impl ProjectionState {
             Some(s) => s,
             None => {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
             }
         };
@@ -1527,14 +1527,14 @@ impl ProjectionState {
         ];
         if !valid_outcomes.contains(&outcome.as_str()) {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         }
         // `scope` MUST be present per schema; we only require it to
         // be an object — the wire validator enforces the inner shape.
         let Some(scope) = payload.get("scope").and_then(Value::as_object) else {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         };
         let storage_boundary = scope

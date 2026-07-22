@@ -123,14 +123,14 @@ pub(crate) async fn validate_event_envelope_with_context(
     if object.get("actor_kind").is_some() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            arkret_core::ReasonCode::ACTOR_KIND_REDUCER_MANAGED,
+            arkret_wire::ReasonCode::ACTOR_KIND_REDUCER_MANAGED,
             "envelope.actor_kind is reducer-managed; clients MUST NOT supply it",
         ));
     }
     if object.get("effective_scope").is_some() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            arkret_core::ReasonCode::EFFECTIVE_SCOPE_REDUCER_MANAGED,
+            arkret_wire::ReasonCode::EFFECTIVE_SCOPE_REDUCER_MANAGED,
             "envelope.effective_scope is reducer-managed; clients MUST NOT supply it",
         ));
     }
@@ -217,7 +217,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     if let Some(reason) = frozen_realm_check(realm_frozen, &kind) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            arkret_core::ErrorCode::REALM_FROZEN,
+            arkret_wire::ErrorCode::REALM_FROZEN,
             reason,
         ));
     }

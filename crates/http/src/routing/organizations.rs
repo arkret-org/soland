@@ -1049,7 +1049,7 @@ pub(crate) fn requires_organization_approval_error() -> AppError {
         "realm moderation policy override requires organization approval",
     )
     .with_status(StatusCode::CONFLICT)
-    .with_reason_code(arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
+    .with_reason_code(arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
 }
 
 #[cfg(test)]
@@ -1065,7 +1065,7 @@ mod tests {
         assert_eq!(error.wire_code(), "failed_precondition");
         assert_eq!(
             error.reason_code.as_deref(),
-            Some(arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
+            Some(arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
         );
     }
 }

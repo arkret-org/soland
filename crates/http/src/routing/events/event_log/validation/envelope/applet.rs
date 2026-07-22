@@ -13,7 +13,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     let executed_by = event_string_field(object, &["executed_by"]).ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
-            arkret_core::ReasonCode::EXECUTED_BY_MISSING,
+            arkret_wire::ReasonCode::EXECUTED_BY_MISSING,
             "applet-originated delegated Event requires executed_by",
         )
     })?;

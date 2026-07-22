@@ -85,7 +85,7 @@ pub(super) async fn validate_member_state_policy(
                 return Err("not_member");
             }
             if !has_active_accountability_grant(state, target, actor).await {
-                return Err(arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
+                return Err(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
             }
             if realm_requires_content_encryption(state, operation.realm_id.as_str()).await
                 && !crate::routing::mls::has_claimable_realm_membership_keypackage(
@@ -386,7 +386,7 @@ pub(super) async fn validate_realm_organization_policy(
     // Organization side — strong-typed parse + SDK verifier (fail-closed).
     let payload: arkret_models_collaboration::RealmOrganizationPayload =
         serde_json::from_value(operation.payload.clone())
-            .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)?;
+            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
     arkret_policy::verify_realm_organization_statement(
         &payload,
         &operation.realm_id,
@@ -556,7 +556,7 @@ pub(super) async fn validate_call_recording_start_policy(
         return Ok(());
     }
     if action == arkret_core::CapabilityActionId::CALL_TRANSCRIBE {
-        Err(arkret_core::ReasonCode::TRANSCRIPTION_DENIED)
+        Err(arkret_wire::ReasonCode::TRANSCRIPTION_DENIED)
     } else {
         Err("missing_capability")
     }
@@ -566,7 +566,7 @@ fn call_recording_start_payload(
     operation: &Operation,
 ) -> Result<arkret_core::RecordingStartPayload, &'static str> {
     let Some(payload) = operation.payload.as_object() else {
-        return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     };
     let wire_payload = [
         "call_id",
@@ -585,7 +585,7 @@ fn call_recording_start_payload(
     })
     .collect();
     serde_json::from_value(Value::Object(wire_payload))
-        .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
+        .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
 }
 
 pub(super) fn call_recording_start_required_action(

@@ -36,27 +36,27 @@ impl ProjectionState {
             .and_then(|effects| (effects.len() == 1).then(|| &effects[0]))
         else {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+                reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
             };
         };
         let Some(cell) = effect.get("cell").and_then(Value::as_str) else {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+                reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
             };
         };
         let Some(value) = effect.pointer("/op/value").cloned() else {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+                reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
             };
         };
         let Ok(cell) = CellRef::new(cell.to_owned()) else {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+                reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
             };
         };
         if self.cells.contains_key(&cell) {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::CAS_CONFLICT.to_owned(),
+                reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
             };
         }
         self.cells.insert(cell, CellState::Value(value));
@@ -80,14 +80,14 @@ impl ProjectionState {
                 }
                 _ => {
                     return ProjectionEffect::Rejected {
-                        reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                     };
                 }
             };
         let realm_id = payload.realm_id.to_string();
         let Ok(cell_id) = CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}")) else {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         };
         if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
@@ -97,7 +97,7 @@ impl ProjectionState {
         }
         let Ok(value) = serde_json::to_value(payload.notary) else {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         };
         self.cells.insert(cell_id, CellState::Value(value));
@@ -121,7 +121,7 @@ impl ProjectionState {
                 Ok(payload) if payload.validate().is_ok() => payload,
                 _ => {
                     return ProjectionEffect::Rejected {
-                        reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                     };
                 }
             };
@@ -130,14 +130,14 @@ impl ProjectionState {
             != Some(payload.from_digest_algorithm.as_str())
         {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::CAS_CONFLICT.to_owned(),
+                reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
             };
         }
         let Ok(cell_id) = CellRef::new(format!(
             "ak:cell:ak.component.realm.digest_suite.v1:{realm_id}"
         )) else {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         };
         if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
@@ -148,7 +148,7 @@ impl ProjectionState {
         let digest_algorithm = payload.to_digest_algorithm.as_str().to_owned();
         let Ok(value) = serde_json::to_value(payload) else {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         };
         self.cells.insert(cell_id, CellState::Value(value));
@@ -204,14 +204,14 @@ impl ProjectionState {
             < content_floor_rank(self.realm_content_encryption_floor(&realm_id).as_deref())
         {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+                reason: arkret_wire::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
             };
         }
         if metadata_floor_rank(policy_floor_field(&value, "metadata_encryption_floor"))
             < metadata_floor_rank(self.realm_metadata_encryption_floor(&realm_id).as_deref())
         {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+                reason: arkret_wire::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
             };
         }
         // One-way `content_scheme` ratchet (realm-and-space.md history-sharing):
@@ -399,7 +399,7 @@ impl ProjectionState {
             match self.call_session_focus.get(&call_id) {
                 Some(committed) if committed != session_focus => {
                     return ProjectionEffect::Rejected {
-                        reason: arkret_core::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED.to_owned(),
+                        reason: arkret_wire::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED.to_owned(),
                     };
                 }
                 Some(_) => {}
@@ -477,7 +477,7 @@ impl ProjectionState {
                     .is_some_and(|reference| !reference.starts_with("ak:blob:"));
             if bypassed {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_core::ReasonCode::TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED
+                    reason: arkret_wire::ReasonCode::TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED
                         .to_owned(),
                 };
             }
@@ -572,7 +572,7 @@ impl ProjectionState {
         let value = state_payload_value(&operation.payload).clone();
         let Some(call_id) = value.get("call_id").and_then(Value::as_str) else {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
+                reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
             };
         };
         let call_id = call_id.to_owned();
@@ -584,7 +584,7 @@ impl ProjectionState {
             .is_some_and(is_terminal_call_state);
         if !final_state_terminal {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
+                reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
             };
         }
 
@@ -602,7 +602,7 @@ impl ProjectionState {
                 .is_some_and(|state| is_terminal_call_state(&state));
         if !call_state_terminal {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
+                reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
             };
         }
 
@@ -614,7 +614,7 @@ impl ProjectionState {
             if let Some(existing) = self.cell_value(&cell_id) {
                 if existing != &value {
                     return ProjectionEffect::Rejected {
-                        reason: arkret_core::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
+                        reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
                     };
                 }
                 return ProjectionEffect::CallSummaryProjected { call_id };
@@ -771,7 +771,7 @@ impl ProjectionState {
             .and_then(|link| arkret_core::RealmLinkStatus::parse(&link.status));
         if current_status.is_some_and(|current| !current.can_transition_to(next_status)) {
             return ProjectionEffect::Rejected {
-                reason: arkret_core::ReasonCode::REALM_LINK_INVALID_TRANSITION.to_owned(),
+                reason: arkret_wire::ReasonCode::REALM_LINK_INVALID_TRANSITION.to_owned(),
             };
         }
         let label = operation
@@ -1298,7 +1298,7 @@ fn validate_capture_state(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if !consent_confirmed {
-        return Some(arkret_core::ReasonCode::RECORDING_CONSENT_REQUIRED);
+        return Some(arkret_wire::ReasonCode::RECORDING_CONSENT_REQUIRED);
     }
     None
 }
@@ -1318,7 +1318,7 @@ fn validate_transcript_result_storage(
     if has_start_event_id {
         None
     } else {
-        Some(arkret_core::ErrorCode::SCHEMA_VIOLATION)
+        Some(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
     }
 }
 
@@ -1326,5 +1326,5 @@ fn validate_call_capture_failure_reason(result: &Value) -> Option<&'static str> 
     let reason = result.get("failure_reason_code")?;
     serde_json::from_value::<arkret_core::CallCaptureFailureReasonCode>(reason.clone())
         .err()
-        .map(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
+        .map(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
 }

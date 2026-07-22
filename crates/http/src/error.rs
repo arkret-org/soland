@@ -1,12 +1,12 @@
 //! Soland error integration for canonical Arkret SDK error codes.
 //!
-//! Wire-form error codes are owned by `arkret_core::ErrorCode`; this module
+//! Wire-form error codes are owned by `arkret_wire::ErrorCode`; this module
 //! only adds soland-specific Salvo rendering and typed endpoint plumbing.
 
 /// Soland-local rejection reasons that are not registered protocol reason codes.
 ///
 /// Registered reasons and top-level errors are consumed directly through
-/// arkret_core::ReasonCode and arkret_core::ErrorCode.
+/// arkret_wire::ReasonCode and arkret_wire::ErrorCode.
 pub mod reasons {
     pub const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =
         "member_identity_handle_field_forbidden";
@@ -61,7 +61,7 @@ macro_rules! app_error {
     };
 }
 
-pub use arkret_core::ErrorCode;
+pub use arkret_wire::ErrorCode;
 
 /// Convert the SDK registry status into Salvo's `StatusCode`.
 pub fn error_http_status(code: ErrorCode) -> StatusCode {

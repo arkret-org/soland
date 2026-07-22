@@ -134,12 +134,12 @@ pub(crate) fn validate_reaction_target_kind(
     let Some(target) = target else {
         // Missing target is caught by REACTION_REQUIREMENTS; treat here as
         // unsupported so the canonical reason still surfaces.
-        return Err(arkret_core::error::ReasonCode::REACTION_TARGET_UNSUPPORTED);
+        return Err(arkret_wire::ReasonCode::REACTION_TARGET_UNSUPPORTED);
     };
     if target.starts_with("ak:message:") || target.starts_with("ak:event:") {
         Ok(())
     } else {
-        Err(arkret_core::error::ReasonCode::REACTION_TARGET_UNSUPPORTED)
+        Err(arkret_wire::ReasonCode::REACTION_TARGET_UNSUPPORTED)
     }
 }
 
@@ -167,7 +167,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             )?;
             payload
                 .validate()
-                .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
+                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         }
         arkret_core::events::EventKind::CONTAINER_REBALANCE => {
             let payload: arkret_core::ContainerRebalancePayload = typed_payload_fields(
@@ -181,17 +181,17 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             )?;
             payload
                 .validate()
-                .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
+                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         }
         arkret_core::events::EventKind::REALM_NOTARY => {
             let payload: arkret_core::RealmNotaryPayload =
                 typed_payload_fields(operation, &["realm_id", "notary"])?;
             if payload.realm_id != operation.realm_id {
-                return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
+                return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
             }
             payload
                 .validate()
-                .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
+                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         }
         arkret_core::events::EventKind::REALM_DIGEST_SUITE_TRANSITION => {
             let payload: arkret_core::RealmDigestSuiteTransitionPayload = typed_payload_fields(
@@ -205,7 +205,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             )?;
             payload
                 .validate()
-                .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
+                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         }
         arkret_core::events::EventKind::CONSENT_GRANT => {
             let _: arkret_core::ConsentGrantPayload = typed_payload_fields(
@@ -337,9 +337,9 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             // here pins them to `soland_http::error::reasons::*` so a rename
             // would break compilation rather than silently diverge.
             const _SESSION_FOCUS_REASON: &str =
-                arkret_core::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED;
+                arkret_wire::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED;
             const _PARTICIPANT_BINDING_REASON: &str =
-                arkret_core::ReasonCode::PARTICIPANT_BINDING_INVALID;
+                arkret_wire::ReasonCode::PARTICIPANT_BINDING_INVALID;
             if let Some(revision) = operation
                 .payload
                 .get("session_focus_revision")
@@ -424,7 +424,7 @@ fn typed_payload_fields<T: DeserializeOwned>(
     fields: &[&str],
 ) -> Result<T, &'static str> {
     let Some(payload) = operation.payload.as_object() else {
-        return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     };
     let wire_payload = fields
         .iter()
@@ -436,7 +436,7 @@ fn typed_payload_fields<T: DeserializeOwned>(
         })
         .collect();
     serde_json::from_value(Value::Object(wire_payload))
-        .map_err(|_| arkret_core::ErrorCode::SCHEMA_VIOLATION)
+        .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
 }
 
 pub(crate) fn validate_operation_schema_from_sdk_artifact(
@@ -1047,13 +1047,13 @@ pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static 
     let parsed: arkret_core::ConsentRevokePayload = serde_json::from_value(payload.clone())
         .map_err(|err| {
             (
-                arkret_core::ErrorCode::SCHEMA_VIOLATION,
+                arkret_wire::ErrorCode::SCHEMA_VIOLATION,
                 format!("ak.consent.revoke payload shape is invalid: {err}"),
             )
         })?;
     parsed.validate_minimal().map_err(|err| {
         (
-            arkret_core::ErrorCode::SCHEMA_VIOLATION,
+            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
             format!("ak.consent.revoke payload invariant violation: {err}"),
         )
     })?;
@@ -1092,7 +1092,7 @@ mod tests {
                 arkret_core::events::EventKind::CONTAINER_MOVE_ITEM,
                 &legacy,
             ),
-            Err(arkret_core::ErrorCode::SCHEMA_VIOLATION)
+            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         );
     }
 
@@ -1110,7 +1110,7 @@ mod tests {
                 arkret_core::events::EventKind::REALM_NOTARY,
                 &wrong_realm,
             ),
-            Err(arkret_core::ErrorCode::SCHEMA_VIOLATION)
+            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         );
 
         let noop = operation(
@@ -1127,7 +1127,7 @@ mod tests {
                 arkret_core::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
                 &noop,
             ),
-            Err(arkret_core::ErrorCode::SCHEMA_VIOLATION)
+            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         );
     }
 

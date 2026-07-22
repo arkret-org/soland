@@ -121,7 +121,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         if crate::authz::grant_revoked_upstream(&historical_snapshot, grant_id, auth_time) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
-                arkret_core::ReasonCode::GRANT_REVOKED_UPSTREAM,
+                arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM,
                 format!("DataEvent capability_ref {grant_id} was revoked upstream"),
             ));
         }
@@ -397,13 +397,13 @@ pub(super) fn validate_data_event_covered_seals(
 pub(super) fn data_event_covered_seals_failed_precondition(
     message: impl Into<String>,
 ) -> EventValidationError {
-    let code = arkret_core::ErrorCode::FailedPrecondition;
+    let code = arkret_wire::ErrorCode::FailedPrecondition;
     event_validation_error(
         error_http_status(code),
         code.as_str(),
         format!(
             "{}: {}",
-            arkret_core::ReasonCode::MLS_GOVERNANCE_BINDING_STALE,
+            arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE,
             message.into()
         ),
     )

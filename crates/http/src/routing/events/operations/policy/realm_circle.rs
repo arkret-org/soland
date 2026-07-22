@@ -26,7 +26,7 @@ pub(super) fn validate_realm_lifecycle_write_gate(
     if projection.realm_is_frozen_at(realm_id, chrono::Utc::now())
         && !realm_frozen_operation_exempt(&kind)
     {
-        return Err(arkret_core::ErrorCode::REALM_FROZEN);
+        return Err(arkret_wire::ErrorCode::REALM_FROZEN);
     }
     Ok(())
 }

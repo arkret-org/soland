@@ -728,7 +728,7 @@ fn call_state_capture_failure_reason_uses_closed_sdk_type() {
             ),
             &hlc,
         ),
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ErrorCode::SCHEMA_VIOLATION
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ErrorCode::SCHEMA_VIOLATION
     ));
 }
 

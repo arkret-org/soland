@@ -133,7 +133,7 @@ pub(super) async fn recovery_receipt_put(
                 "witness_ref observed_at is {age_secs}s old (> freshness window \
                      {RECOVERY_WITNESS_FRESHNESS_SECS}s)"
             ))
-            .with_wire_code(arkret_core::ReasonCode::RECOVERY_WITNESS_REVOKE_LAGGING));
+            .with_wire_code(arkret_wire::ReasonCode::RECOVERY_WITNESS_REVOKE_LAGGING));
         }
     }
 

@@ -1550,12 +1550,12 @@ impl PresignBlobBlock {
                 ErrorCode::FailedPrecondition,
                 "blob is currently subject to a legal hold; presign refused",
             )
-            .with_wire_code(arkret_core::ReasonCode::LEGAL_HOLD_ACTIVE),
+            .with_wire_code(arkret_wire::ReasonCode::LEGAL_HOLD_ACTIVE),
             Self::Redacted => AppError::new(
                 ErrorCode::FailedPrecondition,
                 "blob has been redacted; presign refused",
             )
-            .with_wire_code(arkret_core::ReasonCode::BLOB_REDACTED),
+            .with_wire_code(arkret_wire::ReasonCode::BLOB_REDACTED),
             Self::ActorPrivate => AppError::new(
                 ErrorCode::CapabilityDenied,
                 "blob is actor_private; only the owner may request a presign URL",

@@ -283,7 +283,7 @@ async fn validate_read_receipt_child_policy_write(
 fn read_receipt_child_violation_reason(violation: ReadReceiptPolicyChildViolation) -> &'static str {
     match violation {
         ReadReceiptPolicyChildViolation::ComplianceFloorViolated => {
-            arkret_core::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
+            arkret_wire::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
         }
         ReadReceiptPolicyChildViolation::ScopeOverridesDisabled
         | ReadReceiptPolicyChildViolation::DisclosurePrivacyLoosened
@@ -704,7 +704,7 @@ pub(crate) async fn validate_realm_moderation_policy(
     )
     .await;
     if requires_approval && !has_approval {
-        return Err(arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL);
+        return Err(arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL);
     }
     Ok(())
 }

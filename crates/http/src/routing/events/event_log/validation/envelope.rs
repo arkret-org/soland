@@ -62,7 +62,7 @@ fn event_digest_for_suite(bytes: &[u8], suite: &str) -> Result<String, EventVali
 }
 
 fn unsupported_digest_algorithm_error(suite: &str) -> EventValidationError {
-    let code = arkret_core::ErrorCode::UnsupportedDigestAlgorithm;
+    let code = arkret_wire::ErrorCode::UnsupportedDigestAlgorithm;
     event_validation_error(
         error_http_status(code),
         code.as_str(),

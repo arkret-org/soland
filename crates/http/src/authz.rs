@@ -444,7 +444,7 @@ impl SolandAuthzEngine {
             if has_revoked_upstream_grant {
                 return AuthzResult {
                     allowed: false,
-                    reason: arkret_core::ReasonCode::GRANT_REVOKED_UPSTREAM.to_owned(),
+                    reason: arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM.to_owned(),
                     reason_detail: None,
                     grants: Vec::new(),
                 };
@@ -467,7 +467,7 @@ impl SolandAuthzEngine {
         if has_revoked_upstream_grant {
             return AuthzResult {
                 allowed: false,
-                reason: arkret_core::ReasonCode::GRANT_REVOKED_UPSTREAM.to_owned(),
+                reason: arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM.to_owned(),
                 reason_detail: None,
                 grants: Vec::new(),
             };
@@ -1474,7 +1474,7 @@ mod tests {
         assert!(!result.allowed);
         assert_eq!(
             result.reason,
-            arkret_core::ReasonCode::GRANT_REVOKED_UPSTREAM
+            arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM
         );
         assert!(
             engine

@@ -99,11 +99,11 @@ pub(crate) async fn minimal_metadata_author_context(
 /// The single canonical rejection for every §2.10.3 failure mode.
 fn author_credential_invalid(detail: impl std::fmt::Display) -> EventValidationError {
     tracing::debug!(%detail, "minimal-metadata author credential admission failed");
-    let code = arkret_core::ErrorCode::FailedPrecondition;
+    let code = arkret_wire::ErrorCode::FailedPrecondition;
     event_validation_error(
         error_http_status(code),
         code.as_str(),
-        arkret_core::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID,
+        arkret_wire::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID,
     )
 }
 
@@ -398,7 +398,7 @@ mod tests {
             assert_eq!(error.code, "failed_precondition");
             assert_eq!(
                 error.message,
-                arkret_core::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID
+                arkret_wire::ReasonCode::MINIMAL_METADATA_AUTHOR_CREDENTIAL_INVALID
             );
         }
     }

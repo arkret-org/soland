@@ -307,10 +307,10 @@ pub(crate) fn validate_patch_semantic_safety(
 ) -> Result<(), &'static str> {
     for (path, value) in patch {
         if patch_path_targets_reducer_managed(path) {
-            return Err(arkret_core::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
+            return Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
         }
         if patch_op_removes_value(value) && patch_path_targets_redactable_unset(path) {
-            return Err(arkret_core::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD);
+            return Err(arkret_wire::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD);
         }
     }
     Ok(())

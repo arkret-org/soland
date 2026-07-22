@@ -479,7 +479,7 @@ fn space_wip_policy_is_projected_and_removed_scope_fields_fail_closed() {
         assert!(matches!(
             effect,
             ProjectionEffect::Rejected { ref reason }
-                if reason == arkret_core::ErrorCode::SCHEMA_VIOLATION
+                if reason == arkret_wire::ErrorCode::SCHEMA_VIOLATION
         ));
     }
 }
@@ -886,11 +886,11 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     );
     assert!(matches!(
         state.apply(&public_create, &hlc),
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ErrorCode::POLICY_VIOLATION
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ErrorCode::POLICY_VIOLATION
     ));
     assert_eq!(
         state.check_child_scope_policy_transition(&public_create),
-        Err(arkret_core::ErrorCode::POLICY_VIOLATION)
+        Err(arkret_wire::ErrorCode::POLICY_VIOLATION)
     );
     assert!(!state.strands.contains_key(public_strand_id));
 
@@ -1034,7 +1034,7 @@ fn child_scope_policy_gates_space_parent_edges() {
     );
     assert!(matches!(
         state.apply(&public_parent, &hlc),
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ErrorCode::POLICY_VIOLATION
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ErrorCode::POLICY_VIOLATION
     ));
     assert_eq!(state.space_containers[child_id].parent_ref.as_deref(), None);
 

@@ -235,12 +235,12 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
     // downgrade e2ee_required -> allow_plaintext is rejected
     assert!(matches!(
         apply_floor(&mut state, Some("allow_plaintext")),
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
     ));
     // dropping the floor by omission is also a downgrade
     assert!(matches!(
         apply_floor(&mut state, None),
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
     ));
 }
 
@@ -266,7 +266,7 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     // tightening to the same level is fine; lowering is rejected
     assert!(matches!(
         apply_meta(&mut state, "allow_plaintext"),
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE
     ));
 }
 
@@ -379,7 +379,7 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
             &effect,
             ProjectionEffect::Rejected { reason }
                 if reason
-                    == arkret_core::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+                    == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
         ),
         "expected history/content-scheme rejection, got {effect:?}"
     );
@@ -484,7 +484,7 @@ fn durability_policy_requires_exporter_aead_scheme() {
     );
     assert!(matches!(
         effect,
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE
     ));
 }
 

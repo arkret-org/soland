@@ -238,7 +238,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
     }
     // Lifetime check — RFC 9420 §10. Stale KeyPackages can't be claimed.
     if claimed_at >= row.lifetime.not_after {
-        return reject(arkret_core::ReasonCode::KEYPACKAGE_EXPIRED);
+        return reject(arkret_wire::ReasonCode::KEYPACKAGE_EXPIRED);
     }
     let trust_binding = match keypackage_claim_trust_binding(payload) {
         Ok(binding) => binding,
@@ -248,7 +248,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
         || row.device_authorize_event_id != trust_binding.device_authorize_event_id
         || row.agent_key_authorize_event_id != trust_binding.agent_key_authorize_event_id
     {
-        return reject(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH);
+        return reject(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH);
     }
     let intended_realm_id = payload
         .get("intended_realm_id")
@@ -277,7 +277,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
         if claim_expires_at_unix_ms <= claimed_at.saturating_mul(1000)
             || claim_expires_at_unix_ms > row.lifetime.not_after.saturating_mul(1000)
         {
-            return reject(arkret_core::ReasonCode::KEYPACKAGE_EXPIRED);
+            return reject(arkret_wire::ReasonCode::KEYPACKAGE_EXPIRED);
         }
         row.claimed_by = Some(group_id.to_owned());
         row.claimed_at = Some(claimed_at);
@@ -672,7 +672,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     if !locked_policy_root.is_empty() {
         let commit_policy_root = binding_policy_root(payload).unwrap_or_default();
         if commit_policy_root != locked_policy_root {
-            return reject(arkret_core::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
+            return reject(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
         }
     }
 
@@ -703,7 +703,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
             // `decryption_pending` reject until a resolving commit advances the
             // epoch. (A reject never reaches persistence, so it does not need a
             // mirror.)
-            return reject(arkret_core::ReasonCode::DECRYPTION_PENDING);
+            return reject(arkret_wire::ReasonCode::DECRYPTION_PENDING);
         }
         // First racing commit at this base: drive `covered_frontier_cell` to
         // `⊥`. The accepted `CommitFrontierContested` effect flips the marker on
@@ -1101,25 +1101,25 @@ fn validate_welcome_trust_binding(
         .get("claim_id")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let keypackage_ref = payload
         .get("keypackage_ref")
         .and_then(Value::as_str)
         .unwrap_or(key_package_id);
     if keypackage_ref != key_package_id {
-        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let keypackage_digest = payload
         .get("keypackage_digest")
         .and_then(Value::as_str)
         .filter(|value| is_sha256_digest(value))
-        .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let claim_ref = payload
         .get("claim_ref")
         .and_then(Value::as_object)
-        .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let claim_trust_binding = keypackage_claim_trust_binding_object(claim_ref)
-        .map_err(|_| arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if let Some(agent_authorize_event_id) =
         claim_trust_binding.agent_key_authorize_event_id.as_deref()
         && !state
@@ -1127,7 +1127,7 @@ fn validate_welcome_trust_binding(
             .into_iter()
             .any(|(_, event_id)| event_id == agent_authorize_event_id)
     {
-        return Err(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH);
+        return Err(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH);
     }
     if claim_ref.get("claim_id").and_then(Value::as_str) != Some(claim_id)
         || claim_ref.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
@@ -1137,13 +1137,13 @@ fn validate_welcome_trust_binding(
             .and_then(Value::as_str)
             .is_none_or(|value| !is_sha256_digest(value))
     {
-        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
 
     let envelope = payload
         .get("claim_envelope")
         .and_then(Value::as_object)
-        .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let expected_welcome_digest = arkret_core::canonical::sha256_digest(welcome_bytes);
     if envelope.get("claim_id").and_then(Value::as_str) != Some(claim_id)
         || envelope.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
@@ -1164,7 +1164,7 @@ fn validate_welcome_trust_binding(
             .and_then(Value::as_str)
             .is_none_or(str::is_empty)
     {
-        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let envelope_signing_binding = welcome_requester_signature_binding(envelope)?;
     if envelope_signing_binding.ssk_generation.is_some() {
@@ -1179,7 +1179,7 @@ fn validate_welcome_trust_binding(
             .filter(|value| !value.is_empty())
         && sender_device_id != requester_device_id
     {
-        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     if claim_ref.get("ssk_generation").and_then(Value::as_u64) != claim_trust_binding.ssk_generation
         || claim_ref
@@ -1191,7 +1191,7 @@ fn validate_welcome_trust_binding(
             .and_then(Value::as_str)
             != claim_trust_binding.agent_key_authorize_event_id.as_deref()
     {
-        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     validate_welcome_claim_signature(envelope)?;
     validate_welcome_recipient_binding(payload, recipient_actor_id)
@@ -1227,18 +1227,18 @@ fn validate_welcome_claim_signature(envelope: &Map<String, Value>) -> Result<(),
     let signature = envelope
         .get("signature")
         .and_then(Value::as_object)
-        .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let kid = signature
         .get("kid")
         .and_then(Value::as_str)
-        .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if kid.is_empty()
         || signature
             .get("sig")
             .and_then(Value::as_str)
             .is_none_or(str::is_empty)
     {
-        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     Ok(())
 }
@@ -1252,12 +1252,12 @@ fn validate_welcome_recipient_binding(
         .or_else(|| payload.get("recipient_actor_id"))
         .and_then(Value::as_str)
     else {
-        return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     };
     if bound_recipient == recipient_actor_id {
         Ok(())
     } else {
-        Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)
+        Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)
     }
 }
 
@@ -1332,7 +1332,7 @@ struct WelcomeRequesterSignatureBinding {
 fn keypackage_claim_trust_binding(payload: &Value) -> Result<KeyPackageTrustBinding, &'static str> {
     let object = payload
         .as_object()
-        .ok_or(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
+        .ok_or(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
     keypackage_claim_trust_binding_object(object)
 }
 
@@ -1375,7 +1375,7 @@ fn keypackage_claim_trust_binding_object(
             device_authorize_event_id: None,
             agent_key_authorize_event_id: Some(agent_key_authorize_event_id),
         }),
-        _ => Err(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH),
+        _ => Err(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH),
     }
 }
 
@@ -1401,7 +1401,7 @@ fn welcome_requester_signature_binding(
             ssk_generation: None,
             requester_device_id: Some(requester_device_id),
         }),
-        _ => Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH),
+        _ => Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH),
     }
 }
 

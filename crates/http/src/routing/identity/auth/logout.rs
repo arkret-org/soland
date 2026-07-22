@@ -531,7 +531,7 @@ async fn verify_cross_session_revoke_proof(
 fn session_revoke_proof_invalid(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::InvalidSignature, message)
         .with_status(StatusCode::UNAUTHORIZED)
-        .with_wire_code(arkret_core::ReasonCode::PROOF_INVALID)
+        .with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }
 
 fn session_revoke_has_applet_selector(body: &SessionRevokeRequestBody) -> bool {

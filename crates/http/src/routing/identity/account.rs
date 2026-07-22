@@ -28,9 +28,10 @@ use arkret_core::{
     AccountRegistrationPolicy, AccountRegistrationPolicyEvidence,
     AccountRegistrationRateLimitPolicy, AccountStatus, AccountUpdateProfileOutcome,
     AccountUpdateProfileRequestBody, AccountView, ActorKind, ActorProfile, ActorProfileId, BlobRef,
-    ContactIntroductionEvidence, DeviceId, Did, ErrorCode, EventId, Hash, Patch, PatchOpKind,
-    RealmId, StrandId,
+    ContactIntroductionEvidence, DeviceId, Did, EventId, Hash, Patch, PatchOpKind, RealmId,
+    StrandId,
 };
+use arkret_wire::ErrorCode;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
@@ -681,7 +682,7 @@ async fn managed_agent_direct_authorization_basis(
     }
     let unavailable = |detail| {
         direct_resolve_precondition(
-            arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation is unavailable",
         )
         .with_private_detail(detail)
@@ -1424,7 +1425,7 @@ async fn direct_conversation_resolve(
         let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, &scope).await?
         else {
             return Err(direct_resolve_precondition(
-                arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+                arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
                 "direct conversation is unavailable",
             )
             .with_private_detail(format!(
@@ -1434,7 +1435,7 @@ async fn direct_conversation_resolve(
         };
         if !has_active_consent_for_scope(state, &peer, &session.actor, &scope, now()) {
             return Err(direct_resolve_precondition(
-                arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+                arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
                 "direct conversation is unavailable",
             )
             .with_private_detail(format!(

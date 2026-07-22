@@ -302,7 +302,7 @@ pub(super) async fn validate_strand_watch_audit_pair(
     {
         return Err(event_validation_error(
             StatusCode::PRECONDITION_FAILED,
-            arkret_core::ReasonCode::WATCH_SET_OTHERS_AUDIT_MISSING,
+            arkret_wire::ReasonCode::WATCH_SET_OTHERS_AUDIT_MISSING,
             "manage_others strand watch writes cannot set muted or public levels",
         ));
     }
@@ -391,7 +391,7 @@ fn event_refs_with_role(
 fn manage_others_audit_error(message: impl Into<String>) -> EventValidationError {
     event_validation_error(
         StatusCode::PRECONDITION_FAILED,
-        arkret_core::ReasonCode::WATCH_SET_OTHERS_AUDIT_MISSING,
+        arkret_wire::ReasonCode::WATCH_SET_OTHERS_AUDIT_MISSING,
         message,
     )
 }

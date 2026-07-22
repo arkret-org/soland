@@ -1229,7 +1229,7 @@ mod derived_relation_and_morph_immutability_tests {
         );
         assert_eq!(
             validate_relation_operation_payload(&operation),
-            Err(arkret_core::error::ReasonCode::RELATION_KIND_WATCHES_DERIVED)
+            Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED)
         );
     }
 
@@ -1248,7 +1248,7 @@ mod derived_relation_and_morph_immutability_tests {
         );
         assert_eq!(
             validate_relation_operation_payload(&operation),
-            Err(arkret_core::error::ReasonCode::RELATION_KIND_CONTAINS_DERIVED)
+            Err(arkret_wire::ReasonCode::RELATION_KIND_CONTAINS_DERIVED)
         );
     }
 
@@ -1412,7 +1412,7 @@ mod derived_relation_and_morph_immutability_tests {
         );
         assert_eq!(
             validate_operation_patch_semantics(&operation),
-            Err(arkret_core::ReasonCode::PATCH_PATH_REDUCER_MANAGED)
+            Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED)
         );
     }
 
@@ -1427,7 +1427,7 @@ mod derived_relation_and_morph_immutability_tests {
         );
         assert_eq!(
             validate_operation_patch_semantics(&operation),
-            Err(arkret_core::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD)
+            Err(arkret_wire::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD)
         );
     }
 

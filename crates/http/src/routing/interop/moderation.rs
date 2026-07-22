@@ -479,10 +479,10 @@ fn encrypted_event_payload_digest(
 }
 
 // Wire code for an invalid franking proof. `proof_invalid` is a registered
-// `reason_code`, so it is sourced from the SDK as `arkret_core::error::ReasonCode::PROOF_INVALID`
+// `reason_code`, so it is sourced from the SDK as `arkret_wire::ReasonCode::PROOF_INVALID`
 // rather than a local literal.
 fn franking_proof_invalid(message: impl Into<String>) -> AppError {
-    AppError::invalid_param(message).with_wire_code(arkret_core::error::ReasonCode::PROOF_INVALID)
+    AppError::invalid_param(message).with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }
 
 fn validate_franking_sender_claim(object: &serde_json::Map<String, Value>) -> Result<(), AppError> {
@@ -1173,10 +1173,7 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(
-            error.wire_code(),
-            arkret_core::error::ReasonCode::PROOF_INVALID
-        );
+        assert_eq!(error.wire_code(), arkret_wire::ReasonCode::PROOF_INVALID);
     }
 
     #[tokio::test]
@@ -1187,9 +1184,6 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(
-            error.wire_code(),
-            arkret_core::error::ReasonCode::PROOF_INVALID
-        );
+        assert_eq!(error.wire_code(), arkret_wire::ReasonCode::PROOF_INVALID);
     }
 }

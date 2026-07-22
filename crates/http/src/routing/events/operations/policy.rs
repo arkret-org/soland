@@ -104,7 +104,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "agent_pcr_recovery_not_ready",
         )
-    } else if message == arkret_core::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
+    } else if message == arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
         (salvo::http::StatusCode::CONFLICT, "failed_precondition")
     } else if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
@@ -112,9 +112,8 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("direct_conversation_")
         || message.starts_with("cross_signing_reset_")
         || message == "cross_signing_model_mismatch"
-        || message == arkret_core::error::ReasonCode::REACTION_SCOPE_MISMATCH
-        || message
-            == arkret_core::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        || message == arkret_wire::ReasonCode::REACTION_SCOPE_MISMATCH
+        || message == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
@@ -128,25 +127,25 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             "applet_registration_unauthorized",
         )
-    } else if message == arkret_core::ReasonCode::TRANSCRIPTION_DENIED {
+    } else if message == arkret_wire::ReasonCode::TRANSCRIPTION_DENIED {
         (
             salvo::http::StatusCode::FORBIDDEN,
-            arkret_core::ReasonCode::TRANSCRIPTION_DENIED,
+            arkret_wire::ReasonCode::TRANSCRIPTION_DENIED,
         )
-    } else if message == arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING {
+    } else if message == arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
-            arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+            arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
         )
     } else if message == soland_application::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
             soland_application::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND,
         )
-    } else if message == arkret_core::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
+    } else if message == arkret_wire::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
         (
             salvo::http::StatusCode::UNPROCESSABLE_ENTITY,
-            arkret_core::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
+            arkret_wire::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
         )
     } else if matches!(
         message,
@@ -179,10 +178,10 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         )
     } else if message == "realm_terminal_state" {
         (salvo::http::StatusCode::FORBIDDEN, "realm_terminal_state")
-    } else if message == arkret_core::ErrorCode::REALM_FROZEN {
+    } else if message == arkret_wire::ErrorCode::REALM_FROZEN {
         (
             salvo::http::StatusCode::FORBIDDEN,
-            arkret_core::ErrorCode::REALM_FROZEN,
+            arkret_wire::ErrorCode::REALM_FROZEN,
         )
     } else if matches!(
         message,

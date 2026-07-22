@@ -72,7 +72,7 @@ pub(super) async fn set_agent_participation(
     );
     validate_selection_within_ceiling(ceiling, body.selection).map_err(|_| {
         agent_participation_failed_precondition(
-            arkret_core::error::ReasonCode::AGENT_PARTICIPATION_EXCEEDS_CEILING,
+            arkret_wire::ReasonCode::AGENT_PARTICIPATION_EXCEEDS_CEILING,
         )
     })?;
     let effective = effective_participation(ceiling, body.selection);

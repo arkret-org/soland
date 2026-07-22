@@ -425,7 +425,7 @@ fn keypackage_claim_rejects_stale_cross_signing_generation() {
     let effect = apply_keypackage_claim(&mut state, &claim);
     match effect {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH);
+            assert_eq!(reason, arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH);
         }
         other => panic!("expected Rejected, got {other:?}"),
     }
@@ -502,7 +502,7 @@ fn welcome_enqueue_rejects_inactive_agent_key_authorization() {
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { reason }
-            if reason == arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH
+            if reason == arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH
     ));
 }
 
@@ -599,7 +599,7 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { reason }
-            if reason == arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
+            if reason == arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
     ));
 }
 
@@ -655,7 +655,7 @@ fn welcome_enqueue_rejects_missing_claim_envelope() {
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { reason }
-            if reason == arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
+            if reason == arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
     ));
     assert!(state.mls_welcomes.is_empty());
 }
@@ -1188,7 +1188,7 @@ fn commit_rejects_policy_root_mismatch() {
     );
     match effect {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, arkret_core::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
+            assert_eq!(reason, arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
         }
         other => panic!("expected governance_binding_mismatch, got {other:?}"),
     }
@@ -1247,7 +1247,7 @@ fn concurrent_commits_contend_then_resolve() {
     );
     assert!(matches!(
         pending,
-        ProjectionEffect::Rejected { reason } if reason == arkret_core::ReasonCode::DECRYPTION_PENDING
+        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::DECRYPTION_PENDING
     ));
 
     // A resolving commit at the current epoch advances and clears ⊥. The

@@ -745,12 +745,12 @@ pub(crate) fn validate_view_payload(operation: &Operation) -> Result<(), &'stati
     for field in ["object", "definition", "patch"] {
         if let Some(value) = operation.payload.get(field) {
             if contains_retired_field(value) {
-                return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
+                return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
             }
             if let Some(state) = value.get("state")
                 && !matches!(state.as_str(), Some("active" | "tombstoned"))
             {
-                return Err(arkret_core::ErrorCode::SCHEMA_VIOLATION);
+                return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
             }
         }
     }

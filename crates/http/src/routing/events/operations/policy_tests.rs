@@ -132,7 +132,7 @@ fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
         );
         assert_eq!(
             validate_view_payload(&operation),
-            Err(arkret_core::ErrorCode::SCHEMA_VIOLATION)
+            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         );
     }
     let current = op(
@@ -390,7 +390,7 @@ async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
         validate_operation_policy(&state, &[child_policy])
             .await
             .unwrap_err(),
-        arkret_core::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
+        arkret_wire::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED
     );
 }
 
@@ -1550,7 +1550,7 @@ async fn profile_accountable_principal_requires_active_grant() {
         validate_operation_policy(&state, &[profile])
             .await
             .unwrap_err(),
-        arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
+        arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
     );
 }
 
@@ -1589,7 +1589,7 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
         validate_operation_policy(&state, &[fake_grant, profile])
             .await
             .unwrap_err(),
-        arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
+        arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
     );
 }
 
@@ -1642,7 +1642,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
         validate_operation_policy(&state, &[profile])
             .await
             .unwrap_err(),
-        arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
+        arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
     );
 }
 
@@ -1845,7 +1845,7 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
         validate_agent_reply_participation(&state, &[message])
             .await
             .unwrap_err(),
-        arkret_core::error::ReasonCode::APPROVAL_NONCE_REUSED
+        arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED
     );
 }
 
@@ -2098,13 +2098,13 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
         validate_operation_policy(&state, &[start])
             .await
             .unwrap_err(),
-        arkret_core::ReasonCode::TRANSCRIPTION_DENIED
+        arkret_wire::ReasonCode::TRANSCRIPTION_DENIED
     );
     assert_eq!(
-        operation_policy_reason_code(arkret_core::ReasonCode::TRANSCRIPTION_DENIED),
+        operation_policy_reason_code(arkret_wire::ReasonCode::TRANSCRIPTION_DENIED),
         (
             salvo::http::StatusCode::FORBIDDEN,
-            arkret_core::ReasonCode::TRANSCRIPTION_DENIED
+            arkret_wire::ReasonCode::TRANSCRIPTION_DENIED
         )
     );
 }
@@ -2168,7 +2168,7 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
         validate_operation_policy(&state, &[missing_mode])
             .await
             .unwrap_err(),
-        arkret_core::ErrorCode::SCHEMA_VIOLATION
+        arkret_wire::ErrorCode::SCHEMA_VIOLATION
     );
 
     let mut invalid_recording_id_payload = payload;
@@ -2184,7 +2184,7 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
         validate_operation_policy(&state, &[invalid_recording_id])
             .await
             .unwrap_err(),
-        arkret_core::ErrorCode::SCHEMA_VIOLATION
+        arkret_wire::ErrorCode::SCHEMA_VIOLATION
     );
 }
 
@@ -2223,7 +2223,7 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
         .unwrap_err();
     assert_eq!(
         reason,
-        arkret_core::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     );
     assert_eq!(
         operation_policy_reason_code(reason),
@@ -2321,7 +2321,7 @@ async fn mls_prejoin_history_rejects_create_object_strict_content_scheme() {
         .unwrap_err();
     assert_eq!(
         reason,
-        arkret_core::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     );
 }
 
@@ -2386,7 +2386,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
         validate_operation_policy(&state, &[history_visibility])
             .await
             .unwrap_err(),
-        arkret_core::error::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     );
 }
 

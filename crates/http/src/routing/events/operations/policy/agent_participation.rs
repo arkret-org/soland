@@ -350,7 +350,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
         approval_nonce,
         approval.expires_at,
     ) {
-        return Err(arkret_core::error::ReasonCode::APPROVAL_NONCE_REUSED);
+        return Err(arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED);
     }
     Ok(())
 }

@@ -41,7 +41,7 @@ async fn lock_sidecar_ensure(realm_id: &str, controller: &str) -> tokio::sync::O
 
 pub(super) fn sidecar_create_denied(message: impl Into<String>) -> AppError {
     AppError::capability_denied(message)
-        .with_wire_code(arkret_core::ReasonCode::SIDECAR_CREATE_DENIED)
+        .with_wire_code(arkret_wire::ReasonCode::SIDECAR_CREATE_DENIED)
 }
 
 pub(super) fn sidecar_failed_precondition(
