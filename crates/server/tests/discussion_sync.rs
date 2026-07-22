@@ -694,6 +694,107 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
 }
 
 #[tokio::test]
+async fn joined_member_initial_sync_includes_current_pre_join_encryption_policy() {
+    let state = soland_test_support::app_state(test_config());
+    let alice_did = ALICE_DID.as_str();
+    let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
+    let bob_did = BOB_DID.as_str();
+    let bob = dev_token(state.clone(), bob_did, "b0b000000021").await;
+    let realm_id = seed_realm(&state, alice_did, "joined security baseline", "joined").await;
+
+    let mut meta = state
+        .test_persistence()
+        .realm_meta()
+        .get(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    meta.encryption_profile = Some("mls_rfc9420".to_owned());
+    state
+        .test_persistence()
+        .realm_meta()
+        .put(&realm_id, &meta)
+        .await
+        .unwrap();
+
+    let old_policy_event_id = submit_projection_event(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        &realm_id,
+        "ak.realm.policy_components",
+        json!({
+            "value": {
+                "content_encryption_floor": "e2ee_required",
+                "content_scheme": "mls-rfc9420",
+                "metadata_encryption_floor": "e2ee_required",
+                "policy_revision": 1
+            }
+        }),
+    )
+    .await;
+    let policy_event_id = submit_projection_event(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        &realm_id,
+        "ak.realm.policy_components",
+        json!({
+            "value": {
+                "content_encryption_floor": "e2ee_required",
+                "content_scheme": "mls-exporter-aead-v1",
+                "metadata_encryption_floor": "e2ee_required",
+                "policy_revision": 2
+            }
+        }),
+    )
+    .await;
+    send_message(
+        state.clone(),
+        &alice,
+        &realm_id,
+        "pre-join content remains hidden",
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    admit_member(
+        state.clone(),
+        &alice,
+        alice_did,
+        alice_device_id,
+        bob_did,
+        &realm_id,
+    )
+    .await;
+
+    let sync = account_subscribe_frame(state.clone(), &bob, "catchup=true").await;
+    assert!(
+        !sync_bodies(&sync, &realm_id).contains(&"pre-join content remains hidden".to_owned()),
+        "joined history must continue to hide pre-join data events: {sync:?}"
+    );
+    let state_events = sync["realms"][&realm_id]["state"]["events"]
+        .as_array()
+        .expect("initial state baseline");
+    assert!(
+        state_events
+            .iter()
+            .all(|event| event["event_id"] != old_policy_event_id),
+        "initial security baseline must not leak superseded pre-join policy revisions"
+    );
+    let policy = state_events
+        .iter()
+        .find(|event| event["event_id"] == policy_event_id)
+        .expect("current pre-join policy-components event must be in the member baseline");
+    assert_eq!(
+        policy["payload"]["value"]["content_scheme"],
+        "mls-exporter-aead-v1"
+    );
+}
+
+#[tokio::test]
 async fn joined_history_incremental_sync_includes_post_join_messages_after_cursor() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();

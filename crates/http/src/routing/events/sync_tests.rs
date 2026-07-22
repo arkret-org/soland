@@ -61,6 +61,18 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
 }
 
 #[test]
+fn initial_security_baseline_is_limited_to_current_create_and_policy_facets() {
+    assert!(required_security_baseline_kind("ak.realm.create"));
+    assert!(required_security_baseline_kind(
+        "ak.realm.policy_components"
+    ));
+    assert!(!required_security_baseline_kind("ak.message.create"));
+    assert!(!required_security_baseline_kind(
+        "ak.realm.history_visibility"
+    ));
+}
+
+#[test]
 fn derive_cursor_handle_excludes_devices_timestamp() {
     // The per-mint `devices` timestamp must NOT enter the binding, so two
     // mints at different wall-clock times but identical realm/to_device
@@ -1501,6 +1513,103 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
             .expect("timeline events")
             .len(),
         0
+    );
+}
+
+#[tokio::test]
+async fn membership_only_projection_advances_incremental_roster() {
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
+    let session = roster_session(&state, ROSTER_ACTOR);
+    state
+        .realm_directory_application()
+        .upsert(roster_realm(false, false));
+
+    let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:30:00.000Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    state
+        .realm_query_application()
+        .store_realm_metadata(
+            ROSTER_REALM,
+            soland_application::events::RealmMetadata {
+                owner: ROSTER_ACTOR.to_owned(),
+                deleted: false,
+                discoverability: "invite_only".to_owned(),
+                history_visibility: "shared".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
+                encryption_profile: Some("mls_rfc9420".to_owned()),
+                plaintext_visible_services: BTreeSet::new(),
+                plaintext_visible_service_classes: BTreeMap::new(),
+                minimal_metadata_realm: false,
+                created_at,
+                updated_at: created_at,
+            },
+        )
+        .await
+        .expect("realm meta stored");
+
+    let body = roster_body(state.service_id());
+    let initial =
+        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    let filter_value = sync_filter_value(body.filter.as_ref());
+    let initial_cursor = parse_and_validate_sync_cursor(
+        initial.cursor.as_deref().unwrap(),
+        &state,
+        Some(&session),
+        filter_value.as_ref(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .expect("initial cursor parses");
+
+    let member_join = sync_test_operation_at(
+        "ak:operation:01904100-0000-7000-8000-0000000000c6",
+        arkret_core::events::EventKind::MEMBER_STATE,
+        json!({
+            "realm_id": ROSTER_REALM,
+            "actor_id": ROSTER_CALLER,
+            "membership": "join",
+            "delivery_status": "unroutable",
+            "sender": ROSTER_ACTOR
+        }),
+        created_at + ChronoDuration::seconds(1),
+    );
+    crate::routing::events::projection::project_accepted_operations(
+        &state,
+        ROSTER_ACTOR,
+        &[member_join],
+    )
+    .await;
+
+    let mut incremental_body = body;
+    incremental_body.after = initial.cursor;
+    let incremental = build_sync_snapshot(
+        &state,
+        Some(&session),
+        &incremental_body,
+        &initial_cursor,
+        false,
+    )
+    .await;
+    let value = serde_json::to_value(&incremental).unwrap();
+    let members = value["realms"][ROSTER_REALM]["members"]
+        .as_array()
+        .expect("membership-only delta must include the current roster projection");
+    assert_eq!(
+        roster_membership_for_actor(members, ROSTER_CALLER),
+        Some("join"),
+        "ak.member.state(join) must wake account sync and expose the joined member without a timeline message"
+    );
+    assert_eq!(
+        value["realms"][ROSTER_REALM]["members_limited"],
+        json!(false)
     );
 }
 

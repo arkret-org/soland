@@ -137,8 +137,14 @@ pub(crate) async fn build_sync_snapshot(
             session,
         )
         .await;
-        let (state_events, state_position) =
-            state_events_for_realm(state, &realm_id, after_account_position, session).await;
+        let (state_events, state_position) = state_events_for_realm(
+            state,
+            &realm_id,
+            after_account_position,
+            session,
+            !is_incremental,
+        )
+        .await;
         let account_position =
             account_realm_projection_position(meta.as_ref(), &realm_id).max(state_position);
         timeline_positions.insert(realm_id.clone(), timeline_position);
@@ -176,12 +182,11 @@ pub(crate) async fn build_sync_snapshot(
         // visible timeline event, and lets hidden timeline advancement move
         // the cursor without emitting an empty Realm projection.
         //
-        // Caveats: membership changes that don't bump a projection position
-        // (e.g. raw `ak.realm.member.update` events) will not propagate through
-        // an incremental sync until either (a) a new timeline event arrives,
-        // or (b) the client issues a full sync (no `after`). This is a known
-        // limitation — see follow-up TODO to add per-realm activity tracking
-        // off `event_broadcast`.
+        // Canonical membership transitions are durable projection changes:
+        // `ak.member.state` and the `ak.invite.accept` cascade both touch Realm
+        // metadata, while their accepted state Events independently advance the
+        // account position. They therefore cannot depend on a later timeline
+        // message to surface the updated roster.
         if is_incremental
             && known_timeline_to_cursor
             && !durable_projection_changed
@@ -866,6 +871,7 @@ async fn state_events_for_realm(
     realm_id: &str,
     after_position: i64,
     session: Option<&SessionRecord>,
+    include_current_security_baseline: bool,
 ) -> (Vec<arkret_core::Event>, i64) {
     let events = state
         .event_query_application()
@@ -875,6 +881,38 @@ async fn state_events_for_realm(
         .into_iter()
         .filter(|event| event.realm_id == realm_id)
         .collect::<Vec<_>>();
+    // `history_visibility=joined` limits historical data-plane Events.  It
+    // must not hide the current encryption contract from an active member:
+    // without the create-locked mechanism and effective policy-components
+    // event a late joiner cannot validate the Realm's content scheme or emit
+    // a policy-bound MLS message after reload.  Initial account sync therefore
+    // carries the newest accepted event for these two singleton security
+    // facets even when the event predates the member's join boundary.
+    let member_may_receive_security_baseline = if include_current_security_baseline {
+        match session {
+            Some(session) => realm_has_member(state, realm_id, &session.actor).await,
+            None => false,
+        }
+    } else {
+        false
+    };
+    let newest_security_baseline = events
+        .iter()
+        .filter(|event| required_security_baseline_kind(&event.event_kind))
+        .fold(
+            BTreeMap::<String, (i64, String)>::new(),
+            |mut newest, event| {
+                let position = projection_event_position(event);
+                let key = event.event_kind.clone();
+                if newest
+                    .get(&key)
+                    .is_none_or(|(current, _)| position > *current)
+                {
+                    newest.insert(key, (position, event.event_id.clone()));
+                }
+                newest
+            },
+        );
     let mut seen = BTreeSet::new();
     let mut newest_position = after_position;
     let mut state_entries = Vec::new();
@@ -887,7 +925,12 @@ async fn state_events_for_realm(
         if position <= after_position || !seen.insert(event.event_id.clone()) {
             continue;
         }
-        if !projection_record_visible_to_session(state, &event, session).await {
+        let visible_by_history = projection_record_visible_to_session(state, &event, session).await;
+        let visible_as_security_baseline = member_may_receive_security_baseline
+            && newest_security_baseline
+                .get(&event.event_kind)
+                .is_some_and(|(_, event_id)| event_id == &event.event_id);
+        if !visible_by_history && !visible_as_security_baseline {
             continue;
         }
         if let Some(event) = accepted_event(state, &event.event_id).await {
@@ -899,6 +942,10 @@ async fn state_events_for_realm(
         state_entries.into_iter().map(|(_, event)| event).collect(),
         newest_position,
     )
+}
+
+pub(crate) fn required_security_baseline_kind(kind: &str) -> bool {
+    matches!(kind, "ak.realm.create" | "ak.realm.policy_components")
 }
 
 fn projection_event_position(event: &soland_application::events::ProjectedEvent) -> i64 {
