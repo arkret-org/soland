@@ -152,6 +152,59 @@ fn realm_leave_cascades_to_circle_history_membership() {
 }
 
 #[test]
+fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
+    let (mut state, hlc, base) = seed_state("joined");
+    let group_id = "ak:mls_group:01904100-0000-7000-8000-dddddddddddd";
+    let effective_scope = serde_json::json!({
+        "kind": "realm",
+        "realm_id": REALM,
+    });
+    state.mls_commit_epochs.insert(
+        MlsCommitEpochKey::new(format!("realm\0{REALM}"), group_id),
+        MlsCommitEpoch {
+            group_id: group_id.to_owned(),
+            effective_scope,
+            epoch: 2,
+            leader_actor_id: ALICE.to_owned(),
+            covered_seals: Vec::new(),
+            committed_at: base.timestamp(),
+            policy_root: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_owned(),
+            accepted_commit_digest: None,
+            accepted_from_epoch: None,
+            frontier_contested: false,
+        },
+    );
+    let leave_at = base + Duration::minutes(30);
+    let mut leave = make_operation(
+        arkret_core::events::EventKind::MEMBER_STATE,
+        REALM,
+        serde_json::json!({
+            "actor_id": BOB,
+            "membership": "leave",
+            "sender": BOB,
+        }),
+    );
+    leave.created_at = leave_at;
+    let expected_frontier = leave.operation_id.as_str().to_owned();
+
+    assert!(matches!(
+        state.apply(&leave, &hlc),
+        ProjectionEffect::MembershipChanged { .. }
+    ));
+
+    assert_eq!(state.pending_mls_removals.len(), 1);
+    let obligation = &state.pending_mls_removals[0];
+    assert_eq!(obligation.realm_id, REALM);
+    assert_eq!(obligation.circle_id, None);
+    assert_eq!(obligation.mls_group_ref.as_deref(), Some(group_id));
+    assert_eq!(obligation.actor_id, BOB);
+    assert_eq!(obligation.membership_frontier, vec![expected_frontier]);
+    assert_eq!(obligation.trigger_membership, "leave");
+    assert_eq!(obligation.triggered_at, leave_at);
+}
+
+#[test]
 fn controller_removal_cascades_owned_agent_membership() {
     let (mut state, _hlc, base) = seed_state("joined");
     state
