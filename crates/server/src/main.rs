@@ -47,7 +47,7 @@ async fn run() -> anyhow::Result<()> {
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
         .unwrap_or(false);
     let log_format = soland_http::config::LogFormat::from_env(dev_mode_for_logging);
-    let _tracing_guards = init_tracing(log_format)?;
+    let _tracing_guards = init_tracing(log_format, dev_mode_for_logging)?;
 
     // Fail fast at startup if a bundled Arkret artifact is malformed instead
     // of crashing the first request that touches the offending OnceLock.
@@ -350,16 +350,18 @@ struct TracingGuards {
     _otel_guard: soland::otel::OtelGuard,
 }
 
-fn init_tracing(log_format: soland_http::config::LogFormat) -> anyhow::Result<TracingGuards> {
+fn init_tracing(
+    log_format: soland_http::config::LogFormat,
+    development_mode: bool,
+) -> anyhow::Result<TracingGuards> {
     use soland_http::config::LogFormat;
     use tracing_subscriber::{Layer, Registry, fmt};
 
-    let filter =
-        if std::env::var_os("RUST_LOG").is_none() && soland_http::error::debug_mode_from_env() {
-            tracing_subscriber::EnvFilter::new("debug")
-        } else {
-            tracing_subscriber::EnvFilter::from_default_env()
-        };
+    let filter = if std::env::var_os("RUST_LOG").is_none() && development_mode {
+        tracing_subscriber::EnvFilter::new("debug")
+    } else {
+        tracing_subscriber::EnvFilter::from_default_env()
+    };
     // Stdout writer: structured JSON in production, ANSI-decorated text in
     // development. JSON is required by the runbook log-search recipes; the
     // operator can force either side via `SOLAND_LOG_FORMAT=json|plain`.

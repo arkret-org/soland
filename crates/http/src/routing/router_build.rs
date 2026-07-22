@@ -73,7 +73,6 @@ pub fn router_with_rate_limiter_and_request_size_config(
     let conformance_harness_enabled = conformance::conformance_harness_enabled(state.config());
     let error_exposure = soland_http::error::ErrorExposure {
         development_mode: state.config().development_mode,
-        debug_mode: soland_http::error::debug_mode_from_env(),
     };
     let router = Router::new()
         .hoop(crate::metrics::MetricsMiddleware)

@@ -22,17 +22,6 @@ use salvo::prelude::*;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ErrorExposure {
     pub development_mode: bool,
-    pub debug_mode: bool,
-}
-
-/// Return whether deployment-local diagnostic logging is enabled.
-///
-/// This switch only affects server logs. It never changes protocol responses
-/// or enables any of the relaxed behavior guarded by `development_mode`.
-#[must_use]
-pub fn debug_mode_from_env() -> bool {
-    std::env::var("SOLAND_DEBUG_MODE")
-        .is_ok_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 /// Construct an [`AppError`] with a canonical [`ErrorCode`] variant.
@@ -388,12 +377,8 @@ impl Writer for AppError {
             .get_typed::<ErrorExposure>()
             .map(|exposure| exposure.development_mode)
             .unwrap_or(false);
-        let debug_mode = depot
-            .get_typed::<ErrorExposure>()
-            .map(|exposure| exposure.debug_mode)
-            .unwrap_or(false);
         let redact_internal = self.code == ErrorCode::InternalError && !development_mode;
-        if debug_mode {
+        if development_mode {
             tracing::warn!(
                 status = status.as_u16(),
                 wire_code = %wire,
