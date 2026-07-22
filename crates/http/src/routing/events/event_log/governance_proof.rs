@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_core::models::EffectiveScope as GovernanceScope;
-use arkret_core::move_event::{LatticeOp, LatticeOpType};
 use arkret_core::{
     CellId, CellRef, Event, Hash, MaterializedMlsGovernanceProofBundle,
     MlsGovernanceBindingPayload, MlsGovernanceControlStateLeaf, MlsGovernanceControlStateValue,
@@ -12,6 +11,7 @@ use arkret_core::{
 };
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::compute_state_root;
+use arkret_wire::move_event::{LatticeOp, LatticeOpType};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 

@@ -1,7 +1,7 @@
 //! Notary cell admin endpoints — read + reconfigure.
 
-use arkret_core::move_event::{Effect, LatticeOp, LatticeOpType};
 use arkret_core::{Did, Move, MoveSigner, NotaryValue as SdkNotaryValue, RealmId, UnsignedMove};
+use arkret_wire::move_event::{Effect, LatticeOp, LatticeOpType};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;

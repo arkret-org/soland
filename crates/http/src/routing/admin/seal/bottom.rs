@@ -2,9 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::move_event::{Effect, LatticeOp, LatticeOpType};
 use arkret_core::{CellRef, Move, MoveSigner, RealmId, SealId, UnsignedMove};
 use arkret_state::lattice::CellState;
+use arkret_wire::move_event::{Effect, LatticeOp, LatticeOpType};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -310,13 +310,13 @@ pub(crate) async fn admin_repair_bottom(
                     issuer_seq: None,
                 },
             };
-            let recovery_ref = arkret_core::move_event::SemanticRef {
+            let recovery_ref = arkret_wire::move_event::SemanticRef {
                 id: recovery_capability_ref.clone(),
                 role: "recovery_capability".to_owned(),
                 critical: true,
             };
             let seal_basis = pick_admin_seal_basis(state, &realm)?;
-            let state_witness_ref = arkret_core::move_event::SemanticRef {
+            let state_witness_ref = arkret_wire::move_event::SemanticRef {
                 id: state_witness_seal.as_str().to_owned(),
                 role: "state_witness".to_owned(),
                 critical: true,
@@ -328,7 +328,7 @@ pub(crate) async fn admin_repair_bottom(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
             {
-                refs.push(arkret_core::move_event::SemanticRef {
+                refs.push(arkret_wire::move_event::SemanticRef {
                     id: inclusion_ref.to_owned(),
                     role: "inclusion_proof".to_owned(),
                     critical: true,
