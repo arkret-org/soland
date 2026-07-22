@@ -725,7 +725,100 @@ pub(crate) async fn validate_agent_controller_binding(
         pcr_id,
         authorization_ref,
         requested_scope,
-    )
+    )?;
+    validate_active_agent_accountability(state, agent_record, accepted_at).await
+}
+
+async fn validate_active_agent_accountability(
+    state: &AppState,
+    agent_record: &AgentPrincipalRecord,
+    accepted_at: DateTime<Utc>,
+) -> Result<(), AppError> {
+    let accountability_event_id = agent_record
+        .provision_event_refs
+        .as_ref()
+        .and_then(|refs| refs.get("accountability_grant_event_id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            failed_precondition(
+                "managed Agent provisioning accountability reference is missing",
+                arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+            )
+        })?;
+    let events =
+        state.events_store().snapshot_all().await.map_err(|error| {
+            AppError::internal(format!("accountability lookup failed: {error}"))
+        })?;
+    let event = events
+        .iter()
+        .find(|event| event.event_id == accountability_event_id)
+        .ok_or_else(|| {
+            failed_precondition(
+                "managed Agent accountability Event is not accepted",
+                arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+            )
+        })?;
+    let original_payload = event.envelope.get("payload").unwrap_or(&event.envelope);
+    let original_grant =
+        serde_json::from_value::<arkret_core::AccountabilityGrantPayload>(original_payload.clone())
+            .map_err(|_| {
+                failed_precondition(
+                    "managed Agent accountability Event payload is invalid",
+                    arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+                )
+            })?;
+    let current_grant = events
+        .iter()
+        .filter(|candidate| {
+            candidate.kind == "ak.identity.accountability_grant"
+                && candidate.received_at <= accepted_at
+                && candidate.realm_id == event.realm_id
+                && candidate
+                    .envelope
+                    .get("executed_by")
+                    .and_then(Value::as_str)
+                    .unwrap_or(candidate.actor_id.as_str())
+                    == agent_record.controller_id
+        })
+        .filter_map(|candidate| {
+            let payload = candidate
+                .envelope
+                .get("payload")
+                .unwrap_or(&candidate.envelope);
+            let grant =
+                serde_json::from_value::<arkret_core::AccountabilityGrantPayload>(payload.clone())
+                    .ok()?;
+            (grant.issuer.as_str() == agent_record.controller_id
+                && grant.subject.as_str() == agent_record.id
+                && grant.accountability_scope == original_grant.accountability_scope)
+                .then_some((candidate.actor_seq, grant))
+        })
+        .max_by_key(|(actor_seq, _)| *actor_seq)
+        .map(|(_, grant)| grant)
+        .ok_or_else(|| {
+            failed_precondition(
+                "managed Agent accountability projection is missing",
+                arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+            )
+        })?;
+    let signed_by_controller = event
+        .envelope
+        .get("executed_by")
+        .and_then(Value::as_str)
+        .unwrap_or(event.actor_id.as_str())
+        == agent_record.controller_id;
+    if event.kind != "ak.identity.accountability_grant"
+        || !signed_by_controller
+        || original_grant.issuer.as_str() != agent_record.controller_id
+        || original_grant.subject.as_str() != agent_record.id
+        || current_grant.validate_lifecycle_at(accepted_at).is_err()
+    {
+        return Err(failed_precondition(
+            "managed Agent accountability grant is missing or inactive",
+            arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) async fn validate_delegated_agent_envelope(
