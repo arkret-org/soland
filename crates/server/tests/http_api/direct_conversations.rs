@@ -588,6 +588,29 @@ async fn direct_resolve_fails_closed_without_accepted_contact() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
+    assert_eq!(
+        body["error"]["details"]["reason_detail"],
+        "no owned active managed-Agent authorization or accepted contact projection: requester=did:web:alice.example, peer=did:web:bob.example"
+    );
+}
+
+#[tokio::test]
+async fn direct_resolve_private_detail_stays_redacted_in_production() {
+    let mut config = test_config();
+    config.development_mode = false;
+    let state = soland_test_support::app_state(config);
+    let token = "production-direct-resolve-session";
+    super::agents::seed_controller_session(&state, token, "did:web:alice.example").await;
+
+    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
+        .send(&app_from_state(state))
+        .await;
+
+    assert_eq!(response.status_code.unwrap().as_u16(), 412);
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
     assert!(body["error"]["details"]["reason_detail"].is_null());
 }
 
@@ -625,7 +648,10 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
-    assert!(body["error"]["details"]["reason_detail"].is_null());
+    assert_eq!(
+        body["error"]["details"]["reason_detail"],
+        "peer has no active direct_message or any consent for requester: requester=did:web:alice.example, peer=did:web:bob.example"
+    );
 }
 
 #[tokio::test]
@@ -758,7 +784,10 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
-    assert!(body["error"]["details"]["reason_detail"].is_null());
+    assert_eq!(
+        body["error"]["details"]["reason_detail"],
+        "local KeyPackage claim returned no usable claim"
+    );
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 

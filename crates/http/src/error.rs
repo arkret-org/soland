@@ -231,11 +231,12 @@ pub struct AppError {
     /// doc on the response: clients MUST NOT parse this value, only
     /// log/display it.
     pub reason_detail: Option<Box<str>>,
-    /// Deployment-local diagnostic that is never rendered on the wire.
+    /// Deployment-local diagnostic that is rendered only in development mode.
     ///
     /// Privacy-sensitive endpoints use this field to retain the concrete
     /// rejection cause while returning the same indistinguishable protocol
-    /// error to every caller.
+    /// error in production. When `SOLAND_DEVELOPMENT_MODE=true`, the writer
+    /// exposes it as the unstable `error.details.reason_detail` diagnostic.
     pub private_detail: Option<Box<str>>,
     /// When set, render a top-level `reason` field on the error envelope.
     ///
@@ -402,6 +403,15 @@ impl Writer for AppError {
         } else {
             self.message.as_ref()
         };
+        // `private_detail` carries the useful cause for privacy-preserving
+        // production errors such as Direct Conversation precondition failures.
+        // Keep production responses indistinguishable, but make an explicitly
+        // development-mode server actionable from the browser's response body.
+        let wire_reason_detail = self.reason_detail.as_deref().or_else(|| {
+            development_mode
+                .then_some(self.private_detail.as_deref())
+                .flatten()
+        });
         if let Some(reason) = self.top_level_reason.as_deref() {
             render_error_with_top_level_reason(
                 res,
@@ -409,7 +419,7 @@ impl Writer for AppError {
                 &wire,
                 public_message,
                 reason,
-                self.reason_detail.as_deref(),
+                wire_reason_detail,
             );
         } else if let Some(reason_code) = self.reason_code.as_deref() {
             render_error_with_reason_code(
@@ -418,9 +428,9 @@ impl Writer for AppError {
                 &wire,
                 public_message,
                 reason_code,
-                self.reason_detail.as_deref(),
+                wire_reason_detail,
             );
-        } else if let Some(reason_detail) = self.reason_detail.as_deref() {
+        } else if let Some(reason_detail) = wire_reason_detail {
             render_error_with_detail(res, status, &wire, public_message, reason_detail);
         } else {
             render_error(res, status, &wire, public_message);
