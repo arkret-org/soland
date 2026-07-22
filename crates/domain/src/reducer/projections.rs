@@ -347,7 +347,7 @@ pub struct MlsKeyPackage {
 ///
 /// The reducer's `apply_welcome_enqueue` appends one row per Welcome
 /// fanout target; the recipient device drains its queue via
-/// `GET /_soland/self/keys/keypackages/welcomes/pending`, which marks each delivered row
+/// `GET /_arkret/self/keys/keypackages/welcomes/pending`, which marks each delivered row
 /// with `delivered_at = now()` so a re-poll won't redeliver.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsWelcome {
@@ -363,6 +363,12 @@ pub struct MlsWelcome {
     /// Welcome (per `MlsKeyPackage::id`). Audit trail only — the
     /// reducer does not re-validate the claim at delivery time.
     pub key_package_id: String,
+    /// Epoch established by the Add Commit referenced by this Welcome.
+    pub epoch: u64,
+    /// Accepted Add Commit Event ref. Sidecar Welcome admission requires it.
+    pub commit_ref: Option<String>,
+    /// Full governance binding retained for exact Sidecar evidence.
+    pub governance_binding: Value,
     pub enqueued_at: i64,
     /// Unix seconds the recipient first drained this Welcome. `None`
     /// while pending.
@@ -441,8 +447,14 @@ pub struct MlsCommitEpoch {
     /// DID of the committer (the `leader` per MLS terminology — the
     /// member whose Commit was accepted).
     pub leader_actor_id: String,
+    /// Device that authored the accepted epoch-0 genesis.
+    pub creator_device_id: String,
+    /// Accepted genesis Event/control ref.
+    pub genesis_event_ref: String,
     pub covered_seals: Vec<String>,
     pub committed_at: i64,
+    /// Full governance binding accepted for the current epoch.
+    pub governance_binding: Value,
     /// `governance_binding.policy_root` the genesis bound this MLS group to.
     /// Every later commit's binding MUST carry the same `policy_root`; a
     /// mismatch is rejected with `governance_binding_mismatch`
@@ -453,6 +465,8 @@ pub struct MlsCommitEpoch {
     /// (`accepted_from_epoch`) drives the group's `covered_frontier_cell` to
     /// `⊥` (encryption-and-audit.md §2.5.2). `None` at genesis (no commit yet).
     pub accepted_commit_digest: Option<String>,
+    /// Accepted Commit Event/control ref for the current epoch.
+    pub accepted_commit_ref: Option<String>,
     /// Base epoch the `accepted_commit_digest` commit attested. Lets the reducer
     /// tell a *concurrent* commit at that same base (⊥ contention) apart from a
     /// plain stale / out-of-order replay (`mls_epoch_skew`). `None` at genesis.

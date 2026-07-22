@@ -138,6 +138,9 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 recipient_device_id: welcome.recipient_device_id,
                 welcome_bytes: welcome.welcome_bytes,
                 key_package_id: welcome.key_package_id,
+                epoch: welcome.epoch,
+                commit_ref: welcome.commit_ref,
+                governance_binding: welcome.governance_binding,
                 enqueued_at: welcome.enqueued_at,
                 delivered_at: welcome.delivered_at,
             });
@@ -161,6 +164,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             group_id,
             effective_scope,
             creator_actor_id,
+            creator_device_id,
             covered_seals,
             ..
         } => {
@@ -176,6 +180,12 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     effective_scope,
                     group_id,
                     creator_actor_id,
+                    creator_device_id,
+                    operation
+                        .payload
+                        .get("event_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_else(|| operation.operation_id.as_str()),
                     covered_seals,
                     &binding,
                     operation.created_at.timestamp(),
@@ -210,6 +220,11 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                         leader_actor_id,
                         covered_seals,
                         governance_binding: &binding,
+                        accepted_commit_ref: operation
+                            .payload
+                            .get("event_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_else(|| operation.operation_id.as_str()),
                         committed_at: operation.created_at.timestamp(),
                     },
                 )

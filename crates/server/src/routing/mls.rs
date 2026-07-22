@@ -1536,6 +1536,7 @@ async fn consume_keypackages(
         ));
     }
     validate_direct_keypackage_consume(state, &session, &body).await?;
+    validate_sidecar_keypackage_consume(state, &session, &body).await?;
     let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
     let group_id = consume_group_ref(&body);
     let consume_realm_id = body.realm_id.as_ref().map(ToString::to_string);
@@ -1748,6 +1749,175 @@ async fn validate_direct_keypackage_consume(
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "KeyPackage consume claim differs from the canonical direct Welcome",
+        ));
+    }
+    Ok(())
+}
+
+async fn validate_sidecar_keypackage_consume(
+    state: &AppState,
+    session: &SessionRecord,
+    body: &KeyPackagesConsumeRequestBody,
+) -> Result<(), AppError> {
+    let Some(group_id) = body.mls_group_id.as_deref() else {
+        return Ok(());
+    };
+    let sidecar = {
+        let projection = state.projection.lock();
+        projection
+            .sidecars
+            .values()
+            .find(|sidecar| {
+                projection
+                    .circles
+                    .get(&sidecar.backing_circle_id)
+                    .and_then(|circle| circle.mls_group_ref.as_deref())
+                    == Some(group_id)
+            })
+            .cloned()
+    };
+    let Some(sidecar) = sidecar else {
+        return Ok(());
+    };
+    let sidecar_record = state
+        .sidecars_store()
+        .get(&sidecar.sidecar_id)
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?
+        .ok_or_else(|| AppError::internal("Sidecar projection has no durable record"))?;
+    let expected_sidecar_binding =
+        crate::routing::identity::agents::sidecar::expected_sidecar_mls_binding(
+            state,
+            &sidecar_record,
+        )
+        .await?;
+    if body.key_package_refs.len() != 1
+        || body.claim_ids.len() != 1
+        || body.welcome_ref.is_none()
+        || body.epoch.is_none()
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Sidecar KeyPackage consume requires one exact claim and Welcome context",
+        ));
+    }
+    let welcome_ref = body.welcome_ref.as_deref().expect("checked above");
+    let stored = state
+        .event_query_application()
+        .accepted_event(welcome_ref)
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar Welcome lookup failed: {error}")))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "Sidecar Welcome Event is not accepted",
+            )
+        })?;
+    let event = serde_json::from_value::<arkret_core::Event>(stored.envelope)
+        .map_err(|error| AppError::internal(format!("stored Sidecar Welcome invalid: {error}")))?;
+    if event.kind.as_str() != arkret_core::events::EventKind::MLS_WELCOME {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Sidecar consume reference is not a Welcome Event",
+        ));
+    }
+    let welcome = serde_json::from_value::<arkret_core::MlsWelcomePayload>(
+        serde_json::to_value(event.payload).map_err(|error| {
+            AppError::internal(format!("stored Sidecar Welcome payload invalid: {error}"))
+        })?,
+    )
+    .map_err(|_| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Sidecar Welcome payload is invalid",
+        )
+    })?;
+    let key_package_id = &body.key_package_refs[0];
+    let claim_id = &body.claim_ids[0];
+    let sidecar_binding = welcome
+        .governance_binding
+        .sidecar_binding()
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "Sidecar Welcome omits Sidecar governance binding",
+            )
+        })?;
+    let current_epoch_matches = state
+        .projection
+        .lock()
+        .mls_commit_epochs
+        .values()
+        .any(|row| {
+            row.group_id == group_id
+                && row.epoch == welcome.epoch
+                && row.effective_scope
+                    == serde_json::json!({
+                        "kind": "circle",
+                        "realm_id": sidecar.realm_id,
+                        "circle_id": sidecar.backing_circle_id,
+                    })
+        });
+    if welcome.mls_group_id.as_str() != group_id
+        || Some(welcome.epoch) != body.epoch
+        || body.realm_id.as_ref().map(ToString::to_string).as_deref()
+            != Some(sidecar.realm_id.as_str())
+        || welcome.recipient_principal_id.as_str() != session.actor
+        || welcome.recipient_device_id.as_str() != session.device_id
+        || welcome.keypackage_ref.as_str() != key_package_id
+        || welcome.claim_id.as_str() != claim_id
+        || !claim_id.starts_with(&format!("{key_package_id}:"))
+        || sidecar_binding != &expected_sidecar_binding
+        || welcome.governance_binding.realm_id().as_str() != sidecar.realm_id
+        || welcome
+            .governance_binding
+            .circle_id()
+            .map(ToString::to_string)
+            .as_deref()
+            != Some(sidecar.backing_circle_id.as_str())
+        || !current_epoch_matches
+        || welcome.commit_ref.as_ref().is_none_or(|commit_ref| {
+            !state
+                .projection
+                .lock()
+                .accepted_mls_commit_refs
+                .contains(commit_ref.as_str())
+        })
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Sidecar consume differs from the accepted Welcome evidence",
+        ));
+    }
+    let delivered = state
+        .projection
+        .lock()
+        .mls_welcomes
+        .values()
+        .flatten()
+        .any(|row| {
+            row.group_id == group_id
+                && row.recipient_actor_id == session.actor
+                && row.recipient_device_id == session.device_id
+                && row.key_package_id == *key_package_id
+                && row.epoch == welcome.epoch
+                && row.commit_ref.as_deref()
+                    == welcome
+                        .commit_ref
+                        .as_ref()
+                        .map(|event_id| event_id.as_str())
+                && serde_json::from_value::<arkret_core::MlsGovernanceBindingPayload>(
+                    row.governance_binding.clone(),
+                )
+                .ok()
+                .as_ref()
+                    == Some(&welcome.governance_binding)
+                && row.delivered_at.is_some()
+        });
+    if !delivered {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Sidecar Welcome has not been delivered to this device",
         ));
     }
     Ok(())

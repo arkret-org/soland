@@ -1,5 +1,24 @@
 use super::*;
 
+pub(crate) fn direct_authorization_basis_from_contact(
+    contact: &ContactRecord,
+) -> Result<arkret_core::DirectConversationAuthorizationBasis, AppError> {
+    let event_refs = contact_fact_refs(contact)
+        .into_iter()
+        .map(arkret_core::EventId::new)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            AppError::internal(format!("stored contact event ref is invalid: {error}"))
+        })?;
+    let basis = arkret_core::DirectConversationAuthorizationBasis::accepted_contact(event_refs);
+    basis.validate_shape().map_err(|error| {
+        AppError::internal(format!(
+            "stored direct conversation contact authorization basis is invalid: {error}"
+        ))
+    })?;
+    Ok(basis)
+}
+
 pub(crate) async fn ensure_direct_peer_resolvable(
     state: &AppState,
     peer: &str,
@@ -12,6 +31,24 @@ pub(crate) async fn ensure_direct_peer_resolvable(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
+        let managed_agent = state
+            .agent_pairing_application()
+            .agent(peer)
+            .await
+            .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?;
+        if let Some(record) = managed_agent
+            && record.state == "active"
+            && record.authorized_event_ref.is_some()
+            && crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+                state,
+                &record,
+                now(),
+            )
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
         return Err(direct_resolve_precondition(
             arkret_core::ErrorCode::PEER_UNRESOLVABLE,
             "direct conversation peer is not resolvable on this Principal Server",
@@ -275,25 +312,29 @@ pub(crate) async fn validate_direct_binding_operation(
         return Err("direct_conversation_binding_invalid");
     }
     validate_direct_binding_event_refs(state, &payload).await?;
-    let left = payload.participants_unordered[0].as_str();
-    let right = payload.participants_unordered[1].as_str();
-    let contact = state
-        .contact_application()
-        .contact_any(left, right)
-        .await
-        .map_err(|_| "direct_conversation_binding_invalid")?
-        .ok_or("direct_conversation_binding_invalid")?;
-    if contact.status != "accepted" {
-        return Err("direct_conversation_binding_invalid");
-    }
-    let verified_contact_refs: BTreeSet<_> = contact_fact_refs(&contact).into_iter().collect();
-    if payload.contact_refs.is_empty()
-        || payload
-            .contact_refs
+    if payload.authorization_basis.kind
+        == arkret_core::DirectConversationAuthorizationKind::AcceptedContact
+    {
+        let left = payload.participants_unordered[0].as_str();
+        let right = payload.participants_unordered[1].as_str();
+        let contact = state
+            .contact_application()
+            .contact_any(left, right)
+            .await
+            .map_err(|_| "direct_conversation_binding_invalid")?
+            .ok_or("direct_conversation_binding_invalid")?;
+        if contact.status != "accepted" {
+            return Err("direct_conversation_binding_invalid");
+        }
+        let verified_contact_refs: BTreeSet<_> = contact_fact_refs(&contact).into_iter().collect();
+        if payload
+            .authorization_basis
+            .event_refs
             .iter()
             .any(|reference| !verified_contact_refs.contains(reference.as_str()))
-    {
-        return Err("direct_conversation_binding_invalid");
+        {
+            return Err("direct_conversation_binding_invalid");
+        }
     }
     Ok(())
 }
@@ -388,6 +429,81 @@ async fn validate_direct_binding_event_refs(
             .any(|participant| participant.as_str() == peer)
     {
         return Err("direct_conversation_binding_invalid");
+    }
+
+    let mut authorization_kinds = BTreeSet::new();
+    for event_ref in &payload.authorization_basis.event_refs {
+        let accepted = state
+            .event_query_application()
+            .accepted_event(event_ref.as_str())
+            .await
+            .map_err(|_| "direct_conversation_binding_invalid")?
+            .ok_or("direct_conversation_binding_invalid")?;
+        authorization_kinds.insert(accepted.kind);
+    }
+    match payload.authorization_basis.kind {
+        arkret_core::DirectConversationAuthorizationKind::AcceptedContact => {
+            let expected = BTreeSet::from([
+                arkret_core::events::EventKind::CONTACT_REQUESTED.to_owned(),
+                arkret_core::events::EventKind::CONTACT_ACCEPTED.to_owned(),
+            ]);
+            if payload.authorization_basis.event_refs.len() != 2 || authorization_kinds != expected
+            {
+                return Err("direct_conversation_binding_invalid");
+            }
+        }
+        arkret_core::DirectConversationAuthorizationKind::ManagedAgentController => {
+            let expected = BTreeSet::from([
+                arkret_core::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT.to_owned(),
+                arkret_core::events::EventKind::AGENT_SELECTOR_CLAIM.to_owned(),
+                arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+            ]);
+            if payload.authorization_basis.event_refs.len() != 3 || authorization_kinds != expected
+            {
+                return Err("direct_conversation_binding_invalid");
+            }
+            let record = state
+                .agent_pairing_application()
+                .agent(peer)
+                .await
+                .map_err(|_| "direct_conversation_binding_invalid")?
+                .ok_or("direct_conversation_binding_invalid")?;
+            if record.controller_id != creator || record.state != "active" {
+                return Err("direct_conversation_binding_invalid");
+            }
+            let provision_refs = record
+                .provision_event_refs
+                .as_ref()
+                .ok_or("direct_conversation_binding_invalid")?;
+            let expected_refs = [
+                provision_refs
+                    .get("accountability_grant_event_id")
+                    .and_then(Value::as_str),
+                provision_refs
+                    .get("selector_claim_event_id")
+                    .and_then(Value::as_str),
+                record.authorized_event_ref.as_deref(),
+            ]
+            .into_iter()
+            .collect::<Option<BTreeSet<_>>>()
+            .ok_or("direct_conversation_binding_invalid")?;
+            let provided_refs = payload
+                .authorization_basis
+                .event_refs
+                .iter()
+                .map(arkret_core::EventId::as_str)
+                .collect::<BTreeSet<_>>();
+            if provided_refs != expected_refs {
+                return Err("direct_conversation_binding_invalid");
+            }
+            crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+                state,
+                &record,
+                payload.created_at.to_owned(),
+            )
+            .await
+            .map_err(|_| "direct_conversation_binding_invalid")?;
+        }
     }
 
     let strand = accepted_direct_event(
@@ -845,13 +961,15 @@ pub(crate) async fn complete_remote_direct_binding_with_realm(
             .await?;
     let realm_id = reserved.realm_id.clone();
     let main_strand_id = reserved.main_strand_id.clone();
+    let authorization_basis = direct_authorization_basis_from_contact(contact)?;
     prepare_reserved_direct_materialization(
         state,
         pair_key,
         actor,
         actor_device_id,
         peer,
-        contact,
+        Some(contact),
+        authorization_basis,
         &realm_id,
         &main_strand_id,
         &context.actor_member_event_ref,
@@ -1303,7 +1421,8 @@ pub(crate) async fn create_direct_binding_with_realm(
     actor: &str,
     actor_device_id: &str,
     peer: &str,
-    contact: &ContactRecord,
+    contact: Option<&ContactRecord>,
+    authorization_basis: arkret_core::DirectConversationAuthorizationBasis,
 ) -> Result<
     (
         DirectConversationBindingRecord,
@@ -1394,6 +1513,7 @@ pub(crate) async fn create_direct_binding_with_realm(
         actor_device_id,
         peer,
         contact,
+        authorization_basis,
         &realm_id,
         &main_strand_id,
         &actor_member_event_ref,
@@ -1415,7 +1535,8 @@ async fn prepare_reserved_direct_materialization(
     actor: &str,
     _actor_device_id: &str,
     peer: &str,
-    contact: &ContactRecord,
+    contact: Option<&ContactRecord>,
+    authorization_basis: arkret_core::DirectConversationAuthorizationBasis,
     realm_id: &str,
     main_strand_id: &str,
     actor_member_event_ref: &str,
@@ -1492,10 +1613,9 @@ async fn prepare_reserved_direct_materialization(
         founding_payload,
     )?;
 
-    let member_payload =
-        direct_member_join_operation(state, realm_scope.clone(), peer, Some(contact))
-            .map_err(AppError::internal)?
-            .payload;
+    let member_payload = direct_member_join_operation(state, realm_scope.clone(), peer, contact)
+        .map_err(AppError::internal)?
+        .payload;
     let mut peer_member_event = unsigned_direct_materialization_event(
         state,
         actor,
@@ -1544,13 +1664,7 @@ async fn prepare_reserved_direct_materialization(
         main_strand_id: arkret_core::StrandId::new(main_strand_id.to_owned()).map_err(|error| {
             AppError::internal(format!("stored main strand id is invalid: {error}"))
         })?,
-        contact_refs: contact_fact_refs(contact)
-            .into_iter()
-            .map(arkret_core::EventId::new)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                AppError::internal(format!("stored contact event ref is invalid: {error}"))
-            })?,
+        authorization_basis,
         member_event_refs: member_event_refs
             .into_iter()
             .map(arkret_core::EventId::new)

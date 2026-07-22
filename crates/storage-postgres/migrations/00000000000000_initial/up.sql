@@ -627,8 +627,11 @@ CREATE TABLE public.mls_commits (
     mls_group_id text NOT NULL,
     epoch bigint NOT NULL,
     leader_actor_id text NOT NULL,
+    creator_device_id text NOT NULL,
+    genesis_event_ref text NOT NULL,
     covered_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     governance_binding jsonb DEFAULT '{}'::jsonb NOT NULL,
+    accepted_commit_ref text,
     committed_at bigint NOT NULL,
     frontier_contested boolean DEFAULT false NOT NULL,
     CONSTRAINT mls_commits_effective_scope_check CHECK ((((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL)) OR ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL))))
@@ -678,6 +681,9 @@ CREATE TABLE public.mls_welcomes (
     recipient_device_id text NOT NULL,
     welcome_bytes bytea NOT NULL,
     key_package_id text NOT NULL,
+    epoch bigint NOT NULL,
+    commit_ref text,
+    governance_binding jsonb NOT NULL,
     enqueued_at bigint NOT NULL,
     delivered_at bigint
 );

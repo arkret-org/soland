@@ -918,6 +918,12 @@ pub(super) async fn lifecycle_transition(
         updated_record.runtime_attestation_digest = None;
         updated_record.approval_notification_id = None;
     }
+    if matches!(
+        new_state,
+        AgentLifecycleState::Paused | AgentLifecycleState::Deactivated
+    ) {
+        sidecar::remove_agent_from_controller_sidecars(state, &session.actor, &agent_id).await?;
+    }
     state
         .agent_pairing_application()
         .save_agent(updated_record)

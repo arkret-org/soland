@@ -178,6 +178,20 @@ pub(super) async fn hydrate_sidecar_projections(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     for event in events {
+        if event.event_kind == arkret_core::events::EventKind::SIDECAR_CREATE
+            && let Some(sidecar_id) = event.payload.pointer("/object/id").and_then(Value::as_str)
+            && proj.sidecars.contains_key(sidecar_id)
+        {
+            let operation_ref = event.operation_id.clone().ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "Sidecar create Event {} has no operation_id",
+                    event.event_id
+                ))
+            })?;
+            proj.sidecar_create_refs
+                .insert(sidecar_id.to_owned(), operation_ref);
+            continue;
+        }
         let circle_id = match event.event_kind.as_str() {
             arkret_core::events::EventKind::CIRCLE_CREATE => {
                 event.payload.pointer("/object/id").and_then(Value::as_str)
@@ -532,7 +546,7 @@ pub(super) async fn hydrate_projections_from_persistence(
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
         AppletProjection, KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
-        MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
+        MlsWelcome, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
         SpaceContainerProjection, StrandProjection,
     };
 
@@ -855,6 +869,31 @@ pub(super) async fn hydrate_projections_from_persistence(
         }
     }
 
+    if let Ok(rows) = persistence.mls_welcomes().snapshot_all().await {
+        proj.mls_welcomes.clear();
+        for row in rows {
+            proj.mls_welcomes
+                .entry(soland_domain::reducer::MlsWelcomeQueueKey::new(
+                    row.recipient_actor_id.clone(),
+                    row.recipient_device_id.clone(),
+                ))
+                .or_default()
+                .push(MlsWelcome {
+                    id: row.id,
+                    group_id: row.group_id,
+                    recipient_actor_id: row.recipient_actor_id,
+                    recipient_device_id: row.recipient_device_id,
+                    welcome_bytes: row.welcome_bytes,
+                    key_package_id: row.key_package_id,
+                    epoch: row.epoch,
+                    commit_ref: row.commit_ref,
+                    governance_binding: row.governance_binding,
+                    enqueued_at: row.enqueued_at,
+                    delivered_at: row.delivered_at,
+                });
+        }
+    }
+
     // MLS commit-epoch projection — the reducer treats this in-memory map as the
     // epoch CAS authority (`reducer/mls.rs apply_commit_epoch`). Without
     // rehydration, after a restart the genesis guard sees no epoch row and an
@@ -889,15 +928,29 @@ pub(super) async fn hydrate_projections_from_persistence(
                     effective_scope: record.effective_scope,
                     epoch: record.epoch,
                     leader_actor_id: record.leader_actor_id,
+                    creator_device_id: record.creator_device_id,
+                    genesis_event_ref: record.genesis_event_ref,
                     covered_seals: record.covered_seals,
                     committed_at: record.committed_at,
+                    governance_binding: record.governance_binding,
                     policy_root,
                     accepted_commit_digest: None,
+                    accepted_commit_ref: record.accepted_commit_ref.clone(),
                     accepted_from_epoch: None,
                     frontier_contested: record.frontier_contested,
                 },
             );
+            if let Some(commit_ref) = record.accepted_commit_ref {
+                proj.accepted_mls_commit_refs.insert(commit_ref);
+            }
         }
+    }
+    for event in persistence
+        .projection_events()
+        .snapshot_kind(arkret_core::events::EventKind::MLS_COMMIT)
+        .await?
+    {
+        proj.accepted_mls_commit_refs.insert(event.event_id);
     }
     // Run after object mirrors: sidecar Relation scope validation needs both
     // endpoint projections, and Strand field restoration must not be replaced
