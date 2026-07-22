@@ -1507,9 +1507,13 @@ mod tests {
         projection
             .accepted_mls_commit_refs
             .insert("ak:event:01964137-0000-7000-8000-000000000046".to_owned());
-        projection
-            .mls_welcomes
-            .insert(welcome.recipient_actor_id.clone(), vec![welcome.clone()]);
+        projection.mls_welcomes.insert(
+            soland_domain::reducer::MlsWelcomeQueueKey::new(
+                welcome.recipient_actor_id.clone(),
+                welcome.recipient_device_id.clone(),
+            ),
+            vec![welcome.clone()],
+        );
         projection.mls_key_packages.insert(
             welcome.key_package_id.clone(),
             soland_domain::reducer::MlsKeyPackage {
