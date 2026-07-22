@@ -2,7 +2,7 @@
 //!
 //! dev-login is gated by `config.development_mode=true`, so we can't use
 //! the HTTP path with auth tokens to test the production verifier. Instead
-//! we exercise the verifier directly via the public `soland::jws_verify`
+//! we exercise the verifier directly via the public `soland_http::jws_verify`
 //! module. AppState is built minimally with `development_mode=false` so
 //! the DID resolver is identical to production-deploy behaviour.
 
@@ -40,7 +40,7 @@ fn make_detached_jws(signing_key: &SigningKey, canonical_bytes: &[u8], tamper: b
 async fn production_verifier_accepts_real_ed25519_did_key_signature() {
     let mut cfg = test_config();
     cfg.development_mode = false;
-    let state = AppState::new(cfg, Db { pool: None });
+    let state = soland_test_support::app_state(cfg);
 
     let signing_key = SigningKey::from_bytes(&[7u8; 32]);
     let pubkey_bytes: [u8; 32] = signing_key.verifying_key().to_bytes();
@@ -51,7 +51,7 @@ async fn production_verifier_accepts_real_ed25519_did_key_signature() {
     let canonical_bytes = b"some canonical move bytes for testing";
     let jws = make_detached_jws(&signing_key, canonical_bytes, false);
 
-    let result = soland::jws_verify::verify_jws_ed25519(
+    let result = soland_http::jws_verify::verify_jws_ed25519(
         canonical_bytes,
         &jws,
         &verification_method,
@@ -68,7 +68,7 @@ async fn production_verifier_accepts_real_ed25519_did_key_signature() {
 async fn production_verifier_rejects_tampered_signature() {
     let mut cfg = test_config();
     cfg.development_mode = false;
-    let state = AppState::new(cfg, Db { pool: None });
+    let state = soland_test_support::app_state(cfg);
 
     let signing_key = SigningKey::from_bytes(&[11u8; 32]);
     let pubkey_bytes: [u8; 32] = signing_key.verifying_key().to_bytes();
@@ -79,7 +79,7 @@ async fn production_verifier_rejects_tampered_signature() {
     let canonical_bytes = b"another canonical payload";
     let jws = make_detached_jws(&signing_key, canonical_bytes, true);
 
-    let result = soland::jws_verify::verify_jws_ed25519(
+    let result = soland_http::jws_verify::verify_jws_ed25519(
         canonical_bytes,
         &jws,
         &verification_method,
@@ -99,7 +99,7 @@ async fn production_verifier_rejects_tampered_signature() {
 async fn production_verifier_rejects_signature_over_different_payload() {
     let mut cfg = test_config();
     cfg.development_mode = false;
-    let state = AppState::new(cfg, Db { pool: None });
+    let state = soland_test_support::app_state(cfg);
 
     let signing_key = SigningKey::from_bytes(&[13u8; 32]);
     let pubkey_bytes: [u8; 32] = signing_key.verifying_key().to_bytes();
@@ -114,7 +114,7 @@ async fn production_verifier_rejects_signature_over_different_payload() {
     let jws = make_detached_jws(&signing_key, signed_bytes, false);
     let claimed_bytes = b"DIFFERENT bytes the verifier was given";
 
-    let result = soland::jws_verify::verify_jws_ed25519(
+    let result = soland_http::jws_verify::verify_jws_ed25519(
         claimed_bytes,
         &jws,
         &verification_method,
@@ -131,7 +131,7 @@ async fn production_verifier_rejects_signature_over_different_payload() {
 async fn production_verifier_rejects_unknown_verification_method() {
     let mut cfg = test_config();
     cfg.development_mode = false;
-    let state = AppState::new(cfg, Db { pool: None });
+    let state = soland_test_support::app_state(cfg);
 
     let signing_key = SigningKey::from_bytes(&[17u8; 32]);
     let canonical_bytes = b"some payload";
@@ -139,7 +139,7 @@ async fn production_verifier_rejects_unknown_verification_method() {
 
     // verification_method points at a did:web that the resolver chain
     // can't reach (would need an HTTP fetch in test env).
-    let result = soland::jws_verify::verify_jws_ed25519(
+    let result = soland_http::jws_verify::verify_jws_ed25519(
         canonical_bytes,
         &jws,
         "did:web:unreachable.example#k1",

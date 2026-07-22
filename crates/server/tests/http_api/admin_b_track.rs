@@ -6,7 +6,7 @@ use super::common::*;
 
 #[tokio::test]
 async fn admin_actor_detail_includes_account_lifecycle_linkage() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let actor: Value = TestClient::get("http://server/_soland/admin/actors/did:web:alice.example")
@@ -38,7 +38,7 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage() {
 
 #[tokio::test]
 async fn admin_account_status_aliases_keep_protocol_state_closed() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let admin = dev_token(state.clone()).await;
     let _bob = register_account(
         state.clone(),
@@ -106,7 +106,7 @@ async fn admin_account_status_aliases_keep_protocol_state_closed() {
 
 #[tokio::test]
 async fn admin_invite_token_create_and_revoke_round_trip() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let created: Value = TestClient::post("http://server/_soland/admin/invite-tokens")
@@ -163,7 +163,7 @@ async fn admin_invite_token_create_and_revoke_round_trip() {
 
 #[tokio::test]
 async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let now = chrono::Utc::now();
     state

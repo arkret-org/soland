@@ -1,0 +1,1173 @@
+use std::sync::Arc;
+
+use serde_json::Value;
+use soland_storage::*;
+
+use crate::federation::FederationApplicationService;
+use crate::governance::{AdminSigningKeyPort, GovernanceApplicationService, RuntimeSettingsPort};
+use crate::jobs::{JobsApplicationService, RuntimeHealthPort};
+use crate::sync::SyncApplicationService;
+
+struct PersistenceFederationOutbox(Arc<dyn PersistenceStore>);
+struct PersistenceAuditLog(Arc<dyn PersistenceStore>);
+struct PersistenceModeration(Arc<dyn PersistenceStore>);
+struct PersistenceGovernanceRecords(Arc<dyn PersistenceStore>);
+struct PersistenceCursorStore(Arc<dyn PersistenceStore>);
+struct PersistenceMaintenance(Arc<dyn PersistenceStore>);
+
+fn federation_delivery_record(
+    record: crate::federation::FederationDeliveryRecord,
+) -> FederationOutboxRecord {
+    FederationOutboxRecord {
+        id: record.id,
+        peer_did: record.peer_did,
+        peer_url: record.peer_url,
+        endpoint: record.endpoint,
+        idempotency_key: record.idempotency_key,
+        payload_json: record.payload_json,
+        attempts: 0,
+        next_attempt_at: record.created_at,
+        last_status: None,
+        last_response_excerpt: None,
+        created_at: record.created_at,
+        delivered_at: None,
+    }
+}
+
+fn application_delivery_record(
+    record: &FederationOutboxRecord,
+) -> crate::federation::FederationDeliveryRecord {
+    crate::federation::FederationDeliveryRecord {
+        id: record.id.clone(),
+        peer_did: record.peer_did.clone(),
+        peer_url: record.peer_url.clone(),
+        endpoint: record.endpoint.clone(),
+        idempotency_key: record.idempotency_key.clone(),
+        payload_json: record.payload_json.clone(),
+        created_at: record.created_at,
+    }
+}
+
+fn application_pending_delivery(
+    record: FederationOutboxRecord,
+) -> crate::federation::PendingFederationDelivery {
+    crate::federation::PendingFederationDelivery {
+        delivery: application_delivery_record(&record),
+        attempts: record.attempts,
+        next_attempt_at: record.next_attempt_at,
+        last_status: record.last_status,
+        last_response_excerpt: record.last_response_excerpt,
+        delivered_at: record.delivered_at,
+    }
+}
+
+fn persistence_pending_delivery(
+    record: &crate::federation::PendingFederationDelivery,
+) -> FederationOutboxRecord {
+    FederationOutboxRecord {
+        id: record.delivery.id.clone(),
+        peer_did: record.delivery.peer_did.clone(),
+        peer_url: record.delivery.peer_url.clone(),
+        endpoint: record.delivery.endpoint.clone(),
+        idempotency_key: record.delivery.idempotency_key.clone(),
+        payload_json: record.delivery.payload_json.clone(),
+        attempts: record.attempts,
+        next_attempt_at: record.next_attempt_at,
+        last_status: record.last_status,
+        last_response_excerpt: record.last_response_excerpt.clone(),
+        created_at: record.delivery.created_at,
+        delivered_at: record.delivered_at,
+    }
+}
+
+fn application_federation_transaction(
+    record: soland_storage::FederationTransactionRecord,
+) -> crate::federation::FederationTransactionRecord {
+    crate::federation::FederationTransactionRecord {
+        origin: record.origin,
+        txn_id: record.txn_id,
+        destination: record.destination,
+        realm_id: record.realm_id,
+        content_digest: record.content_digest,
+        origin_verification_method: record.origin_verification_method,
+        service_binding_ref: record.service_binding_ref,
+        origin_key_state_digest: record.origin_key_state_digest,
+        local_peer_policy_digest: record.local_peer_policy_digest,
+        status: record.status,
+        response: record.response,
+        received_at: record.received_at,
+        processed_at: record.processed_at,
+    }
+}
+
+fn persistence_federation_transaction(
+    record: &crate::federation::FederationTransactionRecord,
+) -> soland_storage::FederationTransactionRecord {
+    soland_storage::FederationTransactionRecord {
+        origin: record.origin.clone(),
+        txn_id: record.txn_id.clone(),
+        destination: record.destination.clone(),
+        realm_id: record.realm_id.clone(),
+        content_digest: record.content_digest.clone(),
+        origin_verification_method: record.origin_verification_method.clone(),
+        service_binding_ref: record.service_binding_ref.clone(),
+        origin_key_state_digest: record.origin_key_state_digest.clone(),
+        local_peer_policy_digest: record.local_peer_policy_digest.clone(),
+        status: record.status.clone(),
+        response: record.response.clone(),
+        received_at: record.received_at,
+        processed_at: record.processed_at,
+    }
+}
+
+fn application_frontier_exchange(
+    record: soland_storage::FederationFrontierExchangeRecord,
+) -> crate::federation::FederationFrontierExchangeRecord {
+    crate::federation::FederationFrontierExchangeRecord {
+        realm_id: record.realm_id,
+        peer_service_id: record.peer_service_id,
+        status: record.status,
+        consecutive_failures: record.consecutive_failures,
+        last_success_at: record.last_success_at,
+        last_failure_at: record.last_failure_at,
+        last_frontier_root: record.last_frontier_root,
+        last_error: record.last_error,
+        updated_at: record.updated_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
+    async fn enqueue(
+        &self,
+        delivery: &crate::federation::FederationDeliveryRecord,
+    ) -> crate::ApplicationResult<bool> {
+        Ok(self
+            .0
+            .federation_outbox()
+            .enqueue(&federation_delivery_record(delivery.clone()))
+            .await?)
+    }
+
+    async fn find(
+        &self,
+        peer_did: &str,
+        idempotency_key: &str,
+    ) -> crate::ApplicationResult<Option<crate::federation::FederationDeliveryRecord>> {
+        Ok(self
+            .0
+            .federation_outbox()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .find(|row| row.peer_did == peer_did && row.idempotency_key == idempotency_key)
+            .map(|row| application_delivery_record(&row)))
+    }
+
+    async fn pending_due(
+        &self,
+        now: i64,
+        limit: usize,
+    ) -> crate::ApplicationResult<Vec<crate::federation::PendingFederationDelivery>> {
+        Ok(self
+            .0
+            .federation_outbox()
+            .pending_due(now, limit)
+            .await?
+            .into_iter()
+            .map(application_pending_delivery)
+            .collect())
+    }
+
+    async fn update(
+        &self,
+        delivery: &crate::federation::PendingFederationDelivery,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .federation_outbox()
+            .update(&persistence_pending_delivery(delivery))
+            .await?;
+        Ok(())
+    }
+
+    async fn insert_dead_letter(
+        &self,
+        record: &crate::federation::FederationDeadLetter,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .federation_outbox()
+            .insert_dead_letter(&soland_storage::FederationOutboxDeadLetterRecord {
+                id: record.id.clone(),
+                outbox_id: record.outbox_id.clone(),
+                peer_did: record.peer_did.clone(),
+                endpoint: record.endpoint.clone(),
+                idempotency_key: record.idempotency_key.clone(),
+                terminal_status: record.terminal_status,
+                attempts: record.attempts,
+                response_excerpt: record.response_excerpt.clone(),
+                failed_at: record.failed_at,
+                reason: record.reason.clone(),
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn deliveries(
+        &self,
+    ) -> crate::ApplicationResult<Vec<crate::federation::PendingFederationDelivery>> {
+        Ok(self
+            .0
+            .federation_outbox()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(application_pending_delivery)
+            .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
+    async fn transaction(
+        &self,
+        origin: &str,
+        txn_id: &str,
+    ) -> crate::ApplicationResult<Option<crate::federation::FederationTransactionRecord>> {
+        Ok(self
+            .0
+            .federation_transactions()
+            .get(origin, txn_id)
+            .await?
+            .map(application_federation_transaction))
+    }
+    async fn begin_transaction(
+        &self,
+        record: &crate::federation::FederationTransactionRecord,
+    ) -> crate::ApplicationResult<bool> {
+        Ok(self
+            .0
+            .federation_transactions()
+            .try_begin(&persistence_federation_transaction(record))
+            .await?)
+    }
+    async fn store_transaction(
+        &self,
+        record: &crate::federation::FederationTransactionRecord,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .federation_transactions()
+            .put(&persistence_federation_transaction(record))
+            .await?;
+        Ok(())
+    }
+    async fn transactions(
+        &self,
+    ) -> crate::ApplicationResult<Vec<crate::federation::FederationTransactionRecord>> {
+        Ok(self
+            .0
+            .federation_transactions()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(application_federation_transaction)
+            .collect())
+    }
+    async fn append_operation(
+        &self,
+        operation: arkret_core::Operation,
+    ) -> crate::ApplicationResult<()> {
+        self.0.federation_operations().append(operation).await?;
+        Ok(())
+    }
+    async fn has_operation(&self, operation_id: &str) -> crate::ApplicationResult<bool> {
+        Ok(self
+            .0
+            .federation_operations()
+            .contains(operation_id)
+            .await?)
+    }
+    async fn operations_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> crate::ApplicationResult<Vec<arkret_core::Operation>> {
+        Ok(self
+            .0
+            .federation_operations()
+            .list_for_realm(realm_id)
+            .await?)
+    }
+    async fn operations(&self) -> crate::ApplicationResult<Vec<arkret_core::Operation>> {
+        Ok(self.0.federation_operations().snapshot_all().await?)
+    }
+    async fn frontier_exchange(
+        &self,
+        realm_id: &str,
+        peer_service_id: &str,
+    ) -> crate::ApplicationResult<Option<crate::federation::FederationFrontierExchangeRecord>> {
+        Ok(self
+            .0
+            .federation_frontier_exchange()
+            .get(realm_id, peer_service_id)
+            .await?
+            .map(application_frontier_exchange))
+    }
+    async fn record_frontier_success(
+        &self,
+        realm_id: &str,
+        peer_service_id: &str,
+        frontier_root: &str,
+        observed_at: i64,
+    ) -> crate::ApplicationResult<crate::federation::FederationFrontierExchangeRecord> {
+        Ok(application_frontier_exchange(
+            self.0
+                .federation_frontier_exchange()
+                .record_success(realm_id, peer_service_id, frontier_root, observed_at)
+                .await?,
+        ))
+    }
+    async fn record_frontier_failure(
+        &self,
+        realm_id: &str,
+        peer_service_id: &str,
+        reason: &str,
+        observed_at: i64,
+    ) -> crate::ApplicationResult<crate::federation::FederationFrontierExchangeRecord> {
+        Ok(application_frontier_exchange(
+            self.0
+                .federation_frontier_exchange()
+                .record_failure(realm_id, peer_service_id, reason, observed_at)
+                .await?,
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::governance::AuditLogPort for PersistenceAuditLog {
+    async fn append(&self, entry: Value) -> crate::ApplicationResult<()> {
+        self.0.audit().append(entry).await?;
+        Ok(())
+    }
+
+    async fn entries(&self) -> crate::ApplicationResult<Vec<Value>> {
+        Ok(self.0.audit().snapshot_all().await?)
+    }
+
+    async fn entries_for_actor(&self, actor_id: &str) -> crate::ApplicationResult<Vec<Value>> {
+        Ok(self.0.audit().list_for_actor(actor_id).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::governance::ModerationPort for PersistenceModeration {
+    async fn append_report(&self, report: Value) -> crate::ApplicationResult<()> {
+        self.0.moderation().append_report(report).await?;
+        Ok(())
+    }
+    async fn append_action(&self, action: Value) -> crate::ApplicationResult<()> {
+        self.0.moderation().append_action(action).await?;
+        Ok(())
+    }
+    async fn reports(&self) -> crate::ApplicationResult<Vec<Value>> {
+        Ok(self.0.moderation().list_reports().await?)
+    }
+    async fn upsert_queue_item(&self, item: Value) -> crate::ApplicationResult<()> {
+        self.0.moderation().upsert_queue_item(item).await?;
+        Ok(())
+    }
+    async fn queue_items(&self) -> crate::ApplicationResult<Vec<Value>> {
+        Ok(self.0.moderation().list_queue_items().await?)
+    }
+    async fn queue_item(&self, id: &str) -> crate::ApplicationResult<Option<Value>> {
+        Ok(self.0.moderation().get_queue_item(id).await?)
+    }
+    async fn append_appeal(&self, appeal: Value) -> crate::ApplicationResult<()> {
+        self.0.moderation().append_appeal(appeal).await?;
+        Ok(())
+    }
+    async fn appeals(&self) -> crate::ApplicationResult<Vec<Value>> {
+        Ok(self.0.moderation().list_appeals().await?)
+    }
+    async fn appeal_history(&self, appeal_id: &str) -> crate::ApplicationResult<Vec<Value>> {
+        Ok(self.0.moderation().appeal_history(appeal_id).await?)
+    }
+}
+
+fn application_organization(
+    row: soland_storage::OrganizationRecord,
+) -> crate::governance::OrganizationRecord {
+    crate::governance::OrganizationRecord {
+        organization_id: row.organization_id,
+        organization_did: row.organization_did,
+        handle: row.handle,
+        display_name: row.display_name,
+        source_refs: row.source_refs,
+        policy_revision: row.policy_revision,
+        verified: row.verified,
+        members: row.members,
+        member_count: row.member_count,
+        created_by: row.created_by,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }
+}
+
+fn persistence_organization(
+    row: &crate::governance::OrganizationRecord,
+) -> soland_storage::OrganizationRecord {
+    soland_storage::OrganizationRecord {
+        organization_id: row.organization_id.clone(),
+        organization_did: row.organization_did.clone(),
+        handle: row.handle.clone(),
+        display_name: row.display_name.clone(),
+        source_refs: row.source_refs.clone(),
+        policy_revision: row.policy_revision.clone(),
+        verified: row.verified,
+        members: row.members.clone(),
+        member_count: row.member_count,
+        created_by: row.created_by.clone(),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }
+}
+
+fn application_organization_policy(
+    row: soland_storage::OrganizationPolicyRecord,
+) -> crate::governance::OrganizationPolicyRecord {
+    crate::governance::OrganizationPolicyRecord {
+        organization_id: row.organization_id,
+        policy_id: row.policy_id,
+        payload: row.payload,
+        version: row.version,
+        updated_by: row.updated_by,
+        updated_at: row.updated_at,
+    }
+}
+
+fn persistence_organization_policy(
+    row: &crate::governance::OrganizationPolicyRecord,
+) -> soland_storage::OrganizationPolicyRecord {
+    soland_storage::OrganizationPolicyRecord {
+        organization_id: row.organization_id.clone(),
+        policy_id: row.policy_id.clone(),
+        payload: row.payload.clone(),
+        version: row.version,
+        updated_by: row.updated_by.clone(),
+        updated_at: row.updated_at,
+    }
+}
+
+fn application_realm_moderation_policy(
+    row: soland_storage::RealmModerationPolicyRecord,
+) -> crate::governance::RealmModerationPolicyRecord {
+    crate::governance::RealmModerationPolicyRecord {
+        realm_id: row.realm_id,
+        payload: row.payload,
+        updated_by: row.updated_by,
+        updated_at: row.updated_at,
+    }
+}
+
+fn persistence_realm_moderation_policy(
+    row: &crate::governance::RealmModerationPolicyRecord,
+) -> soland_storage::RealmModerationPolicyRecord {
+    soland_storage::RealmModerationPolicyRecord {
+        realm_id: row.realm_id.clone(),
+        payload: row.payload.clone(),
+        updated_by: row.updated_by.clone(),
+        updated_at: row.updated_at,
+    }
+}
+
+fn application_policy_document(
+    row: soland_storage::PolicyDocumentRecord,
+) -> crate::governance::PolicyDocumentRecord {
+    crate::governance::PolicyDocumentRecord {
+        policy_id: row.policy_id,
+        owner: row.owner,
+        scope: row.scope,
+        subject_ref: row.subject_ref,
+        policy_type: row.policy_type,
+        payload: row.payload,
+        active: row.active,
+        updated_at: row.updated_at,
+    }
+}
+
+fn persistence_policy_document(
+    row: crate::governance::PolicyDocumentRecord,
+) -> soland_storage::PolicyDocumentRecord {
+    soland_storage::PolicyDocumentRecord {
+        policy_id: row.policy_id,
+        owner: row.owner,
+        scope: row.scope,
+        subject_ref: row.subject_ref,
+        policy_type: row.policy_type,
+        payload: row.payload,
+        active: row.active,
+        updated_at: row.updated_at,
+    }
+}
+
+fn application_retention_policy(
+    row: soland_storage::RetentionPolicyRecord,
+) -> crate::governance::RetentionPolicyRecord {
+    crate::governance::RetentionPolicyRecord {
+        realm_id: row.realm_id,
+        ttl_seconds: row.ttl_seconds,
+        updated_by: row.updated_by,
+        updated_at: row.updated_at,
+    }
+}
+
+fn persistence_retention_policy(
+    row: &crate::governance::RetentionPolicyRecord,
+) -> soland_storage::RetentionPolicyRecord {
+    soland_storage::RetentionPolicyRecord {
+        realm_id: row.realm_id.clone(),
+        ttl_seconds: row.ttl_seconds,
+        updated_by: row.updated_by.clone(),
+        updated_at: row.updated_at,
+    }
+}
+
+fn application_retention_tombstone(
+    row: soland_storage::RetentionTombstoneRecord,
+) -> crate::governance::RetentionTombstoneRecord {
+    crate::governance::RetentionTombstoneRecord {
+        event_id: row.event_id,
+        realm_id: row.realm_id,
+        reason: row.reason,
+        policy_ttl_seconds: row.policy_ttl_seconds,
+        expired_at: row.expired_at,
+        tombstoned_at: row.tombstoned_at,
+        sealed: row.sealed,
+    }
+}
+
+fn persistence_retention_tombstone(
+    row: &crate::governance::RetentionTombstoneRecord,
+) -> soland_storage::RetentionTombstoneRecord {
+    soland_storage::RetentionTombstoneRecord {
+        event_id: row.event_id.clone(),
+        realm_id: row.realm_id.clone(),
+        reason: row.reason.clone(),
+        policy_ttl_seconds: row.policy_ttl_seconds,
+        expired_at: row.expired_at,
+        tombstoned_at: row.tombstoned_at,
+        sealed: row.sealed,
+    }
+}
+
+fn application_multisig_pending(
+    row: soland_storage::MultisigPendingRecord,
+) -> crate::governance::MultisigPendingRecord {
+    crate::governance::MultisigPendingRecord {
+        seal_id: row.seal_id,
+        realm_id: row.realm_id,
+        threshold_k: row.threshold_k,
+        threshold_n: row.threshold_n,
+        members: row.members,
+        canonical_b64: row.canonical_b64,
+        partials: row.partials,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        claimed_by_node_id: row.claimed_by_node_id,
+        claimed_until: row.claimed_until,
+        claim_seq: row.claim_seq,
+    }
+}
+
+fn persistence_multisig_pending(
+    row: crate::governance::MultisigPendingRecord,
+) -> soland_storage::MultisigPendingRecord {
+    soland_storage::MultisigPendingRecord {
+        seal_id: row.seal_id,
+        realm_id: row.realm_id,
+        threshold_k: row.threshold_k,
+        threshold_n: row.threshold_n,
+        members: row.members,
+        canonical_b64: row.canonical_b64,
+        partials: row.partials,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        claimed_by_node_id: row.claimed_by_node_id,
+        claimed_until: row.claimed_until,
+        claim_seq: row.claim_seq,
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
+    async fn organization(
+        &self,
+        organization_id: &str,
+    ) -> crate::ApplicationResult<Option<crate::governance::OrganizationRecord>> {
+        Ok(self
+            .0
+            .organizations()
+            .get(organization_id)
+            .await?
+            .map(application_organization))
+    }
+
+    async fn store_organization(
+        &self,
+        record: &crate::governance::OrganizationRecord,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .organizations()
+            .put(&persistence_organization(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn organizations(
+        &self,
+    ) -> crate::ApplicationResult<Vec<crate::governance::OrganizationRecord>> {
+        Ok(self
+            .0
+            .organizations()
+            .list()
+            .await?
+            .into_iter()
+            .map(application_organization)
+            .collect())
+    }
+
+    async fn organization_policy(
+        &self,
+        organization_id: &str,
+    ) -> crate::ApplicationResult<Option<crate::governance::OrganizationPolicyRecord>> {
+        Ok(self
+            .0
+            .organization_policies()
+            .get(organization_id)
+            .await?
+            .map(application_organization_policy))
+    }
+
+    async fn store_organization_policy(
+        &self,
+        record: &crate::governance::OrganizationPolicyRecord,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .organization_policies()
+            .put(&persistence_organization_policy(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn organization_policies(
+        &self,
+    ) -> crate::ApplicationResult<Vec<crate::governance::OrganizationPolicyRecord>> {
+        Ok(self
+            .0
+            .organization_policies()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(application_organization_policy)
+            .collect())
+    }
+
+    async fn link_realm_organization(
+        &self,
+        realm_id: &str,
+        organization_id: &str,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .realm_organizations()
+            .link(realm_id, organization_id)
+            .await?;
+        Ok(())
+    }
+
+    async fn realm_organization_links(
+        &self,
+    ) -> crate::ApplicationResult<Vec<(String, std::collections::BTreeSet<String>)>> {
+        Ok(self.0.realm_organizations().snapshot_all().await?)
+    }
+
+    async fn store_realm_moderation_policy(
+        &self,
+        record: &crate::governance::RealmModerationPolicyRecord,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .realm_moderation_policies()
+            .put(&persistence_realm_moderation_policy(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn realm_moderation_policies(
+        &self,
+    ) -> crate::ApplicationResult<Vec<crate::governance::RealmModerationPolicyRecord>> {
+        Ok(self
+            .0
+            .realm_moderation_policies()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(application_realm_moderation_policy)
+            .collect())
+    }
+
+    async fn policy_document(
+        &self,
+        policy_id: &str,
+    ) -> crate::ApplicationResult<Option<crate::governance::PolicyDocumentRecord>> {
+        Ok(self
+            .0
+            .policy_documents()
+            .get(policy_id)
+            .await?
+            .map(application_policy_document))
+    }
+
+    async fn store_policy_document(
+        &self,
+        record: crate::governance::PolicyDocumentRecord,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .policy_documents()
+            .put(persistence_policy_document(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_policy_document(&self, policy_id: &str) -> crate::ApplicationResult<bool> {
+        Ok(self.0.policy_documents().delete(policy_id).await?)
+    }
+
+    async fn policy_documents_for_owner(
+        &self,
+        owner: &str,
+    ) -> crate::ApplicationResult<Vec<crate::governance::PolicyDocumentRecord>> {
+        Ok(self
+            .0
+            .policy_documents()
+            .list_for_owner(owner)
+            .await?
+            .into_iter()
+            .map(application_policy_document)
+            .collect())
+    }
+
+    async fn policy_documents(
+        &self,
+    ) -> crate::ApplicationResult<Vec<crate::governance::PolicyDocumentRecord>> {
+        Ok(self
+            .0
+            .policy_documents()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(application_policy_document)
+            .collect())
+    }
+
+    async fn active_policy_documents(
+        &self,
+    ) -> crate::ApplicationResult<Vec<crate::governance::PolicyDocumentRecord>> {
+        Ok(self
+            .0
+            .policy_documents()
+            .list_active()
+            .await?
+            .into_iter()
+            .map(application_policy_document)
+            .collect())
+    }
+
+    async fn retention_policy(
+        &self,
+        realm_id: &str,
+    ) -> crate::ApplicationResult<Option<crate::governance::RetentionPolicyRecord>> {
+        Ok(self
+            .0
+            .retention_policies()
+            .get(realm_id)
+            .await?
+            .map(application_retention_policy))
+    }
+
+    async fn store_retention_policy(
+        &self,
+        record: &crate::governance::RetentionPolicyRecord,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .retention_policies()
+            .put(&persistence_retention_policy(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn retention_tombstone(
+        &self,
+        event_id: &str,
+    ) -> crate::ApplicationResult<Option<crate::governance::RetentionTombstoneRecord>> {
+        Ok(self
+            .0
+            .retention_tombstones()
+            .get(event_id)
+            .await?
+            .map(application_retention_tombstone))
+    }
+
+    async fn retention_tombstones(
+        &self,
+    ) -> crate::ApplicationResult<Vec<crate::governance::RetentionTombstoneRecord>> {
+        Ok(self
+            .0
+            .retention_tombstones()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(application_retention_tombstone)
+            .collect())
+    }
+
+    async fn store_retention_tombstone(
+        &self,
+        record: &crate::governance::RetentionTombstoneRecord,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .retention_tombstones()
+            .put(&persistence_retention_tombstone(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn multisig_pending(
+        &self,
+        seal_id: &str,
+    ) -> crate::ApplicationResult<Option<crate::governance::MultisigPendingRecord>> {
+        Ok(self
+            .0
+            .multisig_pending()
+            .get(seal_id)
+            .await?
+            .map(application_multisig_pending))
+    }
+
+    async fn store_multisig_pending(
+        &self,
+        record: crate::governance::MultisigPendingRecord,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .multisig_pending()
+            .upsert(persistence_multisig_pending(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn multisig_pending_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> crate::ApplicationResult<Vec<crate::governance::MultisigPendingRecord>> {
+        Ok(self
+            .0
+            .multisig_pending()
+            .list_for_realm(realm_id)
+            .await?
+            .into_iter()
+            .map(application_multisig_pending)
+            .collect())
+    }
+
+    async fn multisig_pending_all(
+        &self,
+    ) -> crate::ApplicationResult<Vec<crate::governance::MultisigPendingRecord>> {
+        Ok(self
+            .0
+            .multisig_pending()
+            .snapshot_all()
+            .await?
+            .into_iter()
+            .map(application_multisig_pending)
+            .collect())
+    }
+
+    async fn claim_multisig_pending(
+        &self,
+        seal_id: &str,
+        node_id: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        claimed_until: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ApplicationResult<(bool, i64)> {
+        Ok(self
+            .0
+            .multisig_pending()
+            .try_claim(seal_id, node_id, now, claimed_until)
+            .await?)
+    }
+
+    async fn release_multisig_claim(
+        &self,
+        seal_id: &str,
+        node_id: &str,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .multisig_pending()
+            .release_claim(seal_id, node_id)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_multisig_with_fence(
+        &self,
+        seal_id: &str,
+        node_id: &str,
+        claim_seq: i64,
+    ) -> crate::ApplicationResult<bool> {
+        Ok(self
+            .0
+            .multisig_pending()
+            .delete_with_fence(seal_id, node_id, claim_seq)
+            .await?)
+    }
+
+    async fn renew_multisig_claim(
+        &self,
+        seal_id: &str,
+        node_id: &str,
+        claim_seq: i64,
+        new_claimed_until: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ApplicationResult<bool> {
+        Ok(self
+            .0
+            .multisig_pending()
+            .renew_claim(seal_id, node_id, claim_seq, new_claimed_until)
+            .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::jobs::MaintenancePort for PersistenceMaintenance {
+    async fn prune_expired_idempotency(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ApplicationResult<usize> {
+        Ok(self.0.idempotency_keys().prune_expired(now).await?)
+    }
+
+    async fn idempotency_record(
+        &self,
+        principal_id: &str,
+        key: &str,
+    ) -> crate::ApplicationResult<Option<crate::jobs::IdempotencyState>> {
+        Ok(self
+            .0
+            .idempotency_keys()
+            .get(principal_id, key)
+            .await?
+            .map(application_idempotency))
+    }
+
+    async fn store_idempotency_record(
+        &self,
+        record: crate::jobs::IdempotencyState,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .idempotency_keys()
+            .record(&persistence_idempotency(record))
+            .await?;
+        Ok(())
+    }
+}
+
+fn application_idempotency(
+    record: soland_storage::IdempotencyRecord,
+) -> crate::jobs::IdempotencyState {
+    crate::jobs::IdempotencyState {
+        principal_id: record.principal_id,
+        idempotency_key: record.idempotency_key,
+        service_id: record.service_id,
+        request_hash: record.request_hash,
+        response_status: record.response_status,
+        response_body: record.response_body,
+        created_at: record.created_at,
+        expires_at: record.expires_at,
+    }
+}
+fn persistence_idempotency(
+    record: crate::jobs::IdempotencyState,
+) -> soland_storage::IdempotencyRecord {
+    soland_storage::IdempotencyRecord {
+        principal_id: record.principal_id,
+        idempotency_key: record.idempotency_key,
+        service_id: record.service_id,
+        request_hash: record.request_hash,
+        response_status: record.response_status,
+        response_body: record.response_body,
+        created_at: record.created_at,
+        expires_at: record.expires_at,
+    }
+}
+
+fn application_cursor_state(record: soland_storage::SyncCursorRecord) -> crate::sync::CursorState {
+    crate::sync::CursorState {
+        handle: record.handle,
+        principal_id: record.principal_id,
+        device_id: record.device_id,
+        service_id: record.service_id,
+        filter_digest: record.filter_digest,
+        purpose: record.purpose,
+        positions: record.positions,
+        target: record.target,
+        issued_at_ms: record.issued_at_ms,
+        expires_at_ms: record.expires_at_ms,
+    }
+}
+
+fn persistence_cursor_state(record: &crate::sync::CursorState) -> soland_storage::SyncCursorRecord {
+    soland_storage::SyncCursorRecord {
+        handle: record.handle.clone(),
+        principal_id: record.principal_id.clone(),
+        device_id: record.device_id.clone(),
+        service_id: record.service_id.clone(),
+        filter_digest: record.filter_digest.clone(),
+        purpose: record.purpose.clone(),
+        positions: record.positions.clone(),
+        target: record.target.clone(),
+        issued_at_ms: record.issued_at_ms,
+        expires_at_ms: record.expires_at_ms,
+    }
+}
+
+fn application_cursor_revocation(record: CursorRevocation) -> crate::sync::CursorRevocationState {
+    crate::sync::CursorRevocationState {
+        cursor_digest: record.cursor_digest,
+        principal_id: record.principal_id,
+        device_id: record.device_id,
+        scope: record.scope,
+        reason_code: record.reason_code,
+        revoked_at: record.revoked_at,
+        expires_at: record.expires_at,
+    }
+}
+
+fn persistence_cursor_revocation(record: &crate::sync::CursorRevocationState) -> CursorRevocation {
+    CursorRevocation {
+        cursor_digest: record.cursor_digest.clone(),
+        principal_id: record.principal_id.clone(),
+        device_id: record.device_id.clone(),
+        scope: record.scope.clone(),
+        reason_code: record.reason_code.clone(),
+        revoked_at: record.revoked_at,
+        expires_at: record.expires_at,
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::sync::CursorStorePort for PersistenceCursorStore {
+    async fn get(
+        &self,
+        handle: &str,
+    ) -> crate::ApplicationResult<Option<crate::sync::CursorState>> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .get(handle)
+            .await?
+            .map(application_cursor_state))
+    }
+
+    async fn upsert(&self, record: &crate::sync::CursorState) -> crate::ApplicationResult<()> {
+        self.0
+            .sync_cursors()
+            .upsert(&persistence_cursor_state(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn delete(&self, handle: &str) -> crate::ApplicationResult<bool> {
+        Ok(self.0.sync_cursors().delete(handle).await?)
+    }
+
+    async fn prune_stream_superseded(
+        &self,
+        principal_id: &str,
+        device_id: &str,
+        filter_digest: &str,
+        presented_issued_at_ms: i64,
+    ) -> crate::ApplicationResult<usize> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .prune_stream_superseded(
+                principal_id,
+                device_id,
+                filter_digest,
+                presented_issued_at_ms,
+            )
+            .await?)
+    }
+
+    async fn prune_expired(&self, now_ms: i64) -> crate::ApplicationResult<usize> {
+        Ok(self.0.sync_cursors().prune_expired(now_ms).await?)
+    }
+
+    async fn record_revocation(
+        &self,
+        record: &crate::sync::CursorRevocationState,
+    ) -> crate::ApplicationResult<()> {
+        self.0
+            .sync_cursors()
+            .record_revocation(&persistence_cursor_revocation(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn active_revocations(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ApplicationResult<Vec<crate::sync::CursorRevocationState>> {
+        Ok(self
+            .0
+            .sync_cursors()
+            .active_revocations(now)
+            .await?
+            .into_iter()
+            .map(application_cursor_revocation)
+            .collect())
+    }
+}
+
+#[derive(Clone)]
+pub struct PersistenceOperationalApplications {
+    pub federation: FederationApplicationService,
+    pub governance: GovernanceApplicationService,
+    pub sync: SyncApplicationService,
+    pub jobs: JobsApplicationService,
+}
+
+pub fn build_persistence_operational_applications(
+    persistence: Arc<dyn PersistenceStore>,
+    admin_signing_keys: Arc<dyn AdminSigningKeyPort>,
+    runtime_settings: Arc<dyn RuntimeSettingsPort>,
+    runtime_health: Arc<dyn RuntimeHealthPort>,
+    sync_cursor_hmac_key: [u8; 32],
+) -> PersistenceOperationalApplications {
+    PersistenceOperationalApplications {
+        federation: FederationApplicationService::new(
+            Arc::new(PersistenceFederationOutbox(persistence.clone())),
+            Arc::new(PersistenceFederationOutbox(persistence.clone())),
+        ),
+        governance: GovernanceApplicationService::new(
+            Arc::new(PersistenceAuditLog(persistence.clone())),
+            Arc::new(PersistenceModeration(persistence.clone())),
+            Arc::new(PersistenceGovernanceRecords(persistence.clone())),
+            admin_signing_keys,
+            runtime_settings,
+        ),
+        sync: SyncApplicationService::new(
+            Arc::new(PersistenceCursorStore(persistence.clone())),
+            sync_cursor_hmac_key,
+        ),
+        jobs: JobsApplicationService::new(
+            Arc::new(PersistenceMaintenance(persistence)),
+            runtime_health,
+        ),
+    }
+}

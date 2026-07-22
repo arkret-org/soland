@@ -20,19 +20,19 @@ use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland_storage::{
-    PersistenceStore, ServiceRegistrationCommitOutcome, WebvhDocumentRecord, WebvhLogRecord,
+use soland_application::identity::{
+    DidDocumentState as WebvhDocumentRecord, DidLogEvent as WebvhLogRecord,
+    ServiceRegistrationCommitResult as ServiceRegistrationCommitOutcome,
 };
-use soland_storage_memory::SolandMemoryPersistenceStore;
-use soland_storage_postgres::Db;
-
-use crate::config::AppConfig;
-use crate::persistence_registry::PgPersistenceStore;
-use crate::routing::identity::webvh_validation::{
+use soland_application::persistence::PersistenceHandle;
+use soland_http::config::AppConfig;
+use soland_http::webvh_validation::{
     WebvhLogEntry, validate_log_chain, validate_rotation_authorization_for_log,
     validate_witness_policy_for_log, verify_log_subject, verify_scid_against_did,
     verify_webvh_log_proof,
 };
+use soland_storage_memory::SolandMemoryPersistenceStore;
+use soland_storage_postgres::{Db, PgPersistenceStore};
 
 const SERVICE_IDENTITY_KEYSTORE_APP: &str = "soland.service-identity";
 const CONFIGURED_SIGNING_KEY_REF: &str = "secret:SOLAND_NOTARY_SIGNING_KEY";
@@ -40,7 +40,7 @@ const CONFIGURED_SIGNING_KEY_REF: &str = "secret:SOLAND_NOTARY_SIGNING_KEY";
 /// Runtime values resolved before AppState is constructed. The service DID is
 /// deliberately absent from [`AppConfig`].
 pub struct ServiceIdentityBootstrap {
-    pub persistence: Arc<dyn PersistenceStore>,
+    pub persistence: PersistenceHandle,
     /// The exact KeyStore instance used to prepare or recover this identity.
     /// Waiting/degraded retries must retain it so a timed-out ensure cannot
     /// silently prepare a second control root.
@@ -58,11 +58,15 @@ pub async fn resolve_and_build_persistence(
     config: &AppConfig,
     db: &Db,
 ) -> anyhow::Result<ServiceIdentityBootstrap> {
-    let persistence: Arc<dyn PersistenceStore> = db
-        .pool
-        .as_ref()
-        .map(|pool| Arc::new(PgPersistenceStore::new(pool.clone())) as Arc<dyn PersistenceStore>)
-        .unwrap_or_else(|| Arc::new(SolandMemoryPersistenceStore::new()));
+    let persistence = db.pool.as_ref().map_or_else(
+        || PersistenceHandle::new(Arc::new(SolandMemoryPersistenceStore::new())),
+        |pool| {
+            PersistenceHandle::new(Arc::new(PgPersistenceStore::new(
+                pool.clone(),
+                Arc::new(SolandMemoryPersistenceStore::new()),
+            )))
+        },
+    );
     let key_store: Option<Arc<dyn KeyStore>> = if let Some(key_store) = config
         .key_store
         .open(SERVICE_IDENTITY_KEYSTORE_APP)
@@ -83,7 +87,7 @@ pub async fn resolve_and_build_persistence(
 /// indeterminate Provider response.
 pub async fn retry_service_identity(
     config: &AppConfig,
-    persistence: Arc<dyn PersistenceStore>,
+    persistence: PersistenceHandle,
     key_store: Option<Arc<dyn KeyStore>>,
 ) -> anyhow::Result<ServiceIdentityBootstrap> {
     let first_provisioning = config.development_mode || config.first_provisioning;
@@ -94,7 +98,7 @@ pub async fn retry_service_identity(
         .map(FileIdentityBundleBackend::new);
 
     let state = resolve_service_identity(
-        persistence.as_ref(),
+        &persistence,
         config,
         key_store.as_deref(),
         bundle_backend
@@ -132,7 +136,7 @@ pub async fn retry_service_identity(
 }
 
 async fn resolve_service_identity(
-    persistence: &dyn PersistenceStore,
+    persistence: &PersistenceHandle,
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
     bundle_backend: Option<&dyn IdentityBundleBackend>,
@@ -144,8 +148,7 @@ async fn resolve_service_identity(
             .await;
     }
     let existing = persistence
-        .service_identity()
-        .get()
+        .stored_service_identity()
         .await
         .map_err(|error| anyhow::anyhow!("reading persisted service identity failed: {error}"))?;
 
@@ -170,8 +173,7 @@ async fn resolve_service_identity(
         )
         .await?
     } else if let Some(outcome) = persistence
-        .webvh()
-        .get_service_registration(&configured_key)
+        .service_registration(&configured_key)
         .await
         .map_err(|error| anyhow::anyhow!("reading local service registration failed: {error}"))?
     {
@@ -220,15 +222,14 @@ struct ExternalIdentityMaterial {
 }
 
 async fn resolve_external_service_identity(
-    persistence: &dyn PersistenceStore,
+    persistence: &PersistenceHandle,
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
     registration_key: ServiceRegistrationKey,
 ) -> anyhow::Result<ServiceIdentityState> {
     let provider = external_provider(config)?;
     let existing = persistence
-        .service_identity()
-        .get()
+        .stored_service_identity()
         .await
         .map_err(|error| anyhow::anyhow!("reading persisted service identity failed: {error}"))?;
     let material = external_identity_material(
@@ -332,7 +333,7 @@ async fn resolve_external_service_identity(
 }
 
 async fn accept_external_outcome(
-    persistence: &dyn PersistenceStore,
+    persistence: &PersistenceHandle,
     provider: &ServiceIdentityProviderRef,
     registration_key: &ServiceRegistrationKey,
     material: &ExternalIdentityMaterial,
@@ -536,7 +537,7 @@ fn load_or_create_seed(
         Ok(bytes) => key_bytes_to_seed(key_ref, bytes.as_slice()),
         Err(error) if error.is_not_found() && allow_create => {
             let mut seed = [0u8; 32];
-            crate::state::getrandom_seed(&mut seed);
+            soland_http::state::getrandom_seed(&mut seed);
             key_store.store(key_ref.as_str(), &seed).map_err(|error| {
                 anyhow::anyhow!("persisting {} failed: {error}", key_ref.as_str())
             })?;
@@ -607,7 +608,7 @@ fn provider_unavailable(error: &arkret_http_client::Error) -> bool {
 }
 
 async fn ensure_identity_bundle(
-    persistence: &dyn PersistenceStore,
+    persistence: &PersistenceHandle,
     backend: Option<&dyn IdentityBundleBackend>,
     stored: &StoredServiceIdentity,
 ) -> anyhow::Result<()> {
@@ -618,8 +619,7 @@ async fn ensure_identity_bundle(
         anyhow::bail!("service identity bundle backend is unavailable: {error}");
     }
     let history = persistence
-        .webvh()
-        .list_log_events(stored.identity.service_id.as_str())
+        .webvh_history(stored.identity.service_id.as_str())
         .await
         .map_err(|error| anyhow::anyhow!("reading service WebVH history failed: {error}"))?;
     if history.len() != 1 {
@@ -659,7 +659,7 @@ fn load_identity_bundle(
 }
 
 async fn restore_identity_bundle(
-    persistence: &dyn PersistenceStore,
+    persistence: &PersistenceHandle,
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
     registration_key: ServiceRegistrationKey,
@@ -720,7 +720,6 @@ async fn restore_identity_bundle(
         created_at: now,
     };
     match persistence
-        .webvh()
         .commit_service_registration(registration_key, outcome, document, event)
         .await
         .map_err(|error| anyhow::anyhow!("restoring service registration failed: {error}"))?
@@ -817,15 +816,14 @@ fn registration_key(config: &AppConfig) -> anyhow::Result<ServiceRegistrationKey
 }
 
 async fn persist_stored_identity(
-    persistence: &dyn PersistenceStore,
+    persistence: &PersistenceHandle,
     identity: StoredServiceIdentity,
 ) -> anyhow::Result<StoredServiceIdentity> {
     identity
         .validate()
         .map_err(|error| anyhow::anyhow!("service identity is invalid: {error}"))?;
     persistence
-        .service_identity()
-        .put(identity.clone())
+        .store_service_identity(identity.clone())
         .await
         .map_err(|error| anyhow::anyhow!("persisting service identity failed: {error}"))?;
     Ok(identity)
@@ -866,7 +864,7 @@ fn stored_identity_from_outcome(
 }
 
 async fn validate_stored_service_identity(
-    persistence: &dyn PersistenceStore,
+    persistence: &PersistenceHandle,
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
     stored: &StoredServiceIdentity,
@@ -886,8 +884,7 @@ async fn validate_stored_service_identity(
     validate_service_signing_binding(stored, &signing_seed)?;
 
     let log = persistence
-        .webvh()
-        .list_log_events(stored.identity.service_id.as_str())
+        .webvh_history(stored.identity.service_id.as_str())
         .await
         .map_err(|error| {
             anyhow::anyhow!("reading persisted service WebVH history failed: {error}")
@@ -987,7 +984,7 @@ fn validate_control_key_binding(
 }
 
 async fn mint_local_service_identity(
-    persistence: &dyn PersistenceStore,
+    persistence: &PersistenceHandle,
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
     bundle_backend: Option<&dyn IdentityBundleBackend>,
@@ -997,11 +994,11 @@ async fn mint_local_service_identity(
     let provider_endpoint = url::Url::parse(registration_key.public_base().as_str())
         .map_err(|error| anyhow::anyhow!("invalid service Provider endpoint: {error}"))?;
     let mut rng_seed = [0u8; 32];
-    crate::state::getrandom_seed(&mut rng_seed);
+    soland_http::state::getrandom_seed(&mut rng_seed);
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rng_seed);
     let service_signing_seed = config.notary_signing_key_seed.unwrap_or_else(|| {
         let mut seed = [0u8; 32];
-        crate::state::getrandom_seed(&mut seed);
+        soland_http::state::getrandom_seed(&mut seed);
         seed
     });
     let prepared =
@@ -1086,7 +1083,6 @@ async fn mint_local_service_identity(
         created_at: issued_at,
     };
     let committed = persistence
-        .webvh()
         .commit_service_registration(registration_key.clone(), outcome, document, event)
         .await
         .map_err(|error| {
@@ -1338,14 +1334,15 @@ mod tests {
     #[tokio::test]
     async fn first_provisioning_persists_sdk_identity_and_both_control_keys() {
         let config = bootstrap_config();
-        let persistence = SolandMemoryPersistenceStore::new();
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store.clone());
         let key_store = InMemoryKeyStore::new();
 
         let state = resolve_service_identity(&persistence, &config, Some(&key_store), None, true)
             .await
             .expect("first provisioning");
 
-        let stored = persistence
+        let stored = persistence_store
             .service_identity()
             .get()
             .await
@@ -1380,7 +1377,8 @@ mod tests {
     #[tokio::test]
     async fn restart_reuses_identity_and_rejects_missing_control_key() {
         let config = bootstrap_config();
-        let persistence = SolandMemoryPersistenceStore::new();
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store.clone());
         let key_store = InMemoryKeyStore::new();
         let state = resolve_service_identity(&persistence, &config, Some(&key_store), None, true)
             .await
@@ -1394,7 +1392,12 @@ mod tests {
                 .expect("durable restart");
         assert_eq!(state_did(&restarted_state), first_did);
 
-        let stored = persistence.service_identity().get().await.unwrap().unwrap();
+        let stored = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
         key_store
             .delete(stored.identity.control_key_ref.as_str())
             .unwrap();
@@ -1415,10 +1418,11 @@ mod tests {
         let config = AppConfig {
             public_base_url: "https://soland.example/".to_owned(),
             notary_signing_key_seed: None,
-            key_store: crate::config::KeyStoreConfig::Platform,
+            key_store: soland_http::config::KeyStoreConfig::Platform,
             ..AppConfig::test_default()
         };
-        let persistence = SolandMemoryPersistenceStore::new();
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store);
         let key_store = InMemoryKeyStore::new();
 
         let first = resolve_service_identity(&persistence, &config, Some(&key_store), None, true)
@@ -1462,27 +1466,29 @@ mod tests {
     #[tokio::test]
     async fn database_row_loss_recovers_from_local_registration_without_reminting() {
         let config = bootstrap_config();
-        let persistence = SolandMemoryPersistenceStore::new();
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store.clone());
         let key_store = InMemoryKeyStore::new();
         let state = resolve_service_identity(&persistence, &config, Some(&key_store), None, true)
             .await
             .expect("first provisioning");
         let first_did = state_did(&state);
 
-        let replacement_identity_store = SolandMemoryPersistenceStore::new();
+        let replacement_identity_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let replacement_persistence = PersistenceHandle::new(replacement_identity_store.clone());
         let key = registration_key(&config).unwrap();
-        let outcome = persistence
+        let outcome = persistence_store
             .webvh()
             .get_service_registration(&key)
             .await
             .unwrap()
             .unwrap();
-        let events = persistence
+        let events = persistence_store
             .webvh()
             .list_log_events(&first_did)
             .await
             .unwrap();
-        let document = persistence
+        let document = persistence_store
             .webvh()
             .get_document(&first_did)
             .await
@@ -1496,7 +1502,7 @@ mod tests {
 
         let restarted = bootstrap_config();
         let restarted_state = resolve_service_identity(
-            &replacement_identity_store,
+            &replacement_persistence,
             &restarted,
             Some(&key_store),
             None,
@@ -1510,7 +1516,8 @@ mod tests {
     #[tokio::test]
     async fn empty_database_restores_verified_identity_bundle() {
         let config = bootstrap_config();
-        let persistence = SolandMemoryPersistenceStore::new();
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store);
         let key_store = InMemoryKeyStore::new();
         let bundle_dir = std::env::temp_dir().join(format!(
             "soland-service-identity-bundle-{}",
@@ -1528,10 +1535,11 @@ mod tests {
         .expect("first provisioning with bundle");
         let first_did = state_did(&state);
 
-        let empty_database = SolandMemoryPersistenceStore::new();
+        let empty_database = Arc::new(SolandMemoryPersistenceStore::new());
+        let empty_persistence = PersistenceHandle::new(empty_database.clone());
         let restored_config = bootstrap_config();
         let restored_state = resolve_service_identity(
-            &empty_database,
+            &empty_persistence,
             &restored_config,
             Some(&key_store),
             Some(&bundle_backend),
@@ -1554,7 +1562,8 @@ mod tests {
     #[tokio::test]
     async fn bundle_restore_rejects_a_forged_provider_receipt() {
         let config = bootstrap_config();
-        let persistence = SolandMemoryPersistenceStore::new();
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store);
         let key_store = InMemoryKeyStore::new();
         let bundle_dir = std::env::temp_dir().join(format!(
             "soland-forged-identity-bundle-{}",
@@ -1579,9 +1588,10 @@ mod tests {
         forged.receipt_chain[0] = forged.identity.registration_receipt.clone();
         bundle_backend.store(&forged).unwrap();
 
-        let empty_database = SolandMemoryPersistenceStore::new();
+        let empty_database = Arc::new(SolandMemoryPersistenceStore::new());
+        let empty_persistence = PersistenceHandle::new(empty_database);
         let error = resolve_service_identity(
-            &empty_database,
+            &empty_persistence,
             &config,
             Some(&key_store),
             Some(&bundle_backend),
@@ -1596,7 +1606,8 @@ mod tests {
     #[tokio::test]
     async fn production_without_first_provisioning_fails_closed() {
         let config = bootstrap_config();
-        let persistence = SolandMemoryPersistenceStore::new();
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store);
         let key_store = InMemoryKeyStore::new();
         let error = resolve_service_identity(&persistence, &config, Some(&key_store), None, false)
             .await
@@ -1615,7 +1626,8 @@ mod tests {
             external_webvh_registration_bearer: Some("test-registration-bearer".to_owned()),
             ..bootstrap_config()
         };
-        let persistence = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store.clone());
         let key_store = Arc::new(InMemoryKeyStore::new());
 
         let first = retry_service_identity(&config, persistence.clone(), Some(key_store.clone()))
@@ -1626,7 +1638,7 @@ mod tests {
             ServiceIdentityState::WaitingProvider { .. }
         ));
         assert!(
-            persistence
+            persistence_store
                 .service_identity()
                 .get()
                 .await
@@ -1645,7 +1657,7 @@ mod tests {
         ));
         assert_eq!(key_store.list().unwrap(), retained_key_ids);
         assert!(
-            persistence
+            persistence_store
                 .service_identity()
                 .get()
                 .await
@@ -1657,7 +1669,8 @@ mod tests {
     #[tokio::test]
     async fn provisioning_without_durable_control_store_is_rejected() {
         let config = bootstrap_config();
-        let persistence = SolandMemoryPersistenceStore::new();
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store.clone());
         let error = resolve_service_identity(&persistence, &config, None, None, true)
             .await
             .expect_err("plaintext database fallback must not exist");
@@ -1667,7 +1680,7 @@ mod tests {
                 .contains("durable Secrets/KeyStore backend")
         );
         assert!(
-            persistence
+            persistence_store
                 .service_identity()
                 .get()
                 .await

@@ -17,7 +17,7 @@ fn b64(value: &str) -> String {
 
 #[tokio::test]
 async fn tus_options_probe_advertises_capabilities_without_auth() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let response = TestClient::options("http://server/_arkret/self/blob/resumable")
         .send(&app_from_state(state))
         .await;
@@ -38,7 +38,7 @@ async fn tus_options_probe_advertises_capabilities_without_auth() {
 
 #[tokio::test]
 async fn tus_create_requires_supported_version_and_auth() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     // No bearer — 401 before any tus processing.
@@ -62,7 +62,7 @@ async fn tus_create_requires_supported_version_and_auth() {
 
 #[tokio::test]
 async fn resumable_chunked_upload_matches_canonical_blob_ref() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let payload = b"resumable-file-transfer-ciphertext-bytes".to_vec();
@@ -237,7 +237,7 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
 
 #[tokio::test]
 async fn resumable_upload_is_actor_scoped_and_terminable() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let bob = dev_token_for_device(
         state.clone(),
@@ -288,7 +288,7 @@ async fn resumable_upload_is_actor_scoped_and_terminable() {
 
 #[tokio::test]
 async fn describe_advertises_tus_binding_and_limits() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&app_from_state(state))
         .await

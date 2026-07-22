@@ -1,7 +1,7 @@
 //! Integration tests — `push_keys` domain: push / profile / blob / presence /
 //! call-signal contracts.
 
-use soland::state::EventNotificationKind;
+use soland_http::state::EventNotificationKind;
 
 use super::helpers::*;
 use crate::common::*;
@@ -75,7 +75,7 @@ async fn ephemeral_test_token(state: AppState) -> String {
 
 #[tokio::test]
 async fn ephemeral_presence_requires_active_authorized_device_signature() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = ephemeral_test_token(state.clone()).await;
 
     let wrong_key = SigningKey::from_bytes(&[0x6d; 32]);
@@ -167,7 +167,7 @@ async fn ephemeral_presence_requires_active_authorized_device_signature() {
 
 #[tokio::test]
 async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let file_transfer_bytes = b"file-transfer-ciphertext";
@@ -253,17 +253,14 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
 
 #[tokio::test]
 async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let avatar_bytes = b"\x89PNG\r\n\x1a\navatar-bytes".to_vec();
     let avatar_sha256 = hex::encode(Sha256::digest(&avatar_bytes));
     let blob_ref = format!("ak:blob:sha256:{avatar_sha256}");
-    let storage_key = state
-        .test_object_storage()
-        .object_key_for_sha256(&avatar_sha256);
+    let storage_key = state.test_object_key_for_sha256(&avatar_sha256);
     state
-        .test_object_storage()
-        .put(&storage_key, avatar_bytes.clone())
+        .test_put_object(&storage_key, avatar_bytes.clone())
         .await
         .unwrap();
     assert!(
@@ -312,7 +309,7 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
 
 #[tokio::test]
 async fn push_profile_and_moderation_contracts_work() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = ephemeral_test_token(state.clone()).await;
     let unauth_presence = TestClient::post("http://server/_arkret/self/ephemeral")
         .json(&broadcast_ephemeral_envelope(
@@ -593,7 +590,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
 #[tokio::test]
 async fn presence_visibility_account_data_requires_encrypted_content() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = ephemeral_test_token(state.clone()).await;
 
     let plaintext_policy =
@@ -767,7 +764,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
 
 #[tokio::test]
 async fn typing_submit_rejects_unknown_strand_scope() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = ephemeral_test_token(state.clone()).await;
 
     let rejected_typing = TestClient::post("http://server/_arkret/self/ephemeral")
@@ -793,7 +790,7 @@ async fn typing_submit_rejects_unknown_strand_scope() {
 
 #[tokio::test]
 async fn typing_submit_accepts_default_realm_strand_scope() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = ephemeral_test_token(state.clone()).await;
     let default_strand_id = DEMO_REALM_ID.replacen("ak:realm:", "ak:strand:", 1);
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
@@ -827,11 +824,11 @@ async fn typing_submit_accepts_default_realm_strand_scope() {
 
 #[tokio::test]
 async fn typing_submit_wakes_account_subscribe_stream() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = ephemeral_test_token(state.clone()).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000004";
     insert_typing_scope_strand(state.clone(), strand_id, Some(true));
-    let mut wakeups = state.test_event_broadcast().subscribe();
+    let mut wakeups = state.test_subscribe_event_notifications();
     let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&broadcast_ephemeral_envelope(
@@ -861,7 +858,7 @@ async fn typing_submit_wakes_account_subscribe_stream() {
 
 #[tokio::test]
 async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
     let alice_token = ephemeral_test_token(state.clone()).await;
     let bob_token = verified_dev_token_for_device(
@@ -940,7 +937,7 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
 
 #[tokio::test]
 async fn typing_submit_rejects_disabled_discussion_strand_scope() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = ephemeral_test_token(state.clone()).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000001";
     insert_typing_scope_strand(state.clone(), strand_id, Some(false));
@@ -967,7 +964,7 @@ async fn typing_submit_rejects_disabled_discussion_strand_scope() {
 
 #[tokio::test]
 async fn public_read_receipt_policy_rejected_for_world_readable_realm_without_opt_in() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let now = chrono::Utc::now();
     state
@@ -1023,7 +1020,7 @@ async fn public_read_receipt_policy_rejected_for_world_readable_realm_without_op
 
 #[tokio::test]
 async fn typing_fanout_respects_receiver_blocklist() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_token = ephemeral_test_token(state.clone()).await;
     add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
     let bob_token = verified_dev_token_for_device(
@@ -1095,7 +1092,7 @@ async fn typing_fanout_respects_receiver_blocklist() {
 
 #[tokio::test]
 async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
     let bob_token = dev_token_for_device(
         state.clone(),
@@ -1177,7 +1174,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
     // {call_id, signal_type, seq} with a canonical signal_type incl.
     // moderation). It does NOT cryptographically verify the proof (receiver's
     // job).
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     state.test_authz().create_grant(
         DEMO_REALM_ID.to_owned(),
@@ -1275,7 +1272,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
 
 #[tokio::test]
 async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_token() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -1340,7 +1337,7 @@ async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_toke
 
 #[tokio::test]
 async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";

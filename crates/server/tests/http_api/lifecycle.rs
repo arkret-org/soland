@@ -6,7 +6,7 @@ use super::common::*;
 
 #[tokio::test]
 async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transitions() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let container_space_id = "ak:space:01904100-0000-7000-8000-c10dc0000001";
 
@@ -157,7 +157,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
 #[tokio::test]
 async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transitions() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-e10dc0000001";
     let morph_id = "ak:morph:01904100-0000-7000-8000-e20dc0000001";
@@ -364,7 +364,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 
 #[tokio::test]
 async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persist() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let now = chrono::Utc::now();
     state
@@ -475,7 +475,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
 
 #[tokio::test]
 async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let task_strand_id = "ak:strand:01904100-0000-7000-8000-f51dc0000001";
     let incident_strand_id = "ak:strand:01904100-0000-7000-8000-f51dc0000002";
@@ -659,7 +659,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
 
 #[tokio::test]
 async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal_repeat() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-f10dc0000001";
     let morph_id = "ak:morph:01904100-0000-7000-8000-f20dc0000001";
@@ -815,7 +815,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
 
 #[tokio::test]
 async fn strand_tracks_update_rejected_when_parent_strand_archived() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-aabbccdd0001";
 

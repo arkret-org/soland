@@ -1,17 +1,88 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arkret_core::{
-    BlobRef, DeviceGenerationStatus, Hash, NonEmptyString, RecoveryIdentityModel, SealBasis,
-    ServiceRegistrationKey, ServiceRegistrationOutcome,
+    AccountStatus, BlobRef, CrossSigningPublish, CrossSigningResetPayload, DeviceGenerationStatus,
+    DeviceId, Did, Hash, NonEmptyString, RecoveryIdentityModel, SealBasis, ServiceRegistrationKey,
+    ServiceRegistrationOutcome,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use serde_json::Value;
-use soland_domain::identity::{
-    ConsentCellKey, ConsentCellRecord, ContactRecord, DirectConversationBindingRecord,
-};
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ConsentCellKey {
+    pub holder: String,
+    pub peer: String,
+    pub scope: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsentGrantDot {
+    pub dot: String,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub granted_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsentCellRecord {
+    pub holder: String,
+    pub peer: String,
+    pub scope: String,
+    pub cell_id: String,
+    pub requested_at: Option<DateTime<Utc>>,
+    pub grant_dots: BTreeMap<String, ConsentGrantDot>,
+    pub revoked_dots: BTreeSet<String>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ContactRecord {
+    pub requester: String,
+    pub target: String,
+    pub scope: String,
+    pub status: String,
+    pub request_event_ref: Option<String>,
+    pub response_event_ref: Option<String>,
+    pub tombstone_event_ref: Option<String>,
+    pub message: Option<String>,
+    pub peer_service_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DirectConversationBindingRecord {
+    pub participants_unordered: Vec<String>,
+    pub realm_id: String,
+    pub main_strand_id: String,
+    pub binding_event_ref: String,
+    pub state: String,
+    pub authoring_context: Option<Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
 
 use crate::ApplicationResult;
+
+/// Resolve the private control Realm used by identity-scoped application
+/// workflows without exposing the domain crate to transport or composition
+/// layers.
+pub fn principal_control_realm_for_did(principal_did: &str) -> String {
+    soland_domain::identity::principal_control_realm_for_did(principal_did)
+}
+
+fn lifecycle_status_from_wire(value: &str) -> AccountStatus {
+    match value {
+        "erased" => AccountStatus::ErasurePending,
+        _ => AccountStatus::from_wire(value).unwrap_or_else(|| {
+            tracing::warn!(state = value, "unknown account lifecycle state");
+            AccountStatus::Suspended
+        }),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct FindAccountByActorQuery {
@@ -105,6 +176,7 @@ pub trait ConsentCellPort: Send + Sync {
 #[derive(Clone)]
 pub struct ConsentApplicationService {
     consent_cells: Arc<dyn ConsentCellPort>,
+    runtime_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
 }
 
 #[async_trait]
@@ -127,6 +199,7 @@ pub trait ContactPort: Send + Sync {
 #[async_trait]
 pub trait InviteReceivePolicyPort: Send + Sync {
     async fn save_policy(&self, policy: arkret_core::InviteReceivePolicy) -> ApplicationResult<()>;
+    async fn policies(&self) -> ApplicationResult<Vec<(String, arkret_core::InviteReceivePolicy)>>;
 }
 
 #[async_trait]
@@ -137,6 +210,7 @@ pub trait DirectConversationBindingPort: Send + Sync {
         binding: DirectConversationBindingRecord,
     ) -> ApplicationResult<()>;
     async fn delete_binding(&self, pair_key: &str) -> ApplicationResult<()>;
+    async fn bindings(&self) -> ApplicationResult<Vec<(String, DirectConversationBindingRecord)>>;
 }
 
 #[derive(Clone)]
@@ -144,9 +218,23 @@ pub struct ContactApplicationService {
     contacts: Arc<dyn ContactPort>,
     invite_policies: Arc<dyn InviteReceivePolicyPort>,
     direct_bindings: Arc<dyn DirectConversationBindingPort>,
+    runtime_invite_policies: Arc<Mutex<BTreeMap<String, arkret_core::InviteReceivePolicy>>>,
+    runtime_direct_bindings: Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
 }
 
 impl ContactApplicationService {
+    pub async fn hydrate_runtime(&self) -> ApplicationResult<()> {
+        self.replace_runtime_invite_policies(self.invite_policies.policies().await?);
+        self.replace_runtime_direct_bindings(
+            self.direct_bindings
+                .bindings()
+                .await?
+                .into_iter()
+                .filter(|(_, record)| record.state == "authoring_required"),
+        );
+        Ok(())
+    }
+
     pub fn new(
         contacts: Arc<dyn ContactPort>,
         invite_policies: Arc<dyn InviteReceivePolicyPort>,
@@ -156,6 +244,8 @@ impl ContactApplicationService {
             contacts,
             invite_policies,
             direct_bindings,
+            runtime_invite_policies: Arc::new(Mutex::new(BTreeMap::new())),
+            runtime_direct_bindings: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -191,7 +281,22 @@ impl ContactApplicationService {
         &self,
         policy: arkret_core::InviteReceivePolicy,
     ) -> ApplicationResult<()> {
-        self.invite_policies.save_policy(policy).await
+        self.invite_policies.save_policy(policy.clone()).await?;
+        self.runtime_invite_policies
+            .lock()
+            .insert(policy.subject_id.to_string(), policy);
+        Ok(())
+    }
+
+    pub fn replace_runtime_invite_policies(
+        &self,
+        policies: impl IntoIterator<Item = (String, arkret_core::InviteReceivePolicy)>,
+    ) {
+        *self.runtime_invite_policies.lock() = policies.into_iter().collect();
+    }
+
+    pub fn invite_policy(&self, subject_id: &str) -> Option<arkret_core::InviteReceivePolicy> {
+        self.runtime_invite_policies.lock().get(subject_id).cloned()
     }
 
     pub async fn save_direct_binding(
@@ -199,17 +304,165 @@ impl ContactApplicationService {
         pair_key: &str,
         binding: DirectConversationBindingRecord,
     ) -> ApplicationResult<()> {
-        self.direct_bindings.save_binding(pair_key, binding).await
+        self.direct_bindings
+            .save_binding(pair_key, binding.clone())
+            .await?;
+        self.runtime_direct_bindings
+            .lock()
+            .insert(pair_key.to_owned(), binding);
+        Ok(())
     }
 
     pub async fn delete_direct_binding(&self, pair_key: &str) -> ApplicationResult<()> {
-        self.direct_bindings.delete_binding(pair_key).await
+        self.direct_bindings.delete_binding(pair_key).await?;
+        self.runtime_direct_bindings.lock().remove(pair_key);
+        Ok(())
+    }
+
+    pub fn replace_runtime_direct_bindings(
+        &self,
+        bindings: impl IntoIterator<Item = (String, DirectConversationBindingRecord)>,
+    ) {
+        *self.runtime_direct_bindings.lock() = bindings.into_iter().collect();
+    }
+
+    pub fn runtime_direct_binding_count(&self) -> usize {
+        self.runtime_direct_bindings.lock().len()
+    }
+
+    pub fn direct_binding(&self, pair_key: &str) -> Option<DirectConversationBindingRecord> {
+        self.runtime_direct_bindings.lock().get(pair_key).cloned()
+    }
+
+    pub fn active_direct_binding_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> Option<DirectConversationBindingRecord> {
+        self.runtime_direct_bindings
+            .lock()
+            .values()
+            .find(|binding| binding.state == "active" && binding.realm_id == realm_id)
+            .cloned()
+    }
+
+    pub fn pending_direct_binding_has_participant(
+        &self,
+        realm_id: &str,
+        participant: &str,
+    ) -> bool {
+        self.runtime_direct_bindings.lock().values().any(|binding| {
+            binding.state == "pending"
+                && binding.realm_id == realm_id
+                && binding.participants_unordered.len() == 2
+                && binding
+                    .participants_unordered
+                    .iter()
+                    .any(|candidate| candidate == participant)
+        })
+    }
+
+    pub fn install_direct_binding(
+        &self,
+        pair_key: impl Into<String>,
+        binding: DirectConversationBindingRecord,
+    ) {
+        self.runtime_direct_bindings
+            .lock()
+            .insert(pair_key.into(), binding);
+    }
+
+    pub fn replace_direct_binding_if_current(
+        &self,
+        pair_key: &str,
+        expected_event_ref: Option<&str>,
+        binding: DirectConversationBindingRecord,
+    ) -> Result<(), Option<Box<DirectConversationBindingRecord>>> {
+        let mut bindings = self.runtime_direct_bindings.lock();
+        let current = bindings.get(pair_key);
+        let matches = match (current, expected_event_ref) {
+            (None, None) => true,
+            (Some(current), Some(expected)) => current.binding_event_ref == expected,
+            _ => false,
+        };
+        if !matches {
+            return Err(current.cloned().map(Box::new));
+        }
+        bindings.insert(pair_key.to_owned(), binding);
+        Ok(())
+    }
+
+    pub fn direct_binding_is_current(&self, pair_key: &str, event_ref: &str) -> bool {
+        self.runtime_direct_bindings
+            .lock()
+            .get(pair_key)
+            .is_some_and(|binding| binding.binding_event_ref == event_ref)
+    }
+
+    pub fn remove_direct_binding_if_current(&self, pair_key: &str, event_ref: &str) -> bool {
+        let mut bindings = self.runtime_direct_bindings.lock();
+        let matches = bindings
+            .get(pair_key)
+            .is_some_and(|binding| binding.binding_event_ref == event_ref);
+        if matches {
+            bindings.remove(pair_key);
+        }
+        matches
+    }
+
+    pub fn retire_direct_binding_if_current(
+        &self,
+        pair_key: &str,
+        event_ref: &str,
+        retired_at: DateTime<Utc>,
+    ) -> Option<DirectConversationBindingRecord> {
+        let mut bindings = self.runtime_direct_bindings.lock();
+        let binding = bindings.get_mut(pair_key)?;
+        if binding.binding_event_ref != event_ref {
+            return None;
+        }
+        binding.state = "retired".to_owned();
+        binding.updated_at = retired_at;
+        Some(binding.clone())
+    }
+
+    pub fn retire_affected_direct_bindings(
+        &self,
+        realm_id: &str,
+        member: Option<&str>,
+        archived_strand: Option<&str>,
+        realm_ended: bool,
+        retired_at: DateTime<Utc>,
+    ) -> Vec<(String, DirectConversationBindingRecord)> {
+        self.runtime_direct_bindings
+            .lock()
+            .iter_mut()
+            .filter_map(|(pair_key, binding)| {
+                let affected = binding.state == "active"
+                    && binding.realm_id == realm_id
+                    && (realm_ended
+                        || member.is_some_and(|member| {
+                            binding
+                                .participants_unordered
+                                .iter()
+                                .any(|participant| participant == member)
+                        })
+                        || archived_strand.is_some_and(|strand| strand == binding.main_strand_id));
+                affected.then(|| {
+                    binding.state = "retired".to_owned();
+                    binding.updated_at = retired_at;
+                    (pair_key.clone(), binding.clone())
+                })
+            })
+            .collect()
     }
 }
 
 impl ConsentApplicationService {
     pub fn new(consent_cells: Arc<dyn ConsentCellPort>) -> Self {
-        Self { consent_cells }
+        Self {
+            consent_cells,
+            runtime_cells: Arc::new(Mutex::new(BTreeMap::new())),
+        }
     }
 
     pub async fn save_cell(&self, cell: ConsentCellRecord) -> ApplicationResult<()> {
@@ -218,6 +471,216 @@ impl ConsentApplicationService {
 
     pub async fn cells(&self) -> ApplicationResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
         self.consent_cells.cells().await
+    }
+
+    pub async fn hydrate_runtime(&self) -> ApplicationResult<()> {
+        self.replace_runtime_cells(self.consent_cells.cells().await?);
+        Ok(())
+    }
+
+    pub fn replace_runtime_cells(
+        &self,
+        cells: impl IntoIterator<Item = (ConsentCellKey, ConsentCellRecord)>,
+    ) {
+        *self.runtime_cells.lock() = cells.into_iter().collect();
+    }
+
+    pub fn install_runtime_cell(&self, cell: ConsentCellRecord) {
+        let key = consent_cell_key(&cell.holder, &cell.peer, &cell.scope);
+        self.runtime_cells.lock().insert(key, cell);
+    }
+
+    pub fn visible_cells(&self, actor_id: &str) -> Vec<ConsentCellRecord> {
+        self.runtime_cells
+            .lock()
+            .values()
+            .filter(|cell| cell.holder == actor_id || cell.peer == actor_id)
+            .cloned()
+            .collect()
+    }
+
+    pub fn cell(&self, holder: &str, peer: &str, scope: &str) -> Option<ConsentCellRecord> {
+        self.runtime_cells
+            .lock()
+            .get(&consent_cell_key(holder, peer, scope))
+            .cloned()
+    }
+
+    pub fn cell_by_id(&self, cell_id: &str) -> Option<ConsentCellRecord> {
+        self.runtime_cells
+            .lock()
+            .values()
+            .find(|cell| cell.cell_id == cell_id)
+            .cloned()
+    }
+
+    pub fn holder_cell_by_id(&self, holder: &str, cell_id: &str) -> Option<ConsentCellRecord> {
+        self.runtime_cells
+            .lock()
+            .values()
+            .find(|cell| cell.holder == holder && cell.cell_id == cell_id)
+            .cloned()
+    }
+
+    pub fn cells_for_pair(&self, holder: &str, peer: &str) -> Vec<ConsentCellRecord> {
+        self.runtime_cells
+            .lock()
+            .values()
+            .filter(|cell| cell.holder == holder && cell.peer == peer)
+            .cloned()
+            .collect()
+    }
+
+    pub fn record_pending_request(
+        &self,
+        holder: &str,
+        peer: &str,
+        scope: &str,
+        default_cell_id: String,
+        requested_at: DateTime<Utc>,
+        cell_id: Option<String>,
+    ) -> ConsentCellRecord {
+        let key = consent_cell_key(holder, peer, scope);
+        let mut cells = self.runtime_cells.lock();
+        let cell = cells.entry(key).or_insert_with(|| {
+            empty_consent_cell(holder, peer, scope, default_cell_id, requested_at)
+        });
+        if let Some(cell_id) = cell_id {
+            cell.cell_id = cell_id;
+        }
+        cell.requested_at = Some(requested_at);
+        cell.updated_at = requested_at;
+        cell.clone()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn grant_cell(
+        &self,
+        holder: &str,
+        peer: &str,
+        scope: &str,
+        default_cell_id: String,
+        dot: String,
+        cell_id: Option<String>,
+        expires_at: Option<DateTime<Utc>>,
+        granted_at: DateTime<Utc>,
+    ) -> ConsentCellRecord {
+        let key = consent_cell_key(holder, peer, scope);
+        let mut cells = self.runtime_cells.lock();
+        let cell = cells.entry(key).or_insert_with(|| {
+            empty_consent_cell(holder, peer, scope, default_cell_id, granted_at)
+        });
+        if let Some(cell_id) = cell_id {
+            cell.cell_id = cell_id;
+        }
+        cell.grant_dots.insert(
+            dot.clone(),
+            ConsentGrantDot {
+                dot,
+                expires_at,
+                granted_at,
+            },
+        );
+        cell.revoked_at = None;
+        cell.updated_at = granted_at;
+        cell.clone()
+    }
+
+    pub fn grant_dots(&self, holder: &str, peer: &str, scope: &str) -> Vec<String> {
+        self.runtime_cells
+            .lock()
+            .get(&consent_cell_key(holder, peer, scope))
+            .map(|cell| cell.grant_dots.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn revoke_cell(
+        &self,
+        holder: &str,
+        peer: &str,
+        scope: &str,
+        default_cell_id: String,
+        observed_dots: &[String],
+        revoked_at: DateTime<Utc>,
+    ) -> ConsentCellRecord {
+        let key = consent_cell_key(holder, peer, scope);
+        let mut cells = self.runtime_cells.lock();
+        let cell = cells.entry(key).or_insert_with(|| {
+            empty_consent_cell(holder, peer, scope, default_cell_id, revoked_at)
+        });
+        cell.revoked_dots.extend(observed_dots.iter().cloned());
+        cell.revoked_at = Some(revoked_at);
+        cell.updated_at = revoked_at;
+        cell.clone()
+    }
+
+    pub fn mark_superseded_by_any_revoke(
+        &self,
+        holder: &str,
+        peer: &str,
+        scope: &str,
+        default_cell_id: String,
+        marker: &str,
+        revoked_at: DateTime<Utc>,
+    ) -> ConsentCellRecord {
+        let key = consent_cell_key(holder, peer, scope);
+        let mut cells = self.runtime_cells.lock();
+        let cell = cells.entry(key).or_insert_with(|| {
+            empty_consent_cell(holder, peer, scope, default_cell_id, revoked_at)
+        });
+        cell.revoked_dots.insert(marker.to_owned());
+        cell.revoked_at = Some(revoked_at);
+        cell.updated_at = revoked_at;
+        cell.clone()
+    }
+
+    pub fn restore_cell_if_current(
+        &self,
+        current: &ConsentCellRecord,
+        previous: Option<ConsentCellRecord>,
+    ) -> bool {
+        let key = consent_cell_key(&current.holder, &current.peer, &current.scope);
+        let mut cells = self.runtime_cells.lock();
+        if !cells.get(&key).is_some_and(|cell| cell == current) {
+            return false;
+        }
+        match previous {
+            Some(previous) => {
+                cells.insert(key, previous);
+            }
+            None => {
+                cells.remove(&key);
+            }
+        }
+        true
+    }
+}
+
+fn consent_cell_key(holder: &str, peer: &str, scope: &str) -> ConsentCellKey {
+    ConsentCellKey {
+        holder: holder.to_owned(),
+        peer: peer.to_owned(),
+        scope: scope.to_owned(),
+    }
+}
+
+fn empty_consent_cell(
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    cell_id: String,
+    updated_at: DateTime<Utc>,
+) -> ConsentCellRecord {
+    ConsentCellRecord {
+        holder: holder.to_owned(),
+        peer: peer.to_owned(),
+        scope: scope.to_owned(),
+        cell_id,
+        requested_at: None,
+        grant_dots: BTreeMap::new(),
+        revoked_dots: Default::default(),
+        revoked_at: None,
+        updated_at,
     }
 }
 
@@ -375,6 +838,7 @@ pub trait AccountLookupPort: Send + Sync {
     ) -> ApplicationResult<Option<AccountIdentity>>;
     async fn register_account(&self, command: RegisterAccountCommand) -> ApplicationResult<()>;
     async fn account(&self, actor_id: &str) -> ApplicationResult<Option<AccountProfileState>>;
+    async fn accounts(&self) -> ApplicationResult<Vec<AccountProfileState>>;
     async fn save_account(&self, account: AccountProfileState) -> ApplicationResult<()>;
     async fn delete_account(&self, actor_id: &str) -> ApplicationResult<()>;
     async fn account_localparts(
@@ -409,11 +873,15 @@ pub trait AccountLookupPort: Send + Sync {
         lifecycle: AccountLifecycleState,
     ) -> ApplicationResult<()>;
     async fn delete_account_lifecycle(&self, actor_id: &str) -> ApplicationResult<()>;
+    async fn account_lifecycles(&self) -> ApplicationResult<Vec<(String, AccountLifecycleState)>> {
+        Ok(Vec::new())
+    }
 }
 
 #[async_trait]
 pub trait DeviceDirectoryPort: Send + Sync {
     async fn list_active_device_actors(&self) -> ApplicationResult<Vec<String>>;
+    async fn devices(&self) -> ApplicationResult<Vec<DeviceIdentity>>;
     async fn find_device(
         &self,
         actor_id: &str,
@@ -437,6 +905,96 @@ pub struct IdentityApplicationService {
     accounts: Arc<dyn AccountLookupPort>,
     devices: Arc<dyn DeviceDirectoryPort>,
     agents: Arc<dyn AgentDirectoryPort>,
+    account_registration_attempts: AccountRegistrationAttempts,
+    cross_signing_reset_replays: CrossSigningResetReplays,
+    cross_signing: Arc<Mutex<CrossSigningRegistry>>,
+    account_lifecycles: Arc<Mutex<BTreeMap<String, AccountLifecycleState>>>,
+}
+
+type AccountRegistrationAttempts = Arc<Mutex<BTreeMap<String, (DateTime<Utc>, u32)>>>;
+type CrossSigningResetReplays = Arc<Mutex<BTreeMap<(String, u64), DateTime<Utc>>>>;
+
+#[derive(Clone, Debug, Default)]
+pub struct CrossSigningRegistry {
+    publishes: BTreeMap<Did, CrossSigningPublish>,
+    generation_high_water: BTreeMap<Did, u64>,
+    revoked_devices: BTreeMap<Did, BTreeMap<DeviceId, DateTime<Utc>>>,
+}
+
+impl CrossSigningRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn current_cross_signing(&self, principal: &Did) -> Option<&CrossSigningPublish> {
+        self.publishes.get(principal)
+    }
+
+    pub fn record_cross_signing_publish(
+        &mut self,
+        publish: CrossSigningPublish,
+    ) -> arkret_core::Result<()> {
+        publish.validate_structure()?;
+        let principal = publish.principal_id.clone();
+        let current_generation = self
+            .generation_high_water
+            .get(&principal)
+            .copied()
+            .unwrap_or(0);
+        if publish.expected_previous_generation != current_generation {
+            return Err(arkret_core::Error::Protocol(format!(
+                "cross-signing publish expected_previous_generation {} does not match accepted {} (cas_conflict)",
+                publish.expected_previous_generation, current_generation
+            )));
+        }
+        if publish.generation.get() != current_generation + 1 {
+            return Err(arkret_core::Error::Protocol(format!(
+                "cross-signing publish generation {} must equal current {} + 1 (cas_conflict)",
+                publish.generation, current_generation
+            )));
+        }
+        self.generation_high_water
+            .insert(principal.clone(), publish.generation.get());
+        self.publishes.insert(principal, publish);
+        Ok(())
+    }
+
+    pub fn record_cross_signing_reset(
+        &mut self,
+        reset: &CrossSigningResetPayload,
+    ) -> arkret_core::Result<()> {
+        reset.validate_structure()?;
+        let principal = reset.principal_id();
+        let current = self.publishes.get(principal).ok_or_else(|| {
+            arkret_core::Error::Protocol(
+                "cannot reset cross-signing: no current publish accepted for principal".to_owned(),
+            )
+        })?;
+        if reset.previous_generation() != current.generation.get() {
+            return Err(arkret_core::Error::Protocol(format!(
+                "cross-signing reset previous_generation {} does not match accepted {}",
+                reset.previous_generation(),
+                current.generation
+            )));
+        }
+        self.publishes.remove(principal);
+        self.generation_high_water
+            .insert(principal.clone(), reset.new_generation());
+        if let Some(device_ids) = reset.revoked_device_ids() {
+            let revoked = self.revoked_devices.entry(principal.clone()).or_default();
+            let now = Utc::now();
+            for device_id in device_ids {
+                revoked.insert(device_id.clone(), now);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn is_device_revoked(&self, principal: &Did, device_id: &DeviceId) -> bool {
+        self.revoked_devices
+            .get(principal)
+            .is_some_and(|devices| devices.contains_key(device_id))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -574,9 +1132,60 @@ pub trait AgentPairingPort: Send + Sync {
     ) -> ApplicationResult<bool>;
 }
 
+#[derive(Clone, Debug)]
+pub struct AgentSidecarState {
+    pub sidecar_id: String,
+    pub realm_id: String,
+    pub controller_id: String,
+    pub backing_circle_id: String,
+    pub state: String,
+    pub state_changed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentSidecarContextState {
+    pub sidecar_id: String,
+    pub normalized_context_ref_digest: String,
+    pub normalized_context_ref: Value,
+    pub private_strand_id: String,
+    pub private_relation_id: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[async_trait]
+pub trait SidecarPort: Send + Sync {
+    async fn ensure_sidecar(
+        &self,
+        sidecar: AgentSidecarState,
+    ) -> ApplicationResult<AgentSidecarState>;
+    async fn sidecar(&self, sidecar_id: &str) -> ApplicationResult<Option<AgentSidecarState>>;
+    async fn sidecar_for_realm_controller(
+        &self,
+        realm_id: &str,
+        controller_id: &str,
+    ) -> ApplicationResult<Option<AgentSidecarState>>;
+    async fn sidecars_for_controller(
+        &self,
+        controller_id: &str,
+        realm_id: Option<&str>,
+    ) -> ApplicationResult<Vec<AgentSidecarState>>;
+    async fn ensure_context(
+        &self,
+        context: AgentSidecarContextState,
+    ) -> ApplicationResult<AgentSidecarContextState>;
+    async fn context(
+        &self,
+        sidecar_id: &str,
+        digest: &str,
+    ) -> ApplicationResult<Option<AgentSidecarContextState>>;
+}
+
 #[derive(Clone)]
 pub struct AgentPairingApplicationService {
     pairing: Arc<dyn AgentPairingPort>,
+    sidecars: Arc<dyn SidecarPort>,
 }
 
 #[derive(Clone, Debug)]
@@ -793,6 +1402,8 @@ impl RecoverySessionApplicationService {
 pub trait AgentParticipationPort: Send + Sync {
     async fn store_selection(&self, selection: Value) -> ApplicationResult<()>;
     async fn selections(&self, agent_id: &str) -> ApplicationResult<Vec<Value>>;
+    async fn ceilings(&self, scope_keys: &[String]) -> ApplicationResult<Vec<Value>>;
+    async fn store_ceiling(&self, ceiling: Value) -> ApplicationResult<()>;
 }
 
 #[derive(Clone)]
@@ -811,6 +1422,14 @@ impl AgentParticipationApplicationService {
 
     pub async fn selections(&self, agent_id: &str) -> ApplicationResult<Vec<Value>> {
         self.participation.selections(agent_id).await
+    }
+
+    pub async fn ceilings(&self, scope_keys: &[String]) -> ApplicationResult<Vec<Value>> {
+        self.participation.ceilings(scope_keys).await
+    }
+
+    pub async fn store_ceiling(&self, ceiling: Value) -> ApplicationResult<()> {
+        self.participation.store_ceiling(ceiling).await
     }
 }
 
@@ -837,7 +1456,7 @@ pub struct AgentSessionState {
 #[derive(Clone, Debug)]
 pub struct SessionIdentityState {
     pub token_hash: String,
-    pub actor_id: String,
+    pub actor: String,
     pub device_id: String,
     pub audience: String,
     pub session_public_key: Option<String>,
@@ -930,7 +1549,7 @@ impl SessionApplicationService {
             .await?
             .into_iter()
             .filter(|session| {
-                session.actor_id == actor_id
+                session.actor == actor_id
                     && session.revoked_at.is_none()
                     && session.agent_session.is_some()
             })
@@ -1051,8 +1670,8 @@ impl KeyBackupApplicationService {
 }
 
 impl AgentPairingApplicationService {
-    pub fn new(pairing: Arc<dyn AgentPairingPort>) -> Self {
-        Self { pairing }
+    pub fn new(pairing: Arc<dyn AgentPairingPort>, sidecars: Arc<dyn SidecarPort>) -> Self {
+        Self { pairing, sidecars }
     }
 
     pub async fn pairing_record(
@@ -1100,6 +1719,47 @@ impl AgentPairingApplicationService {
             .clear_approval_notification_if_current(agent_id, approval_request_id)
             .await
     }
+
+    pub async fn ensure_sidecar(
+        &self,
+        sidecar: AgentSidecarState,
+    ) -> ApplicationResult<AgentSidecarState> {
+        self.sidecars.ensure_sidecar(sidecar).await
+    }
+    pub async fn sidecar(&self, sidecar_id: &str) -> ApplicationResult<Option<AgentSidecarState>> {
+        self.sidecars.sidecar(sidecar_id).await
+    }
+    pub async fn sidecar_for_realm_controller(
+        &self,
+        realm_id: &str,
+        controller_id: &str,
+    ) -> ApplicationResult<Option<AgentSidecarState>> {
+        self.sidecars
+            .sidecar_for_realm_controller(realm_id, controller_id)
+            .await
+    }
+    pub async fn sidecars_for_controller(
+        &self,
+        controller_id: &str,
+        realm_id: Option<&str>,
+    ) -> ApplicationResult<Vec<AgentSidecarState>> {
+        self.sidecars
+            .sidecars_for_controller(controller_id, realm_id)
+            .await
+    }
+    pub async fn ensure_sidecar_context(
+        &self,
+        context: AgentSidecarContextState,
+    ) -> ApplicationResult<AgentSidecarContextState> {
+        self.sidecars.ensure_context(context).await
+    }
+    pub async fn sidecar_context(
+        &self,
+        sidecar_id: &str,
+        digest: &str,
+    ) -> ApplicationResult<Option<AgentSidecarContextState>> {
+        self.sidecars.context(sidecar_id, digest).await
+    }
 }
 
 impl IdentityApplicationService {
@@ -1112,7 +1772,99 @@ impl IdentityApplicationService {
             accounts,
             devices,
             agents,
+            account_registration_attempts: Arc::new(Mutex::new(BTreeMap::new())),
+            cross_signing_reset_replays: Arc::new(Mutex::new(BTreeMap::new())),
+            cross_signing: Arc::new(Mutex::new(CrossSigningRegistry::new())),
+            account_lifecycles: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+
+    pub fn install_cross_signing_registry(&self, registry: CrossSigningRegistry) {
+        *self.cross_signing.lock() = registry;
+    }
+
+    pub fn current_cross_signing(&self, principal: &Did) -> Option<CrossSigningPublish> {
+        self.cross_signing
+            .lock()
+            .current_cross_signing(principal)
+            .cloned()
+    }
+
+    pub fn record_cross_signing_publish(
+        &self,
+        publish: CrossSigningPublish,
+    ) -> arkret_core::Result<()> {
+        self.cross_signing
+            .lock()
+            .record_cross_signing_publish(publish)
+    }
+
+    pub fn record_cross_signing_reset(
+        &self,
+        reset: &CrossSigningResetPayload,
+    ) -> arkret_core::Result<()> {
+        self.cross_signing.lock().record_cross_signing_reset(reset)
+    }
+
+    pub fn is_cross_signing_device_revoked(&self, principal: &Did, device_id: &DeviceId) -> bool {
+        self.cross_signing
+            .lock()
+            .is_device_revoked(principal, device_id)
+    }
+
+    pub fn account_registration_retry_after_ms(
+        &self,
+        actor_id: &str,
+        max_attempts: u32,
+        window_seconds: u64,
+        now: DateTime<Utc>,
+    ) -> Option<u64> {
+        if max_attempts == 0 || window_seconds == 0 {
+            return Some(0);
+        }
+        let window = chrono::Duration::seconds(window_seconds as i64);
+        let mut attempts = self.account_registration_attempts.lock();
+        let entry = attempts.entry(actor_id.to_owned()).or_insert((now, 0));
+        if now.signed_duration_since(entry.0) >= window {
+            *entry = (now, 0);
+        }
+        if entry.1 >= max_attempts {
+            return Some(
+                window
+                    .checked_sub(&now.signed_duration_since(entry.0))
+                    .unwrap_or_else(chrono::Duration::zero)
+                    .num_milliseconds()
+                    .max(0) as u64,
+            );
+        }
+        entry.1 += 1;
+        None
+    }
+
+    pub fn cross_signing_reset_replay_seen(
+        &self,
+        principal_id: &str,
+        previous_generation: u64,
+        now: DateTime<Utc>,
+        retention_seconds: i64,
+    ) -> bool {
+        let cutoff = now - chrono::Duration::seconds(retention_seconds);
+        let mut replays = self.cross_signing_reset_replays.lock();
+        replays.retain(|_, seen_at| *seen_at >= cutoff);
+        replays.contains_key(&(principal_id.to_owned(), previous_generation))
+    }
+
+    pub fn remember_cross_signing_reset_replay(
+        &self,
+        principal_id: String,
+        previous_generation: u64,
+        now: DateTime<Utc>,
+        retention_seconds: i64,
+    ) {
+        let cutoff = now - chrono::Duration::seconds(retention_seconds);
+        let mut replays = self.cross_signing_reset_replays.lock();
+        replays.retain(|_, seen_at| *seen_at >= cutoff);
+        replays.insert((principal_id, previous_generation), now);
     }
 
     pub async fn find_account_by_actor(
@@ -1128,6 +1880,10 @@ impl IdentityApplicationService {
 
     pub async fn account(&self, actor_id: &str) -> ApplicationResult<Option<AccountProfileState>> {
         self.accounts.account(actor_id).await
+    }
+
+    pub async fn accounts(&self) -> ApplicationResult<Vec<AccountProfileState>> {
+        self.accounts.accounts().await
     }
 
     pub async fn save_account(&self, account: AccountProfileState) -> ApplicationResult<()> {
@@ -1197,12 +1953,43 @@ impl IdentityApplicationService {
         lifecycle: AccountLifecycleState,
     ) -> ApplicationResult<()> {
         self.accounts
-            .save_account_lifecycle(actor_id, lifecycle)
-            .await
+            .save_account_lifecycle(actor_id, lifecycle.clone())
+            .await?;
+        if lifecycle.state == "active" {
+            self.account_lifecycles.lock().remove(actor_id);
+        } else {
+            self.account_lifecycles
+                .lock()
+                .insert(actor_id.to_owned(), lifecycle);
+        }
+        Ok(())
     }
 
     pub async fn delete_account_lifecycle(&self, actor_id: &str) -> ApplicationResult<()> {
-        self.accounts.delete_account_lifecycle(actor_id).await
+        self.accounts.delete_account_lifecycle(actor_id).await?;
+        self.account_lifecycles.lock().remove(actor_id);
+        Ok(())
+    }
+
+    pub async fn hydrate_account_lifecycles(&self) -> ApplicationResult<()> {
+        let lifecycles = self.accounts.account_lifecycles().await?;
+        *self.account_lifecycles.lock() = lifecycles
+            .into_iter()
+            .filter(|(_, lifecycle)| lifecycle.state != "active")
+            .collect();
+        Ok(())
+    }
+
+    pub fn account_lifecycle_status(&self, actor_id: &str) -> AccountStatus {
+        self.account_lifecycles
+            .lock()
+            .get(actor_id)
+            .map(|lifecycle| lifecycle_status_from_wire(&lifecycle.state))
+            .unwrap_or(AccountStatus::Active)
+    }
+
+    pub fn account_lifecycle_state(&self, actor_id: &str) -> String {
+        self.account_lifecycle_status(actor_id).as_str().to_owned()
     }
 
     pub async fn list_active_device_actors(
@@ -1210,6 +1997,10 @@ impl IdentityApplicationService {
         _query: ListActiveDeviceActorsQuery,
     ) -> ApplicationResult<Vec<String>> {
         self.devices.list_active_device_actors().await
+    }
+
+    pub async fn devices(&self) -> ApplicationResult<Vec<DeviceIdentity>> {
+        self.devices.devices().await
     }
 
     pub async fn find_device(
@@ -1254,6 +2045,26 @@ pub struct DidDocumentState {
     pub fetched_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+pub const DID_DOCUMENT_HIGH_RISK_TTL_SECS: i64 = 15 * 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DidDocumentFreshness {
+    Fresh,
+    Stale,
+}
+
+pub fn evaluate_did_document_freshness(
+    record: &DidDocumentState,
+    now: DateTime<Utc>,
+    max_age: chrono::Duration,
+) -> DidDocumentFreshness {
+    if now.signed_duration_since(record.fetched_at) > max_age {
+        DidDocumentFreshness::Stale
+    } else {
+        DidDocumentFreshness::Fresh
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1308,14 +2119,54 @@ pub trait DidDocumentPort: Send + Sync {
     ) -> ApplicationResult<DidLogCommitResult>;
 }
 
+#[async_trait]
+pub trait DidResolverPort: arkret_identity::DidResolver + Send + Sync {
+    async fn resolve_did_async(&self, did: &Did) -> Result<arkret_identity::DidDocument, String>;
+    fn cache_document_state(
+        &self,
+        document: DidDocumentState,
+    ) -> Result<arkret_identity::DidDocument, String>;
+}
+
 #[derive(Clone)]
 pub struct DidApplicationService {
     documents: Arc<dyn DidDocumentPort>,
+    resolver: Arc<dyn DidResolverPort>,
 }
 
 impl DidApplicationService {
-    pub fn new(documents: Arc<dyn DidDocumentPort>) -> Self {
-        Self { documents }
+    pub fn new(documents: Arc<dyn DidDocumentPort>, resolver: Arc<dyn DidResolverPort>) -> Self {
+        Self {
+            documents,
+            resolver,
+        }
+    }
+
+    pub fn resolver(&self) -> &dyn arkret_identity::DidResolver {
+        self.resolver.as_ref()
+    }
+
+    pub fn shared_resolver(&self) -> Arc<dyn DidResolverPort> {
+        self.resolver.clone()
+    }
+
+    pub async fn resolve_did(&self, did: &Did) -> Result<arkret_identity::DidDocument, String> {
+        if let Some(document) = self
+            .documents
+            .document(did.as_str())
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            return self.resolver.cache_document_state(document);
+        }
+        self.resolver.resolve_did_async(did).await
+    }
+
+    pub fn cache_resolved_document_state(
+        &self,
+        document: DidDocumentState,
+    ) -> Result<arkret_identity::DidDocument, String> {
+        self.resolver.cache_document_state(document)
     }
 
     pub async fn document(&self, did: &str) -> ApplicationResult<Option<DidDocumentState>> {
@@ -1382,11 +2233,84 @@ mod tests {
 
     struct NoAgents;
 
+    struct NoSidecars;
+
     struct StaticDidDocuments;
+
+    struct NoDidResolver;
+
+    impl arkret_identity::DidResolver for NoDidResolver {
+        fn supports(&self, _did: &Did) -> bool {
+            false
+        }
+
+        fn resolve_did(&self, _did: &Did) -> arkret_identity::Result<arkret_identity::DidDocument> {
+            Err(arkret_identity::IdentityError::Protocol(
+                "DID resolver is unused in this test".to_owned(),
+            ))
+        }
+    }
+
+    #[async_trait]
+    impl DidResolverPort for NoDidResolver {
+        async fn resolve_did_async(
+            &self,
+            _did: &Did,
+        ) -> Result<arkret_identity::DidDocument, String> {
+            Err("DID resolver is unused in this test".to_owned())
+        }
+
+        fn cache_document_state(
+            &self,
+            _document: DidDocumentState,
+        ) -> Result<arkret_identity::DidDocument, String> {
+            Err("DID resolver is unused in this test".to_owned())
+        }
+    }
 
     struct AcceptPairing;
 
     struct CurrentRecoveryPolicy;
+
+    #[async_trait]
+    impl SidecarPort for NoSidecars {
+        async fn ensure_sidecar(
+            &self,
+            _sidecar: AgentSidecarState,
+        ) -> ApplicationResult<AgentSidecarState> {
+            panic!("unused test port")
+        }
+        async fn sidecar(&self, _sidecar_id: &str) -> ApplicationResult<Option<AgentSidecarState>> {
+            Ok(None)
+        }
+        async fn sidecar_for_realm_controller(
+            &self,
+            _realm_id: &str,
+            _controller_id: &str,
+        ) -> ApplicationResult<Option<AgentSidecarState>> {
+            Ok(None)
+        }
+        async fn sidecars_for_controller(
+            &self,
+            _controller_id: &str,
+            _realm_id: Option<&str>,
+        ) -> ApplicationResult<Vec<AgentSidecarState>> {
+            Ok(Vec::new())
+        }
+        async fn ensure_context(
+            &self,
+            _context: AgentSidecarContextState,
+        ) -> ApplicationResult<AgentSidecarContextState> {
+            panic!("unused test port")
+        }
+        async fn context(
+            &self,
+            _sidecar_id: &str,
+            _digest: &str,
+        ) -> ApplicationResult<Option<AgentSidecarContextState>> {
+            Ok(None)
+        }
+    }
 
     #[async_trait]
     impl AccountLookupPort for StaticAccount {
@@ -1410,6 +2334,10 @@ mod tests {
 
         async fn account(&self, _actor_id: &str) -> ApplicationResult<Option<AccountProfileState>> {
             Ok(None)
+        }
+
+        async fn accounts(&self) -> ApplicationResult<Vec<AccountProfileState>> {
+            Ok(Vec::new())
         }
 
         async fn save_account(&self, _account: AccountProfileState) -> ApplicationResult<()> {
@@ -1487,6 +2415,10 @@ mod tests {
     #[async_trait]
     impl DeviceDirectoryPort for NoDevices {
         async fn list_active_device_actors(&self) -> ApplicationResult<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        async fn devices(&self) -> ApplicationResult<Vec<DeviceIdentity>> {
             Ok(Vec::new())
         }
 
@@ -1685,7 +2617,8 @@ mod tests {
 
     #[tokio::test]
     async fn did_lookup_is_independent_from_http_and_app_state() {
-        let service = DidApplicationService::new(Arc::new(StaticDidDocuments));
+        let service =
+            DidApplicationService::new(Arc::new(StaticDidDocuments), Arc::new(NoDidResolver));
         let document = service
             .document("did:web:alice.example")
             .await
@@ -1699,7 +2632,8 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_activation_is_one_atomic_port_call() {
-        let service = AgentPairingApplicationService::new(Arc::new(AcceptPairing));
+        let service =
+            AgentPairingApplicationService::new(Arc::new(AcceptPairing), Arc::new(NoSidecars));
         let command = ActivateAgentRuntimeCommand {
             agent_id: "did:web:agent.example".to_owned(),
             approval_request_id: "approval-1".to_owned(),

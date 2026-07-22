@@ -1,13 +1,354 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use arkret_core::{Did, EventBatchReceipt, Operation, PrincipalLocatorDisplayHint, RealmId};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use soland_storage::{
-    CanonicalEventRecord, EventCommitRequest, EventCommitUnitOfWork, FederationOutboxRecord,
-    IdempotencyRecord, ProjectionEventRecord, RealmInviteRecord,
-};
+use soland_storage::RealmEventStats;
 
 use crate::ApplicationResult;
+
+#[derive(Clone, Debug, Default)]
+pub struct RealmDirectoryQuery {
+    pub text: Option<String>,
+    pub tags: BTreeSet<String>,
+    pub members: BTreeSet<Did>,
+    pub public_only: bool,
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PeerEventsPageQuery {
+    pub realms: Vec<String>,
+    pub actors: Vec<String>,
+    pub kind_filter: Option<String>,
+    pub cursor_event_id: Option<String>,
+    pub backward: bool,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpaceContainerProjectionRecord {
+    pub container_space_id: String,
+    pub realm_id: String,
+    pub kind: String,
+    pub title: String,
+    pub fields: BTreeMap<String, Value>,
+    pub scope_circle_id: Option<String>,
+    pub child_scope_policy: Option<String>,
+    pub child_scope_policy_scope_circle_id: Option<String>,
+    pub parent_ref: Option<String>,
+    pub rank: Option<String>,
+    pub state: String,
+    pub state_changed_at: Option<DateTime<Utc>>,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+    pub history_basis_seals: Vec<String>,
+    pub updated_by: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StrandProjectionRecord {
+    pub strand_id: String,
+    pub realm_id: String,
+    pub tracks: BTreeMap<String, arkret_core::StrandTrackConfig>,
+    pub title: String,
+    pub summary: Option<String>,
+    pub state: String,
+    pub state_changed_at: Option<DateTime<Utc>>,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+    pub history_basis_seals: Vec<String>,
+    pub updated_by: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub scope_circle_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MorphProjectionRecord {
+    pub morph_id: String,
+    pub realm_id: String,
+    pub scope_circle_id: Option<String>,
+    pub morph_type: String,
+    pub title: Option<String>,
+    pub fields: Value,
+    pub schema_refs: Value,
+    pub facets: Value,
+    pub versions: Value,
+    pub state: String,
+    pub state_changed_at: Option<DateTime<Utc>>,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+    pub history_basis_seals: Vec<String>,
+    pub updated_by: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RealmOrganizationStatementRecord {
+    pub realm_id: String,
+    pub organization_id: String,
+    pub relationship: String,
+    pub statement_id: String,
+    pub status: String,
+    pub control_scopes: Vec<String>,
+    pub issued_at: DateTime<Utc>,
+    pub not_before: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub supersedes_statement_id: Option<String>,
+    pub revokes_statement_id: Option<String>,
+    pub realm_frontier_digest: Option<String>,
+    pub proof_digest: Option<String>,
+    pub delegation_ref: Option<String>,
+    pub issuer_role: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RealmDirectoryEntry {
+    pub realm_id: RealmId,
+    pub title: String,
+    pub alias: Option<String>,
+    pub description: Option<String>,
+    pub tags: BTreeSet<String>,
+    pub members: BTreeSet<Did>,
+    pub public: bool,
+    pub category: Option<String>,
+    pub realm_class: Option<String>,
+    pub default_join_rule: Option<String>,
+    pub as_of: DateTime<Utc>,
+    pub source_refs: Vec<String>,
+    pub policy_revision: String,
+}
+
+impl RealmDirectoryEntry {
+    pub fn new(realm_id: RealmId, title: impl Into<String>) -> Self {
+        Self {
+            realm_id,
+            title: title.into(),
+            alias: None,
+            description: None,
+            tags: BTreeSet::new(),
+            members: BTreeSet::new(),
+            public: false,
+            category: None,
+            realm_class: None,
+            default_join_rule: None,
+            as_of: DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
+                .expect("current time is representable at millisecond precision"),
+            source_refs: vec![format!("ak:event:{}", uuid::Uuid::now_v7())],
+            policy_revision: "local".to_owned(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RealmDirectoryIndex {
+    entries: BTreeMap<RealmId, RealmDirectoryEntry>,
+}
+
+impl RealmDirectoryIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn upsert(&mut self, entry: RealmDirectoryEntry) {
+        self.entries.insert(entry.realm_id.clone(), entry);
+    }
+
+    pub fn get(&self, realm_id: &RealmId) -> Option<&RealmDirectoryEntry> {
+        self.entries.get(realm_id)
+    }
+
+    pub fn get_mut(&mut self, realm_id: &RealmId) -> Option<&mut RealmDirectoryEntry> {
+        self.entries.get_mut(realm_id)
+    }
+
+    pub fn entries_iter(&self) -> impl Iterator<Item = (&RealmId, &RealmDirectoryEntry)> {
+        self.entries.iter()
+    }
+
+    pub fn search_by_text(&self, query: &str) -> Vec<&RealmDirectoryEntry> {
+        let query = query.to_lowercase();
+        self.entries
+            .values()
+            .filter(|entry| realm_directory_text(entry).contains(&query))
+            .collect()
+    }
+
+    pub fn search_by_tag(&self, tag: &str) -> Vec<&RealmDirectoryEntry> {
+        self.entries
+            .values()
+            .filter(|entry| entry.tags.contains(tag))
+            .collect()
+    }
+
+    pub fn search_by_member(&self, member: &Did) -> Vec<&RealmDirectoryEntry> {
+        self.entries
+            .values()
+            .filter(|entry| entry.members.contains(member))
+            .collect()
+    }
+
+    pub fn search(&self, query: RealmDirectoryQuery) -> Vec<&RealmDirectoryEntry> {
+        let mut scored =
+            self.entries
+                .values()
+                .filter(|entry| !query.public_only || entry.public)
+                .filter(|entry| {
+                    query.text.as_ref().is_none_or(|text| {
+                        realm_directory_text(entry).contains(&text.to_lowercase())
+                    })
+                })
+                .filter(|entry| query.tags.iter().all(|tag| entry.tags.contains(tag)))
+                .filter(|entry| {
+                    query
+                        .members
+                        .iter()
+                        .all(|member| entry.members.contains(member))
+                })
+                .map(|entry| (realm_directory_score(entry, &query), entry))
+                .collect::<Vec<_>>();
+        scored.sort_by(|(left_score, left), (right_score, right)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| left.title.cmp(&right.title))
+        });
+        let mut results = scored
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect::<Vec<_>>();
+        if let Some(limit) = query.limit {
+            results.truncate(limit);
+        }
+        results
+    }
+}
+
+#[derive(Clone)]
+pub struct RealmDirectoryApplicationService {
+    index: Arc<parking_lot::Mutex<RealmDirectoryIndex>>,
+}
+
+impl RealmDirectoryApplicationService {
+    pub fn new(index: RealmDirectoryIndex) -> Self {
+        Self {
+            index: Arc::new(parking_lot::Mutex::new(index)),
+        }
+    }
+
+    pub fn snapshot(&self) -> RealmDirectoryIndex {
+        self.index.lock().clone()
+    }
+
+    pub fn entry(&self, realm_id: &RealmId) -> Option<RealmDirectoryEntry> {
+        self.index.lock().get(realm_id).cloned()
+    }
+
+    pub fn upsert(&self, entry: RealmDirectoryEntry) {
+        self.index.lock().upsert(entry);
+    }
+
+    pub fn upsert_resolving_alias(&self, mut entry: RealmDirectoryEntry) -> bool {
+        let mut index = self.index.lock();
+        let alias_accepted = entry.alias.as_ref().is_none_or(|alias| {
+            !index.entries_iter().any(|(realm_id, existing)| {
+                realm_id != &entry.realm_id && existing.alias.as_ref() == Some(alias)
+            })
+        });
+        if !alias_accepted {
+            entry.alias = None;
+        }
+        index.upsert(entry);
+        alias_accepted
+    }
+
+    pub fn update_entry<R>(
+        &self,
+        realm_id: &RealmId,
+        update: impl FnOnce(&mut RealmDirectoryEntry) -> R,
+    ) -> Option<R> {
+        self.index.lock().get_mut(realm_id).map(update)
+    }
+
+    pub fn set_alias_if_available(&self, realm_id: &RealmId, alias: String) -> bool {
+        let mut index = self.index.lock();
+        let taken = index.entries_iter().any(|(existing_id, existing)| {
+            existing_id != realm_id && existing.alias.as_deref() == Some(alias.as_str())
+        });
+        if taken {
+            return false;
+        }
+        index.get_mut(realm_id).is_some_and(|entry| {
+            entry.alias = Some(alias);
+            true
+        })
+    }
+
+    pub fn add_member(&self, realm_id: &RealmId, member: Did) -> bool {
+        self.update_entry(realm_id, |entry| entry.members.insert(member))
+            .unwrap_or(false)
+    }
+
+    pub fn remove_member_from_all(&self, member: &Did) -> usize {
+        let mut index = self.index.lock();
+        let mut removed = 0;
+        for entry in index.entries.values_mut() {
+            if entry.members.remove(member) {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
+    #[doc(hidden)]
+    pub fn test_index(&self) -> &Arc<parking_lot::Mutex<RealmDirectoryIndex>> {
+        &self.index
+    }
+}
+
+fn realm_directory_text(entry: &RealmDirectoryEntry) -> String {
+    format!(
+        "{} {} {}",
+        entry.title,
+        entry.description.as_deref().unwrap_or_default(),
+        entry.tags.iter().cloned().collect::<Vec<_>>().join(" ")
+    )
+    .to_lowercase()
+}
+
+fn realm_directory_score(entry: &RealmDirectoryEntry, query: &RealmDirectoryQuery) -> usize {
+    let mut score = 0;
+    if let Some(text) = &query.text {
+        let text = text.to_lowercase();
+        if entry.title.to_lowercase().contains(&text) {
+            score += 10;
+        }
+        if entry
+            .description
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase()
+            .contains(&text)
+        {
+            score += 4;
+        }
+    }
+    score += query
+        .tags
+        .iter()
+        .filter(|tag| entry.tags.contains(*tag))
+        .count()
+        * 3;
+    score += query
+        .members
+        .iter()
+        .filter(|member| entry.members.contains(*member))
+        .count()
+        * 2;
+    score
+}
 
 #[derive(Clone, Debug)]
 pub struct AcceptedEvent {
@@ -22,6 +363,8 @@ pub struct AcceptedEvent {
     pub envelope: Value,
     pub received_at: DateTime<Utc>,
 }
+
+pub type CanonicalEventRecord = AcceptedEvent;
 #[derive(Clone, Debug)]
 pub struct ProjectedEvent {
     pub event_id: String,
@@ -33,6 +376,69 @@ pub struct ProjectedEvent {
     pub payload: Value,
     pub created_at: DateTime<Utc>,
     pub received_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MessageState {
+    pub event_id: String,
+    pub message_id: String,
+    pub realm_id: String,
+    pub sender: String,
+    pub thread_id: String,
+    pub content: Value,
+    pub encrypted: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[async_trait::async_trait]
+pub trait MessagePort: Send + Sync {
+    async fn message(&self, event_id: &str) -> ApplicationResult<Option<MessageState>>;
+    async fn store_message(&self, message: MessageState) -> ApplicationResult<()>;
+    async fn messages_for_realm(
+        &self,
+        realm_id: &str,
+        limit: usize,
+    ) -> ApplicationResult<Vec<MessageState>>;
+}
+
+#[derive(Clone, Debug)]
+pub struct AppletTransactionReplayState {
+    pub source_service_id: String,
+    pub idempotency_key: String,
+    pub source_signature_anchor: String,
+    pub request_digest: String,
+    pub outcome: Option<Value>,
+    pub received_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub enum AppletTransactionReplayResult {
+    Fresh,
+    Existing(AppletTransactionReplayState),
+}
+
+#[async_trait::async_trait]
+pub trait AppletPort: Send + Sync {
+    async fn applet(&self, applet_id: &str) -> ApplicationResult<Option<Value>>;
+    async fn applets(&self) -> ApplicationResult<Vec<Value>>;
+    async fn store_applet(&self, applet_id: &str, applet: Value) -> ApplicationResult<()>;
+    async fn begin_applet_transaction(
+        &self,
+        replay: AppletTransactionReplayState,
+    ) -> ApplicationResult<AppletTransactionReplayResult>;
+    async fn complete_applet_transaction(
+        &self,
+        source_service_id: &str,
+        idempotency_key: &str,
+        outcome: Value,
+    ) -> ApplicationResult<()>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectedEventAppendResult {
+    Inserted,
+    AlreadyExists,
 }
 
 #[derive(Clone, Debug)]
@@ -77,11 +483,86 @@ pub struct AcceptedBatchReceipt {
     pub value: Value,
 }
 
+#[derive(Clone, Debug)]
+pub struct IdentityAnchorDeviceState {
+    pub actor: String,
+    pub device_id: String,
+    pub display_name: Option<String>,
+    pub verification_state: String,
+    pub payload: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IdentityAnchorFrontierState {
+    pub realm_id: String,
+    pub raw_leaves: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IdentityAnchorReanchorState {
+    pub actor_id: String,
+    pub version_number: u64,
+    pub did_version_id: String,
+    pub reanchor_digest: String,
+    pub authorize_digest: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct IdentityAnchorCommitResult {
+    pub reanchor_conflict: bool,
+}
+
 #[async_trait::async_trait]
 pub trait EventReadPort: Send + Sync {
+    async fn store_canonical_event(&self, record: CanonicalEventRecord) -> ApplicationResult<()>;
+    async fn store_realm_bootstrap_batch(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+    ) -> ApplicationResult<()>;
+    async fn store_identity_anchor_batch(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+        receipt: Option<EventBatchReceipt>,
+        device: Option<IdentityAnchorDeviceState>,
+        frontier_cas: Option<IdentityAnchorFrontierState>,
+        reanchor_slot: Option<IdentityAnchorReanchorState>,
+    ) -> ApplicationResult<IdentityAnchorCommitResult>;
+    async fn canonical_event(
+        &self,
+        event_id: &str,
+    ) -> ApplicationResult<Option<CanonicalEventRecord>>;
+    async fn has_canonical_event(&self, event_id: &str) -> ApplicationResult<bool>;
+    async fn canonical_events(&self) -> ApplicationResult<Vec<CanonicalEventRecord>>;
+    async fn canonical_events_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> ApplicationResult<Vec<CanonicalEventRecord>>;
+    async fn canonical_batch_receipts_for_event(
+        &self,
+        event_id: &str,
+    ) -> ApplicationResult<Vec<EventBatchReceipt>>;
+    async fn realm_event_stats(&self, realm_id: &str) -> ApplicationResult<RealmEventStats>;
+    async fn peer_authz_state_records(&self) -> ApplicationResult<Vec<CanonicalEventRecord>>;
+    async fn peer_events_query_page(
+        &self,
+        query: &PeerEventsPageQuery,
+    ) -> ApplicationResult<Vec<CanonicalEventRecord>>;
+    async fn realm_events_newest_first(
+        &self,
+        realm_id: &str,
+    ) -> ApplicationResult<Vec<CanonicalEventRecord>>;
     async fn accepted_event(&self, event_id: &str) -> ApplicationResult<Option<AcceptedEvent>>;
     async fn accepted_events(&self) -> ApplicationResult<Vec<AcceptedEvent>>;
     async fn projected_events(&self) -> ApplicationResult<Vec<ProjectedEvent>>;
+    async fn projected_events_capped(&self, limit: usize)
+    -> ApplicationResult<Vec<ProjectedEvent>>;
+    async fn append_projected_event(
+        &self,
+        event: ProjectedEvent,
+    ) -> ApplicationResult<ProjectedEventAppendResult>;
     async fn accepted_events_for_actor(
         &self,
         actor_id: &str,
@@ -93,14 +574,140 @@ pub trait EventReadPort: Send + Sync {
     ) -> ApplicationResult<Vec<AcceptedBatchReceipt>>;
 }
 
+#[async_trait::async_trait]
+pub trait ProjectedOperationPersistencePort: Send + Sync {
+    async fn persist_projected_operation(
+        &self,
+        origin: &str,
+        operation: &Operation,
+        event_type: &str,
+        is_message_create: bool,
+        is_membership_or_realm_lifecycle: bool,
+    ) -> Result<(), String>;
+}
+
+#[async_trait::async_trait]
+pub trait ProjectionWritePort: Send + Sync {
+    async fn persist_projected_operation(
+        &self,
+        origin: &str,
+        operation: &Operation,
+    ) -> ApplicationResult<()>;
+    async fn store_space_container_projection(
+        &self,
+        record: &SpaceContainerProjectionRecord,
+    ) -> ApplicationResult<()>;
+    async fn store_strand_projection(
+        &self,
+        record: &StrandProjectionRecord,
+    ) -> ApplicationResult<()>;
+    async fn store_morph_projection(&self, record: &MorphProjectionRecord)
+    -> ApplicationResult<()>;
+    async fn store_realm_organization_statement(
+        &self,
+        record: &RealmOrganizationStatementRecord,
+    ) -> ApplicationResult<()>;
+}
+
 #[derive(Clone)]
 pub struct EventQueryApplicationService {
     events: Arc<dyn EventReadPort>,
+    messages: Arc<dyn MessagePort>,
+    applets: Arc<dyn AppletPort>,
+    projections: Arc<dyn ProjectionWritePort>,
 }
 
 impl EventQueryApplicationService {
-    pub fn new(events: Arc<dyn EventReadPort>) -> Self {
-        Self { events }
+    pub async fn persist_projected_operation(
+        &self,
+        origin: &str,
+        operation: &Operation,
+    ) -> ApplicationResult<()> {
+        self.projections
+            .persist_projected_operation(origin, operation)
+            .await
+    }
+    pub async fn store_canonical_event(
+        &self,
+        record: CanonicalEventRecord,
+    ) -> ApplicationResult<()> {
+        self.events.store_canonical_event(record).await
+    }
+    pub async fn store_realm_bootstrap_batch(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+    ) -> ApplicationResult<()> {
+        self.events.store_realm_bootstrap_batch(records).await
+    }
+    pub async fn store_identity_anchor_batch(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+        receipt: Option<EventBatchReceipt>,
+        device: Option<IdentityAnchorDeviceState>,
+        frontier_cas: Option<IdentityAnchorFrontierState>,
+        reanchor_slot: Option<IdentityAnchorReanchorState>,
+    ) -> ApplicationResult<IdentityAnchorCommitResult> {
+        self.events
+            .store_identity_anchor_batch(records, receipt, device, frontier_cas, reanchor_slot)
+            .await
+    }
+    pub async fn canonical_event(
+        &self,
+        event_id: &str,
+    ) -> ApplicationResult<Option<CanonicalEventRecord>> {
+        self.events.canonical_event(event_id).await
+    }
+    pub async fn has_canonical_event(&self, event_id: &str) -> ApplicationResult<bool> {
+        self.events.has_canonical_event(event_id).await
+    }
+    pub async fn canonical_events(&self) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+        self.events.canonical_events().await
+    }
+    pub async fn canonical_events_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+        self.events.canonical_events_for_actor(actor_id).await
+    }
+    pub async fn canonical_batch_receipts_for_event(
+        &self,
+        event_id: &str,
+    ) -> ApplicationResult<Vec<EventBatchReceipt>> {
+        self.events
+            .canonical_batch_receipts_for_event(event_id)
+            .await
+    }
+    pub async fn realm_event_stats(&self, realm_id: &str) -> ApplicationResult<RealmEventStats> {
+        self.events.realm_event_stats(realm_id).await
+    }
+    pub async fn peer_authz_state_records(&self) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+        self.events.peer_authz_state_records().await
+    }
+    pub async fn peer_events_query_page(
+        &self,
+        query: &PeerEventsPageQuery,
+    ) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+        self.events.peer_events_query_page(query).await
+    }
+    pub async fn realm_events_newest_first(
+        &self,
+        realm_id: &str,
+    ) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+        self.events.realm_events_newest_first(realm_id).await
+    }
+
+    pub fn new(
+        events: Arc<dyn EventReadPort>,
+        messages: Arc<dyn MessagePort>,
+        applets: Arc<dyn AppletPort>,
+        projections: Arc<dyn ProjectionWritePort>,
+    ) -> Self {
+        Self {
+            events,
+            messages,
+            applets,
+            projections,
+        }
     }
 
     pub async fn accepted_event(&self, event_id: &str) -> ApplicationResult<Option<AcceptedEvent>> {
@@ -113,6 +720,20 @@ impl EventQueryApplicationService {
 
     pub async fn projected_events(&self) -> ApplicationResult<Vec<ProjectedEvent>> {
         self.events.projected_events().await
+    }
+
+    pub async fn projected_events_capped(
+        &self,
+        limit: usize,
+    ) -> ApplicationResult<Vec<ProjectedEvent>> {
+        self.events.projected_events_capped(limit).await
+    }
+
+    pub async fn append_projected_event(
+        &self,
+        event: ProjectedEvent,
+    ) -> ApplicationResult<ProjectedEventAppendResult> {
+        self.events.append_projected_event(event).await
     }
 
     pub async fn accepted_events_for_actor(
@@ -137,6 +758,80 @@ impl EventQueryApplicationService {
     ) -> ApplicationResult<Vec<AcceptedBatchReceipt>> {
         self.events.batch_receipts_for_event(event_id).await
     }
+
+    pub async fn message(&self, event_id: &str) -> ApplicationResult<Option<MessageState>> {
+        self.messages.message(event_id).await
+    }
+
+    pub async fn store_message(&self, message: MessageState) -> ApplicationResult<()> {
+        self.messages.store_message(message).await
+    }
+
+    pub async fn messages_for_realm(
+        &self,
+        realm_id: &str,
+        limit: usize,
+    ) -> ApplicationResult<Vec<MessageState>> {
+        self.messages.messages_for_realm(realm_id, limit).await
+    }
+
+    pub async fn applet(&self, applet_id: &str) -> ApplicationResult<Option<Value>> {
+        self.applets.applet(applet_id).await
+    }
+    pub async fn applets(&self) -> ApplicationResult<Vec<Value>> {
+        self.applets.applets().await
+    }
+    pub async fn store_applet(&self, applet_id: &str, applet: Value) -> ApplicationResult<()> {
+        self.applets.store_applet(applet_id, applet).await
+    }
+    pub async fn begin_applet_transaction(
+        &self,
+        replay: AppletTransactionReplayState,
+    ) -> ApplicationResult<AppletTransactionReplayResult> {
+        self.applets.begin_applet_transaction(replay).await
+    }
+    pub async fn complete_applet_transaction(
+        &self,
+        source_service_id: &str,
+        idempotency_key: &str,
+        outcome: Value,
+    ) -> ApplicationResult<()> {
+        self.applets
+            .complete_applet_transaction(source_service_id, idempotency_key, outcome)
+            .await
+    }
+
+    pub async fn store_space_container_projection(
+        &self,
+        record: &SpaceContainerProjectionRecord,
+    ) -> ApplicationResult<()> {
+        self.projections
+            .store_space_container_projection(record)
+            .await
+    }
+
+    pub async fn store_strand_projection(
+        &self,
+        record: &StrandProjectionRecord,
+    ) -> ApplicationResult<()> {
+        self.projections.store_strand_projection(record).await
+    }
+
+    pub async fn store_morph_projection(
+        &self,
+        record: &MorphProjectionRecord,
+    ) -> ApplicationResult<()> {
+        self.projections.store_morph_projection(record).await
+    }
+
+    pub async fn store_realm_organization_statement(
+        &self,
+        record: &RealmOrganizationStatementRecord,
+    ) -> ApplicationResult<()> {
+        self.projections
+            .store_realm_organization_statement(record)
+            .await
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -144,12 +839,59 @@ pub struct MlsCommitState {
     pub group_id: String,
     pub effective_scope: Value,
     pub epoch: u64,
+    pub creator_device_id: String,
+    pub genesis_event_ref: String,
+    pub governance_binding: Value,
+    pub accepted_commit_ref: Option<String>,
     pub frontier_contested: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct InitializeMlsGroupCommand {
+    pub effective_scope: Value,
+    pub group_id: String,
+    pub leader_actor_id: String,
+    pub creator_device_id: String,
+    pub genesis_event_ref: String,
+    pub covered_seals: Vec<String>,
+    pub governance_binding: Value,
+    pub committed_at: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AdvanceMlsEpochCommand {
+    pub expected_previous_epoch: u64,
+    pub effective_scope: Value,
+    pub group_id: String,
+    pub leader_actor_id: String,
+    pub covered_seals: Vec<String>,
+    pub governance_binding: Value,
+    pub accepted_commit_ref: String,
+    pub committed_at: i64,
 }
 
 #[async_trait::async_trait]
 pub trait MlsCommitReadPort: Send + Sync {
     async fn commits(&self) -> ApplicationResult<Vec<MlsCommitState>>;
+    async fn commit(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+    ) -> ApplicationResult<Option<MlsCommitState>>;
+    async fn initialize_group(
+        &self,
+        command: InitializeMlsGroupCommand,
+    ) -> ApplicationResult<Option<MlsCommitState>>;
+    async fn advance_epoch(
+        &self,
+        command: AdvanceMlsEpochCommand,
+    ) -> ApplicationResult<Option<MlsCommitState>>;
+    async fn mark_frontier_contested(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        epoch: u64,
+    ) -> ApplicationResult<Option<MlsCommitState>>;
 }
 
 #[derive(Clone)]
@@ -165,15 +907,175 @@ impl MlsCommitQueryApplicationService {
     pub async fn commits(&self) -> ApplicationResult<Vec<MlsCommitState>> {
         self.commits.commits().await
     }
+
+    pub async fn commit(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+    ) -> ApplicationResult<Option<MlsCommitState>> {
+        self.commits.commit(effective_scope, group_id).await
+    }
+
+    pub async fn initialize_group(
+        &self,
+        command: InitializeMlsGroupCommand,
+    ) -> ApplicationResult<Option<MlsCommitState>> {
+        self.commits.initialize_group(command).await
+    }
+
+    pub async fn advance_epoch(
+        &self,
+        command: AdvanceMlsEpochCommand,
+    ) -> ApplicationResult<Option<MlsCommitState>> {
+        self.commits.advance_epoch(command).await
+    }
+
+    pub async fn mark_frontier_contested(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+        epoch: u64,
+    ) -> ApplicationResult<Option<MlsCommitState>> {
+        self.commits
+            .mark_frontier_contested(effective_scope, group_id, epoch)
+            .await
+    }
+}
+
+pub struct ClaimMlsKeyPackageCommand<'a> {
+    pub id: &'a str,
+    pub mls_group_id: &'a str,
+    pub intended_realm_id: Option<&'a str>,
+    pub ssk_generation: Option<u64>,
+    pub device_authorize_event_id: Option<&'a str>,
+    pub agent_key_authorize_event_id: Option<&'a str>,
+    pub claimed_at: i64,
+    pub claim_expires_at_unix_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsKeyPackageState {
+    pub id: String,
+    pub keypackage_ref: String,
+    pub keypackage_digest: String,
+    pub actor_id: String,
+    pub device_id: String,
+    pub key_package_bytes: Vec<u8>,
+    pub capabilities: Vec<String>,
+    pub capabilities_digest: String,
+    pub device_signature: Value,
+    pub last_resort: bool,
+    pub last_resort_realm_id: Option<String>,
+    pub lifetime_not_before: i64,
+    pub lifetime_not_after: i64,
+    pub claimed_by_mls_group_id: Option<String>,
+    pub ssk_generation: Option<u64>,
+    pub device_authorize_event_id: Option<String>,
+    pub agent_key_authorize_event_id: Option<String>,
+    pub claimed_at: Option<i64>,
+    pub claim_expires_at_unix_ms: Option<i64>,
+    pub consumed_at: Option<i64>,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PeerKeyPackageClaimLedgerState {
+    pub source_service_id: String,
+    pub claim_request_id: String,
+    pub request_digest: String,
+    pub state: String,
+    pub outcome: Option<Value>,
+    pub keypackage_id: Option<String>,
+    pub claim_expires_at_unix_ms: Option<i64>,
+    pub expires_at: i64,
+    pub updated_at: i64,
+}
+
+pub struct PeerKeyPackageClaimCommand<'a> {
+    pub keypackage_id: &'a str,
+    pub mls_group_id: &'a str,
+    pub ssk_generation: Option<u64>,
+    pub device_authorize_event_id: Option<&'a str>,
+    pub agent_key_authorize_event_id: Option<&'a str>,
+    pub claimed_at: i64,
+    pub claim_expires_at_unix_ms: i64,
+    pub ledger: &'a PeerKeyPackageClaimLedgerState,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PeerKeyPackageClaimResult {
+    Claimed(Box<MlsKeyPackageState>),
+    Existing(PeerKeyPackageClaimLedgerState),
+    KeyPackageUnavailable,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PeerKeyPackageClaimLedgerWriteResult {
+    Inserted,
+    Existing(PeerKeyPackageClaimLedgerState),
 }
 
 #[async_trait::async_trait]
 pub trait MlsKeyPackageMaintenancePort: Send + Sync {
+    async fn store_key_package(&self, record: &MlsKeyPackageState) -> ApplicationResult<bool>;
+    async fn key_package(&self, id: &str) -> ApplicationResult<Option<MlsKeyPackageState>>;
+    async fn claim_key_package(
+        &self,
+        command: ClaimMlsKeyPackageCommand<'_>,
+    ) -> ApplicationResult<Option<MlsKeyPackageState>>;
+    async fn consume_key_package_claim(
+        &self,
+        id: &str,
+        mls_group_id: &str,
+        consumed_at: i64,
+    ) -> ApplicationResult<Option<MlsKeyPackageState>>;
+    async fn peer_claim(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+    ) -> ApplicationResult<Option<PeerKeyPackageClaimLedgerState>>;
+    async fn claim_peer_key_package(
+        &self,
+        attempt: PeerKeyPackageClaimCommand<'_>,
+    ) -> ApplicationResult<PeerKeyPackageClaimResult>;
+    async fn store_peer_claim_terminal(
+        &self,
+        record: &PeerKeyPackageClaimLedgerState,
+    ) -> ApplicationResult<PeerKeyPackageClaimLedgerWriteResult>;
+    async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> ApplicationResult<Vec<String>>;
+    async fn key_packages(&self) -> ApplicationResult<Vec<MlsKeyPackageState>>;
+    async fn key_packages_claimed_by_group(
+        &self,
+        mls_group_id: &str,
+    ) -> ApplicationResult<Vec<MlsKeyPackageState>>;
     async fn retire_actor_keypackages(
         &self,
         actor_id: &str,
         retired_at: i64,
     ) -> ApplicationResult<usize>;
+    async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ApplicationResult<()>;
+    async fn drain_welcomes(
+        &self,
+        recipient_actor_id: &str,
+        recipient_device_id: &str,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> ApplicationResult<Vec<MlsWelcomeState>>;
+}
+
+#[derive(Clone, Debug)]
+pub struct MlsWelcomeState {
+    pub id: String,
+    pub group_id: String,
+    pub recipient_actor_id: String,
+    pub recipient_device_id: String,
+    pub welcome_bytes: Vec<u8>,
+    pub key_package_id: String,
+    pub epoch: u64,
+    pub commit_ref: Option<String>,
+    pub governance_binding: Value,
+    pub enqueued_at: i64,
+    pub delivered_at: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -195,23 +1097,135 @@ impl MlsKeyPackageApplicationService {
             .retire_actor_keypackages(actor_id, retired_at)
             .await
     }
+
+    pub async fn store_key_package(&self, record: &MlsKeyPackageState) -> ApplicationResult<bool> {
+        self.key_packages.store_key_package(record).await
+    }
+    pub async fn key_package(&self, id: &str) -> ApplicationResult<Option<MlsKeyPackageState>> {
+        self.key_packages.key_package(id).await
+    }
+    pub async fn claim_key_package(
+        &self,
+        command: ClaimMlsKeyPackageCommand<'_>,
+    ) -> ApplicationResult<Option<MlsKeyPackageState>> {
+        self.key_packages.claim_key_package(command).await
+    }
+    pub async fn consume_key_package_claim(
+        &self,
+        id: &str,
+        mls_group_id: &str,
+        consumed_at: i64,
+    ) -> ApplicationResult<Option<MlsKeyPackageState>> {
+        self.key_packages
+            .consume_key_package_claim(id, mls_group_id, consumed_at)
+            .await
+    }
+    pub async fn peer_claim(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+    ) -> ApplicationResult<Option<PeerKeyPackageClaimLedgerState>> {
+        self.key_packages
+            .peer_claim(source_service_id, claim_request_id)
+            .await
+    }
+    pub async fn claim_peer_key_package(
+        &self,
+        attempt: PeerKeyPackageClaimCommand<'_>,
+    ) -> ApplicationResult<PeerKeyPackageClaimResult> {
+        self.key_packages.claim_peer_key_package(attempt).await
+    }
+    pub async fn store_peer_claim_terminal(
+        &self,
+        record: &PeerKeyPackageClaimLedgerState,
+    ) -> ApplicationResult<PeerKeyPackageClaimLedgerWriteResult> {
+        self.key_packages.store_peer_claim_terminal(record).await
+    }
+    pub async fn revoke_expired_peer_claims(
+        &self,
+        now_unix_ms: i64,
+    ) -> ApplicationResult<Vec<String>> {
+        self.key_packages
+            .revoke_expired_peer_claims(now_unix_ms)
+            .await
+    }
+    pub async fn key_packages(&self) -> ApplicationResult<Vec<MlsKeyPackageState>> {
+        self.key_packages.key_packages().await
+    }
+    pub async fn key_packages_claimed_by_group(
+        &self,
+        mls_group_id: &str,
+    ) -> ApplicationResult<Vec<MlsKeyPackageState>> {
+        self.key_packages
+            .key_packages_claimed_by_group(mls_group_id)
+            .await
+    }
+
+    pub async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ApplicationResult<()> {
+        self.key_packages.enqueue_welcome(welcome).await
+    }
+
+    pub async fn drain_welcomes(
+        &self,
+        recipient_actor_id: &str,
+        recipient_device_id: &str,
+        now_unix_secs: i64,
+        limit: usize,
+    ) -> ApplicationResult<Vec<MlsWelcomeState>> {
+        self.key_packages
+            .drain_welcomes(
+                recipient_actor_id,
+                recipient_device_id,
+                now_unix_secs,
+                limit,
+            )
+            .await
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct RealmMetadata {
-    pub realm_id: String,
-    pub owner_id: String,
+    pub owner: String,
+    pub deleted: bool,
     pub discoverability: String,
     pub history_visibility: String,
-    pub deleted: bool,
+    pub history_sharing_policy: Option<Value>,
+    pub history_sharing_policy_digest: Option<String>,
+    pub preview_policy: Option<Value>,
+    pub preview_policy_digest: Option<String>,
+    pub asset_privacy_policy: Option<Value>,
+    pub asset_privacy_policy_digest: Option<String>,
+    pub encryption_profile: Option<String>,
+    pub plaintext_visible_services: BTreeSet<String>,
+    pub plaintext_visible_service_classes:
+        BTreeMap<String, BTreeSet<arkret_core::PlaintextDataClassKind>>,
+    pub minimal_metadata_realm: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl RealmMetadata {
+    pub fn allows_plaintext_data_class(
+        &self,
+        service_id: &str,
+        data_class: arkret_core::PlaintextDataClassKind,
+    ) -> bool {
+        self.plaintext_visible_service_classes
+            .get(service_id)
+            .is_some_and(|classes| classes.contains(&data_class))
+    }
 }
 
 #[async_trait::async_trait]
 pub trait RealmMetadataPort: Send + Sync {
     async fn realm_metadata(&self, realm_id: &str) -> ApplicationResult<Option<RealmMetadata>>;
-    async fn realm_metadata_list(&self) -> ApplicationResult<Vec<RealmMetadata>>;
+    async fn realm_metadata_list(&self) -> ApplicationResult<Vec<(String, RealmMetadata)>>;
+    async fn store_realm_metadata(
+        &self,
+        realm_id: &str,
+        metadata: RealmMetadata,
+    ) -> ApplicationResult<()>;
+    async fn delete_realm_metadata(&self, realm_id: &str) -> ApplicationResult<()>;
 }
 
 #[derive(Clone)]
@@ -228,48 +1242,182 @@ impl RealmQueryApplicationService {
         self.realms.realm_metadata(realm_id).await
     }
 
-    pub async fn realm_metadata_list(&self) -> ApplicationResult<Vec<RealmMetadata>> {
+    pub async fn realm_metadata_list(&self) -> ApplicationResult<Vec<(String, RealmMetadata)>> {
         self.realms.realm_metadata_list().await
+    }
+
+    pub async fn store_realm_metadata(
+        &self,
+        realm_id: &str,
+        metadata: RealmMetadata,
+    ) -> ApplicationResult<()> {
+        self.realms.store_realm_metadata(realm_id, metadata).await
+    }
+    pub async fn delete_realm_metadata(&self, realm_id: &str) -> ApplicationResult<()> {
+        self.realms.delete_realm_metadata(realm_id).await
     }
 }
 
 #[async_trait::async_trait]
 pub trait RealmInvitePort: Send + Sync {
-    async fn get(&self, invite_id: &str) -> ApplicationResult<Option<RealmInviteRecord>>;
-    async fn put(&self, record: RealmInviteRecord) -> ApplicationResult<()>;
-    async fn snapshot_all(&self) -> ApplicationResult<Vec<RealmInviteRecord>>;
+    async fn get(&self, invite_id: &str) -> ApplicationResult<Option<RealmInviteState>>;
+    async fn put(&self, record: RealmInviteState) -> ApplicationResult<()>;
+    async fn snapshot_all(&self) -> ApplicationResult<Vec<RealmInviteState>>;
+}
+
+#[derive(Clone, Debug)]
+pub struct RealmInviteState {
+    pub invite_id: String,
+    pub realm_id: String,
+    pub inviter: String,
+    pub invitee: Option<String>,
+    pub invite_delivery_target: Option<Value>,
+    pub introduction_evidence_digest: Option<String>,
+    pub third_party_id: Option<Value>,
+    pub join_rule_snapshot: Option<Value>,
+    pub invite_token: String,
+    pub status: String,
+    pub claim_nonces: BTreeMap<String, String>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InviteLocatorState {
+    pub locator_id: String,
+    pub token_digest: String,
+    pub subject_id: String,
+    pub recipient_service_id: String,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub one_time_use: bool,
+    pub display_hint: Option<PrincipalLocatorDisplayHint>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub consumed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InviteLocatorRotateCommand {
+    pub locator_id: String,
+    pub token_digest: String,
+    pub issued_at: DateTime<Utc>,
+    pub ttl_seconds: Option<u32>,
+    pub one_time_use: Option<bool>,
+    pub display_hint: Option<Option<PrincipalLocatorDisplayHint>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InviteLocatorInsertResult {
+    Inserted,
+    ActiveLimitReached,
+}
+
+#[async_trait::async_trait]
+pub trait InviteLocatorPort: Send + Sync {
+    async fn insert(
+        &self,
+        record: &InviteLocatorState,
+        active_limit: usize,
+        now: DateTime<Utc>,
+    ) -> ApplicationResult<InviteLocatorInsertResult>;
+    async fn resolve_and_consume(
+        &self,
+        token_digest: &str,
+        now: DateTime<Utc>,
+    ) -> ApplicationResult<Option<InviteLocatorState>>;
+    async fn rotate(
+        &self,
+        subject_id: &str,
+        old_locator_id: &str,
+        mutation: &InviteLocatorRotateCommand,
+        now: DateTime<Utc>,
+    ) -> ApplicationResult<Option<InviteLocatorState>>;
+    async fn revoke(
+        &self,
+        subject_id: &str,
+        locator_id: &str,
+        now: DateTime<Utc>,
+    ) -> ApplicationResult<Option<InviteLocatorState>>;
 }
 
 #[derive(Clone)]
 pub struct RealmInviteApplicationService {
     invites: Arc<dyn RealmInvitePort>,
+    locators: Arc<dyn InviteLocatorPort>,
 }
 
 impl RealmInviteApplicationService {
-    pub fn new(invites: Arc<dyn RealmInvitePort>) -> Self {
-        Self { invites }
+    pub fn new(invites: Arc<dyn RealmInvitePort>, locators: Arc<dyn InviteLocatorPort>) -> Self {
+        Self { invites, locators }
     }
 
-    pub async fn get(&self, invite_id: &str) -> ApplicationResult<Option<RealmInviteRecord>> {
+    pub async fn get(&self, invite_id: &str) -> ApplicationResult<Option<RealmInviteState>> {
         self.invites.get(invite_id).await
     }
 
-    pub async fn put(&self, record: RealmInviteRecord) -> ApplicationResult<()> {
+    pub async fn put(&self, record: RealmInviteState) -> ApplicationResult<()> {
         self.invites.put(record).await
     }
 
-    pub async fn snapshot_all(&self) -> ApplicationResult<Vec<RealmInviteRecord>> {
+    pub async fn snapshot_all(&self) -> ApplicationResult<Vec<RealmInviteState>> {
         self.invites.snapshot_all().await
+    }
+
+    pub async fn insert_locator(
+        &self,
+        record: &InviteLocatorState,
+        active_limit: usize,
+        now: DateTime<Utc>,
+    ) -> ApplicationResult<InviteLocatorInsertResult> {
+        self.locators.insert(record, active_limit, now).await
+    }
+
+    pub async fn resolve_and_consume_locator(
+        &self,
+        token_digest: &str,
+        now: DateTime<Utc>,
+    ) -> ApplicationResult<Option<InviteLocatorState>> {
+        self.locators.resolve_and_consume(token_digest, now).await
+    }
+
+    pub async fn rotate_locator(
+        &self,
+        subject_id: &str,
+        old_locator_id: &str,
+        mutation: &InviteLocatorRotateCommand,
+        now: DateTime<Utc>,
+    ) -> ApplicationResult<Option<InviteLocatorState>> {
+        self.locators
+            .rotate(subject_id, old_locator_id, mutation, now)
+            .await
+    }
+
+    pub async fn revoke_locator(
+        &self,
+        subject_id: &str,
+        locator_id: &str,
+        now: DateTime<Utc>,
+    ) -> ApplicationResult<Option<InviteLocatorState>> {
+        self.locators.revoke(subject_id, locator_id, now).await
     }
 }
 
 #[derive(Clone)]
 pub struct EventApplicationService {
-    commits: Arc<dyn EventCommitUnitOfWork>,
+    commits: Arc<dyn EventCommitPort>,
+}
+
+#[async_trait::async_trait]
+pub trait EventCommitPort: Send + Sync {
+    async fn commit_accepted_event(
+        &self,
+        command: CommitAcceptedEventCommand,
+    ) -> ApplicationResult<CommitAcceptedEventResult>;
 }
 
 impl EventApplicationService {
-    pub fn new(commits: Arc<dyn EventCommitUnitOfWork>) -> Self {
+    pub fn new(commits: Arc<dyn EventCommitPort>) -> Self {
         Self { commits }
     }
 
@@ -277,98 +1425,30 @@ impl EventApplicationService {
         &self,
         command: CommitAcceptedEventCommand,
     ) -> ApplicationResult<CommitAcceptedEventResult> {
-        let outcome = self.commits.commit_event(command.into()).await?;
-        Ok(CommitAcceptedEventResult {
-            projections_inserted: outcome.projections_inserted,
-            deliveries_inserted: outcome.outbox_inserted,
-        })
-    }
-}
-
-impl From<CommitAcceptedEventCommand> for EventCommitRequest {
-    fn from(command: CommitAcceptedEventCommand) -> Self {
-        Self {
-            event: CanonicalEventRecord {
-                event_id: command.event.event_id,
-                actor_id: command.event.actor_id,
-                actor_seq: command.event.actor_seq,
-                realm_id: command.event.realm_id,
-                kind: command.event.kind,
-                schema_id: command.event.schema_id,
-                canonical_digest: command.event.canonical_digest,
-                canonical_bytes: command.event.canonical_bytes,
-                envelope: command.event.envelope,
-                received_at: command.event.received_at,
-            },
-            projections: command
-                .projections
-                .into_iter()
-                .map(|projection| ProjectionEventRecord {
-                    event_id: projection.event_id,
-                    realm_id: projection.realm_id,
-                    event_kind: projection.event_kind,
-                    operation_type: projection.operation_type,
-                    operation_id: projection.operation_id,
-                    sender: projection.sender,
-                    payload: projection.payload,
-                    created_at: projection.created_at,
-                    received_at: projection.received_at,
-                })
-                .collect(),
-            idempotency: command.idempotency.map(|record| IdempotencyRecord {
-                principal_id: record.principal_id,
-                idempotency_key: record.key,
-                service_id: record.service_id,
-                request_hash: record.request_hash,
-                response_status: record.status,
-                response_body: record.body,
-                created_at: record.created_at,
-                expires_at: record.expires_at,
-            }),
-            outbox: command
-                .deliveries
-                .into_iter()
-                .map(|delivery| FederationOutboxRecord {
-                    id: delivery.id,
-                    peer_did: delivery.peer_did,
-                    peer_url: delivery.peer_url,
-                    endpoint: delivery.endpoint,
-                    idempotency_key: delivery.idempotency_key,
-                    payload_json: delivery.payload_json,
-                    attempts: 0,
-                    next_attempt_at: delivery.created_at,
-                    last_status: None,
-                    last_response_excerpt: None,
-                    created_at: delivery.created_at,
-                    delivered_at: None,
-                })
-                .collect(),
-        }
+        self.commits.commit_accepted_event(command).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use soland_storage::{EventCommitOutcome, PersistenceResult};
 
     use super::*;
 
     struct RecordingCommitter;
 
     #[async_trait]
-    impl EventCommitUnitOfWork for RecordingCommitter {
-        async fn commit_event(
+    impl EventCommitPort for RecordingCommitter {
+        async fn commit_accepted_event(
             &self,
-            request: EventCommitRequest,
-        ) -> PersistenceResult<EventCommitOutcome> {
-            assert_eq!(request.event.kind, "ak.message.create");
-            assert_eq!(request.projections.len(), 1);
-            assert_eq!(request.outbox.len(), 1);
-            Ok(EventCommitOutcome {
-                event_inserted: true,
+            command: CommitAcceptedEventCommand,
+        ) -> ApplicationResult<CommitAcceptedEventResult> {
+            assert_eq!(command.event.kind, "ak.message.create");
+            assert_eq!(command.projections.len(), 1);
+            assert_eq!(command.deliveries.len(), 1);
+            Ok(CommitAcceptedEventResult {
                 projections_inserted: 1,
-                outbox_inserted: 1,
+                deliveries_inserted: 1,
             })
         }
     }

@@ -12,7 +12,7 @@ fn registration_secret_digest(value: &str) -> arkret_core::Hash {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn external_bearer_without_dpop_is_rejected() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
 
     let mut response = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", "Bearer external-session-credential", true)
@@ -27,7 +27,7 @@ async fn external_bearer_without_dpop_is_rejected() {
 
 #[tokio::test]
 async fn account_register_requires_account_authority_bearer() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
 
     let mut response = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
@@ -43,7 +43,7 @@ async fn account_register_requires_account_authority_bearer() {
 
 #[tokio::test]
 async fn account_registration_policy_rejects_closed_and_audits() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     {
         let mut policy = state.test_account_registration_policy().lock();
         policy.enabled = false;
@@ -85,7 +85,7 @@ async fn account_registration_policy_rejects_closed_and_audits() {
 
 #[tokio::test]
 async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     {
         let mut policy = state.test_account_registration_policy().lock();
         *policy = arkret_core::AccountRegistrationPolicy {
@@ -223,7 +223,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     assert_eq!(duplicate["state"], "active");
     assert_eq!(duplicate["registration_audit"]["outcome"], "accepted");
 
-    let rate_limited_state = AppState::new(test_config(), Db { pool: None });
+    let rate_limited_state = soland_test_support::app_state(test_config());
     {
         let mut policy = rate_limited_state.test_account_registration_policy().lock();
         policy.rate_limit = Some(arkret_core::AccountRegistrationRateLimitPolicy {
@@ -266,7 +266,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
 async fn dev_login_is_unavailable_in_production_mode() {
     let mut config = test_config();
     config.development_mode = false;
-    let state = AppState::new(config, Db { pool: None });
+    let state = soland_test_support::app_state(config);
 
     let response = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
@@ -281,7 +281,7 @@ async fn dev_login_is_unavailable_in_production_mode() {
 
 #[tokio::test]
 async fn oversized_json_body_is_rejected_before_handler() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let body = serde_json::json!({
         "query": "x".repeat(128),
         "limit": 10,
@@ -297,7 +297,7 @@ async fn oversized_json_body_is_rejected_before_handler() {
 
 #[tokio::test]
 async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let limited_service = service_with_rate_limiter_config(
         state,
         RateLimiterConfig {
@@ -362,7 +362,7 @@ async fn framework_errors_use_arkret_error_envelope() {
 
 #[tokio::test]
 async fn protected_endpoints_reject_query_auth_material() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let mut response = TestClient::get(format!(
         "http://server/_arkret/self/account/viewer?access_token={token}"
@@ -382,7 +382,7 @@ async fn protected_endpoints_reject_query_auth_material() {
 
 #[tokio::test]
 async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let actor = "did:web:alice.example";
     let device_a = "ak:device:01904100-0000-7000-8000-a11ce00000aa";
     let device_b = "ak:device:01904100-0000-7000-8000-a11ce00000bb";
@@ -505,7 +505,7 @@ async fn postgres_startup_migrations_are_gated_by_database_url() {
         .await
         .expect("postgres migrations should run");
     let health: Value = TestClient::get("http://server/health")
-        .send(&app_from_state(AppState::new(test_config(), db)))
+        .send(&app_from_state(app_state_for_postgres(test_config(), db)))
         .await
         .take_json()
         .await

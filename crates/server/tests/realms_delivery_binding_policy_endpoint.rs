@@ -12,10 +12,8 @@
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
-use soland::config::AppConfig;
-use soland::service;
-use soland::state::AppState;
-use soland_storage_postgres::Db;
+use soland_http::config::AppConfig;
+use soland_http::service;
 
 /// Build a minimal dev-mode `AppConfig`. Identical posture to the
 /// helper in `tests/http_api/common.rs` (kept in-line so this test file
@@ -31,7 +29,7 @@ fn test_config() -> AppConfig {
 }
 
 fn app() -> salvo::Service {
-    service(AppState::new(test_config(), Db { pool: None }))
+    service(soland_test_support::app_state(test_config()))
 }
 
 /// Acquire a dev-mode bearer token for an arbitrary actor. Mirrors the

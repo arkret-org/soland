@@ -10,7 +10,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
     const FRESH_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000010";
     const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000010";
 
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let fresh =
         verified_dev_token_for_device(state.clone(), FRESH_DID, FRESH_DEVICE, "Fresh").await;
     let bob =
@@ -85,7 +85,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
     const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001";
 
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = verified_dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
@@ -228,7 +228,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
 async fn encrypted_account_data_requires_standard_envelope_metadata() {
     const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = verified_dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
@@ -318,7 +318,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
 async fn encrypted_realm_remark_rejects_plaintext_carrier() {
     const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = verified_dev_token_for_device(
         state.clone(),
         "did:web:alice.example",

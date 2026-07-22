@@ -1,182 +1,101 @@
-# soland architecture
+# Soland architecture
 
-This document describes the operator-visible internals of soland's reference
-Arkret v1 principal server: how a wire event becomes a projection row, how
-federation outbound traffic is shaped, how MLS epochs strand through the
-event log, and what to watch when running more than one replica.
+Soland is the Arkret v1 principal-server implementation. The workspace uses a
+one-way dependency graph so transport, use-case orchestration, deterministic
+state, and persistence adapters can be verified independently.
 
-For a quick map of the codebase, the canonical pointers are:
+## Crate map
 
-| Concern | File / module |
+| Crate | Responsibility |
 | --- | --- |
-| Wire intake | `src/routing/events/event_log.rs` |
-| Reducer dispatch | `src/reducer.rs`, `src/reducer/lattice_kinds.rs` |
-| Persistence boundary | `src/persistence.rs` |
-| Federation outbox | `src/routing/federation/outbox.rs` |
-| MLS lifecycle | `src/reducer/mls.rs`, `src/routing/spaces/...` |
-| Process lifecycle | `src/main.rs`, `src/state.rs`, `src/db.rs` |
-| Metrics | `src/metrics.rs` (Prometheus text on `SOLAND_METRICS_BIND`) |
+| `soland-domain` | Deterministic reducers, projection state, HLC, and domain invariants. |
+| `soland-storage` | Persistence records, narrow storage ports, and shared adapter contracts. |
+| `soland-storage-memory` | In-memory implementations used by tests and development fixtures. |
+| `soland-storage-postgres` | Diesel/PostgreSQL schema, migrations, row mapping, and production adapters. |
+| `soland-application` | Identity, event, projection, sync, federation, governance, delivery, and job use cases. |
+| `soland-http` | Salvo routing, authentication, signatures, OpenAPI, wire validation, and response mapping. |
+| `soland` | Composition root, process configuration, adapter selection, runtime loops, OTel, and binaries. |
+| `soland-test-support` | Development-only state builders and integration-test fixtures. |
 
-## 1. Request → reducer → projection pipeline
+The hard dependency policy lives in `xtask/src/bin/check_layering.rs` and runs
+in CI. In particular, `soland-http` has no normal dependency on domain or
+storage adapters, and only `soland-storage-postgres` may depend on Diesel.
 
-soland keeps the durable, signed event log as the source of truth; every
-read surface is a projection cached in PostgreSQL (or the in-memory mirror).
-A successful `POST /_arkret/self/events` walks the following stages:
+## Event pipeline
 
-1. **Wire validation** (`routing::events::event_log`). The Salvo handler
-   normalizes the request body into a canonical
-   `arkret_sdk::Event`, validates the schema-backed payload,
-   and binds the envelope to the authenticated principal.
+A successful `POST /_arkret/self/events` follows this path:
 
-2. **Replay window + signature verification**
-   (`src/jws_verify.rs`, `src/routing/events/event_log.rs`). The
-   per-cell-family freshness window (`AppConfig::jws_replay_window_per_family`,
-   most-restrictive wins) drops stale signatures before any reducer work
-   runs. Signatures are verified against the resolved DID document
-   (`src/did_resolver_chain.rs`).
+1. `crates/http/src/routing/events/event_log` parses the envelope, establishes
+   the authenticated context, validates the wire shape, and verifies proofs.
+2. Application services in `crates/application/src/events.rs` and
+   `crates/application/src/projection` coordinate admission, deterministic
+   reduction, persistence, and post-commit effects.
+3. Reducers in `crates/domain/src/reducer` calculate projection changes without
+   HTTP, SQL, or runtime dependencies.
+4. Ports in `soland-storage` preserve the event/projection/idempotency/outbox
+   transaction boundary. Memory and PostgreSQL adapters implement the same
+   contract tests.
+5. Runtime loops dispatch durable federation outbox entries, notary work,
+   compaction, and garbage collection. Their reusable single-step operations
+   live below the process layer.
 
-3. **Reducer dispatch** (`src/reducer.rs`). The reducer maps each
-   `event_kind` to an `apply_*_dispatch` arm and updates the in-memory
-   `ProjectionState`. AKP-0007 adds the Circle FSM, the
-   `ak.realm.link` / `ak.realm.inheritance_policy` edges, and the
-   `scope_circle_id` projection columns.
+The signed event log and durable projection tables are the truth. In-process
+projection and directory views are rebuilt during startup; correctness must not
+depend on an unhydrated cache.
 
-4. **Persistence write** (`src/persistence.rs`). Each reducer mutation is
-   funneled through one of the `*Store` traits
-   (`EventsStore`, `RealmsStore`, `AccountsStore`, `FederationOutboxStore`,
-   ...). Production deployments hit `PgPersistenceStore`; tests hit
-   `SolandMemoryPersistenceStore`. Both stores share the same trait surface so
-   tests exercise the production code paths.
+## Request and runtime state
 
-5. **Side-effect fanout**. The handler returns to the caller as soon as
-   the projection write commits. Three background workers then drain
-   downstream side effects:
-   - `routing::federation::outbox` — outbound peer dispatch.
-   - `notary.rs` — periodic Seal signing using the
-     `SOLAND_NOTARY_SIGNING_KEY` seed (see DEPLOYMENT.md §11 for the
-     rotation cadence).
-   - `compactor.rs` — MAL-11 prune walk when
-     `SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS > 0`.
+`soland_http::state::AppState` contains private application services and bounded
+runtime resources required by handlers. It does not expose a persistence
+registry or public state fields. `AppStateRuntime` is the composition input used
+by the final server and test-support builders; concrete PostgreSQL, memory, and
+object-storage adapters are selected before HTTP service construction.
 
-The end-to-end pipeline is observable on the
-`http.request_duration_seconds{op=...}` histogram and the
-`event_log` tracing target.
+Persistence still has an internal composition registry because adapter
+construction must supply all stores, but application services receive only the
+ports needed by their use cases. HTTP handlers do not execute SQL or obtain the
+registry.
 
-## 2. Federation outbox
+## Federation outbox
 
-soland's outbound federation surface (`/_arkret/peer/events*`) is
-implemented as an at-least-once outbox table backed by Postgres (or the
-in-memory mirror) and a single in-process dispatcher per replica.
+Outbound federation is at-least-once. The event transaction records a stable
+idempotency key and outbox intent together. A runtime dispatcher selects due
+entries, signs the peer request, applies retry backoff, and moves terminal
+failures to the dead-letter ledger. Receiver idempotency makes duplicate
+delivery safe.
 
-### Enqueue path
+Operators should alert on sustained `soland_federation_outbox_depth` growth and
+on any non-zero rate of `soland_federation_outbox_dead_letter_total`.
 
-1. A reducer that produces a federation side effect (e.g. accepting a
-   `ak.realm.create` whose participants include a remote DID) writes a
-   `FederationOutboxRecord` via `FederationOutboxStore::enqueue` in the
-   same transaction as the projection write. This guarantees the wire
-   commit and the fanout intent are durable together.
-2. The record carries a stable `idempotency_key` so the receiving peer
-   can deduplicate. Replays of the same `(peer_did, idempotency_key)`
-   collapse onto the cached response.
+## MLS and Move/Seal/Cell state
 
-### Dispatcher loop
+MLS lifecycle changes are accepted as signed Arkret events. Application
+projection services own the reducer state plus Move, Seal, and Cell resources;
+HTTP code performs protocol validation and delegates state changes through
+those services. Epoch changes publish typed event notifications after the
+durable operation is accepted.
 
-`routing::federation::outbox::FederationDispatcher` polls the outbox
-when `SOLAND_FEDERATION_OUTBOUND=1` (default). Each pass:
+The in-process notification broadcast is replica-local. Deployments should use
+sticky sessions for `/_arkret/self/events/subscribe`, or provide an external
+fanout layer when subscribers must observe changes accepted by every replica.
 
-- Selects pending rows in `next_attempt_at` order.
-- POSTs each row to its peer endpoint with the signed
-  `Source-Trust-Domain`, `Destination-Trust-Domain`, and
-  `Request-Canonical-Digest` headers (see `docs/federation-s2s.md`).
-- On retryable failure schedules an exponential backoff via
-  `next_backoff_unix_secs`; on terminal HTTP status (4xx) or
-  `MAX_ATTEMPTS` exhaustion, the row moves to the dead-letter ledger
-  (`insert_dead_letter`) and bumps
-  `soland_federation_outbox_dead_letter_total`.
+## Multi-replica operation
 
-### Operator visibility
+- All replicas must use the same logical PostgreSQL database.
+- Built-in transport rate limits and live broadcasts are process-local; shared
+  fleet limits belong at the gateway.
+- Durable caches and projections are hydrated on startup and updated from
+  persisted operations. Ephemeral caches are bounded and have explicit expiry.
+- Federation, notary, compaction, and GC loops may run on selected replicas;
+  durable claims and idempotency prevent correctness from depending on a
+  single process.
 
-Two metrics make outbox health observable:
+## Source pointers
 
-- `soland_federation_outbox_depth` — gauge of undelivered rows. Sustained
-  growth means the dispatcher cannot keep up with intake (peer down,
-  network partition, or the dispatcher itself wedged).
-- `soland_federation_outbox_dead_letter_total` — monotonic counter. Any
-  non-zero rate over a 5-minute window deserves a page.
-
-See `examples/prometheus-alerts.yml` for ready-made alert rules.
-
-## 3. MLS lifecycle
-
-MLS (RFC 9420) lives inside the same event log: every
-`ak.component.mls.*` event is a regular durable event with the standard
-replay-window and signature verification. The lifecycle states the
-operator should be aware of:
-
-1. **Group create** (`ak.realm.create` + `ak.component.mls.epoch.v1`
-   cell write). The reducer mints the initial epoch and seeds
-   `MlsGroupProjection` (`src/reducer/mls.rs`).
-2. **Epoch rotation**. Any commit that touches the
-   `ak.component.mls.epoch.v1` cell triggers an
-   `EventNotificationKind::EpochRotation` broadcast on the
-   `AppState::event_broadcast` channel. NDJSON subscribers receive a
-   typed `EventsSubscribeFrame::epoch_rotation` so clients can re-fetch
-   keys.
-3. **Member adds / removes**. Routed via `routing::spaces::mls` —
-   the reducer hard-rejects any add for a principal that is not also
-   listed in the Realm's `ak.member.state` projection
-   (`circle_member_must_be_realm_member` invariant).
-4. **Group archive / tombstone**. `ak.circle.archive` / `ak.circle.tombstone`
-   move the projection row into a terminal state; the
-   `ak.component.mls.epoch.v1` cell remains addressable for forensic
-   purposes but no new commits are accepted.
-
-The replay window for `ak.component.mls.epoch.v1` is intentionally
-tighter than the global default (60 s vs. 300 s) — see
-`AppConfig::default_replay_overrides` — because a stale epoch rotation
-can fork the group.
-
-## 4. Multi-replica deployment notes
-
-soland was designed as a single-process reference server. Running more
-than one replica is supported and tested, but the operator must be aware
-of the following sharing boundaries:
-
-- **Postgres is the only shared state.** Every replica must point at the
-  same logical database; Diesel migrations on every boot are idempotent
-  but must not race (use a startup lock at the orchestrator layer if you
-  spin up many replicas at once).
-- **Rate limiting is per-process.** The built-in limiter
-  (`src/ratelimit.rs`) keeps its IP bucket in memory. Multi-replica
-  deployments MUST enforce a shared quota at the reverse proxy or API
-  gateway layer (see SECURITY.md and DEPLOYMENT.md §11). Otherwise the
-  advertised per-minute quota is silently multiplied by the replica count.
-- **Federation outbox dispatchers are per-process.** Two replicas will
-  each run a dispatcher and may both pick up the same row. The
-  `next_attempt_at` advisory lock + the receiver-side idempotency cache
-  collapses the duplicates safely, but it is not free; consider running
-  the dispatcher on a single replica
-  (`SOLAND_FEDERATION_OUTBOUND=0` on the others) for large fleets.
-- **Notary worker.** Same shape as the federation dispatcher — multiple
-  replicas with the same signing seed each seal independently; the
-  reducer treats the result as a sub-seal on the Circle's profile
-  cadence, so duplicate seals are merged at the cell level rather
-  than the wire level.
-- **MLS broadcast.** The `AppState::event_broadcast` channel is
-  in-process; NDJSON subscribers see notifications only from the replica
-  serving their request. Load-balancers should use sticky sessions on
-  `/_arkret/self/events/subscribe` so a single subscriber stays sealed to one
-  replica for the lifetime of the stream.
-- **In-process projection mirrors.** Pieces of soland (handle release
-  ledger, account lifecycle, erased actors, failed-login counters)
-  still keep small caches in process memory; see the comments on
-  `AppState` for the migration plan. Until those land in Postgres, treat
-  the in-process caches as best-effort across replicas.
-
-## 5. Where to find more
-
-- DEPLOYMENT.md — production env vars, hardening checklist, observability.
-- SECURITY.md — vulnerability reporting, scope, known weaknesses.
-- docs/runbook.md — error codes, log-search recipes, restart strategy.
-- docs/federation-s2s.md — peer onboarding & header verification.
-- CHANGELOG.md — wire-breaking surface deltas per round.
+- HTTP transport: `crates/http/src/routing`
+- Application use cases: `crates/application/src`
+- Reducers: `crates/domain/src/reducer`
+- Storage ports: `crates/storage/src`
+- PostgreSQL adapter: `crates/storage-postgres/src`
+- Composition/runtime: `crates/server/src`
+- Deployment and operations: `DEPLOYMENT.md`, `SECURITY.md`, `docs/runbook.md`

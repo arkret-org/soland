@@ -1,7 +1,8 @@
 use super::{
-    BTreeMap, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitStore,
-    MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Mutex,
-    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    BTreeMap, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitEpochStoreKey,
+    MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageRow, MlsKeyPackageStore,
+    MlsWelcomeRecord, MlsWelcomeStore, Mutex, PeerKeyPackageClaimAttempt,
+    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceResult, Uuid, Value, VecDeque, async_trait,
     mls_epoch_key,
 };
@@ -36,15 +37,18 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
 
     async fn try_claim(
         &self,
-        id: &str,
-        group_id: &str,
-        intended_realm_id: Option<&str>,
-        ssk_generation: Option<u64>,
-        device_authorize_event_id: Option<&str>,
-        agent_key_authorize_event_id: Option<&str>,
-        claimed_at: i64,
-        claim_expires_at_unix_ms: Option<i64>,
+        claim: MlsKeyPackageClaim<'_>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
+        let MlsKeyPackageClaim {
+            id,
+            mls_group_id: group_id,
+            intended_realm_id,
+            ssk_generation,
+            device_authorize_event_id,
+            agent_key_authorize_event_id,
+            claimed_at,
+            claim_expires_at_unix_ms,
+        } = claim;
         let mut state = self.state.lock();
         let Some(row) = state.rows.get_mut(id) else {
             return Ok(None);
@@ -185,7 +189,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         row.consumed_at = None;
         let claimed = row.clone();
         state.peer_claims.insert(ledger_key, attempt.ledger.clone());
-        Ok(PeerKeyPackageClaimAttemptResult::Claimed(claimed))
+        Ok(PeerKeyPackageClaimAttemptResult::Claimed(Box::new(claimed)))
     }
 
     async fn record_peer_claim_terminal(
@@ -211,13 +215,13 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         let expired = state
             .peer_claims
             .iter()
-            .filter_map(|(key, ledger)| {
-                (ledger.state == "claimed"
+            .filter(|(_, ledger)| {
+                ledger.state == "claimed"
                     && ledger
                         .claim_expires_at_unix_ms
-                        .is_some_and(|expires_at_unix_ms| expires_at_unix_ms <= now_unix_ms))
-                .then(|| (key.clone(), ledger.keypackage_id.clone()))
+                        .is_some_and(|expires_at_unix_ms| expires_at_unix_ms <= now_unix_ms)
             })
+            .map(|(key, ledger)| (key.clone(), ledger.keypackage_id.clone()))
             .collect::<Vec<_>>();
         let mut revoked = Vec::new();
         for (ledger_key, keypackage_id) in expired {
@@ -335,15 +339,18 @@ impl MlsCommitStore for MemoryMlsCommitStore {
 
     async fn initialize_genesis(
         &self,
-        effective_scope: &Value,
-        group_id: &str,
-        leader_actor_id: &str,
-        creator_device_id: &str,
-        genesis_event_ref: &str,
-        covered_seals: &[String],
-        governance_binding: &Value,
-        committed_at: i64,
+        genesis: MlsCommitGenesis<'_>,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let MlsCommitGenesis {
+            effective_scope,
+            group_id,
+            leader_actor_id,
+            creator_device_id,
+            genesis_event_ref,
+            covered_seals,
+            governance_binding,
+            committed_at,
+        } = genesis;
         let key = mls_epoch_key(effective_scope, group_id)?;
         let mut rows = self.rows.lock();
         if rows.contains_key(&key) {

@@ -28,12 +28,12 @@ pub(crate) use soland_storage::{
     IdempotencyStore, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
     IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
     InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore, KeyBackupStore,
-    MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitStore, MlsKeyPackageRow,
-    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
-    MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
-    OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord, OrganizationStore,
-    OutboundPushBridgeCacheRecord, PeerEventsPageQuery, PeerKeyPackageClaimAttempt,
-    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore,
+    MlsKeyPackageClaim, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore,
+    ModerationStore, MorphProjectionRecord, MorphProjectionStore, MultisigPendingRecord,
+    MultisigPendingStore, NotificationStore, OrganizationPolicyRecord, OrganizationPolicyStore,
+    OrganizationRecord, OrganizationStore, OutboundPushBridgeCacheRecord, PeerEventsPageQuery,
+    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult,
     PolicyDocumentRecord, PolicyDocumentStore, PresenceRecord, PresenceStore,
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore,
@@ -94,6 +94,7 @@ mod push;
 mod read_receipts;
 mod realm_invites;
 mod recovery;
+mod registry;
 mod service_identity;
 mod sessions;
 mod settings;
@@ -128,6 +129,7 @@ pub use push::*;
 pub use read_receipts::*;
 pub use realm_invites::*;
 pub use recovery::*;
+pub use registry::PgPersistenceStore;
 pub use service_identity::*;
 pub use sessions::*;
 pub use settings::*;

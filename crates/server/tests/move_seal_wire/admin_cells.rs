@@ -40,7 +40,7 @@ async fn seed_member_cell_join(state: AppState, token: &str) -> String {
 
 #[tokio::test]
 async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -74,7 +74,7 @@ async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
 
 #[tokio::test]
 async fn admin_get_cell_returns_value_after_sealed_move() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -107,7 +107,7 @@ async fn admin_get_cell_returns_value_after_sealed_move() {
 
 #[tokio::test]
 async fn admin_list_cells_filters_by_prefix() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -170,7 +170,7 @@ async fn admin_list_cells_filters_by_prefix() {
 
 #[tokio::test]
 async fn admin_get_cell_requires_bearer_token() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state.clone());
 
     // No Authorization header — endpoint MUST 401 with canonical envelope.
@@ -195,7 +195,7 @@ async fn admin_get_cell_requires_bearer_token() {
 
 #[tokio::test]
 async fn admin_list_cells_requires_realm_id_query_param() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -216,7 +216,7 @@ async fn admin_list_cells_requires_realm_id_query_param() {
 
 #[tokio::test]
 async fn admin_list_cells_paginates_with_limit_and_offset() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 

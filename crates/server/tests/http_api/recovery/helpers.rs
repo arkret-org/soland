@@ -87,12 +87,7 @@ pub(crate) fn ensure_cross_signing(
     signing: &SigningKey,
 ) {
     let principal = Did::new(principal_id.to_owned()).unwrap();
-    if state
-        .test_cross_signing()
-        .lock()
-        .current_cross_signing(&principal)
-        .is_none()
-    {
+    if !state.test_has_current_cross_signing(&principal) {
         let ssk = SigningKey::from_bytes(&[231u8; 32]);
         let usk = SigningKey::from_bytes(&[232u8; 32]);
         seed_cross_signing(&state, principal_id, vm, signing, &ssk, &usk);
@@ -303,7 +298,7 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
     })
 }
 
-/// Seed an accepted `ak.test_cross_signing().publish` (generation 1) into the server's
+/// Seed an accepted `ak.cross_signing.publish` (generation 1) into the server's
 /// cross-signing registry so `/complete` can verify the device binding against the SSK.
 pub(crate) fn seed_cross_signing(
     state: &AppState,
@@ -337,9 +332,7 @@ pub(crate) fn seed_cross_signing(
     let content: arkret_core::CrossSigningPublish =
         serde_json::from_value(publish).expect("cross-signing publish content");
     state
-        .test_cross_signing()
-        .lock()
-        .record_cross_signing_publish(content)
+        .test_record_cross_signing_publish(content)
         .expect("seed cross-signing publish");
 }
 
@@ -581,14 +574,14 @@ pub(crate) async fn get_recovery(
 }
 
 pub(crate) fn shared_recovery_state(persistence: Arc<dyn PersistenceStore>) -> AppState {
-    AppState::new_with_persistence(test_config(), Db { pool: None }, persistence)
+    soland_test_support::app_state_with_persistence(test_config(), persistence)
 }
 
 pub(crate) fn shared_recovery_state_with_config(
     persistence: Arc<dyn PersistenceStore>,
-    config: soland::config::AppConfig,
+    config: soland_http::config::AppConfig,
 ) -> AppState {
-    AppState::new_with_persistence(config, Db { pool: None }, persistence)
+    soland_test_support::app_state_with_persistence(config, persistence)
 }
 
 pub(crate) async fn seed_recovery_policy(

@@ -18,7 +18,7 @@ fn assert_no_production_gap(body: &Value) {
 
 #[tokio::test]
 async fn admin_actors_query_returns_typed_rows_and_walks_cursor() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let _bob = register_account(
         state.clone(),
@@ -88,7 +88,7 @@ async fn admin_actors_query_returns_typed_rows_and_walks_cursor() {
 
 #[tokio::test]
 async fn admin_actors_query_applies_and_echoes_filters() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let _bob = register_account(
         state.clone(),
@@ -127,7 +127,7 @@ async fn admin_actors_query_applies_and_echoes_filters() {
 
 #[tokio::test]
 async fn admin_actors_query_rejects_expired_cursor_with_gone() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let response =
@@ -144,7 +144,7 @@ async fn admin_actors_query_rejects_expired_cursor_with_gone() {
 
 #[tokio::test]
 async fn admin_queries_require_authentication() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     for resource in ["actors", "audit", "capabilities", "devices"] {
         let response = TestClient::get(format!("http://server/_soland/admin/{resource}"))
             .send(&app_from_state(state.clone()))
@@ -159,7 +159,7 @@ async fn admin_queries_require_authentication() {
 
 #[tokio::test]
 async fn admin_audit_query_is_typed_newest_first_and_filterable() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     // Generate two audited admin actions to query back.
@@ -213,7 +213,7 @@ async fn admin_audit_query_is_typed_newest_first_and_filterable() {
 
 #[tokio::test]
 async fn admin_capabilities_query_reports_tombstones_and_validates_state_filter() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let page: Value = TestClient::get("http://server/_soland/admin/capabilities")
@@ -241,7 +241,7 @@ async fn admin_capabilities_query_reports_tombstones_and_validates_state_filter(
 
 #[tokio::test]
 async fn admin_devices_query_filters_by_name_or_id() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let _bob = register_account(
         state.clone(),
@@ -281,7 +281,7 @@ async fn admin_devices_query_filters_by_name_or_id() {
 
 #[tokio::test]
 async fn admin_collection_no_longer_serves_migrated_resources() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     // The dev collection must not shadow the production endpoints: the

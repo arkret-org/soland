@@ -9,10 +9,10 @@
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
-use soland::config::AppConfig;
-use soland::service;
-use soland::state::AppState;
-use soland_storage_postgres::Db;
+use soland_http::config::AppConfig;
+use soland_http::service;
+use soland_http::state::AppState;
+use soland_test_support::AppStateTestExt as _;
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -25,7 +25,7 @@ fn test_config() -> AppConfig {
 }
 
 fn app() -> salvo::Service {
-    service(AppState::new(test_config(), Db { pool: None }))
+    service(soland_test_support::app_state(test_config()))
 }
 
 async fn dev_token(svc: &salvo::Service) -> String {
@@ -78,7 +78,7 @@ fn project_inheritance_policy(
 /// opt-in) and assert the chain walked back to A.
 #[tokio::test]
 async fn realm_links_post_parent_then_effective_policy_walks_chain() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let svc = service(state.clone());
     let token = dev_token(&svc).await;
 
@@ -189,7 +189,7 @@ async fn realm_links_post_general_directed_cycle_is_allowed() {
 /// contributes to the inheritance walk).
 #[tokio::test]
 async fn realm_links_delete_recomputes_effective_policy() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let svc = service(state.clone());
     let token = dev_token(&svc).await;
 

@@ -74,7 +74,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
 
     use tokio::time::sleep;
 
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -157,7 +157,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
 /// data and terminates cleanly with a closing heartbeat.
 #[tokio::test]
 async fn events_subscribe_emits_close_heartbeat_at_deadline() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -195,7 +195,7 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
 /// starts at the live tail; bounded catch-up begins only from a supplied cursor.
 #[tokio::test]
 async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let first_event_id = "ak:event:01984101-0000-7000-8000-00000000d0c5";
@@ -221,8 +221,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
     let notifier = tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         notifier_state
-            .test_event_broadcast()
-            .send(soland::state::EventNotification::event(
+            .test_publish_event_notification(soland_http::state::EventNotification::event(
                 demo_realm_id().to_owned(),
                 first_event_id.to_owned(),
                 json!({

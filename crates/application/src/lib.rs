@@ -1,17 +1,115 @@
 #![forbid(unsafe_code)]
 
+pub mod authorization;
 pub mod delivery;
 pub mod events;
 pub mod federation;
 pub mod governance;
+pub mod hydration;
 pub mod identity;
 pub mod jobs;
+pub mod operation_semantics;
+pub mod persistence;
+#[doc(hidden)]
+pub mod persistence_delivery;
+#[doc(hidden)]
+pub mod persistence_events;
+#[doc(hidden)]
+pub mod persistence_identity;
+#[doc(hidden)]
+pub mod persistence_operations;
+pub mod projection;
+pub mod protocol_artifacts;
+pub mod runtime_guards;
 pub mod sync;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApplicationError {
-    #[error(transparent)]
-    Storage(#[from] soland_storage::PersistenceError),
+    #[error("not found: {0}")]
+    NotFound(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
+    #[error("database error: {0}")]
+    Database(String),
+    #[error("schema violation: {0}")]
+    SchemaViolation(String),
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApplicationErrorKind {
+    NotFound,
+    Conflict,
+    Database,
+    SchemaViolation,
+    Internal,
+}
+
+impl ApplicationError {
+    #[must_use]
+    pub fn kind(&self) -> ApplicationErrorKind {
+        match self {
+            Self::NotFound(_) => ApplicationErrorKind::NotFound,
+            Self::Conflict(_) => ApplicationErrorKind::Conflict,
+            Self::Database(_) => ApplicationErrorKind::Database,
+            Self::SchemaViolation(_) => ApplicationErrorKind::SchemaViolation,
+            Self::Internal(_) => ApplicationErrorKind::Internal,
+        }
+    }
+
+    #[must_use]
+    pub fn internal(detail: impl Into<String>) -> Self {
+        Self::Internal(detail.into())
+    }
+
+    #[must_use]
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::NotFound(_))
+    }
+
+    #[must_use]
+    pub fn is_conflict_kind(&self) -> bool {
+        matches!(self, Self::Conflict(_))
+    }
+
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::NotFound(detail)
+            | Self::Conflict(detail)
+            | Self::Database(detail)
+            | Self::SchemaViolation(detail)
+            | Self::Internal(detail) => detail,
+        }
+    }
+
+    #[must_use]
+    pub fn is_conflict(&self, expected: &str) -> bool {
+        matches!(self, Self::Conflict(reason) if reason == expected)
+    }
+
+    #[must_use]
+    pub fn is_realm_already_exists(&self) -> bool {
+        matches!(
+            self,
+            Self::Conflict(reason) if reason.contains("realm_already_exists")
+        )
+    }
+}
+
+impl From<soland_storage::PersistenceError> for ApplicationError {
+    fn from(error: soland_storage::PersistenceError) -> Self {
+        match error {
+            soland_storage::PersistenceError::NotFound(detail) => Self::NotFound(detail),
+            soland_storage::PersistenceError::Conflict(detail) => Self::Conflict(detail),
+            soland_storage::PersistenceError::Database(detail) => Self::Database(detail),
+            soland_storage::PersistenceError::SchemaViolation(detail) => {
+                Self::SchemaViolation(detail)
+            }
+            soland_storage::PersistenceError::Internal(detail) => Self::Internal(detail),
+        }
+    }
 }
 
 pub type ApplicationResult<T> = Result<T, ApplicationError>;
@@ -26,11 +124,15 @@ mod boundary_tests {
     fn public_use_case_types_stay_transport_agnostic() {
         for source in [
             include_str!("delivery.rs"),
+            include_str!("authorization.rs"),
             include_str!("events.rs"),
             include_str!("federation.rs"),
             include_str!("governance.rs"),
+            include_str!("hydration.rs"),
             include_str!("identity.rs"),
             include_str!("jobs.rs"),
+            include_str!("projection.rs"),
+            include_str!("runtime_guards.rs"),
             include_str!("sync.rs"),
         ] {
             for forbidden in [

@@ -2,11 +2,11 @@ use arkret_core::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
-use soland::config::{AppConfig, ObjectStorageConfig};
-use soland::service;
-use soland::state::{AppState, RealmDirectoryEntry};
+use soland_http::config::{AppConfig, ObjectStorageConfig};
+use soland_http::service;
+use soland_http::state::{AppState, RealmDirectoryEntry};
 use soland_storage::RealmMetaRecord;
-use soland_storage_postgres::Db;
+use soland_test_support::AppStateTestExt as _;
 
 fn test_event_signer_did() -> String {
     let key = ed25519_dalek::SigningKey::from_bytes(&[21_u8; 32]);
@@ -328,7 +328,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 
 #[tokio::test]
 async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let actor = test_event_signer_did();
     let desktop = dev_token(
         state.clone(),
@@ -431,7 +431,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
 
 #[tokio::test]
 async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_actor = test_event_signer_did();
     let alice_desktop = dev_token(
         state.clone(),
@@ -569,7 +569,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
 
 #[tokio::test]
 async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_actor = test_event_signer_did();
     let alice_desktop = dev_token(
         state.clone(),
@@ -687,7 +687,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
 
 #[tokio::test]
 async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(
         state.clone(),
         "did:web:alice.example",

@@ -17,17 +17,18 @@ pub(crate) use salvo::http::StatusCode;
 pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::Value;
 pub(crate) use sha2::{Digest, Sha256};
-pub(crate) use soland::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
-pub(crate) use soland::state::{AppState, EventNotification, RealmDirectoryEntry};
-pub(crate) use soland::{
+pub(crate) use soland_domain::artifacts;
+pub(crate) use soland_http::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
+pub(crate) use soland_http::ratelimit::RateLimiterConfig;
+pub(crate) use soland_http::state::{AppState, EventNotification, RealmDirectoryEntry};
+pub(crate) use soland_http::{
     service, service_with_rate_limiter_config, service_with_request_size_limit,
 };
-pub(crate) use soland_domain::artifacts;
-pub(crate) use soland_http::ratelimit::RateLimiterConfig;
 pub(crate) use soland_storage::{
     MessageRecord, PresenceRecord, RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord,
 };
 pub(crate) use soland_storage_postgres::Db;
+pub(crate) use soland_test_support::AppStateTestExt;
 
 pub(crate) const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
 /// Fixed REST-style TURN shared secret installed by `test_config()` so the
@@ -68,17 +69,40 @@ pub(crate) fn test_config() -> AppConfig {
 }
 
 pub(crate) fn test_state_with_service_id(service_id: &str) -> AppState {
-    let mut state = AppState::new(test_config(), Db { pool: None });
+    let mut state = soland_test_support::app_state(test_config());
     state.test_set_service_id(service_id.to_owned());
     state
 }
 
 pub(crate) fn app() -> salvo::Service {
-    service(AppState::new(test_config(), Db { pool: None }))
+    service(soland_test_support::app_state(test_config()))
 }
 
 pub(crate) fn app_from_state(state: AppState) -> salvo::Service {
     service(state)
+}
+
+pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {
+    let pool = db.pool.clone().expect("postgres test requires a pool");
+    let fallback: std::sync::Arc<dyn soland_storage::PersistenceStore> = if config.seed_demo_data {
+        std::sync::Arc::new(
+            soland_storage_memory::SolandMemoryPersistenceStore::new_with_demo_data(),
+        )
+    } else {
+        std::sync::Arc::new(soland_storage_memory::SolandMemoryPersistenceStore::new())
+    };
+    let persistence_store: std::sync::Arc<dyn soland_storage::PersistenceStore> =
+        std::sync::Arc::new(soland_storage_postgres::PgPersistenceStore::new(
+            pool, fallback,
+        ));
+    let persistence =
+        soland_application::persistence::PersistenceHandle::from_shared(persistence_store.clone());
+    let identity = soland_test_support::fixture_service_identity(&config);
+    let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
+    let state = soland::runtime::build_app_state(config, db, persistence, identity, signing_seed)
+        .expect("postgres test AppState");
+    soland_test_support::register_persistence(&state, persistence_store);
+    state
 }
 
 pub(crate) async fn account_subscribe_frame(
@@ -132,16 +156,16 @@ pub(crate) fn signed_federation_push_headers(
     target_uri: &str,
     body: &Value,
 ) -> Vec<(&'static str, String)> {
-    signed_federation_request_headers(
-        "POST",
+    signed_federation_request_headers(SignedFederationRequest {
+        method: "POST",
         origin,
         destination,
         destination_trust_domain,
         target_uri,
         body,
-        None,
-        None,
-    )
+        source_trust_domain_override: None,
+        idempotency_key: None,
+    })
 }
 
 pub(crate) fn signed_federation_push_headers_with_idempotency(
@@ -152,16 +176,16 @@ pub(crate) fn signed_federation_push_headers_with_idempotency(
     body: &Value,
     idempotency_key: &str,
 ) -> Vec<(&'static str, String)> {
-    signed_federation_request_headers(
-        "POST",
+    signed_federation_request_headers(SignedFederationRequest {
+        method: "POST",
         origin,
         destination,
         destination_trust_domain,
         target_uri,
         body,
-        Some(destination_trust_domain),
-        Some(idempotency_key),
-    )
+        source_trust_domain_override: Some(destination_trust_domain),
+        idempotency_key: Some(idempotency_key),
+    })
 }
 
 pub(crate) fn signed_federation_push_headers_same_trust(
@@ -171,16 +195,16 @@ pub(crate) fn signed_federation_push_headers_same_trust(
     target_uri: &str,
     body: &Value,
 ) -> Vec<(&'static str, String)> {
-    signed_federation_request_headers(
-        "POST",
+    signed_federation_request_headers(SignedFederationRequest {
+        method: "POST",
         origin,
         destination,
-        trust_domain,
+        destination_trust_domain: trust_domain,
         target_uri,
         body,
-        Some(trust_domain),
-        None,
-    )
+        source_trust_domain_override: Some(trust_domain),
+        idempotency_key: None,
+    })
 }
 
 pub(crate) fn signed_federation_get_headers(
@@ -224,16 +248,30 @@ pub(crate) fn signed_federation_get_headers(
     ]
 }
 
+struct SignedFederationRequest<'a> {
+    method: &'a str,
+    origin: &'a str,
+    destination: &'a str,
+    destination_trust_domain: &'a str,
+    target_uri: &'a str,
+    body: &'a Value,
+    source_trust_domain_override: Option<&'a str>,
+    idempotency_key: Option<&'a str>,
+}
+
 fn signed_federation_request_headers(
-    method: &str,
-    origin: &str,
-    destination: &str,
-    destination_trust_domain: &str,
-    target_uri: &str,
-    body: &Value,
-    source_trust_domain_override: Option<&str>,
-    idempotency_key: Option<&str>,
+    request: SignedFederationRequest<'_>,
 ) -> Vec<(&'static str, String)> {
+    let SignedFederationRequest {
+        method,
+        origin,
+        destination,
+        destination_trust_domain,
+        target_uri,
+        body,
+        source_trust_domain_override,
+        idempotency_key,
+    } = request;
     let body_bytes = arkret_core::canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let request_digest = format!("sha256:{}", hex::encode(Sha256::digest(&body_bytes)));
@@ -339,7 +377,8 @@ pub(crate) async fn dev_token(state: AppState) -> String {
 }
 
 async fn authorize_test_event_device(state: &AppState, actor: &str, device_id: &str) {
-    let devices = state.test_persistence().devices();
+    let persistence = state.test_persistence();
+    let devices = persistence.devices();
     let mut record = devices
         .get(actor, device_id)
         .await
@@ -615,7 +654,8 @@ fn realm_member_roster(entry: &RealmDirectoryEntry) -> Vec<Value> {
 }
 
 pub(crate) async fn delete_test_realm(state: &AppState, realm_id: &str) -> Value {
-    let store = state.test_persistence().realm_meta();
+    let persistence = state.test_persistence();
+    let store = persistence.realm_meta();
     if let Some(mut meta) = store.get(realm_id).await.unwrap() {
         meta.deleted = true;
         meta.updated_at = chrono::Utc::now();

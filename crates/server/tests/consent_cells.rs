@@ -2,10 +2,10 @@ use chrono::{Duration, Utc};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
-use soland::config::AppConfig;
-use soland::state::AppState;
-use soland::{ids, service};
-use soland_storage_postgres::Db;
+use soland_http::config::AppConfig;
+use soland_http::state::AppState;
+use soland_http::{ids, service};
+use soland_test_support::AppStateTestExt as _;
 
 const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
 
@@ -479,7 +479,7 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
 
 #[tokio::test]
 async fn consent_grant_revoke_regrant_does_not_implicitly_accept_contact_request() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state);
     let alice = "did:web:consent-alice.example";
     let bob = "did:web:consent-bob.example";
@@ -512,7 +512,7 @@ async fn consent_grant_revoke_regrant_does_not_implicitly_accept_contact_request
 
 #[tokio::test]
 async fn consent_events_project_cells_without_implicitly_accepting_contact_request() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state);
     let alice_seed = [31_u8; 32];
     let alice = signing_actor(alice_seed);
@@ -606,7 +606,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
 
 #[tokio::test]
 async fn consent_expiry_scope_and_pairwise_did_isolation() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state);
     let alice = "did:web:scope-alice.example";
     let bob = "did:web:scope-bob.example";
@@ -665,7 +665,7 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
 /// invite/any grant" — exactly this cell.
 #[tokio::test]
 async fn contact_row_surfaces_invite_consent_grant_ref() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state);
     let alice = "did:web:icgr-alice.example";
     let bob_seed = [32_u8; 32];
@@ -737,7 +737,7 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
 /// `subject_id` with an authorization error.
 #[tokio::test]
 async fn invite_receive_policy_get_set_round_trips() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state);
     let alice = "did:web:irp-alice.example";
     let mallory = "did:web:irp-mallory.example";
@@ -817,7 +817,7 @@ async fn invite_receive_policy_get_set_round_trips() {
 /// introduction evidence to invite bob into a Realm.
 #[tokio::test]
 async fn contact_accept_grants_event_backed_invite_consent_ref() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state);
     let alice = "did:web:cagebir-alice.example";
     let bob = "did:web:cagebir-bob.example";
@@ -882,7 +882,7 @@ async fn contact_accept_grants_event_backed_invite_consent_ref() {
 
 #[tokio::test]
 async fn contact_reject_revokes_requester_side_consent_ref() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state.clone());
     let alice = "did:web:crrscr-alice.example";
     let bob = "did:web:crrscr-bob.example";
@@ -905,7 +905,7 @@ async fn contact_reject_revokes_requester_side_consent_ref() {
 
 #[tokio::test]
 async fn pending_contact_tombstone_revokes_requester_side_consent_ref() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state.clone());
     let alice = "did:web:pctrrscr-alice.example";
     let bob = "did:web:pctrrscr-bob.example";
@@ -938,7 +938,7 @@ async fn pending_contact_tombstone_revokes_requester_side_consent_ref() {
 
 #[tokio::test]
 async fn expired_contact_respond_revokes_requester_side_consent_and_fails_closed() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state.clone());
     let alice = "did:web:ecrrrscafc-alice.example";
     let bob = "did:web:ecrrrscafc-bob.example";

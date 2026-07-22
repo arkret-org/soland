@@ -2,18 +2,18 @@ use anyhow::Context;
 use salvo::conn::Acceptor;
 use salvo::conn::rustls::{Keycert, RustlsConfig};
 use salvo::prelude::*;
-use soland::config::AppConfig;
-use soland::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
-use soland::service;
-use soland::state::AppState;
 use soland_application::validate_embedded_artifacts;
+use soland_http::config::AppConfig;
+use soland_http::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
+use soland_http::service;
+use soland_http::state::AppState;
 use soland_storage_postgres::Db;
 use tokio::signal;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 fn main() -> anyhow::Result<()> {
-    soland::config::prepare_process_environment()?;
+    soland::process_environment::prepare()?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -46,7 +46,7 @@ async fn run() -> anyhow::Result<()> {
     let dev_mode_for_logging = std::env::var("SOLAND_DEVELOPMENT_MODE")
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
         .unwrap_or(false);
-    let log_format = soland::config::LogFormat::from_env(dev_mode_for_logging);
+    let log_format = soland_http::config::LogFormat::from_env(dev_mode_for_logging);
     let _tracing_guards = init_tracing(log_format)?;
 
     // Fail fast at startup if a bundled Arkret artifact is malformed instead
@@ -117,7 +117,7 @@ async fn run() -> anyhow::Result<()> {
         })?
         .service_id
         .to_string();
-    config.trust_domain = soland::config::derive_trust_domain(&service_id)?;
+    config.trust_domain = soland_http::config::derive_trust_domain(&service_id)?;
     // Probe the optional external webvh provider before advertising it as
     // active. The configured URL remains visible in `/identity/describe` even
     // when the probe fails so coauth can show the operator's intended setup.
@@ -125,7 +125,7 @@ async fn run() -> anyhow::Result<()> {
         let expected_trust_domain = std::env::var("SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN")
             .ok()
             .unwrap_or_else(|| config.trust_domain.clone());
-        match soland::state::did_resolver_chain::probe_webvh_provider_describe(
+        match soland_http::state::did_resolver_chain::probe_webvh_provider_describe(
             &url,
             std::time::Duration::from_secs(3),
             None,
@@ -152,13 +152,13 @@ async fn run() -> anyhow::Result<()> {
     }
     let supervisor_persistence = bootstrap.persistence.clone();
     let supervisor_key_store = bootstrap.key_store.clone();
-    let state = AppState::new_with_service_identity(
+    let state = soland::runtime::build_app_state(
         config.clone(),
         db,
         bootstrap.persistence,
         bootstrap.state,
         bootstrap.signing_seed,
-    );
+    )?;
     spawn_service_identity_supervisor(state.clone(), supervisor_persistence, supervisor_key_store);
     // Finish boot: seed demo data + hydrate the Realm directory and
     // projections from the (now async) persistence store.
@@ -172,7 +172,7 @@ async fn run() -> anyhow::Result<()> {
     // Fail fast at startup if either invariant is violated; the enclave
     // profile claim on `/server/describe` would otherwise be a lie.
     let enclave_assertion =
-        soland::routing::extensions::sovereign::assert_enclave_invariants(state.config());
+        soland_http::routing::extensions::sovereign::assert_enclave_invariants(state.config());
     if !enclave_assertion.is_compliant() {
         anyhow::bail!(
             "SOLAND_SOVEREIGN_ENCLAVE=1 but enclave invariants are not satisfied: {}",
@@ -209,7 +209,7 @@ async fn run() -> anyhow::Result<()> {
     // endpoint stays operator-driven. Set the env var to enable periodic
     // walking; see `compactor.rs` for the policy and "when to enable"
     // rationale.
-    let _compactor = soland::compactor::spawn(state.clone());
+    let _compactor = soland_http::compactor::spawn(state.clone());
     tracing::info!(
         worker = "compactor",
         enabled = state.config().compaction_prune_walk_interval_seconds > 0,
@@ -220,7 +220,8 @@ async fn run() -> anyhow::Result<()> {
     // TTL backstop for the durable sync-cursor handle table (forward-progress
     // pruning on cursor presentation handles the steady state; this clears
     // rows whose client never returned).
-    let _sync_cursor_ttl_sweeper = soland::routing::spawn_sync_cursor_ttl_sweeper(state.clone());
+    let _sync_cursor_ttl_sweeper =
+        soland_http::routing::spawn_sync_cursor_ttl_sweeper(state.clone());
     tracing::info!(
         worker = "sync_cursor_ttl_sweep",
         "background worker configured"
@@ -230,7 +231,7 @@ async fn run() -> anyhow::Result<()> {
     // media-and-blob.md §2.1: incomplete parts have a bounded lifetime and
     // never produce a referencable blob_ref.
     let _resumable_upload_ttl_sweeper =
-        soland::routing::spawn_resumable_upload_ttl_sweeper(state.clone());
+        soland_http::routing::spawn_resumable_upload_ttl_sweeper(state.clone());
     tracing::info!(
         worker = "resumable_upload_ttl_sweep",
         "background worker configured"
@@ -241,14 +242,14 @@ async fn run() -> anyhow::Result<()> {
     // that don't want background HTTP traffic). The dispatcher drains
     // the `federation_outbox` table populated by
     // `routing::federation::federation::broadcast_*_to_peers`.
-    let _federation_dispatcher = soland::routing::federation::outbox::spawn(state.clone());
+    let _federation_dispatcher = soland_http::routing::federation::outbox::spawn(state.clone());
     tracing::info!(
         worker = "federation_outbox",
         enabled = state.config().federation_outbound_enabled,
         "background worker configured"
     );
     let _federation_frontier_exchange =
-        soland::routing::federation::frontier_exchange::spawn(state.clone());
+        soland_http::routing::federation::frontier_exchange::spawn(state.clone());
     tracing::info!(
         worker = "federation_frontier_exchange",
         enabled = state.config().federation_outbound_enabled,
@@ -264,7 +265,8 @@ async fn run() -> anyhow::Result<()> {
     // `fanout_status = "incomplete"`. Spec
     // `realm-and-space.md` §2.5.2. Same `federation_outbound_enabled`
     // toggle as the dispatcher above.
-    let _erasure_fanout_sweep = soland::routing::federation::erasure_fanout::spawn(state.clone());
+    let _erasure_fanout_sweep =
+        soland_http::routing::federation::erasure_fanout::spawn(state.clone());
     tracing::info!(
         worker = "erasure_fanout_sweep",
         enabled = state.config().federation_outbound_enabled,
@@ -273,7 +275,7 @@ async fn run() -> anyhow::Result<()> {
     );
 
     let _metrics_server =
-        soland::metrics::spawn_metrics_server(state.clone(), config.metrics_bind).await?;
+        soland_http::metrics::spawn_metrics_server(state.clone(), config.metrics_bind).await?;
     tracing::info!(
         worker = "metrics_server",
         bind = %config.metrics_bind,
@@ -348,8 +350,8 @@ struct TracingGuards {
     _otel_guard: soland::otel::OtelGuard,
 }
 
-fn init_tracing(log_format: soland::config::LogFormat) -> anyhow::Result<TracingGuards> {
-    use soland::config::LogFormat;
+fn init_tracing(log_format: soland_http::config::LogFormat) -> anyhow::Result<TracingGuards> {
+    use soland_http::config::LogFormat;
     use tracing_subscriber::{Layer, Registry, fmt};
 
     let filter = tracing_subscriber::EnvFilter::from_default_env();
@@ -540,7 +542,7 @@ async fn service_identity_waiting(res: &mut Response) {
 
 fn spawn_service_identity_supervisor(
     state: AppState,
-    persistence: std::sync::Arc<dyn soland_storage::PersistenceStore>,
+    persistence: soland_application::persistence::PersistenceHandle,
     key_store: Option<std::sync::Arc<dyn arkret_core::KeyStore>>,
 ) {
     if !matches!(
@@ -691,7 +693,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             }
                         };
                         let expected_verification_method =
-                            soland::routing::federation::federation_service_signature_key_id(
+                            soland_http::routing::federation::federation_service_signature_key_id(
                                 description.service_id.as_str(),
                             );
                         if document.id != description.service_id

@@ -6,7 +6,7 @@ use super::common::*;
 
 #[tokio::test]
 async fn account_viewer_returns_device_summaries() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
@@ -32,7 +32,7 @@ async fn account_viewer_returns_device_summaries() {
 
 #[tokio::test]
 async fn account_erasure_projects_erasure_pending_state() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let erased: Value = TestClient::post("http://server/_soland/self/account/erase")
@@ -60,7 +60,7 @@ async fn account_erasure_projects_erasure_pending_state() {
 
 #[tokio::test]
 async fn local_account_register_duplicate_conflict_and_me_reads_state() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = register_account(
         state.clone(),
         "did:web:bob.example",
@@ -92,7 +92,7 @@ async fn local_account_register_duplicate_conflict_and_me_reads_state() {
 
 #[tokio::test]
 async fn account_lifecycle_errors_surface_specific_codes() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let admin = dev_token(state.clone()).await;
     let bob = register_account(
         state.clone(),
@@ -214,7 +214,7 @@ async fn account_lifecycle_errors_surface_specific_codes() {
 
 #[tokio::test]
 async fn account_viewer_does_not_authorize_unverified_session_device() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let first_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let second_device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
     let _first = dev_token_for_device(
@@ -263,7 +263,7 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
     // `unverified`, key-less placeholder (a `verified`-without-key row would
     // break recovery genesis and projected-device-set verification), and the
     // enrollment authority's `service_attested` authorize event flips it later.
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let founding_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
     let did = "did:web:bob.example";
     let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
@@ -308,7 +308,7 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
 
 #[tokio::test]
 async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000003";
     let did = "did:web:bob-repeat.example";
     let first = TestClient::post("http://server/_arkret/gate/account/register")
@@ -386,7 +386,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
 
 #[tokio::test]
 async fn account_contacts_and_realm_lifecycle_workflow() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let bob = register_account(
         state.clone(),

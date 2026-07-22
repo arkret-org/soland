@@ -20,10 +20,10 @@ use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, ObjectStorageConfig};
-use soland::service;
-use soland::state::AppState;
-use soland_storage_postgres::Db;
+use soland_http::config::{AppConfig, ObjectStorageConfig};
+use soland_http::service;
+use soland_http::state::AppState;
+use soland_test_support::AppStateTestExt as _;
 
 const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
 const EXTENSION_TEST_SIGNING_SEED: [u8; 32] = [0x5a; 32];
@@ -113,7 +113,7 @@ async fn dev_token(state: AppState) -> String {
 
 #[tokio::test]
 async fn applet_protocol_describe_smoke() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state);
 
     let ping: Value = TestClient::get("http://server/_arkret/edge/applet/ping")
@@ -147,7 +147,7 @@ async fn applet_protocol_describe_smoke() {
 
 #[tokio::test]
 async fn applet_transaction_requires_signature_before_typed_body_validation() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let app = service(state);
     let mut response = TestClient::post("http://server/_arkret/edge/applet/transactions")
         .add_header("Authorization", "Bearer bearer-only", true)
@@ -166,7 +166,7 @@ async fn applet_transaction_requires_signature_before_typed_body_validation() {
 
 #[tokio::test]
 async fn applet_install_package_registers_bot_projection_smoke() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
@@ -242,7 +242,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
 
 #[tokio::test]
 async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
@@ -384,7 +384,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
 
 #[tokio::test]
 async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
@@ -437,7 +437,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
 
 #[tokio::test]
 async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
@@ -519,16 +519,7 @@ async fn post_signed_applet_message_transaction(
     package: &AppletPackage,
     request: AppletMessageTransactionRequest<'_>,
 ) -> Value {
-    let event = applet_message_event(
-        package,
-        request.applet_id,
-        request.actor_id,
-        request.realm_id,
-        request.authorization_ref,
-        request.actor_seq,
-        request.prev_ref,
-        request.text,
-    );
+    let event = applet_message_event(package, &request);
     let body = json!({
         "source_service_id": package.service_id.to_string(),
         "events": [event],
@@ -577,14 +568,18 @@ async fn post_signed_applet_message_transaction(
 
 fn applet_message_event(
     package: &AppletPackage,
-    applet_id: &str,
-    actor_id: &str,
-    realm_id: &str,
-    authorization_ref: &str,
-    actor_seq: u64,
-    prev_ref: &str,
-    text: &str,
+    request: &AppletMessageTransactionRequest<'_>,
 ) -> Value {
+    let AppletMessageTransactionRequest {
+        applet_id,
+        actor_id,
+        realm_id,
+        authorization_ref,
+        actor_seq,
+        prev_ref,
+        text,
+        ..
+    } = request;
     let now = chrono::Utc::now();
     let created_at = arkret_core::canonical::format_timestamp_canonical(now);
     let payload = json!({
@@ -600,7 +595,7 @@ fn applet_message_event(
         "kind": "ak.message.create",
         "realm_id": realm_id,
         "actor_id": actor_id,
-        "actor_seq": actor_seq,
+        "actor_seq": *actor_seq,
         "created_at": created_at,
         "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
         "prev_refs": [prev_ref],
@@ -677,7 +672,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 
 #[tokio::test]
 async fn applet_bridge_register_ghost_route_revoke_smoke() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     allow_service_message_plaintext(&state, DEMO_REALM_ID).await;
     let app = service(state.clone());
@@ -844,7 +839,7 @@ fn capability_grant_ref_for_action(
 
 #[tokio::test]
 async fn tsp_local_stub_routes_are_not_mounted() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state);
 
@@ -989,8 +984,16 @@ async fn ingest_applet_service_id_document(state: &AppState, package: &AppletPac
         .await
         .unwrap();
     state
-        .test_did_resolver()
-        .cache_webvh_record(record)
+        .test_cache_resolved_webvh_record(soland_application::identity::DidDocumentState {
+            did: record.did,
+            did_document: record.did_document,
+            key_log_head: record.key_log_head,
+            seq: record.seq,
+            method_evidence: record.method_evidence,
+            fetched_at: record.fetched_at,
+            expires_at: record.expires_at,
+            updated_at: record.updated_at,
+        })
         .unwrap();
 }
 
@@ -1113,7 +1116,7 @@ fn safe_did_token(value: &str) -> String {
 
 #[tokio::test]
 async fn sovereign_deployment_configure_rejects_unauthenticated() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     state.hydrate().await.unwrap();
     let app = service(state);
 
@@ -1130,7 +1133,7 @@ async fn sovereign_deployment_configure_rejects_unauthenticated() {
 
 #[tokio::test]
 async fn sovereign_deployment_audit_rejects_unauthenticated() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     state.hydrate().await.unwrap();
     let app = service(state);
 

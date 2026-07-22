@@ -191,7 +191,7 @@ async fn optional_pg_app_state() -> Option<AppState> {
     let db = Db::from_env()
         .await
         .expect("postgres migrations should run");
-    let state = AppState::new(test_config(), db);
+    let state = app_state_for_postgres(test_config(), db);
     state.hydrate().await.expect("postgres state hydrates");
     Some(state)
 }
@@ -222,7 +222,7 @@ async fn account_subscribe_first_frame_with_status(
 
 #[tokio::test]
 async fn agent_session_without_stream_scope_cannot_subscribe_events() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = "agent-local-session-stream";
     seed_agent_session_with_scopes(&state, token, &["ak.self.events.query.scan"]).await;
 
@@ -240,7 +240,7 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events() {
 
 #[tokio::test]
 async fn agent_session_without_query_scope_cannot_scan_events() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = "agent-local-session-query";
     seed_agent_session_with_scopes(&state, token, &["ak.self.events.stream.subscribe"]).await;
 
@@ -258,7 +258,7 @@ async fn agent_session_without_query_scope_cannot_scan_events() {
 
 #[tokio::test]
 async fn agent_session_without_submit_scope_cannot_submit_events() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = "agent-local-session-submit";
     seed_agent_session_with_scopes(&state, token, &["ak.self.events.query.scan"]).await;
     let event = signed_event_envelope(
@@ -316,7 +316,7 @@ async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild() {
 
 #[tokio::test]
 async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebuild() {
-    let first_state = AppState::new(test_config(), Db { pool: None });
+    let first_state = soland_test_support::app_state(test_config());
     let actor = "did:web:memory-cursor-restart.example";
     let device = "ak:device:01904100-0000-7000-8000-0badc0ffee01";
     let first_token =
@@ -328,7 +328,7 @@ async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebui
         .to_owned();
     assert!(cursor.starts_with("ak:cursor:"));
 
-    let restarted_state = AppState::new(test_config(), Db { pool: None });
+    let restarted_state = soland_test_support::app_state(test_config());
     let restarted_token = dev_token_for_device(
         restarted_state.clone(),
         actor,
@@ -349,7 +349,7 @@ async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebui
 
 #[tokio::test]
 async fn events_describe_and_single_event_submit_work() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     authorize_test_plaintext_message_service(&state, "did:web:alice.example", DEMO_REALM_ID).await;
 
@@ -634,7 +634,7 @@ async fn events_describe_and_single_event_submit_work() {
 
 #[tokio::test]
 async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let actor = test_event_signer_did().to_owned();
     let token = dev_token_for_device(
         state.clone(),
@@ -968,9 +968,8 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         "Directory/sidebar projection must expose the title, not the Realm id: {resolve_body}"
     );
 
-    let restarted = AppState::new_with_persistence(
+    let restarted = soland_test_support::app_state_with_persistence(
         test_config(),
-        Db { pool: None },
         state.test_persistence().clone(),
     );
     restarted.hydrate().await.expect("restart hydration");
@@ -1055,7 +1054,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
 
 #[tokio::test]
 async fn canonical_control_event_materializes_verifiable_mls_governance_proof() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let realm_id = DEMO_REALM_ID.to_owned();
     let typed_realm = RealmId::new(realm_id.clone()).unwrap();
@@ -1210,7 +1209,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
 
 #[tokio::test]
 async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let controller_id = "did:web:alice.example";
     let token = "managed-agent-governance-session";
     super::agents::seed_controller_session(&state, token, controller_id).await;
@@ -1569,7 +1568,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
 
 #[tokio::test]
 async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let realm_id = DEMO_REALM_ID;
     let invite_id = new_prefixed_uuid7("ak:invite:");
@@ -1624,7 +1623,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
 
 #[tokio::test]
 async fn sync_cursor_rejects_facets_and_renderer_changes() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let first = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
@@ -1647,7 +1646,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
 
 #[tokio::test]
 async fn account_subscribe_realms_filter_excludes_out_of_scope_realms() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let included = seed_test_realm(
         &state,
@@ -1691,7 +1690,7 @@ async fn account_subscribe_realms_filter_excludes_out_of_scope_realms() {
 
 #[tokio::test]
 async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let actor = test_event_signer_did();
     let token = dev_token_for_device(
         state.clone(),
@@ -1757,7 +1756,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
 
 #[tokio::test(start_paused = true)]
 async fn incremental_sync_waits_30_seconds_then_returns_frontier() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
 
     let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
@@ -1789,7 +1788,7 @@ async fn incremental_sync_waits_30_seconds_then_returns_frontier() {
 
 #[tokio::test(start_paused = true)]
 async fn incremental_sync_meta_only_delta_advances_cursor_once() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let created = seed_test_realm(
         &state,
@@ -1858,7 +1857,7 @@ async fn incremental_sync_meta_only_delta_advances_cursor_once() {
 
 #[tokio::test]
 async fn incremental_sync_emits_realm_with_new_timeline_event() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
 
     let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
@@ -1891,7 +1890,7 @@ async fn incremental_sync_emits_realm_with_new_timeline_event() {
 
 #[tokio::test]
 async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batch() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
 
     let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
@@ -1908,17 +1907,15 @@ async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batc
             "wake up the stream",
         )
         .await;
-        let _ = waker_state
-            .test_event_broadcast()
-            .send(EventNotification::event(
-                DEMO_REALM_ID.to_owned(),
-                message.event_id.clone(),
-                serde_json::json!({
-                    "kind": "ak.message.create",
-                    "event_id": message.event_id,
-                    "realm_id": DEMO_REALM_ID,
-                }),
-            ));
+        let _ = waker_state.test_publish_event_notification(EventNotification::event(
+            DEMO_REALM_ID.to_owned(),
+            message.event_id.clone(),
+            serde_json::json!({
+                "kind": "ak.message.create",
+                "event_id": message.event_id,
+                "realm_id": DEMO_REALM_ID,
+            }),
+        ));
         message
     });
 

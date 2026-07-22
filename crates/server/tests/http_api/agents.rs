@@ -275,7 +275,8 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
 
     let realm_id = soland_test_support::principal_control_realm_for_did(controller);
     let typed_realm_id = arkret_core::RealmId::new(realm_id.clone()).unwrap();
-    let mut entry = soland::state::RealmDirectoryEntry::new(typed_realm_id, "Principal Control");
+    let mut entry =
+        soland_http::state::RealmDirectoryEntry::new(typed_realm_id, "Principal Control");
     entry
         .members
         .insert(arkret_core::Did::new(controller.to_owned()).unwrap());
@@ -454,7 +455,7 @@ pub(super) async fn provision_agent_with_sdk_events(
 async fn production_agent_provision_admits_controller_signed_sdk_events() {
     let mut config = test_config();
     config.development_mode = false;
-    let state = AppState::new(config, Db { pool: None });
+    let state = soland_test_support::app_state(config);
     let controller = "did:web:alice.example";
     let token = "prod-agent-provision-session";
     seed_controller_session(&state, token, controller).await;
@@ -544,7 +545,7 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
 
 #[tokio::test]
 async fn agent_provision_commit_requires_its_server_allocation() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let controller = "did:web:alice.example";
     let token = "agent-unallocated-commit-session";
     seed_controller_session(&state, token, controller).await;
@@ -622,7 +623,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     let mut config = test_config();
     config.development_mode = true;
     config.session_grant_introspection_bearer = Some("agent-lifecycle-s2s".to_owned());
-    let state = AppState::new(config, Db { pool: None });
+    let state = soland_test_support::app_state(config);
     let controller = "did:web:alice.example";
     let token = "agent-list-session";
     seed_controller_session(&state, token, controller).await;
@@ -741,7 +742,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
 async fn provisioned_agent_fanout_uses_the_active_controller_device_generation() {
     let mut config = test_config();
     config.development_mode = true;
-    let state = AppState::new(config, Db { pool: None });
+    let state = soland_test_support::app_state(config);
     let controller = "did:web:alice.example";
     let token = "agent-device-generation-session";
     seed_controller_session(&state, token, controller).await;

@@ -274,10 +274,9 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
 }
 
 fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: u64) {
-    let mut manager = state.test_cross_signing().lock();
     for current in 1..=generation {
-        manager
-            .record_cross_signing_publish(cross_signing_publish(principal, current))
+        state
+            .test_record_cross_signing_publish(cross_signing_publish(principal, current))
             .unwrap();
     }
 }
@@ -365,37 +364,30 @@ async fn seed_remote_claim_prerequisites(
         .await
         .unwrap();
     let grant_dot = "ak:event:0196419b-0000-7000-8000-000000000293".to_owned();
-    state.test_consent_cells().lock().insert(
-        soland_domain::identity::ConsentCellKey {
-            holder: BOB_DID.to_owned(),
-            peer: alice.to_owned(),
-            scope: "direct_message".to_owned(),
-        },
-        soland_domain::identity::ConsentCellRecord {
-            holder: BOB_DID.to_owned(),
-            peer: alice.to_owned(),
-            scope: "direct_message".to_owned(),
-            cell_id: "ak:consent:peer-keypackage-claim".to_owned(),
-            requested_at: None,
-            grant_dots: BTreeMap::from([(
-                grant_dot.clone(),
-                soland_storage::ConsentGrantDot {
-                    dot: grant_dot,
-                    expires_at: None,
-                    granted_at: now,
-                },
-            )]),
-            revoked_dots: BTreeSet::new(),
-            revoked_at: None,
-            updated_at: now,
-        },
-    );
+    state.test_install_consent_cell(soland_application::identity::ConsentCellRecord {
+        holder: BOB_DID.to_owned(),
+        peer: alice.to_owned(),
+        scope: "direct_message".to_owned(),
+        cell_id: "ak:consent:peer-keypackage-claim".to_owned(),
+        requested_at: None,
+        grant_dots: BTreeMap::from([(
+            grant_dot.clone(),
+            soland_application::identity::ConsentGrantDot {
+                dot: grant_dot,
+                expires_at: None,
+                granted_at: now,
+            },
+        )]),
+        revoked_dots: BTreeSet::new(),
+        revoked_at: None,
+        updated_at: now,
+    });
     signing_key
 }
 
 #[tokio::test]
 async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let _alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
     upload_bob_direct_keypackage(state.clone(), &bob, "peer-http").await;
@@ -590,7 +582,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
 
 #[tokio::test]
 async fn direct_resolve_fails_closed_without_accepted_contact() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
@@ -607,7 +599,7 @@ async fn direct_resolve_fails_closed_without_accepted_contact() {
 
 #[tokio::test]
 async fn direct_resolve_fails_closed_when_consent_missing() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
     let now = chrono::Utc::now();
@@ -643,7 +635,7 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
 
 #[tokio::test]
 async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let now = chrono::Utc::now();
     state
@@ -665,31 +657,24 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         .await
         .unwrap();
     let grant_dot = "ak:event:0196419b-0000-7000-8000-000000000233".to_owned();
-    state.test_consent_cells().lock().insert(
-        soland_domain::identity::ConsentCellKey {
-            holder: BOB_PAIRWISE_DID.to_owned(),
-            peer: "did:web:alice.example".to_owned(),
-            scope: "direct_message".to_owned(),
-        },
-        soland_domain::identity::ConsentCellRecord {
-            holder: BOB_PAIRWISE_DID.to_owned(),
-            peer: "did:web:alice.example".to_owned(),
-            scope: "direct_message".to_owned(),
-            cell_id: "ak:consent:pairwise-direct".to_owned(),
-            requested_at: None,
-            grant_dots: BTreeMap::from([(
-                grant_dot.clone(),
-                soland_storage::ConsentGrantDot {
-                    dot: grant_dot,
-                    expires_at: None,
-                    granted_at: now,
-                },
-            )]),
-            revoked_dots: BTreeSet::new(),
-            revoked_at: None,
-            updated_at: now,
-        },
-    );
+    state.test_install_consent_cell(soland_application::identity::ConsentCellRecord {
+        holder: BOB_PAIRWISE_DID.to_owned(),
+        peer: "did:web:alice.example".to_owned(),
+        scope: "direct_message".to_owned(),
+        cell_id: "ak:consent:pairwise-direct".to_owned(),
+        requested_at: None,
+        grant_dots: BTreeMap::from([(
+            grant_dot.clone(),
+            soland_application::identity::ConsentGrantDot {
+                dot: grant_dot,
+                expires_at: None,
+                granted_at: now,
+            },
+        )]),
+        revoked_dots: BTreeSet::new(),
+        revoked_at: None,
+        updated_at: now,
+    });
 
     let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -700,12 +685,12 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "peer_unresolvable");
-    assert!(state.test_direct_conversation_bindings().lock().is_empty());
+    assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 
 #[tokio::test]
 async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
     let now = chrono::Utc::now();
@@ -741,7 +726,7 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
 
 #[tokio::test]
 async fn direct_resolve_create_requires_claimable_keypackage() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
@@ -778,12 +763,12 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
-    assert!(state.test_direct_conversation_bindings().lock().is_empty());
+    assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 
 #[tokio::test]
 async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempotent() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
@@ -930,7 +915,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
 
 #[tokio::test]
 async fn concurrent_direct_resolve_create_converges_to_one_binding() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
@@ -1022,5 +1007,5 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
         retried["materialization_draft"],
         authoring["materialization_draft"]
     );
-    assert_eq!(state.test_direct_conversation_bindings().lock().len(), 1);
+    assert_eq!(state.test_direct_conversation_binding_count(), 1);
 }

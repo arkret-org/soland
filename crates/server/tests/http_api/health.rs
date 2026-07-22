@@ -317,7 +317,7 @@ async fn health_and_describe_work() {
 
 #[tokio::test]
 async fn server_describe_accepts_only_its_selected_role() {
-    let service = app_from_state(AppState::new(test_config(), Db { pool: None }));
+    let service = app_from_state(soland_test_support::app_state(test_config()));
 
     let selected: Value =
         TestClient::get("http://server/_arkret/describe?service_type=principal_server")
@@ -340,7 +340,7 @@ async fn server_describe_accepts_only_its_selected_role() {
 async fn private_federation_write_rail_is_local_only() {
     let mut config = test_config();
     config.development_mode = false;
-    let service = app_from_state(AppState::new(config, Db { pool: None }));
+    let service = app_from_state(soland_test_support::app_state(config));
 
     let mut response = TestClient::post("http://server/_soland/peer/federation/operations")
         .json(&serde_json::json!({
@@ -366,7 +366,7 @@ async fn readyz_returns_503_until_session_grant_introspection_bearer_is_configur
     config.session_grant_introspection_url =
         Some("https://coauth.example/_arkret/gate/account/session-grants/introspect".to_owned());
     config.session_grant_introspection_bearer = None;
-    let service = app_from_state(AppState::new(config, Db { pool: None }));
+    let service = app_from_state(soland_test_support::app_state(config));
 
     let mut response = TestClient::get("http://server/readyz").send(&service).await;
     assert_eq!(
@@ -492,7 +492,7 @@ async fn describe_returns_development_mode_field() {
         to_device_queue_capacity: 10_000,
         ..test_config()
     };
-    let prod_state = AppState::new(prod_config, Db { pool: None });
+    let prod_state = soland_test_support::app_state(prod_config);
     let prod_app = app_from_state(prod_state);
 
     let prod_health: Value = TestClient::get("http://server/health")
@@ -575,7 +575,7 @@ async fn healthz_exposes_hardening_status() {
         seed_demo_data: false,
         ..test_config()
     };
-    let prod_state = AppState::new(prod_config, Db { pool: None });
+    let prod_state = soland_test_support::app_state(prod_config);
     let prod_app = app_from_state(prod_state);
 
     let prod_health: Value = TestClient::get("http://server/health")

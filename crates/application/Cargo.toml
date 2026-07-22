@@ -11,12 +11,19 @@ description = "Transport- and adapter-independent Soland application use cases."
 
 [dependencies]
 arkret-core.workspace = true
+arkret-identity.workspace = true
+arkret-policy.workspace = true
+arkret-state.workspace = true
 async-trait.workspace = true
+bytes.workspace = true
 chrono = { workspace = true, features = ["serde"] }
+futures-util.workspace = true
+parking_lot.workspace = true
 serde_json.workspace = true
 soland-domain.workspace = true
 soland-storage.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]

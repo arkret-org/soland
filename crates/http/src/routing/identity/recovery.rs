@@ -1,0 +1,98 @@
+//! AKP-0010 / R3 (REC-1) — recovery policy + recovery receipt endpoints.
+//!
+//! Mounts recovery policy / receipt endpoints introduced in arkret-spec b47ff6ec:
+//!
+//! - `GET /_arkret/root/identity/recovery-policy` — read the active recovery policy.
+//! - `POST /_arkret/root/identity/recovery-policy` — persist + advance a recovery policy.
+//! - `POST /_soland/root/identity/recovery-receipt` — record a recovery receipt for a witnessed
+//!   session.
+//!
+//! Wire-level validation lands here (proof_kind enum, recovery_session
+//! uuid pattern, expires/policy_version monotonicity,
+//! `recovery_witness_revoke_lagging` freshness window) plus the REC-1
+//! Ed25519 principal signature checks over canonical signed_fields
+//! transcripts.
+//!
+//! The implementation is split across sibling submodules under `recovery/`;
+//! this module root keeps the routers, the shared `use` surface (re-exported to
+//! submodules via `use super::*;`).
+
+use std::collections::BTreeSet;
+
+use arkret_core::{
+    DeviceGenerationStatus, DeviceId, Did, EventBatchReceiptScope, Hash, NonEmptyString, PolicyId,
+    ProofSummary, RealmId, ReceiptId, RecoveryIdentityModel, RecoveryPolicy,
+    RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyRef,
+    RecoveryPolicySummary, RecoveryReceiptOutcome, RecoverySessionCompleteOutcome,
+    RecoverySessionCompleteRequestBody, RecoverySessionCreateRequestBody, RecoverySessionId,
+    RecoverySessionProofSubmitOutcome, RecoverySessionProofSubmitRequestBody, RecoverySessionState,
+    SessionState, TypedTrustDomainId,
+};
+use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
+use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
+use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+use soland_application::ApplicationError as PersistenceError;
+use soland_application::identity::{
+    RecoveryPolicyState as RecoveryPolicyRecord, RecoveryReceiptState as RecoveryReceiptRecord,
+    SessionIdentityState as SessionRecord, principal_control_realm_for_did,
+};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
+
+use super::{AuthArgs, append_audit_log};
+use crate::state::AppState;
+
+mod errors;
+use errors::*;
+mod policy_endpoints;
+use policy_endpoints::*;
+mod receipt_endpoints;
+use receipt_endpoints::*;
+mod session_endpoints;
+use session_endpoints::*;
+mod signatures;
+use signatures::*;
+mod validation;
+use validation::*;
+mod wire;
+use wire::*;
+
+/// Spec-canonical recovery surface mounted under `/_arkret/root/identity`.
+///
+/// The standard surface exposes recovery policy read/publish plus recovery
+/// session lifecycle operations. Policy history and recovery receipt
+/// write/history remain product-private on the `/_soland` track.
+pub(super) fn protocol_router() -> Router {
+    Router::with_path("identity")
+        .push(
+            Router::with_path("recovery-policy")
+                .post(recovery_policy_put)
+                .get(recovery_policy_get),
+        )
+        .push(
+            Router::with_path("recovery-sessions").post(recovery_session_create), // C-P2 (REC-1)
+        )
+        .push(
+            Router::with_path("recovery-sessions/{recovery_session_id}").get(recovery_session_get),
+        )
+        .push(
+            Router::with_path("recovery-sessions/{recovery_session_id}/proofs")
+                .post(recovery_session_proof_submit),
+        )
+        .push(
+            Router::with_path("recovery-sessions/{recovery_session_id}/complete")
+                .post(recovery_session_complete),
+        )
+}
+
+pub(super) fn router() -> Router {
+    Router::with_path("identity")
+        .push(Router::with_path("recovery-policies").get(recovery_policies_get))
+        .push(Router::with_path("recovery-receipt").post(recovery_receipt_put))
+        .push(Router::with_path("recovery-receipts").get(recovery_receipts_get))
+}

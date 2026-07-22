@@ -6,7 +6,7 @@ use crate::common::*;
 
 #[tokio::test]
 async fn auth_keys_device_messages_and_blobs_work() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let alice = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -614,7 +614,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
 /// revoked (device-lifecycle.md §8.2).
 #[tokio::test]
 async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
 
     let alice = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -692,7 +692,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
 /// was authorized but never opened a session is still directory-resolvable.
 #[tokio::test]
 async fn device_authorize_projects_public_key_into_devices_table() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
 
     let alice = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
@@ -752,7 +752,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
 
 #[tokio::test]
 async fn device_authorize_projection_preserves_atomic_generation_binding() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = "did:web:managed-alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000003";
     let generation_ref = "1-QmBootstrapGeneration";
@@ -814,7 +814,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
 
 #[tokio::test]
 async fn keys_query_exposes_service_attested_device_anchor() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
 
     let alice = "did:web:managed-alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000004";
@@ -883,7 +883,7 @@ async fn keys_query_exposes_service_attested_device_anchor() {
     );
 }
 
-/// Build a real, fully-signed `(ak.test_cross_signing().publish payload,
+/// Build a real, fully-signed `(ak.cross_signing.publish payload,
 /// ak.device.authorize cross_signing_binding)` pair for `principal` / `device`
 /// using the supplied PSK / SSK keypairs and the SDK canonical-input
 /// constructors (the same ones the server's `check_device_cross_signing_binding`
@@ -1013,7 +1013,7 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     };
     use arkret_signatures::PublicKeyMaterial;
 
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000003";
     let psk = SigningKey::from_bytes(&[210u8; 32]);
@@ -1135,7 +1135,7 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
 
 #[tokio::test]
 async fn keys_query_hides_revoked_device() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let desktop = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
@@ -1276,7 +1276,7 @@ async fn keys_query_hides_revoked_device() {
 
 #[tokio::test]
 async fn revoked_device_blocks_encrypted_writes() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let stale_session = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",

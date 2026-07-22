@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use serde_json::Value;
 
 use crate::ApplicationResult;
@@ -54,11 +56,74 @@ pub trait CursorStorePort: Send + Sync {
 #[derive(Clone)]
 pub struct SyncApplicationService {
     cursors: Arc<dyn CursorStorePort>,
+    cursor_hmac_key: [u8; 32],
+    reconnect_deadlines: Arc<Mutex<BTreeMap<String, DateTime<Utc>>>>,
+    cursor_revocations: Arc<Mutex<Vec<CursorRevocationState>>>,
 }
 
 impl SyncApplicationService {
-    pub fn new(cursors: Arc<dyn CursorStorePort>) -> Self {
-        Self { cursors }
+    pub fn new(cursors: Arc<dyn CursorStorePort>, cursor_hmac_key: [u8; 32]) -> Self {
+        Self {
+            cursors,
+            cursor_hmac_key,
+            reconnect_deadlines: Arc::new(Mutex::new(BTreeMap::new())),
+            cursor_revocations: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn cursor_hmac_key(&self) -> &[u8; 32] {
+        &self.cursor_hmac_key
+    }
+
+    pub fn subscribe_retry_after_ms(&self, key: &str, now: DateTime<Utc>) -> Option<u64> {
+        let mut deadlines = self.reconnect_deadlines.lock();
+        deadlines.retain(|_, deadline| *deadline > now);
+        let deadline = deadlines.get(key)?;
+        Some((*deadline - now).num_milliseconds().max(1) as u64)
+    }
+
+    pub fn arm_subscribe_reconnect(&self, key: String, now: DateTime<Utc>, delay_ms: u64) {
+        const MAX_RECONNECT_WINDOW_MS: u64 = 86_400_000;
+        if delay_ms == 0 {
+            return;
+        }
+        let clamped_ms = delay_ms.min(MAX_RECONNECT_WINDOW_MS) as i64;
+        let mut deadlines = self.reconnect_deadlines.lock();
+        deadlines.insert(key, now + chrono::Duration::milliseconds(clamped_ms));
+        deadlines.retain(|_, deadline| *deadline > now);
+    }
+
+    pub fn replace_cursor_revocations(&self, revocations: Vec<CursorRevocationState>) {
+        *self.cursor_revocations.lock() = revocations;
+    }
+
+    pub fn cache_cursor_revocation(&self, record: CursorRevocationState) {
+        let mut revocations = self.cursor_revocations.lock();
+        revocations.retain(|entry| entry.expires_at > record.revoked_at);
+        revocations.push(record);
+    }
+
+    pub fn cursor_authority_revoked(
+        &self,
+        cursor_digest: &str,
+        principal_id: Option<&str>,
+        device_id: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> bool {
+        let mut revocations = self.cursor_revocations.lock();
+        revocations.retain(|entry| entry.expires_at > now);
+        revocations.iter().any(|entry| match entry.scope.as_str() {
+            "this_cursor" => entry.cursor_digest == cursor_digest,
+            "same_device" | "same_session" => principal_id.is_some_and(|principal_id| {
+                entry.principal_id == principal_id && entry.device_id.as_deref() == device_id
+            }),
+            _ => false,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn cached_cursor_revocation_count(&self) -> usize {
+        self.cursor_revocations.lock().len()
     }
 
     pub async fn cursor(&self, handle: &str) -> ApplicationResult<Option<CursorState>> {
@@ -174,7 +239,7 @@ mod tests {
     #[tokio::test]
     async fn cursor_lifecycle_uses_only_the_cursor_port() {
         let port = Arc::new(RecordingCursors::default());
-        let service = SyncApplicationService::new(port);
+        let service = SyncApplicationService::new(port, [0; 32]);
         let record = CursorState {
             handle: "cursor-handle".to_owned(),
             principal_id: None,
@@ -189,5 +254,22 @@ mod tests {
         };
         service.upsert_cursor(&record).await.expect("upsert cursor");
         assert_eq!(service.cursor("cursor-handle").await.unwrap(), Some(record));
+    }
+
+    #[test]
+    fn subscribe_reconnect_window_expires() {
+        let service = SyncApplicationService::new(Arc::new(RecordingCursors::default()), [0; 32]);
+        let now = Utc::now();
+        let key = "ak.self.events.stream.subscribe|alice|realm-a";
+        service.arm_subscribe_reconnect(key.to_owned(), now, 10_000);
+        let retry_after = service
+            .subscribe_retry_after_ms(key, now + chrono::Duration::milliseconds(2_500))
+            .expect("cooldown active");
+        assert!((7_400..=7_500).contains(&retry_after));
+        assert!(
+            service
+                .subscribe_retry_after_ms(key, now + chrono::Duration::milliseconds(10_000))
+                .is_none()
+        );
     }
 }

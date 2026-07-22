@@ -12,54 +12,20 @@ contract, and the GDPR erasure cascade.
 | `active`       | default                                 | normal session issuance       |
 | `locked`       | `set_account_lifecycle_record`           | 403 `account_locked`          |
 | `suspended`    | `set_account_lifecycle_record`           | 403 `account_suspended`       |
-| `deactivated`  | `POST /_soland/self/account/deactivate`       | 403 `account_deactivated`     |
-| `erased`       | `POST /_soland/self/account/erase`            | 401 `account_erased`          |
+| `deactivated`  | `POST /_arkret/local/account/deactivate`      | 403 `account_deactivated`     |
+| `erased`       | `POST /_arkret/local/account/erase`           | 401 `account_erased`          |
 
-The state projection is in-memory today (`AppState::account_lifecycle`)
-and persists across the process lifetime only — a durable ledger lands
-with the projection rewrite worker.
-
-## Failed-login lockout
-
-> **Status: not enforced.** The counter below cannot currently fire, and
-> nothing else in soland limits repeated credential failures. Tracked in
-> `review_code.md`; do not read this section as a description of live
-> behaviour.
-
-`AppState::failed_login_attempts` implements a lockout intended for the
-credential-issuing surfaces:
-
-- Five consecutive failures within a 15-minute rolling window flip the
-  actor into a 15-minute lockout (`record_failed_login`).
-- While locked the handler returns 403 and a body that does **not**
-  reveal whether the credential would otherwise have been valid
-  (`account_lockout_error`).
-- The counter resets on the first successful login (`clear_failed_login`).
-- Failures older than the window do not contribute to the threshold —
-  the next failure starts the count over.
-- Constants: see `ACCOUNT_LOCKOUT_THRESHOLD`,
-  `ACCOUNT_LOCKOUT_DURATION`, `ACCOUNT_LOCKOUT_WINDOW` in
-  `src/state/records.rs`.
-
-Why it cannot fire: `record_failed_login` — the counter's only writer —
-has no caller. It was written for `POST
-/_arkret/gate/account/session-grants`, which soland no longer mounts
-(api-conventions.md §3.3 moved credential issuance to the Account
-Authority; see `routing/identity/auth.rs`). soland now delegates every
-credential check to coauth's introspection endpoint, so it never observes
-a credential failure to count. The only surface still consulting the
-lockout is dev-login, which authenticates nothing in development mode, so
-it reads a map that is always empty.
-
-The gap this leaves is coauth's: it owns credential verification and has
-no lockout of its own.
+Lifecycle records are durable through `AccountLifecycleStore`. The identity
+application hydrates its bounded read projection during startup and persists a
+change before publishing it to request handlers. Credential-failure throttling
+belongs to the Account Authority because Soland does not verify account
+credentials; the former unwired local failed-login counter has been removed.
 
 ## GDPR erasure cascade
 
-`POST /_soland/self/account/erase` is the spec exit-point for an erased
+`POST /_arkret/local/account/erase` is the Arkret exit-point for an erased
 principal. Soland performs the following actions atomically per
-request (best-effort under in-memory state; durable persistence lands
-with the projection rewrite worker):
+request, using durable application/storage ports:
 
 1. Append a `org.arkret.soland.audit.erasure_initiated` audit row.
 2. Pseudonymize the account record — replace `display_name` with
@@ -70,12 +36,11 @@ with the projection rewrite worker):
    on each row); count returned as `devices_revoked`.
 4. Revoke every active session (`revoke_sessions_for_actor`); count
    returned as `sessions_revoked`.
-5. Remove the actor from every Realm membership index in
-   `state.realms` (`remove_realm_memberships_for_actor`); count
+5. Remove the actor from every Realm membership projection through the Realm
+   directory application; count
    returned as `memberships_removed`.
-6. Flip the actor's lifecycle state to `erased` and mark the in-memory
-   `erased_actors` set so future authenticated requests resolve to
-   401 `account_erased`.
+6. Persist the actor's lifecycle state as `erased` so future authenticated
+   requests resolve to 401 `account_erased`.
 7. Append an `org.arkret.soland.account.state_change` audit row.
 8. Append a single `org.arkret.soland.audit.actor_audit_redacted` row that catalogues
    every prior audit entry by `audit_id` + `created_at` only, marking
@@ -136,7 +101,7 @@ body with `[redacted]` while preserving `audit_id`, `created_at`, and
 
 ## v1 export scope
 
-The `GET /_soland/self/account/export` bundle in v1 is authoritative only
+The `GET /_arkret/local/account/export` bundle in v1 is authoritative only
 for `{ account, devices, audit_log }` (plus the already-empty
 `messages` and `spaces` collections). The following fields are
 reserved on the response envelope so downstream consumers can compile

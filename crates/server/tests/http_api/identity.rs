@@ -6,7 +6,7 @@ use super::common::*;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn identity_surface_works() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let describe: Value = TestClient::get("http://server/_arkret/root/identity/describe")
         .send(&app_from_state(state.clone()))
         .await
@@ -84,7 +84,7 @@ async fn identity_describe_exposes_external_webvh_provider() {
         "webvh".to_owned(),
     ];
     let describe: Value = TestClient::get("http://server/_arkret/root/identity/describe")
-        .send(&app_from_state(AppState::new(config, Db { pool: None })))
+        .send(&app_from_state(soland_test_support::app_state(config)))
         .await
         .take_json()
         .await
@@ -144,7 +144,7 @@ async fn identity_describe_keeps_external_webvh_provider_when_probe_fails() {
         "webvh".to_owned(),
     ];
     let describe: Value = TestClient::get("http://server/_arkret/root/identity/describe")
-        .send(&app_from_state(AppState::new(config, Db { pool: None })))
+        .send(&app_from_state(soland_test_support::app_state(config)))
         .await
         .take_json()
         .await
@@ -186,7 +186,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     config.embedded_webvh_registration_bearer = Some("test-webvh-token".to_owned());
     config.did_resolver_allow_methods =
         vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
-    let state = AppState::new(config, Db { pool: None });
+    let state = soland_test_support::app_state(config);
     let key = arkret_core::ServiceRegistrationKey::new(
         arkret_core::ServiceType::AuthServer,
         arkret_core::CanonicalServiceUrl::new("https://auth.example/").unwrap(),
@@ -307,7 +307,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         "uuid".to_owned(),
         "webvh".to_owned(),
     ];
-    let state = AppState::new(config, Db { pool: None });
+    let state = soland_test_support::app_state(config);
 
     let describe: Value = TestClient::get("http://server/_arkret/root/identity/describe")
         .send(&app_from_state(state.clone()))
@@ -517,7 +517,7 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
     let did = inception.did.clone();
     let operation = inception.log_entry.clone();
     let request = serde_json::to_value(&inception.submit_body).unwrap();
-    let state = AppState::new(config, Db { pool: None });
+    let state = soland_test_support::app_state(config);
 
     let mut mismatched_method = request.clone();
     mismatched_method["did_method"] = Value::String("did:webvh".to_owned());
@@ -663,7 +663,7 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
     config.public_base_url = "https://soland.example".to_owned();
     config.did_resolver_allow_methods =
         vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
-    let state = AppState::new(config, Db { pool: None });
+    let state = soland_test_support::app_state(config);
     let endpoint = url::Url::parse("https://soland.example").unwrap();
     let root_seed = [61u8; 32];
     let committed_root_seed = [62u8; 32];

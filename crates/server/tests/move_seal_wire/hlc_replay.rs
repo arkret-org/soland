@@ -52,7 +52,7 @@ fn replay_window_test_config() -> AppConfig {
 
 #[tokio::test]
 async fn submit_move_rejects_stale_hlc_with_replay_window_reason() {
-    let state = AppState::new(replay_window_test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(replay_window_test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -82,7 +82,7 @@ async fn submit_move_rejects_stale_hlc_with_replay_window_reason() {
 
 #[tokio::test]
 async fn submit_move_rejects_future_hlc() {
-    let state = AppState::new(replay_window_test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(replay_window_test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -109,7 +109,7 @@ async fn submit_move_rejects_future_hlc() {
 
 #[tokio::test]
 async fn submit_move_accepts_current_hlc_under_replay_window() {
-    let state = AppState::new(replay_window_test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(replay_window_test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 

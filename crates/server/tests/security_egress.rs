@@ -22,7 +22,7 @@ fn production_egress_rejects_private_targets() {
         "http://[2001:0000::f5ff:fffe]/sink",
     ] {
         let url = Url::parse(raw).unwrap();
-        assert!(soland::security::validate_url_for_egress(&url, "test", false).is_err());
+        assert!(soland_http::security::validate_url_for_egress(&url, "test", false).is_err());
     }
 }
 
@@ -36,7 +36,7 @@ fn production_egress_rejects_transition_dns_private_answers() {
         IpAddr::V6("2001:0000::f5ff:fffe".parse().unwrap()),
     ] {
         assert!(
-            soland::security::validate_url_for_egress_with_resolved_ips(
+            soland_http::security::validate_url_for_egress_with_resolved_ips(
                 &url,
                 "test",
                 false,
@@ -52,14 +52,14 @@ fn production_egress_rejects_transition_dns_private_answers() {
 fn production_egress_allows_public_ip_literal() {
     let _env = clean_egress_env();
     let url = Url::parse("https://93.184.216.34/federation").unwrap();
-    assert!(soland::security::validate_url_for_egress(&url, "test", false).is_ok());
+    assert!(soland_http::security::validate_url_for_egress(&url, "test", false).is_ok());
 }
 
 #[test]
 fn production_egress_rejects_dns_private_answers() {
     let _env = clean_egress_env();
     let url = Url::parse("https://relay.example/federation").unwrap();
-    let error = soland::security::validate_url_for_egress_with_resolved_ips(
+    let error = soland_http::security::validate_url_for_egress_with_resolved_ips(
         &url,
         "test",
         false,
@@ -73,7 +73,7 @@ fn production_egress_rejects_dns_private_answers() {
 fn production_egress_rejects_mixed_dns_answers_to_limit_rebinding() {
     let _env = clean_egress_env();
     let url = Url::parse("https://relay.example/federation").unwrap();
-    let error = soland::security::validate_url_for_egress_with_resolved_ips(
+    let error = soland_http::security::validate_url_for_egress_with_resolved_ips(
         &url,
         "test",
         false,
@@ -90,7 +90,7 @@ fn production_egress_rejects_mixed_dns_answers_to_limit_rebinding() {
 fn development_egress_can_allow_loopback() {
     let _env = clean_egress_env();
     let url = Url::parse("http://127.0.0.1:8698/health").unwrap();
-    assert!(soland::security::validate_url_for_egress(&url, "test", true).is_ok());
+    assert!(soland_http::security::validate_url_for_egress(&url, "test", true).is_ok());
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn sovereign_enclave_egress_denies_by_default() {
         std::env::set_var("SOLAND_SOVEREIGN_ENCLAVE", "1");
     }
     let url = Url::parse("https://relay.example/federation").unwrap();
-    let error = soland::security::validate_url_for_egress_with_resolved_ips(
+    let error = soland_http::security::validate_url_for_egress_with_resolved_ips(
         &url,
         "federation",
         false,
@@ -122,7 +122,7 @@ fn sovereign_enclave_egress_allows_configured_host() {
     }
     let url = Url::parse("https://relay.example/federation").unwrap();
     assert!(
-        soland::security::validate_url_for_egress_with_resolved_ips(
+        soland_http::security::validate_url_for_egress_with_resolved_ips(
             &url,
             "federation",
             false,

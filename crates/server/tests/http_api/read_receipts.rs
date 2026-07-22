@@ -120,7 +120,7 @@ async fn submit_read_receipt_policy(
 
 #[tokio::test]
 async fn read_receipt_policy_rejects_public_world_readable_without_opt_in() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
     set_demo_realm_visibility(&state, "public", "world_readable").await;
 
@@ -147,7 +147,7 @@ async fn read_receipt_policy_rejects_public_world_readable_without_opt_in() {
 
 #[tokio::test]
 async fn read_receipt_policy_rejects_forced_public_world_readable_without_second_opt_in() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
     set_demo_realm_visibility(&state, "public", "world_readable").await;
 
@@ -258,7 +258,7 @@ async fn submit_alice_target_message(state: AppState, token: &str, body: &str) -
 
 #[tokio::test]
 async fn private_read_receipt_visible_only_to_target_sender() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
     add_test_realm_member(&state, DEMO_REALM_ID, BOB);
     add_test_realm_member(&state, DEMO_REALM_ID, CAROL);
@@ -296,7 +296,7 @@ async fn private_read_receipt_visible_only_to_target_sender() {
 
 #[tokio::test]
 async fn members_and_public_read_receipts_are_cropped() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
     add_test_realm_member(&state, DEMO_REALM_ID, BOB);
     let bob_token =
@@ -345,7 +345,7 @@ async fn members_and_public_read_receipts_are_cropped() {
 
 #[tokio::test]
 async fn read_receipt_ttl_expiry_suppresses_sync_and_event_view() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
     add_test_realm_member(&state, DEMO_REALM_ID, BOB);
     let bob_token =

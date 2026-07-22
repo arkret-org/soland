@@ -4,9 +4,8 @@
 //! GC-eligible Moves as JSON on stdout. The `--dry-run` flag is the
 //! only mode currently supported (deletion is a follow-up).
 
-use soland::config::AppConfig;
-use soland::gc;
-use soland::state::AppState;
+use soland_http::config::AppConfig;
+use soland_http::gc;
 use soland_storage_postgres::Db;
 
 #[tokio::main]
@@ -23,7 +22,14 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     let config = AppConfig::from_env_and_args()?;
     let db = Db::from_env().await?;
-    let state = AppState::new(config, db);
+    let bootstrap = soland::bootstrap::resolve_and_build_persistence(&config, &db).await?;
+    let state = soland::runtime::build_app_state(
+        config,
+        db,
+        bootstrap.persistence,
+        bootstrap.state,
+        bootstrap.signing_seed,
+    )?;
     state.hydrate().await?;
 
     let candidates = match realm_id.as_deref() {

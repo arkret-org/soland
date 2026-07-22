@@ -4,15 +4,15 @@ use std::sync::LazyLock;
 use arkret_core::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
-use soland::config::AppConfig;
-use soland::service;
-use soland::state::{AppState, RealmDirectoryEntry};
 use soland_domain::reducer::{
     CircleLifecycleState, CircleMembershipState, CircleProjection, ObjectLifecycleState,
     StrandProjection,
 };
+use soland_http::config::AppConfig;
+use soland_http::service;
+use soland_http::state::{AppState, RealmDirectoryEntry};
 use soland_storage::{RealmInviteRecord, RealmMetaRecord};
-use soland_storage_postgres::Db;
+use soland_test_support::AppStateTestExt as _;
 
 static ALICE_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([21_u8; 32]));
 static BOB_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([22_u8; 32]));
@@ -168,16 +168,16 @@ async fn admit_member(
         "delivery_status": "unroutable",
     });
     let event_id = new_prefixed_uuid7("ak:event:");
-    let event = signed_event(
-        &state,
-        owner_token,
-        &event_id,
-        owner_did,
-        owner_device_id,
+    let event = signed_event(SignedEvent {
+        state: &state,
+        token: owner_token,
+        event_id: &event_id,
+        actor_id: owner_did,
+        device_id: owner_device_id,
         realm_id,
-        "ak.member.state",
+        kind: "ak.member.state",
         payload,
-    )
+    })
     .await;
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {owner_token}"), true)
@@ -240,16 +240,16 @@ async fn accept_invite(
         "invite_id": invite_id,
     });
     let event_id = new_prefixed_uuid7("ak:event:");
-    let event = signed_event(
-        &state,
+    let event = signed_event(SignedEvent {
+        state: &state,
         token,
-        &event_id,
-        actor_did,
+        event_id: &event_id,
+        actor_id: actor_did,
         device_id,
         realm_id,
-        "ak.invite.accept",
+        kind: "ak.invite.accept",
         payload,
-    )
+    })
     .await;
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -276,16 +276,16 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
         }
     });
     let event_id = new_prefixed_uuid7("ak:event:");
-    let event = signed_event(
-        &state,
+    let event = signed_event(SignedEvent {
+        state: &state,
         token,
-        &event_id,
-        ALICE_DID.as_str(),
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        event_id: &event_id,
+        actor_id: ALICE_DID.as_str(),
+        device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001",
         realm_id,
-        "ak.message.create",
+        kind: "ak.message.create",
         payload,
-    )
+    })
     .await;
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -429,16 +429,16 @@ async fn send_circle_scoped_encrypted_message(
             "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
         }
     });
-    let event = signed_event(
-        &state,
+    let event = signed_event(SignedEvent {
+        state: &state,
         token,
-        &event_id,
+        event_id: &event_id,
         actor_id,
         device_id,
         realm_id,
-        "ak.message.create",
+        kind: "ak.message.create",
         payload,
-    )
+    })
     .await;
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -465,9 +465,16 @@ async fn submit_projection_event(
     payload: Value,
 ) -> String {
     let event_id = new_prefixed_uuid7("ak:event:");
-    let event = signed_event(
-        &state, token, &event_id, actor_id, device_id, realm_id, kind, payload,
-    )
+    let event = signed_event(SignedEvent {
+        state: &state,
+        token,
+        event_id: &event_id,
+        actor_id,
+        device_id,
+        realm_id,
+        kind,
+        payload,
+    })
     .await;
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -494,9 +501,16 @@ async fn submit_projection_event_status(
     payload: Value,
 ) -> (u16, String) {
     let event_id = new_prefixed_uuid7("ak:event:");
-    let event = signed_event(
-        &state, token, &event_id, actor_id, device_id, realm_id, kind, payload,
-    )
+    let event = signed_event(SignedEvent {
+        state: &state,
+        token,
+        event_id: &event_id,
+        actor_id,
+        device_id,
+        realm_id,
+        kind,
+        payload,
+    })
     .await;
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -508,16 +522,28 @@ async fn submit_projection_event_status(
     (status, body)
 }
 
-async fn signed_event(
-    state: &AppState,
-    token: &str,
-    event_id: &str,
-    actor_id: &str,
-    device_id: &str,
-    realm_id: &str,
-    kind: &str,
+struct SignedEvent<'a> {
+    state: &'a AppState,
+    token: &'a str,
+    event_id: &'a str,
+    actor_id: &'a str,
+    device_id: &'a str,
+    realm_id: &'a str,
+    kind: &'a str,
     payload: Value,
-) -> Value {
+}
+
+async fn signed_event(input: SignedEvent<'_>) -> Value {
+    let SignedEvent {
+        state,
+        token,
+        event_id,
+        actor_id,
+        device_id,
+        realm_id,
+        kind,
+        payload,
+    } = input;
     let frontier: Value = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?actor_id={actor_id}&realm_id={realm_id}"
     ))
@@ -621,7 +647,7 @@ fn event_query_bodies(events: &Value) -> Vec<String> {
 
 #[tokio::test]
 async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
@@ -677,7 +703,7 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
 
 #[tokio::test]
 async fn joined_history_incremental_sync_includes_post_join_messages_after_cursor() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
@@ -722,7 +748,7 @@ async fn joined_history_incremental_sync_includes_post_join_messages_after_curso
 
 #[tokio::test]
 async fn invite_accept_member_receives_joined_history_messages_after_accept() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = BOB_DID.as_str();
@@ -767,7 +793,7 @@ async fn invite_accept_member_receives_joined_history_messages_after_accept() {
 
 #[tokio::test]
 async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
@@ -810,7 +836,7 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
 
 #[tokio::test]
 async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_circle() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000010";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000010").await;
@@ -921,7 +947,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
 
 #[tokio::test]
 async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
@@ -1063,7 +1089,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
 
 #[tokio::test]
 async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;

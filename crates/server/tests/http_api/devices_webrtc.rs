@@ -54,7 +54,7 @@ async fn post_account_device_pair(
 
 #[tokio::test]
 async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let sibling = "ak:device:01904100-0000-7000-8000-9b04e0000008";
     let sibling_pubkey = pair_device_pubkey(sibling);
@@ -143,7 +143,7 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
 
 #[tokio::test]
 async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let actor = "did:web:alice.example";
     let trusted_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let unverified_device = "ak:device:01904100-0000-7000-8000-9b04e0000008";
@@ -242,7 +242,7 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
 
 #[tokio::test]
 async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authorizes_new_device() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let actor = "did:web:alice.example";
     let existing_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let new_device = "ak:device:01904100-0000-7000-8000-9b04e0000008";
@@ -367,7 +367,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
 async fn to_device_capacity_eviction_sets_lost_watermark() {
     let mut config = test_config();
     config.to_device_queue_capacity = 2;
-    let state = AppState::new(config, Db { pool: None });
+    let state = soland_test_support::app_state(config);
     let alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
@@ -430,7 +430,7 @@ async fn to_device_capacity_eviction_sets_lost_watermark() {
 
 #[tokio::test]
 async fn protocol_device_surface_excludes_pairing_request_scaffold() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let create = TestClient::post("http://server/_arkret/gate/account/device-pairing-requests")
@@ -481,7 +481,7 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
 
 #[tokio::test]
 async fn rtc_media_token_uses_projected_media_service_epoch() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
     // Brand-new call: no `ak.call.state` cell yet (the initiator redeems a
@@ -649,7 +649,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
 /// session-not-found gate broke (it 404'd every real inkson call).
 #[tokio::test]
 async fn rtc_media_token_inkson_flow_no_session_issues_token() {
-    let state = AppState::new(livekit_test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(livekit_test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     // Use a non-owner member so the pre-grant assertion actually isolates
     // `ak.call.join`; the seeded Alice account is the demo Realm owner and
@@ -716,7 +716,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
 
 #[tokio::test]
 async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
     let session_id = new_prefixed_uuid7("ak:call:");
@@ -781,7 +781,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
 
 #[tokio::test]
 async fn rtc_media_token_rejects_non_member_actor() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let _token = dev_token(state.clone()).await;
     let session_id = new_prefixed_uuid7("ak:call:");
@@ -816,7 +816,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     // exchange proceed.
     // Use the LiveKit-configured deployment so the oldest-membership default
     // focus (`ak:focus:livekit:green`) can mint a real token once join is held.
-    let state = AppState::new(livekit_test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(livekit_test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     // Bootstrap alice (realm owner) so DEMO_REALM exists, then add bob as a
     // member.
@@ -914,7 +914,7 @@ fn verify_livekit_jwt(token: &str, api_secret: &[u8]) -> Value {
 
 #[tokio::test]
 async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
-    let state = AppState::new(livekit_test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(livekit_test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
     let session_id = new_prefixed_uuid7("ak:call:");
@@ -1000,7 +1000,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
 
 #[tokio::test]
 async fn admin_realm_media_service_renders_projected_cell() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
 
@@ -1039,7 +1039,7 @@ async fn admin_realm_media_service_renders_projected_cell() {
 
 #[tokio::test]
 async fn webrtc_ban_blocks_removed_participant_token_reissue() {
-    let state = AppState::new(livekit_test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(livekit_test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let _alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
@@ -1261,7 +1261,7 @@ fn call_signals_in_subscribe(frame: &Value, realm_id: &str) -> Vec<Value> {
 
 #[tokio::test]
 async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_device() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone()).await;
@@ -1322,7 +1322,7 @@ async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_dev
 async fn ephemeral_call_signal_reaches_same_actor_other_device() {
     // §7 — a same-actor *other* device receives the signal (multi-device
     // fan-out); only the originating device self-echo is suppressed.
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = "did:web:alice.example";
     let alice_device_a = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_device_b = "ak:device:01904100-0000-7000-8000-a11ce0000002";
@@ -1357,7 +1357,7 @@ async fn ephemeral_call_signal_reaches_same_actor_other_device() {
 
 #[tokio::test]
 async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone()).await;
@@ -1425,7 +1425,7 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
 
 #[tokio::test]
 async fn ephemeral_call_signal_without_send_capability_is_denied() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     // Use a non-owner member so owner-default authorization cannot mask the
     // missing explicit `ak.call.signal.send` grant.
     let actor = "did:web:bob.example";
@@ -1469,7 +1469,7 @@ async fn ephemeral_call_signal_incremental_resubscribe_does_not_redeliver() {
     // `ak.call.signal` on one sync MUST NOT receive it again on a later
     // incremental sync inside the TTL window; a *new* signal still arrives;
     // and a full sync (catchup, no `after`) still re-delivers pending signals.
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let alice = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone()).await;

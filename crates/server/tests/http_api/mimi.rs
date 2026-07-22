@@ -444,7 +444,7 @@ async fn mimi_provider_facade_contracts_work() {
 
 #[tokio::test]
 async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let demo_realm = DEMO_REALM_ID;
@@ -673,7 +673,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
 
 #[tokio::test]
 async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let realm_id = DEMO_REALM_ID;

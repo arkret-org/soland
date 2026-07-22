@@ -1,0 +1,514 @@
+use super::*;
+
+pub(super) fn operation_with_unsigned_agent_context(
+    operation: &Operation,
+    envelope: &Value,
+) -> Operation {
+    let mut operation = operation.clone();
+    if let Some(object) = operation.payload.as_object_mut()
+        && !object.contains_key("agent_context")
+        && let Some(agent_context) = envelope
+            .get("unsigned")
+            .and_then(|unsigned| unsigned.get("agent_context"))
+            .filter(|value| value.is_object())
+    {
+        object.insert("agent_context".to_owned(), agent_context.clone());
+    }
+    operation
+}
+
+pub(super) async fn record_rejected_invite_claim_effect(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), String> {
+    if !kinds::operation_is_invite_claim(operation) {
+        return Ok(());
+    }
+    let Some(payload) = operation.payload.as_object() else {
+        return Ok(());
+    };
+    let Some(invite_id) = rejected_invite_claim_string_field(payload, "invite_id") else {
+        return Ok(());
+    };
+    let Some(claim_nonce) = rejected_invite_claim_string_field(payload, "claim_nonce") else {
+        return Ok(());
+    };
+
+    let invites = state.realm_invite_application();
+    let Some(mut record) = invites
+        .get(&invite_id)
+        .await
+        .map_err(|error| format!("load invite {invite_id}: {error}"))?
+    else {
+        return Ok(());
+    };
+
+    let mut changed = false;
+    match record.claim_nonces.get(&claim_nonce) {
+        Some(existing_operation_id) if existing_operation_id != operation.operation_id.as_str() => {
+            return Ok(());
+        }
+        Some(_) => {}
+        None => {
+            record
+                .claim_nonces
+                .insert(claim_nonce.clone(), operation.operation_id.to_string());
+            changed = true;
+        }
+    }
+
+    if record
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= operation.created_at)
+    {
+        record.status = "expired".to_owned();
+        record.invite_token.clear();
+        remove_rejected_claim_active_material(&mut record.third_party_id, true);
+        changed = true;
+    }
+
+    if !changed {
+        return Ok(());
+    }
+    record.updated_at = Some(operation.created_at);
+    invites
+        .put(record)
+        .await
+        .map_err(|error| format!("store invite rejected claim effect: {error}"))
+}
+
+pub(super) fn rejected_invite_claim_string_field(
+    payload: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Option<String> {
+    payload
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub(super) fn remove_rejected_claim_active_material(
+    third_party_id: &mut Option<Value>,
+    remove_commitment: bool,
+) {
+    let Some(value) = third_party_id.as_mut() else {
+        return;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "token_salt",
+        "token_salt_id",
+        "lookup_table_ref",
+        "pepper",
+        "pepper_id",
+    ] {
+        object.remove(key);
+    }
+    if remove_commitment {
+        object.remove("token_commitment");
+    }
+}
+
+pub(super) async fn enqueue_peer_event_fanout(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+) {
+    for record in peer_event_fanout_records(state, parsed, envelope).await {
+        if let Err(error) = state
+            .federation_application()
+            .enqueue_delivery(
+                soland_application::federation::EnqueueFederationDeliveryCommand {
+                    delivery: record.clone(),
+                },
+            )
+            .await
+        {
+            tracing::warn!(
+                %error,
+                event_id = %parsed.event_id,
+                peer = %record.peer_url,
+                peer_did = %record.peer_did,
+                "failed to enqueue dynamic ak.peer.events.command.submit fanout"
+            );
+        }
+    }
+}
+
+/// Preserve a protocol-atomic local Event batch as one federation request.
+/// Realm founding units cannot be split into independent outbox rows because
+/// receivers must validate and commit create + founding grant + closed facets
+/// as one transaction.
+pub(super) async fn enqueue_peer_event_batch_fanout(
+    state: &AppState,
+    parsed_events: &[ValidatedEventEnvelope],
+    envelopes: &[Value],
+) {
+    let Some(first) = parsed_events.first() else {
+        return;
+    };
+    if parsed_events.len() != envelopes.len() {
+        tracing::error!("peer Event batch fanout cardinality mismatch");
+        return;
+    }
+    let peers = dynamic_peer_event_targets(state, first, &envelopes[0]);
+    if peers.is_empty() {
+        return;
+    }
+    let events = match envelopes
+        .iter()
+        .cloned()
+        .map(serde_json::from_value::<Event>)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::warn!(%error, realm_id = %first.realm_id, "failed to type check peer Event batch");
+            return;
+        }
+    };
+    let mut signer_key_evidence = Vec::new();
+    let mut evidence_methods = std::collections::BTreeSet::new();
+    for event in &events {
+        let evidence = match crate::jws_verify::federated_event_signer_evidence(state, event).await
+        {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                tracing::warn!(%error, event_id = %event.event_id, "failed to resolve peer Event batch signer evidence");
+                return;
+            }
+        };
+        for entry in evidence {
+            if evidence_methods.insert(entry.verification_method.clone()) {
+                signer_key_evidence.push(entry);
+            }
+        }
+    }
+    let binding_payload = json!({
+        "domain": "ak.peer.events.command.submit.service_binding.v1",
+        "realm_id": first.realm_id,
+        "event_ids": parsed_events.iter().map(|event| event.event_id.as_str()).collect::<Vec<_>>(),
+        "canonical_digests": parsed_events.iter().map(|event| event.canonical_digest.as_str()).collect::<Vec<_>>(),
+    });
+    let now = chrono::Utc::now().timestamp();
+    for peer in peers {
+        let Some(service_binding_ref) =
+            service_binding_ref_for_target(first, &binding_payload, &peer)
+        else {
+            tracing::warn!(peer_did = %peer.service_id, realm_id = %first.realm_id, "failed to build peer Event batch service binding");
+            continue;
+        };
+        if peer.service_id == *state.service_id() {
+            continue;
+        }
+        let mut hasher_input = Vec::new();
+        hasher_input.extend_from_slice(state.service_id().as_bytes());
+        hasher_input.extend_from_slice(b"|");
+        hasher_input.extend_from_slice(peer.service_id.as_bytes());
+        for parsed in parsed_events {
+            hasher_input.extend_from_slice(b"|");
+            hasher_input.extend_from_slice(parsed.event_id.as_bytes());
+            hasher_input.extend_from_slice(b"|");
+            hasher_input.extend_from_slice(parsed.canonical_digest.as_bytes());
+        }
+        let idempotency_key = format!("ak:outbox:event-batch:{}", sha256_hex(&hasher_input));
+        let body = EventsSubmitFederationRequestBody {
+            service_binding_ref,
+            events: events.clone(),
+            signer_key_evidence: signer_key_evidence.clone(),
+            idempotency_key: Some(idempotency_key.clone()),
+        };
+        let Some(payload_json) = canonical::canonical_json_bytes(&body)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        else {
+            tracing::warn!(peer_did = %peer.service_id, realm_id = %first.realm_id, "failed to encode peer Event batch");
+            continue;
+        };
+        let record = soland_application::federation::FederationDeliveryRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            peer_did: peer.service_id,
+            peer_url: peer.url.trim_end_matches('/').to_owned(),
+            endpoint: "/_arkret/peer/events".to_owned(),
+            idempotency_key,
+            payload_json,
+            created_at: now,
+        };
+        if let Err(error) = state
+            .federation_application()
+            .enqueue_delivery(
+                soland_application::federation::EnqueueFederationDeliveryCommand {
+                    delivery: record.clone(),
+                },
+            )
+            .await
+        {
+            tracing::warn!(%error, peer_did = %record.peer_did, realm_id = %first.realm_id, "failed to enqueue peer Event batch fanout");
+        }
+    }
+}
+
+pub(super) async fn peer_event_fanout_records(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+) -> Vec<soland_application::federation::FederationDeliveryRecord> {
+    // Directed invite-create events carry their recipient service in the
+    // operation payload rather than in the member projection. Pass the
+    // original envelope through so the fanout target can be resolved before
+    // the invitee has joined (federation.md section 5.1).
+    let peers = dynamic_peer_event_targets(state, parsed, envelope);
+    if peers.is_empty() {
+        return Vec::new();
+    }
+    let event_id = parsed.event_id.as_str();
+    let binding_payload = json!({
+        "domain": "ak.peer.events.command.submit.service_binding.v1",
+        "realm_id": parsed.realm_id,
+        "event_id": event_id,
+        "canonical_digest": parsed.canonical_digest,
+    });
+    let event = match serde_json::from_value::<Event>(envelope.clone()) {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                event_id,
+                "failed to type checked peer fanout event envelope"
+            );
+            return Vec::new();
+        }
+    };
+    let signer_key_evidence =
+        match crate::jws_verify::federated_event_signer_evidence(state, &event).await {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                tracing::warn!(%error, event_id, "failed to resolve peer Event signer evidence");
+                return Vec::new();
+            }
+        };
+    let now = chrono::Utc::now().timestamp();
+    let mut records = Vec::new();
+    for peer in peers {
+        let service_binding_ref = match service_binding_ref_for_target(
+            parsed,
+            &binding_payload,
+            &peer,
+        ) {
+            Some(value) => value,
+            None => {
+                tracing::warn!(
+                    event_id,
+                    peer_did = %peer.service_id,
+                    "failed to build typed dynamic ak.peer.events.command.submit service binding"
+                );
+                continue;
+            }
+        };
+        let mut hasher_input = Vec::new();
+        hasher_input.extend_from_slice(state.service_id().as_bytes());
+        hasher_input.extend_from_slice(b"|");
+        hasher_input.extend_from_slice(peer.service_id.as_bytes());
+        hasher_input.extend_from_slice(b"|");
+        hasher_input.extend_from_slice(event_id.as_bytes());
+        hasher_input.extend_from_slice(b"|");
+        hasher_input.extend_from_slice(parsed.canonical_digest.as_bytes());
+        for frontier in &peer.delivery_binding_frontier {
+            hasher_input.extend_from_slice(b"|");
+            hasher_input.extend_from_slice(frontier.as_bytes());
+        }
+        let idempotency_key = format!("ak:outbox:event:{}", sha256_hex(&hasher_input));
+        let body = EventsSubmitFederationRequestBody {
+            service_binding_ref,
+            events: vec![event.clone()],
+            signer_key_evidence: signer_key_evidence.clone(),
+            idempotency_key: Some(idempotency_key.clone()),
+        };
+        let payload = match canonical::canonical_json_bytes(&body)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        {
+            Some(payload) => payload,
+            None => {
+                tracing::warn!(
+                    event_id,
+                    peer_did = %peer.service_id,
+                    "failed to encode dynamic ak.peer.events.command.submit body"
+                );
+                continue;
+            }
+        };
+        if peer.service_id == *state.service_id() {
+            continue;
+        }
+        records.push(soland_application::federation::FederationDeliveryRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            peer_did: peer.service_id,
+            peer_url: peer.url.trim_end_matches('/').to_owned(),
+            endpoint: "/_arkret/peer/events".to_owned(),
+            idempotency_key,
+            payload_json: payload,
+            created_at: now,
+        });
+    }
+    records
+}
+
+struct DynamicPeerEventTarget {
+    url: String,
+    service_id: String,
+    membership_frontier: Vec<String>,
+    delivery_binding_frontier: Vec<String>,
+}
+
+fn dynamic_peer_event_targets(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+) -> Vec<DynamicPeerEventTarget> {
+    let service_frontiers = {
+        let projection = state.projection_application().snapshot();
+        // sync/federation.md §4.4 — peers whose federation service delegation
+        // for this Realm has been revoked MUST NOT receive future outbound
+        // pushes. Compute the revoked-peer set once under the projection lock.
+        // The revoke / grant capability control events themselves still fan out
+        // so the peer can invalidate its allow cache (federation.md §4.4:
+        // the pushed payload MUST carry the original Event Envelope so the
+        // receiver can invalidate its capability cache immediately); only
+        // non-capability events are gated.
+        let is_capability_control_event = matches!(
+            parsed.kind.as_str(),
+            "ak.capability.revoke" | "ak.capability.grant" | "ak.capability.delegate"
+        );
+        let revoked_peers = if is_capability_control_event {
+            std::collections::BTreeSet::new()
+        } else {
+            projection.federation_delivery_revoked_peers(&parsed.realm_id)
+        };
+        let mut service_frontiers: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> =
+            BTreeMap::new();
+        for member in projection.members_of_realm(&parsed.realm_id) {
+            if member.delivery_status.as_deref() != Some("routable") {
+                continue;
+            }
+            let Some(service_id) = member.recipient_service_id.as_deref() else {
+                continue;
+            };
+            if service_id == state.service_id() {
+                continue;
+            }
+            if revoked_peers.contains(service_id) {
+                tracing::info!(
+                    event_id = %parsed.event_id,
+                    realm_id = %parsed.realm_id,
+                    revoked_peer_service_id = %service_id,
+                    "skipping outbound federation push to peer with revoked service delegation (federation.md §4.4)"
+                );
+                continue;
+            }
+            let entry = service_frontiers.entry(service_id.to_owned()).or_default();
+            if let Some(frontier) = member.membership_event_ref.as_deref() {
+                entry.0.insert(frontier.to_owned());
+            }
+            if let Some(frontier) = member
+                .delivery_binding_frontier
+                .as_deref()
+                .or(member.membership_event_ref.as_deref())
+            {
+                entry.1.insert(frontier.to_owned());
+            }
+        }
+
+        // A directed `ak.invite.create` is routable even before the invitee's
+        // member projection exists locally. Its canonical delivery target is
+        // carried in the event payload, so include that peer as a fanout
+        // target with the operation id as the fallback frontier. This keeps
+        // the service-binding precondition typed while allowing the recipient
+        // Principal Server to project the pending invite.
+        if parsed.kind == "ak.invite.create"
+            && let Some(service_id) = envelope
+                .get("payload")
+                .and_then(Value::as_object)
+                .and_then(|payload| payload.get("invite_delivery_target"))
+                .and_then(Value::as_object)
+                .and_then(|target| target.get("recipient_service_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|did| !did.is_empty())
+            && service_id != state.service_id()
+            && !revoked_peers.contains(service_id)
+        {
+            service_frontiers.entry(service_id.to_owned()).or_default();
+        }
+        service_frontiers
+    };
+
+    service_frontiers
+        .into_iter()
+        .filter_map(
+            |(service_id, (membership_frontier, delivery_binding_frontier))| {
+                let url = match crate::routing::federation::federation::peer_url_for_service_id(
+                    state,
+                    &service_id,
+                ) {
+                    Some(url) => url,
+                    None => {
+                        tracing::warn!(
+                            event_id = %parsed.event_id,
+                            realm_id = %parsed.realm_id,
+                            destination_service_id = %service_id,
+                            "dynamic peer event fanout target has no configured service URL"
+                        );
+                        return None;
+                    }
+                };
+                Some(DynamicPeerEventTarget {
+                    url,
+                    service_id,
+                    membership_frontier: membership_frontier.into_iter().collect(),
+                    delivery_binding_frontier: delivery_binding_frontier.into_iter().collect(),
+                })
+            },
+        )
+        .collect()
+}
+
+fn service_binding_ref_for_target(
+    parsed: &ValidatedEventEnvelope,
+    binding_payload: &Value,
+    target: &DynamicPeerEventTarget,
+) -> Option<arkret_core::FederationServiceBindingRef> {
+    let membership_frontier =
+        typed_frontier_or_fallback(&target.membership_frontier, &parsed.event_id)?;
+    let delivery_binding_frontier =
+        typed_frontier_or_fallback(&target.delivery_binding_frontier, &parsed.event_id)?;
+    Some(arkret_core::FederationServiceBindingRef {
+        realm_id: RealmId::new(parsed.realm_id.clone()).ok()?,
+        realm_policy_digest: Hash::new(canonical_json_hash(binding_payload)?).ok()?,
+        membership_frontier,
+        delivery_binding_frontier,
+        destination_service_type: "principal_server".to_owned(),
+        reducer_profile_digest: Hash::new(
+            arkret_core::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST.to_owned(),
+        )
+        .ok()?,
+    })
+}
+
+pub(super) fn typed_frontier_or_fallback(
+    frontier: &[String],
+    fallback_event_id: &str,
+) -> Option<Vec<EventId>> {
+    let mut typed = frontier
+        .iter()
+        .filter_map(|event_id| EventId::new(event_id.to_owned()).ok())
+        .collect::<Vec<_>>();
+    if typed.is_empty() {
+        typed.push(EventId::new(fallback_event_id.to_owned()).ok()?);
+    }
+    Some(typed)
+}

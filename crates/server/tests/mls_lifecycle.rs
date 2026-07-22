@@ -30,10 +30,10 @@ use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, ObjectStorageConfig};
-use soland::service;
-use soland::state::AppState;
-use soland_storage_postgres::Db;
+use soland_http::config::{AppConfig, ObjectStorageConfig};
+use soland_http::service;
+use soland_http::state::AppState;
+use soland_test_support::AppStateTestExt as _;
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -203,17 +203,16 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
 }
 
 fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: u64) {
-    let mut manager = state.test_cross_signing().lock();
     for current in 1..=generation {
-        manager
-            .record_cross_signing_publish(cross_signing_publish(principal, current))
+        state
+            .test_record_cross_signing_publish(cross_signing_publish(principal, current))
             .unwrap();
     }
 }
 
 #[tokio::test]
 async fn mls_lifecycle_end_to_end() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
 
     let alice_did = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";

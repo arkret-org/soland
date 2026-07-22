@@ -12,7 +12,7 @@ use super::common::*;
 
 #[tokio::test]
 async fn move_then_seal_apply_returns_recomputed_state_root() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -96,7 +96,7 @@ async fn move_then_seal_apply_returns_recomputed_state_root() {
 
 #[tokio::test]
 async fn seal_with_unknown_predecessor_is_rejected_with_conflict() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -139,7 +139,7 @@ async fn seal_with_unknown_predecessor_is_rejected_with_conflict() {
 
 #[tokio::test]
 async fn genesis_seal_with_non_empty_delta_applies_move() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -176,7 +176,7 @@ async fn genesis_seal_with_non_empty_delta_applies_move() {
 
 #[tokio::test]
 async fn seal_with_wrong_state_root_rolls_back_with_conflict() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -237,7 +237,7 @@ fn cursor_helper_compiles() {
 
 #[tokio::test]
 async fn move_on_soland_registered_cell_family_passes_verify() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 

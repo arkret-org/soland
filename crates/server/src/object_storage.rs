@@ -9,16 +9,15 @@ use std::path::Path as FsPath;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt as _, TryStreamExt as _};
 use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
 use object_store::{GetOptions, ObjectStore, ObjectStoreExt};
+use soland_application::delivery::ObjectStoragePort;
+use soland_http::config::ObjectStorageConfig;
 use tokio::io::AsyncReadExt as _;
-
-use crate::config::ObjectStorageConfig;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ObjectStorageError {
@@ -32,27 +31,9 @@ pub enum ObjectStorageError {
 
 pub type ObjectStorageResult<T> = Result<T, ObjectStorageError>;
 
-pub trait ObjectStorage: Send + Sync {
-    fn backend_name(&self) -> &'static str;
-    fn object_key_for_sha256(&self, sha256: &str) -> String;
-    fn put<'a>(&'a self, key: &'a str, bytes: Vec<u8>) -> BoxFuture<'a, ObjectStorageResult<()>>;
-    fn put_file<'a>(
-        &'a self,
-        key: &'a str,
-        file_path: &'a FsPath,
-    ) -> BoxFuture<'a, ObjectStorageResult<()>>;
-    fn get<'a>(&'a self, key: &'a str) -> BoxFuture<'a, ObjectStorageResult<Vec<u8>>>;
-    fn get_range_stream<'a>(
-        &'a self,
-        key: &'a str,
-        range: Range<u64>,
-    ) -> BoxFuture<'a, ObjectStorageResult<BoxStream<'static, ObjectStorageResult<Bytes>>>>;
-    fn delete<'a>(&'a self, key: &'a str) -> BoxFuture<'a, ObjectStorageResult<()>>;
-}
-
 pub fn build_object_storage(
     config: &ObjectStorageConfig,
-) -> anyhow::Result<Arc<dyn ObjectStorage>> {
+) -> anyhow::Result<Arc<dyn ObjectStoragePort>> {
     match config {
         ObjectStorageConfig::Local { root, prefix } => {
             std::fs::create_dir_all(root)?;
@@ -111,9 +92,10 @@ struct ObjectStoreStorage {
 
 const MULTIPART_UPLOAD_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
-impl ObjectStorage for ObjectStoreStorage {
-    fn backend_name(&self) -> &'static str {
-        self.backend_name
+#[async_trait::async_trait]
+impl ObjectStoragePort for ObjectStoreStorage {
+    fn backend_name(&self) -> String {
+        self.backend_name.to_owned()
     }
 
     fn object_key_for_sha256(&self, sha256: &str) -> String {
@@ -125,20 +107,18 @@ impl ObjectStorage for ObjectStoreStorage {
         }
     }
 
-    fn put<'a>(&'a self, key: &'a str, bytes: Vec<u8>) -> BoxFuture<'a, ObjectStorageResult<()>> {
-        Box::pin(async move {
+    async fn put(&self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
+        async {
             let path = object_path(key)?;
             self.store.put(&path, bytes.into()).await?;
             Ok(())
-        })
+        }
+        .await
+        .map_err(|error: ObjectStorageError| error.to_string())
     }
 
-    fn put_file<'a>(
-        &'a self,
-        key: &'a str,
-        file_path: &'a FsPath,
-    ) -> BoxFuture<'a, ObjectStorageResult<()>> {
-        Box::pin(async move {
+    async fn put_file(&self, key: &str, file_path: &FsPath) -> Result<(), String> {
+        async {
             let path = object_path(key)?;
             let len = tokio::fs::metadata(file_path).await?.len();
             if len <= MULTIPART_UPLOAD_CHUNK_BYTES as u64 {
@@ -165,22 +145,26 @@ impl ObjectStorage for ObjectStoreStorage {
                 return Err(ObjectStorageError::Store(error));
             }
             Ok(())
-        })
+        }
+        .await
+        .map_err(|error: ObjectStorageError| error.to_string())
     }
 
-    fn get<'a>(&'a self, key: &'a str) -> BoxFuture<'a, ObjectStorageResult<Vec<u8>>> {
-        Box::pin(async move {
+    async fn get(&self, key: &str) -> Result<Vec<u8>, String> {
+        async {
             let path = object_path(key)?;
             Ok(self.store.get(&path).await?.bytes().await?.to_vec())
-        })
+        }
+        .await
+        .map_err(|error: ObjectStorageError| error.to_string())
     }
 
-    fn get_range_stream<'a>(
-        &'a self,
-        key: &'a str,
+    async fn get_range_stream(
+        &self,
+        key: &str,
         range: Range<u64>,
-    ) -> BoxFuture<'a, ObjectStorageResult<BoxStream<'static, ObjectStorageResult<Bytes>>>> {
-        Box::pin(async move {
+    ) -> Result<BoxStream<'static, Result<Bytes, String>>, String> {
+        async {
             let path = object_path(key)?;
             let result = self
                 .store
@@ -188,17 +172,21 @@ impl ObjectStorage for ObjectStoreStorage {
                 .await?;
             Ok(result
                 .into_stream()
-                .map_err(ObjectStorageError::Store)
+                .map_err(|error| ObjectStorageError::Store(error).to_string())
                 .boxed())
-        })
+        }
+        .await
+        .map_err(|error: ObjectStorageError| error.to_string())
     }
 
-    fn delete<'a>(&'a self, key: &'a str) -> BoxFuture<'a, ObjectStorageResult<()>> {
-        Box::pin(async move {
+    async fn delete(&self, key: &str) -> Result<(), String> {
+        async {
             let path = object_path(key)?;
             self.store.delete(&path).await?;
             Ok(())
-        })
+        }
+        .await
+        .map_err(|error: ObjectStorageError| error.to_string())
     }
 }
 

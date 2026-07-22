@@ -66,7 +66,7 @@ fn resign_federation_event(event: Value) -> Value {
 
 #[tokio::test]
 async fn peer_events_describe_advertises_formal_surface() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let describe: Value = TestClient::get("http://server/_arkret/peer/events/describe")
         .send(&app_from_state(state))
         .await
@@ -103,7 +103,7 @@ async fn peer_events_describe_advertises_formal_surface() {
 
 #[tokio::test]
 async fn peer_events_query_and_frontier_use_peer_surface() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:alice.example").await;
     let mut event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede00000001",
@@ -183,7 +183,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
 
 #[tokio::test]
 async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state);
     let now = Utc::now();
     let predecessor_id = "ak:event:01904100-0000-7000-8000-fede00000040";
@@ -243,7 +243,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
 
 #[tokio::test]
 async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state);
     let event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede00000003",
@@ -284,7 +284,7 @@ async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
 
 #[tokio::test]
 async fn peer_events_frontier_exposes_current_sibling_heads() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:alice.example").await;
     let now = Utc::now();
     for (idx, event_id) in [
@@ -335,7 +335,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
 /// is constructed.
 #[tokio::test]
 async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state);
     let mut event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede00000099",
@@ -382,7 +382,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
 /// re-verified by the downstream proof chain).
 #[tokio::test]
 async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state);
     // encryption-and-audit.md §2: this fixture submits plaintext, so the
     // Realm must explicitly authorize the receiving service to see it. This
@@ -438,7 +438,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
 
 #[tokio::test]
 async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state);
     let welcome_event_id = "ak:event:01904100-0000-7000-8000-fede00000b01";
     let welcome_event = event_envelope(
@@ -476,7 +476,7 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
 
 #[tokio::test]
 async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:bob.example").await;
     install_test_circle(&state, TEST_CIRCLE_ID, &["did:web:alice.example"]);
     let now = Utc::now();
@@ -558,7 +558,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
 
 #[tokio::test]
 async fn self_events_reject_federation_wire() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede00000002",

@@ -22,7 +22,7 @@ proptest! {
     ) {
         let jws = eddsa_detached_jws(&signature);
         prop_assume!(!jws.rsplit('.').next().unwrap_or_default().bytes().all(|b| b == b'A'));
-        prop_assert!(soland::jws_verify::verify_jws_shape(
+        prop_assert!(soland_http::jws_verify::verify_jws_shape(
             &payload,
             &jws,
             "did:web:alice.example#k1",
@@ -39,7 +39,7 @@ proptest! {
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
         let signature = URL_SAFE_NO_PAD.encode(signature);
         let jws = format!("{header}.{attached_payload}.{signature}");
-        let err = soland::jws_verify::verify_jws_shape(
+        let err = soland_http::jws_verify::verify_jws_shape(
             &payload,
             &jws,
             "did:web:alice.example#k1",

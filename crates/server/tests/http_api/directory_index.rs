@@ -27,7 +27,7 @@ async fn sync_and_directory_share_demo_realm() {
             .await;
     assert_eq!(invalid_profile.status_code.unwrap().as_u16(), 405);
 
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let sync = account_subscribe_frame(state, Some(&token), "catchup=true").await;
     assert!(
@@ -190,7 +190,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
     config.public_base_url = "https://local.host".to_owned();
     let service_id = "did:webvh:zqmsolandlocal".to_owned();
     config.trust_domain = trust_domain_from_service_id(&service_id);
-    let mut state = AppState::new(config, Db { pool: None });
+    let mut state = soland_test_support::app_state(config);
     state.test_set_service_id(service_id);
     let did = "did:web:registered-handle.example";
     let device = "ak:device:01904100-0000-7000-8000-00000000a11c";
@@ -381,7 +381,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
     let mut config = test_config();
     config.development_mode = false;
     config.seed_demo_data = true;
-    let service = app_from_state(AppState::new(config, Db { pool: None }));
+    let service = app_from_state(soland_test_support::app_state(config));
 
     let not_found_cases = [
         (
@@ -473,7 +473,7 @@ async fn private_contact_discovery_rejects_plaintext_identifier_matching() {
 
 #[tokio::test]
 async fn directory_resolve_target_preview_requires_effective_preview_policy() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let realm = seed_test_realm(
         &state,
         "did:web:alice.example",
@@ -509,7 +509,7 @@ async fn directory_resolve_target_preview_requires_effective_preview_policy() {
 
 #[tokio::test]
 async fn directory_resolve_target_preview_returns_policy_limited_projection() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let realm = seed_test_realm(
         &state,
         "did:web:alice.example",
@@ -578,7 +578,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
 
 #[tokio::test]
 async fn directory_resolve_realm_returns_spec_title_field() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let realm = seed_test_realm(
         &state,
         "did:web:alice.example",
@@ -682,7 +682,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     // profiles-presence.md §4.1 references it and does not define `limited`).
     assert_eq!(backfill["has_more"], false);
 
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // service-http-binding.md account_auth: `self` authorization queries are
     // user-session operations, so the contract check must be authenticated.
@@ -730,7 +730,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
 
 #[tokio::test]
 async fn admin_collection_surfaces_return_sodmin_shapes() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let unauthenticated = TestClient::get("http://server/_soland/admin/actors")

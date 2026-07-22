@@ -602,26 +602,6 @@ impl From<ProjectionEventRow> for ProjectionEventRecord {
         }
     }
 }
-pub async fn load_projected_events_from_pg(
-    pool: &PgPool,
-    realm_id: &str,
-) -> PersistenceResult<Vec<ProjectionEventRecord>> {
-    let mut conn = pg_conn(pool).await.map_err(PersistenceError::database)?;
-    let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
-    sql_query(
-        "SELECT e.id AS event_id, e.realm_id, e.event_type AS event_kind, 'event' AS operation_type, e.operation_id, e.sender_id AS sender, e.payload, e.created_at, COALESCE(ce.received_at, e.created_at) AS received_at \
-         FROM events e LEFT JOIN canonical_events ce ON ce.id = e.id WHERE e.realm_id = $1 \
-         UNION ALL \
-         SELECT s.id AS event_id, s.realm_id, s.event_type AS event_kind, 'state' AS operation_type, s.operation_id, s.sender_id AS sender, s.payload, s.created_at, COALESCE(ce.received_at, s.created_at) AS received_at \
-         FROM space_state_events s LEFT JOIN canonical_events ce ON ce.id = s.id OR ce.id = s.operation_id WHERE s.realm_id = $1 \
-         ORDER BY received_at ASC, event_id ASC",
-    )
-    .bind::<SqlUuid, _>(realm_id_uuid)
-    .load::<ProjectionEventRow>(&mut *conn)
-    .await
-    .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
-    .map_err(PersistenceError::database)
-}
 pub async fn persist_projected_operation_to_pg(
     pool: &PgPool,
     origin: &str,

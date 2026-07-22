@@ -1416,7 +1416,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_complete_rejected_after_cross_signing_reset() {
-    // A ak.test_cross_signing().reset advances the accepted generation fence. A
+    // An ak.cross_signing.reset advances the accepted generation fence. A
     // device-authorize binding for the retired generation must be rejected as
     // stale before its SSK signature is considered.
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
@@ -1450,9 +1450,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
     let content: arkret_core::CrossSigningResetPayload =
         serde_json::from_value(reset).expect("reset content");
     state
-        .test_cross_signing()
-        .lock()
-        .record_cross_signing_reset(&content)
+        .test_record_cross_signing_reset(&content)
         .expect("record reset");
 
     let complete_body =

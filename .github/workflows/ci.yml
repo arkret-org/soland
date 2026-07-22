@@ -74,6 +74,10 @@ jobs:
         run: python scripts/check-env-docs.py
         working-directory: soland
 
+      - name: Crate layering gate
+        run: cargo +1.96 run -p xtask --bin check_layering --locked
+        working-directory: soland
+
       - name: Rustfmt
         run: cargo +nightly fmt --all -- --check
         working-directory: soland

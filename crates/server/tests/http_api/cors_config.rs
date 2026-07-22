@@ -8,7 +8,7 @@ use super::common::*;
 async fn configured_cors_allows_only_explicit_origin() {
     let mut config = test_config();
     config.cors_allow_origin = Some("https://app.example".to_owned());
-    let service = app_from_state(AppState::new(config, Db { pool: None }));
+    let service = app_from_state(soland_test_support::app_state(config));
 
     let allowed = TestClient::options("http://server/_arkret/self/account/subscribe?catchup=true")
         .add_header("Origin", "https://app.example", true)
@@ -73,7 +73,7 @@ async fn configured_cors_allows_only_explicit_origin() {
 async fn configured_cors_allows_blob_upload_headers() {
     let mut config = test_config();
     config.cors_allow_origin = Some("https://app.example".to_owned());
-    let service = app_from_state(AppState::new(config, Db { pool: None }));
+    let service = app_from_state(soland_test_support::app_state(config));
 
     let allowed = TestClient::options("http://server/_arkret/self/blob/upload")
         .add_header("Origin", "https://app.example", true)
@@ -123,7 +123,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6 then
     // expect the invitee to see that invite via `GET /authz/invites`.
     // This test pins that contract on the event path.
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     // dev-login auto-registers the actor; we don't need /account/register's
     // strict schema here. Use inkson-style unique DIDs (with hyphens and
     // uuid suffixes) so the test exercises the same DID validator path the
@@ -218,7 +218,7 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
     // header) needs.
     let mut config = test_config();
     config.cors_allow_origin = Some("*".to_owned());
-    let service = app_from_state(AppState::new(config, Db { pool: None }));
+    let service = app_from_state(soland_test_support::app_state(config));
 
     let from_inkson =
         TestClient::options("http://server/_arkret/self/account/subscribe?catchup=true")
@@ -271,7 +271,7 @@ async fn server_describe_advertises_account_authority_and_oidc_method_when_confi
     config.account_authority_enrollment_did =
         Some("did:key:z6Mkfmm57fsb6VL7zVusP8zeA9SYkCKdvUhby2G7Yh8vvQ1P".to_owned());
     config.oidc_client_id = Some("01GFWR28C4KNE04WG3HKXB7C9R".to_owned());
-    let service = app_from_state(AppState::new(config, Db { pool: None }));
+    let service = app_from_state(soland_test_support::app_state(config));
 
     let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&service)

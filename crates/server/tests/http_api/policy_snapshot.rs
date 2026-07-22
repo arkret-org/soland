@@ -6,7 +6,7 @@ use super::common::*;
 
 #[tokio::test]
 async fn policy_check_and_validation_work() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     let policy: Value = TestClient::post("http://server/_arkret/self/policy/check")

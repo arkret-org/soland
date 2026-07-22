@@ -9,17 +9,65 @@ homepage.workspace = true
 authors.workspace = true
 description = "Soland HTTP transport, middleware, routing, and OpenAPI surface."
 
+[features]
+default = []
+openmls-keypackage-validation = []
+test-support = []
+
 [dependencies]
-arkret-core = { workspace = true, features = ["salvo"] }
-arkret-server = { workspace = true }
-arkret-signatures = { workspace = true }
+anyhow.workspace = true
+arc-swap.workspace = true
+async-stream.workspace = true
+async-trait.workspace = true
 base64.workspace = true
-chrono.workspace = true
+bs58.workspace = true
+bytes.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+arkret-core = { workspace = true, features = ["client", "salvo"] }
+arkret-event-draft.workspace = true
+arkret-auth.workspace = true
+arkret-bootstrap.workspace = true
+arkret-crypto = { workspace = true, features = ["account-data"] }
+arkret-http-client.workspace = true
+arkret-identity.workspace = true
+arkret-keystore = { workspace = true, features = ["keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"] }
+arkret-mls.workspace = true
+arkret-models-collaboration.workspace = true
+arkret-models-crypto.workspace = true
+arkret-policy.workspace = true
+arkret-server.workspace = true
+arkret-signatures = { workspace = true, features = ["protocol", "signer"] }
+arkret-state = { workspace = true, features = ["salvo"] }
+arkret-wire.workspace = true
+dotenvy.workspace = true
 ed25519-dalek.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+hmac.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus = { workspace = true, default-features = false }
 parking_lot.workspace = true
-salvo = { workspace = true, features = ["affix-state", "oapi"] }
-salvo-oapi = { workspace = true, features = ["yaml"] }
-serde.workspace = true
+rand.workspace = true
+reqwest = { workspace = true, default-features = false, features = ["form", "json", "rustls"] }
+salvo = { workspace = true, default-features = false, features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
+soland-application.workspace = true
+soland-contracts = { workspace = true, features = ["salvo"] }
+subtle.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true
+url = "2.5"
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
+zeroize = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+proptest.workspace = true
+salvo = { workspace = true, features = ["test"] }
+soland-domain.workspace = true
+soland-storage.workspace = true
+soland-storage-memory.workspace = true
+soland-storage-postgres.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

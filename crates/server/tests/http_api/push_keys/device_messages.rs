@@ -6,7 +6,7 @@ use crate::common::*;
 
 #[tokio::test]
 async fn server_preserves_e2ee_payloads_as_opaque_data() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let ciphertext = "base64url-opaque-ciphertext";
     let target = device_message_target(
@@ -50,7 +50,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
 
 #[tokio::test]
 async fn message_id_idempotency_survives_ack_and_rejects_canonical_target_conflicts() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let target_device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
@@ -219,7 +219,7 @@ async fn message_id_idempotency_survives_ack_and_rejects_canonical_target_confli
 
 #[tokio::test]
 async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     TestClient::post("http://server/_arkret/self/device_messages")
@@ -304,7 +304,7 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
 
 #[tokio::test]
 async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let mut expired_target = device_message_target(
         "ak.mls.welcome",
@@ -391,7 +391,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
 
 #[tokio::test]
 async fn device_messages_evicted_after_session_logout() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
     TestClient::post("http://server/_arkret/self/device_messages")

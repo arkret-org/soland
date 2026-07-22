@@ -73,9 +73,20 @@ pub struct PeerKeyPackageClaimAttempt<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PeerKeyPackageClaimAttemptResult {
-    Claimed(MlsKeyPackageRow),
+    Claimed(Box<MlsKeyPackageRow>),
     Existing(PeerKeyPackageClaimLedgerRecord),
     KeyPackageUnavailable,
+}
+
+pub struct MlsKeyPackageClaim<'a> {
+    pub id: &'a str,
+    pub mls_group_id: &'a str,
+    pub intended_realm_id: Option<&'a str>,
+    pub ssk_generation: Option<u64>,
+    pub device_authorize_event_id: Option<&'a str>,
+    pub agent_key_authorize_event_id: Option<&'a str>,
+    pub claimed_at: i64,
+    pub claim_expires_at_unix_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -136,14 +147,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
     /// inside the store so two concurrent callers see at-most-one win.
     async fn try_claim(
         &self,
-        id: &str,
-        mls_group_id: &str,
-        intended_realm_id: Option<&str>,
-        ssk_generation: Option<u64>,
-        device_authorize_event_id: Option<&str>,
-        agent_key_authorize_event_id: Option<&str>,
-        claimed_at: i64,
-        claim_expires_at_unix_ms: Option<i64>,
+        claim: MlsKeyPackageClaim<'_>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Mark an already claimed ordinary KeyPackage consumed by the same MLS
     /// group. A consume at or after the claim deadline fails closed.
@@ -214,6 +218,17 @@ pub struct MlsCommitEpochAdvance<'a> {
     pub committed_at: i64,
 }
 
+pub struct MlsCommitGenesis<'a> {
+    pub effective_scope: &'a Value,
+    pub group_id: &'a str,
+    pub leader_actor_id: &'a str,
+    pub creator_device_id: &'a str,
+    pub genesis_event_ref: &'a str,
+    pub covered_seals: &'a [String],
+    pub governance_binding: &'a Value,
+    pub committed_at: i64,
+}
+
 #[async_trait]
 pub trait MlsCommitStore: Send + Sync {
     async fn get(
@@ -225,14 +240,7 @@ pub trait MlsCommitStore: Send + Sync {
     /// already has an epoch row.
     async fn initialize_genesis(
         &self,
-        effective_scope: &Value,
-        group_id: &str,
-        leader_actor_id: &str,
-        creator_device_id: &str,
-        genesis_event_ref: &str,
-        covered_seals: &[String],
-        governance_binding: &Value,
-        committed_at: i64,
+        genesis: MlsCommitGenesis<'_>,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
     /// Atomically advance the group's epoch IFF `expected_prev_epoch`
     /// matches the existing row's current epoch.

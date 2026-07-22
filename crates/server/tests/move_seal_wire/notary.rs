@@ -10,7 +10,7 @@ use super::common::*;
 /// state_root.
 #[tokio::test]
 async fn notary_worker_signs_pending_move_and_publishes_seal() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -97,7 +97,7 @@ async fn notary_pass_broadcasts_frontier_frame_to_subscribers() {
 
     use tokio::time::sleep;
 
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let _app = service(state.clone());
 
@@ -142,7 +142,7 @@ async fn notary_pass_broadcasts_frontier_frame_to_subscribers() {
     // (dev_token), so we'd need the actor in realm.members. To avoid
     // wiring all that, we use the broadcast directly: subscribe to the
     // receiver and check the notification arrives.
-    let mut rx = state.test_event_broadcast().subscribe();
+    let mut rx = state.test_subscribe_event_notifications();
     writer.await.expect("writer task");
     // Drain any non-frontier messages and find the frontier.
     let mut saw_frontier = false;
@@ -151,7 +151,7 @@ async fn notary_pass_broadcasts_frontier_frame_to_subscribers() {
     while tokio::time::Instant::now() < deadline {
         match tokio::time::timeout(StdDuration::from_millis(50), rx.recv()).await {
             Ok(Ok(notification)) => {
-                use soland::state::EventNotificationKind;
+                use soland_http::state::EventNotificationKind;
                 match notification.kind {
                     EventNotificationKind::Frontier {
                         state_root,
@@ -191,7 +191,7 @@ async fn notary_pass_broadcasts_frontier_frame_to_subscribers() {
 async fn notary_pass_populates_projection_cells_map() {
     use arkret_state::lattice::CellState;
 
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -241,7 +241,7 @@ async fn notary_pass_populates_projection_cells_map() {
 /// the genesis notary) a non-null `seal_id`.
 #[tokio::test]
 async fn admin_reconfigure_notary_builds_real_move_and_seals_it() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -289,7 +289,7 @@ async fn admin_reconfigure_notary_builds_real_move_and_seals_it() {
 /// member set, because that's a privilege-escalation primitive.
 #[tokio::test]
 async fn admin_reconfigure_notary_rejects_self_in_proposed_member_set() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -318,7 +318,7 @@ async fn admin_reconfigure_notary_rejects_self_in_proposed_member_set() {
 /// `published: false`.
 #[tokio::test]
 async fn notary_worker_is_idempotent_when_no_pending_moves() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
@@ -363,7 +363,7 @@ async fn notary_worker_is_idempotent_when_no_pending_moves() {
 /// rotation transaction, the route must fail closed and leave the key intact.
 #[tokio::test]
 async fn admin_rotate_signing_key_fails_closed_without_mutating_the_signer() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let pre = state.notary_signing_key().to_bytes();

@@ -1,13 +1,13 @@
 use diesel_async::AsyncConnection;
 
 use super::{
-    BigInt, Binary, Bool, Jsonb, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitStore,
-    MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Nullable,
-    OptionalExtension, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
-    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
-    PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text,
-    Uuid, Value, async_trait, db_ssk_generation, json_string_array, mls_effective_scope_parts,
-    pg_conn, sql_query,
+    BigInt, Binary, Bool, Jsonb, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitGenesis,
+    MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,
+    MlsWelcomeStore, Nullable, OptionalExtension, PeerKeyPackageClaimAttempt,
+    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, PgPool,
+    PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text, Uuid, Value, async_trait,
+    db_ssk_generation, json_string_array, mls_effective_scope_parts, pg_conn, sql_query,
 };
 pub struct PgMlsKeyPackageStore {
     pub pool: PgPool,
@@ -83,15 +83,18 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
 
     async fn try_claim(
         &self,
-        id: &str,
-        group_id: &str,
-        intended_realm_id: Option<&str>,
-        ssk_generation: Option<u64>,
-        device_authorize_event_id: Option<&str>,
-        agent_key_authorize_event_id: Option<&str>,
-        claimed_at: i64,
-        claim_expires_at_unix_ms: Option<i64>,
+        claim: MlsKeyPackageClaim<'_>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
+        let MlsKeyPackageClaim {
+            id,
+            mls_group_id: group_id,
+            intended_realm_id,
+            ssk_generation,
+            device_authorize_event_id,
+            agent_key_authorize_event_id,
+            claimed_at,
+            claim_expires_at_unix_ms,
+        } = claim;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -232,7 +235,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                     return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
                 };
                 insert_peer_claim_strict(conn, attempt.ledger).await?;
-                Ok(PeerKeyPackageClaimAttemptResult::Claimed(claimed.into()))
+                Ok(PeerKeyPackageClaimAttemptResult::Claimed(Box::new(
+                    claimed.into(),
+                )))
             })
             .await;
         match result {
@@ -549,15 +554,18 @@ impl MlsCommitStore for PgMlsCommitStore {
 
     async fn initialize_genesis(
         &self,
-        effective_scope: &Value,
-        group_id: &str,
-        leader_actor_id: &str,
-        creator_device_id: &str,
-        genesis_event_ref: &str,
-        covered_seals: &[String],
-        governance_binding: &Value,
-        committed_at: i64,
+        genesis: MlsCommitGenesis<'_>,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let MlsCommitGenesis {
+            effective_scope,
+            group_id,
+            leader_actor_id,
+            creator_device_id,
+            genesis_event_ref,
+            covered_seals,
+            governance_binding,
+            committed_at,
+        } = genesis;
         let scope = mls_effective_scope_parts(effective_scope)?;
         let mut frontier = covered_seals.to_vec();
         frontier.sort();

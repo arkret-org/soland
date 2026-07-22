@@ -23,10 +23,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
 use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, ObjectStorageConfig};
-use soland::routing::federation::outbox::{FederationDispatcher, enqueue_outbound};
-use soland::state::AppState;
-use soland_storage_postgres::Db;
+use soland_http::config::{AppConfig, ObjectStorageConfig};
+use soland_http::routing::federation::outbox::{FederationDispatcher, enqueue_outbound};
+use soland_http::state::AppState;
+use soland_test_support::AppStateTestExt as _;
 
 const PEER_DID: &str = "did:web:peer.example";
 const FEDERATION_ENDPOINT: &str = "/_arkret/peer/events";
@@ -212,7 +212,7 @@ async fn outbound_signature_rejects_body_digest_tamper() {
 async fn permanent_4xx_routes_to_dead_letter() {
     let (peer_url, request_rx) =
         spawn_mock_peer_with_status("404 Not Found", br#"{"error":"unknown_peer"}"#);
-    let state = AppState::new(outbox_test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(outbox_test_config());
     let row = enqueue_outbound(
         &state,
         &peer_url,
@@ -293,7 +293,7 @@ async fn outbound_signature_rejects_trust_domain_mismatch() {
 
 #[tokio::test]
 async fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
-    let state = AppState::new(outbox_test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(outbox_test_config());
 
     let first = enqueue_outbound(
         &state,
@@ -352,7 +352,7 @@ async fn outbound_signature_fails_after_service_key_rotation() {
 
 async fn capture_signed_request() -> CapturedSignedRequestBody {
     let (peer_url, request_rx) = spawn_mock_peer();
-    let state = AppState::new(outbox_test_config(), Db { pool: None });
+    let state = soland_test_support::app_state(outbox_test_config());
 
     // Enqueue one outbound row — same path broadcast_move_to_peers
     // funnels through after computing the deterministic idempotency
@@ -367,10 +367,14 @@ async fn capture_signed_request() -> CapturedSignedRequestBody {
     )
     .await
     .expect("enqueue must succeed");
-    assert!(
-        row.delivered_at.is_none(),
-        "freshly enqueued row should be undelivered"
-    );
+    let persistence = state.test_persistence();
+    let pending = persistence
+        .federation_outbox()
+        .get(&row.id)
+        .await
+        .expect("outbox query")
+        .expect("freshly enqueued row remains pending");
+    assert!(pending.delivered_at.is_none());
 
     // Drive one dispatch pass synchronously.
     let dispatcher = FederationDispatcher::new(state.clone());
