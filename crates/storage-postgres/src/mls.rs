@@ -30,9 +30,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              (id, keypackage_ref, keypackage_digest, actor_id, device_id, key_package_bytes, \
               capabilities, capabilities_digest, device_signature, last_resort, \
               last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-              claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
+              claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
               claim_expires_at_unix_ms, consumed_at, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
@@ -51,6 +51,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Nullable<Text>, _>(&record.claimed_by_mls_group_id)
         .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<Nullable<Text>, _>(&record.device_authorize_event_id)
+        .bind::<Nullable<Text>, _>(&record.agent_key_authorize_event_id)
         .bind::<Nullable<BigInt>, _>(record.claimed_at)
         .bind::<Nullable<BigInt>, _>(record.claim_expires_at_unix_ms)
         .bind::<Nullable<BigInt>, _>(record.consumed_at)
@@ -68,7 +69,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
              FROM mls_key_packages WHERE id = $1",
         )
@@ -87,6 +88,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         intended_realm_id: Option<&str>,
         ssk_generation: Option<u64>,
         device_authorize_event_id: Option<&str>,
+        agent_key_authorize_event_id: Option<&str>,
         claimed_at: i64,
         claim_expires_at_unix_ms: Option<i64>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
@@ -100,21 +102,23 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                  last_resort_realm_id = CASE WHEN last_resort AND $2 <> 'revoked' THEN COALESCE(last_resort_realm_id, $3) ELSE last_resort_realm_id END, \
                  ssk_generation = COALESCE($4, ssk_generation), \
                  device_authorize_event_id = COALESCE($5, device_authorize_event_id), \
-                 claimed_at = CASE WHEN last_resort AND $2 <> 'revoked' THEN claimed_at ELSE $6 END, \
-                 claim_expires_at_unix_ms = CASE WHEN last_resort AND $2 <> 'revoked' THEN claim_expires_at_unix_ms ELSE $7 END, \
+                 agent_key_authorize_event_id = COALESCE($6, agent_key_authorize_event_id), \
+                 claimed_at = CASE WHEN last_resort AND $2 <> 'revoked' THEN claimed_at ELSE $7 END, \
+                 claim_expires_at_unix_ms = CASE WHEN last_resort AND $2 <> 'revoked' THEN claim_expires_at_unix_ms ELSE $8 END, \
                  consumed_at = CASE WHEN $2 = 'revoked' THEN consumed_at ELSE NULL END \
              WHERE id = $1 \
                AND (claimed_by_mls_group_id IS NULL OR claimed_by_mls_group_id <> 'revoked') \
                AND (claimed_by_mls_group_id IS NULL OR (last_resort AND $2 <> 'revoked')) \
                AND ($4 IS NULL OR ssk_generation = $4) \
                AND ($5 IS NULL OR device_authorize_event_id = $5) \
-               AND ($2 = 'revoked' OR (lifetime_not_after > $6 \
-                    AND ($7 IS NULL OR ($7 > $6 * 1000 AND $7 <= lifetime_not_after * 1000)))) \
+               AND ($6 IS NULL OR agent_key_authorize_event_id = $6) \
+               AND ($2 = 'revoked' OR (lifetime_not_after > $7 \
+                    AND ($8 IS NULL OR ($8 > $7 * 1000 AND $8 <= lifetime_not_after * 1000)))) \
                AND ((NOT last_resort) OR $2 = 'revoked' OR (last_resort_realm_id IS NULL AND $3 IS NOT NULL) OR last_resort_realm_id = $3) \
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at",
         )
         .bind::<Text, _>(id)
@@ -122,6 +126,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Nullable<Text>, _>(intended_realm_id)
         .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<Nullable<Text>, _>(device_authorize_event_id)
+        .bind::<Nullable<Text>, _>(agent_key_authorize_event_id)
         .bind::<BigInt, _>(claimed_at)
         .bind::<Nullable<BigInt>, _>(claim_expires_at_unix_ms)
         .get_result::<MlsKeyPackagePgRow>(&mut *conn)
@@ -150,7 +155,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at",
         )
         .bind::<Text, _>(id)
@@ -197,24 +202,26 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 }
                 let claimed = sql_query(
                     "UPDATE mls_key_packages \
-                 SET claimed_by_mls_group_id = $2, claimed_at = $5, claim_expires_at_unix_ms = $6, consumed_at = NULL \
+                 SET claimed_by_mls_group_id = $2, claimed_at = $6, claim_expires_at_unix_ms = $7, consumed_at = NULL \
                  WHERE id = $1 \
                    AND NOT last_resort \
                    AND claimed_by_mls_group_id IS NULL \
                    AND ($3 IS NULL OR ssk_generation = $3) \
                    AND ($4 IS NULL OR device_authorize_event_id = $4) \
-                   AND lifetime_not_after > $5 \
-                   AND $6 > $5 * 1000 AND $6 <= lifetime_not_after * 1000 \
+                   AND ($5 IS NULL OR agent_key_authorize_event_id = $5) \
+                   AND lifetime_not_after > $6 \
+                   AND $7 > $6 * 1000 AND $7 <= lifetime_not_after * 1000 \
                  RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
                  key_package_bytes, capabilities, capabilities_digest, device_signature, \
                  last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-                 claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
+                 claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
                  claim_expires_at_unix_ms, consumed_at, created_at",
                 )
                 .bind::<Text, _>(attempt.keypackage_id)
                 .bind::<Text, _>(attempt.mls_group_id)
                 .bind::<Nullable<BigInt>, _>(ssk_generation)
                 .bind::<Nullable<Text>, _>(attempt.device_authorize_event_id)
+                .bind::<Nullable<Text>, _>(attempt.agent_key_authorize_event_id)
                 .bind::<BigInt, _>(attempt.claimed_at)
                 .bind::<BigInt, _>(attempt.claim_expires_at_unix_ms)
                 .get_result::<MlsKeyPackagePgRow>(conn)
@@ -320,7 +327,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
@@ -344,7 +351,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
              FROM mls_key_packages WHERE claimed_by_mls_group_id = $1 \
              ORDER BY claimed_at ASC NULLS FIRST, id ASC",
@@ -713,6 +720,8 @@ struct MlsKeyPackagePgRow {
     ssk_generation: Option<i64>,
     #[diesel(sql_type = Nullable<Text>)]
     device_authorize_event_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    agent_key_authorize_event_id: Option<String>,
     #[diesel(sql_type = Nullable<BigInt>)]
     claimed_at: Option<i64>,
     #[diesel(sql_type = Nullable<BigInt>)]
@@ -782,6 +791,7 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
                 .and_then(|generation| u64::try_from(generation).ok())
                 .filter(|generation| *generation >= 1),
             device_authorize_event_id: row.device_authorize_event_id,
+            agent_key_authorize_event_id: row.agent_key_authorize_event_id,
             claimed_at: row.claimed_at,
             claim_expires_at_unix_ms: row.claim_expires_at_unix_ms,
             consumed_at: row.consumed_at,

@@ -69,6 +69,26 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
+    if let Some(authorize_event_id) = operation
+        .payload
+        .get("claim_ref")
+        .and_then(Value::as_object)
+        .and_then(|claim_ref| claim_ref.get("agent_key_authorize_event_id"))
+        .and_then(Value::as_str)
+    {
+        let Ok(recipient) = arkret_core::Did::new(recipient_actor_id.to_owned()) else {
+            return Some(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
+        };
+        if !crate::routing::mls::current_agent_key_authorization_matches(
+            state,
+            &recipient,
+            authorize_event_id,
+        )
+        .await
+        {
+            return Some(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
+        }
+    }
     if crate::routing::identity::auth::is_device_revoked(
         state,
         recipient_actor_id,

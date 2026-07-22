@@ -15,7 +15,7 @@ authors.workspace = true
 
 [features]
 default = []
-openmls-keypackage-validation = ["dep:arkret-mls"]
+openmls-keypackage-validation = []
 otel = [
     "dep:opentelemetry",
     "dep:opentelemetry-otlp",
@@ -61,7 +61,7 @@ arkret-crypto = {workspace = true,features = ["account-data"]}
 arkret-http-client.workspace = true
 arkret-identity.workspace = true
 arkret-keystore = {workspace = true,features = ["keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"]}
-arkret-mls = {workspace = true,optional = true}
+arkret-mls.workspace = true
 arkret-models-collaboration.workspace = true
 arkret-models-crypto = {workspace = true}
 arkret-policy.workspace = true

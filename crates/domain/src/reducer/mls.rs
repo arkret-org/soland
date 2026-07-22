@@ -183,6 +183,7 @@ pub fn apply_keypackage_publish(
         claimed_by: None,
         ssk_generation: trust_binding.ssk_generation,
         device_authorize_event_id: trust_binding.device_authorize_event_id,
+        agent_key_authorize_event_id: trust_binding.agent_key_authorize_event_id,
         claimed_at: None,
         claim_expires_at_unix_ms: None,
         consumed_at: None,
@@ -247,6 +248,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
     };
     if row.ssk_generation != trust_binding.ssk_generation
         || row.device_authorize_event_id != trust_binding.device_authorize_event_id
+        || row.agent_key_authorize_event_id != trust_binding.agent_key_authorize_event_id
     {
         return reject(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH);
     }
@@ -380,6 +382,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
         _ => return reject("mls_welcome_bytes_missing"),
     };
     if let Err(reason) = validate_welcome_trust_binding(
+        state,
         op,
         group_id,
         recipient_actor_id,
@@ -1079,6 +1082,7 @@ fn validate_binding_profiles(binding: &Value) -> Result<(), &'static str> {
 }
 
 fn validate_welcome_trust_binding(
+    state: &ProjectionState,
     op: &Operation,
     group_id: &str,
     recipient_actor_id: &str,
@@ -1118,6 +1122,15 @@ fn validate_welcome_trust_binding(
         .ok_or(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let claim_trust_binding = keypackage_claim_trust_binding_object(claim_ref)
         .map_err(|_| arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    if let Some(agent_authorize_event_id) =
+        claim_trust_binding.agent_key_authorize_event_id.as_deref()
+        && !state
+            .active_agent_key_authorizations(recipient_actor_id)
+            .into_iter()
+            .any(|(_, event_id)| event_id == agent_authorize_event_id)
+    {
+        return Err(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH);
+    }
     if claim_ref.get("claim_id").and_then(Value::as_str) != Some(claim_id)
         || claim_ref.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
         || claim_ref.get("keypackage_digest").and_then(Value::as_str) != Some(keypackage_digest)
@@ -1175,6 +1188,10 @@ fn validate_welcome_trust_binding(
             .get("device_authorize_event_id")
             .and_then(Value::as_str)
             != claim_trust_binding.device_authorize_event_id.as_deref()
+        || claim_ref
+            .get("agent_key_authorize_event_id")
+            .and_then(Value::as_str)
+            != claim_trust_binding.agent_key_authorize_event_id.as_deref()
     {
         return Err(arkret_core::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
@@ -1305,6 +1322,7 @@ fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetime, &'static str>
 struct KeyPackageTrustBinding {
     ssk_generation: Option<u64>,
     device_authorize_event_id: Option<String>,
+    agent_key_authorize_event_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1333,14 +1351,31 @@ fn keypackage_claim_trust_binding_object(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    match (ssk_generation, device_authorize_event_id) {
-        (Some(ssk_generation), None) => Ok(KeyPackageTrustBinding {
+    let agent_key_authorize_event_id = object
+        .get("agent_key_authorize_event_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    match (
+        ssk_generation,
+        device_authorize_event_id,
+        agent_key_authorize_event_id,
+    ) {
+        (Some(ssk_generation), None, None) => Ok(KeyPackageTrustBinding {
             ssk_generation: Some(ssk_generation),
             device_authorize_event_id: None,
+            agent_key_authorize_event_id: None,
         }),
-        (None, Some(device_authorize_event_id)) => Ok(KeyPackageTrustBinding {
+        (None, Some(device_authorize_event_id), None) => Ok(KeyPackageTrustBinding {
             ssk_generation: None,
             device_authorize_event_id: Some(device_authorize_event_id),
+            agent_key_authorize_event_id: None,
+        }),
+        (None, None, Some(agent_key_authorize_event_id)) => Ok(KeyPackageTrustBinding {
+            ssk_generation: None,
+            device_authorize_event_id: None,
+            agent_key_authorize_event_id: Some(agent_key_authorize_event_id),
         }),
         _ => Err(arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH),
     }

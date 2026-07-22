@@ -654,10 +654,15 @@ CREATE TABLE public.mls_key_packages (
     claimed_by_mls_group_id text,
     ssk_generation bigint,
     device_authorize_event_id text,
+    agent_key_authorize_event_id text,
     claimed_at bigint,
     claim_expires_at_unix_ms bigint,
     consumed_at bigint,
-    created_at bigint NOT NULL
+    created_at bigint NOT NULL,
+    CONSTRAINT mls_key_packages_trust_binding_check CHECK (
+        num_nonnulls(ssk_generation, device_authorize_event_id, agent_key_authorize_event_id) = 1
+        AND (ssk_generation IS NULL OR ssk_generation >= 1)
+    )
 );
 
 CREATE TABLE public.peer_keypackage_claims (

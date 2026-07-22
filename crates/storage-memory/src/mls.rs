@@ -41,6 +41,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         intended_realm_id: Option<&str>,
         ssk_generation: Option<u64>,
         device_authorize_event_id: Option<&str>,
+        agent_key_authorize_event_id: Option<&str>,
         claimed_at: i64,
         claim_expires_at_unix_ms: Option<i64>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
@@ -71,6 +72,11 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         }
         if let Some(event_id) = device_authorize_event_id
             && row.device_authorize_event_id.as_deref() != Some(event_id)
+        {
+            return Ok(None);
+        }
+        if let Some(event_id) = agent_key_authorize_event_id
+            && row.agent_key_authorize_event_id.as_deref() != Some(event_id)
         {
             return Ok(None);
         }
@@ -165,6 +171,11 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             || attempt
                 .device_authorize_event_id
                 .is_some_and(|event_id| row.device_authorize_event_id.as_deref() != Some(event_id))
+            || attempt
+                .agent_key_authorize_event_id
+                .is_some_and(|event_id| {
+                    row.agent_key_authorize_event_id.as_deref() != Some(event_id)
+                })
         {
             return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
         }
@@ -443,6 +454,7 @@ mod tests {
             claimed_by_mls_group_id: None,
             ssk_generation: Some(1),
             device_authorize_event_id: None,
+            agent_key_authorize_event_id: None,
             claimed_at: None,
             claim_expires_at_unix_ms: None,
             consumed_at: None,
@@ -478,6 +490,7 @@ mod tests {
                 mls_group_id: "group-1",
                 ssk_generation: Some(1),
                 device_authorize_event_id: None,
+                agent_key_authorize_event_id: None,
                 claimed_at: 10,
                 claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &first_ledger,
@@ -487,6 +500,7 @@ mod tests {
                 mls_group_id: "group-2",
                 ssk_generation: Some(1),
                 device_authorize_event_id: None,
+                agent_key_authorize_event_id: None,
                 claimed_at: 10,
                 claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &second_ledger,
@@ -528,6 +542,7 @@ mod tests {
                 mls_group_id: "group-1",
                 ssk_generation: Some(1),
                 device_authorize_event_id: None,
+                agent_key_authorize_event_id: None,
                 claimed_at: 10,
                 claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &ledger,
@@ -571,6 +586,7 @@ mod tests {
                         mls_group_id: group,
                         ssk_generation: Some(1),
                         device_authorize_event_id: None,
+                        agent_key_authorize_event_id: None,
                         claimed_at: 10,
                         claim_expires_at_unix_ms: 20_000,
                         ledger,

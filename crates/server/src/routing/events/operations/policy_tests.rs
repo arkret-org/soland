@@ -658,6 +658,12 @@ async fn register_native_agent_membership_context(
         now,
     );
     record.agent_slug = Some("summary".to_owned());
+    let authorize_event_id = "ak:event:01904100-0000-7000-8000-0000000007d2";
+    let verification_method = "did:web:agent.example#runtime-1";
+    if with_claimable_keypackage {
+        record.authorized_event_ref = Some(authorize_event_id.to_owned());
+        record.authorized_verification_method = Some(verification_method.to_owned());
+    }
     state
         .agents_store()
         .put(record)
@@ -752,21 +758,59 @@ async fn register_native_agent_membership_context(
         return;
     }
     let device_id = "ak:device:01904100-0000-7000-8000-0000000007d1";
-    let device_authorize_event_id = "ak:event:01904100-0000-7000-8000-0000000007d2";
+    let authorize_payload = json!({
+        "agent_id": agent,
+        "key_id": "ak:agent_key:01904100-0000-7000-8000-0000000007d2",
+        "verification_method": verification_method,
+        "public_key_digest": format!("sha256:{}", "4".repeat(64)),
+        "accountable_principal_id": controller,
+        "agent_key_scope": {"actions": ["ak.message.create"]},
+        "audience": [state.service_id.as_str()],
+        "issued_at": "2026-01-01T00:00:00.000Z",
+        "expires_at": "2099-01-01T00:00:00.000Z"
+    });
+    let authorize_event = arkret_core::Event::new(
+        arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE,
+        realm_id.clone(),
+        arkret_core::Did::new(agent.to_owned()).unwrap(),
+        1,
+        arkret_core::Hlc::new("019041000000-0001-000007d2").unwrap(),
+        authorize_payload.clone(),
+    )
+    .unwrap();
+    let mut authorize_envelope = serde_json::to_value(authorize_event).unwrap();
+    authorize_envelope["event_id"] = json!(authorize_event_id);
     state
-        .devices_store()
-        .put(&DeviceInventoryRecord {
-            actor: agent.to_owned(),
-            device_id: device_id.to_owned(),
-            display_name: None,
-            verification_state: "verified".to_owned(),
-            payload: json!({"device_authorize_event_id": device_authorize_event_id}),
-            created_at: now,
-            updated_at: now,
-            revoked_at: None,
+        .events_store()
+        .put(CanonicalEventRecord {
+            event_id: authorize_event_id.to_owned(),
+            actor_id: agent.to_owned(),
+            actor_seq: 1,
+            realm_id: Some(realm_id.to_string()),
+            kind: arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
+            canonical_digest: format!("sha256:{}", "5".repeat(64)),
+            canonical_bytes: Vec::new(),
+            envelope: authorize_envelope,
+            received_at: now,
         })
         .await
-        .expect("agent device");
+        .expect("Agent key authorization Event");
+    let authorize_projection = op(
+        realm_id.clone(),
+        "0000000007d4",
+        arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE,
+        json!({
+            "agent_id": agent,
+            "key_id": "ak:agent_key:01904100-0000-7000-8000-0000000007d2",
+            "accepted_event_id": authorize_event_id,
+            "verification_method": verification_method,
+        }),
+    );
+    state
+        .projection
+        .lock()
+        .apply(&authorize_projection, &state.hlc);
     state.projection.lock().mls_key_packages.insert(
         "ak:mls_keypackage:01904100-0000-7000-8000-0000000007d1".to_owned(),
         soland_domain::reducer::MlsKeyPackage {
@@ -787,7 +831,8 @@ async fn register_native_agent_membership_context(
             last_resort_realm_id: None,
             claimed_by: None,
             ssk_generation: None,
-            device_authorize_event_id: Some(device_authorize_event_id.to_owned()),
+            device_authorize_event_id: None,
+            agent_key_authorize_event_id: Some(authorize_event_id.to_owned()),
             claimed_at: None,
             claim_expires_at_unix_ms: None,
             consumed_at: None,

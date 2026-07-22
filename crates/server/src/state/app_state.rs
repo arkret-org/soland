@@ -4159,7 +4159,7 @@ impl soland_application::events::MlsKeyPackageMaintenancePort
             if self
                 .0
                 .mls_key_packages()
-                .try_claim(&row.id, "revoked", None, None, None, retired_at, None)
+                .try_claim(&row.id, "revoked", None, None, None, None, retired_at, None)
                 .await?
                 .is_some()
             {
@@ -4526,6 +4526,7 @@ mod membership_hydration_tests {
                 claimed_by_mls_group_id: None,
                 ssk_generation: None,
                 device_authorize_event_id: Some("ak:event:auth".to_owned()),
+                agent_key_authorize_event_id: None,
                 claimed_at: None,
                 claim_expires_at_unix_ms: None,
                 consumed_at: None,

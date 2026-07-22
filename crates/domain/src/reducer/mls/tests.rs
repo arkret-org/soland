@@ -477,6 +477,63 @@ fn welcome_enqueue_then_fetch_marks_delivered() {
     assert!(still_pending.is_empty());
 }
 
+fn agent_bound_welcome_payload(welcome_id: &str, authorize_event_id: &str) -> Value {
+    let mut payload = welcome_payload(welcome_id);
+    let claim_ref = payload
+        .get_mut("claim_ref")
+        .and_then(Value::as_object_mut)
+        .unwrap();
+    claim_ref.remove("ssk_generation");
+    claim_ref.insert(
+        "agent_key_authorize_event_id".to_owned(),
+        json!(authorize_event_id),
+    );
+    payload
+}
+
+#[test]
+fn welcome_enqueue_rejects_inactive_agent_key_authorization() {
+    let mut state = ProjectionState::default();
+    let payload = agent_bound_welcome_payload(
+        "ak:mls_welcome:w-agent-stale",
+        "ak:event:0196419b-0000-7000-8000-0000000000a1",
+    );
+    let effect = apply_welcome_enqueue(&mut state, &op_at(300, "ak.mls.welcome", payload));
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason }
+            if reason == arkret_core::ReasonCode::CLAIM_GENERATION_MISMATCH
+    ));
+}
+
+#[test]
+fn welcome_enqueue_accepts_current_agent_key_authorization() {
+    let mut state = ProjectionState::default();
+    let authorize_event_id = "ak:event:0196419b-0000-7000-8000-0000000000a2";
+    let authorize = op_at(
+        200,
+        arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE,
+        json!({
+            "agent_id": "did:web:bob.example",
+            "key_id": "ak:agent_key:0196419b-0000-7000-8000-0000000000a2",
+            "accepted_event_id": authorize_event_id,
+            "verification_method": "did:web:bob.example#runtime-1"
+        }),
+    );
+    let effect = state.apply(&authorize, &crate::hlc::ServerHlc::new("mls-agent-test"));
+    assert!(matches!(
+        effect,
+        ProjectionEffect::AgentKeyAuthorizeProjected { .. }
+    ));
+
+    let payload = agent_bound_welcome_payload("ak:mls_welcome:w-agent-current", authorize_event_id);
+    let effect = apply_welcome_enqueue(&mut state, &op_at(300, "ak.mls.welcome", payload));
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Mls(MlsEffect::WelcomeEnqueued { .. })
+    ));
+}
+
 #[test]
 fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() {
     let mut state = ProjectionState::default();

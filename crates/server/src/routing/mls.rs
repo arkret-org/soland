@@ -77,6 +77,7 @@ const LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
 struct KeyPackageTrustBinding {
     ssk_generation: Option<u64>,
     device_authorize_event_id: Option<String>,
+    agent_key_authorize_event_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,6 +91,7 @@ impl KeyPackageTrustBinding {
         Self {
             ssk_generation: Some(ssk_generation),
             device_authorize_event_id: None,
+            agent_key_authorize_event_id: None,
         }
     }
 
@@ -97,6 +99,15 @@ impl KeyPackageTrustBinding {
         Self {
             ssk_generation: None,
             device_authorize_event_id: Some(device_authorize_event_id),
+            agent_key_authorize_event_id: None,
+        }
+    }
+
+    fn agent_key_authorize(agent_key_authorize_event_id: String) -> Self {
+        Self {
+            ssk_generation: None,
+            device_authorize_event_id: None,
+            agent_key_authorize_event_id: Some(agent_key_authorize_event_id),
         }
     }
 
@@ -104,6 +115,7 @@ impl KeyPackageTrustBinding {
         Self::from_parts(
             kp.ssk_generation,
             kp.device_authorize_event_id.clone(),
+            kp.agent_key_authorize_event_id.clone(),
             "KeyPackage trust binding is invalid",
         )
     }
@@ -112,6 +124,7 @@ impl KeyPackageTrustBinding {
         Self::from_parts(
             row.ssk_generation,
             row.device_authorize_event_id.clone(),
+            row.agent_key_authorize_event_id.clone(),
             "KeyPackage claim is missing a valid trust binding",
         )
     }
@@ -119,12 +132,22 @@ impl KeyPackageTrustBinding {
     fn from_parts(
         ssk_generation: Option<u64>,
         device_authorize_event_id: Option<String>,
+        agent_key_authorize_event_id: Option<String>,
         message: &'static str,
     ) -> Result<Self, AppError> {
-        match (ssk_generation, device_authorize_event_id) {
-            (Some(generation), None) if generation >= 1 => Ok(Self::cross_signing(generation)),
-            (None, Some(event_id)) if !event_id.trim().is_empty() => {
+        match (
+            ssk_generation,
+            device_authorize_event_id,
+            agent_key_authorize_event_id,
+        ) {
+            (Some(generation), None, None) if generation >= 1 => {
+                Ok(Self::cross_signing(generation))
+            }
+            (None, Some(event_id), None) if !event_id.trim().is_empty() => {
                 Ok(Self::device_authorize(event_id))
+            }
+            (None, None, Some(event_id)) if !event_id.trim().is_empty() => {
+                Ok(Self::agent_key_authorize(event_id))
             }
             _ => Err(AppError::new(ErrorCode::FailedPrecondition, message)
                 .with_wire_code("claim_generation_mismatch")),
@@ -144,11 +167,18 @@ impl KeyPackageTrustBinding {
                 Value::String(event_id.to_owned()),
             );
         }
+        if let Some(event_id) = self.agent_key_authorize_event_id.as_deref() {
+            object.insert(
+                "agent_key_authorize_event_id".to_owned(),
+                Value::String(event_id.to_owned()),
+            );
+        }
     }
 
     fn matches_keypackage(&self, kp: &MlsKeyPackage) -> bool {
         kp.ssk_generation == self.ssk_generation
             && kp.device_authorize_event_id == self.device_authorize_event_id
+            && kp.agent_key_authorize_event_id == self.agent_key_authorize_event_id
     }
 }
 
@@ -371,6 +401,15 @@ async fn upload_keypackage(
     }
     let trust_binding =
         current_keypackage_trust_binding(state, &body.principal_id, &device_id).await?;
+    let mut unsigned_key_packages = body.key_packages.clone();
+    for entry in &mut unsigned_key_packages {
+        entry.device_signature = None;
+    }
+    let upload_signature_value = json!({
+        "principal_id": body.principal_id.as_str(),
+        "device_id": body.device_id.as_str(),
+        "key_packages": unsigned_key_packages,
+    });
 
     let default_device_signature = body.device_signature.clone();
     let mut accepted = 0_u32;
@@ -435,6 +474,20 @@ async fn upload_keypackage(
                     continue;
                 }
             };
+        if let Some(authorize_event_id) = trust_binding.agent_key_authorize_event_id.as_deref()
+            && let Err(reason) = validate_agent_keypackage_upload(
+                state,
+                &body.principal_id,
+                authorize_event_id,
+                &key_package_bytes,
+                &device_signature,
+                &upload_signature_value,
+            )
+            .await
+        {
+            rejected.push(keypackage_failure(&entry, &device_id, reason));
+            continue;
+        }
         let created_at = entry.created_at.timestamp();
         let expires_at = entry.expires_at.timestamp();
         let last_resort = entry.last_resort.unwrap_or(false);
@@ -692,6 +745,7 @@ async fn peer_claim_keypackage(
                 mls_group_id: body.mls_group_id.as_str(),
                 ssk_generation: binding.ssk_generation,
                 device_authorize_event_id: binding.device_authorize_event_id.as_deref(),
+                agent_key_authorize_event_id: binding.agent_key_authorize_event_id.as_deref(),
                 claimed_at: now_secs,
                 claim_expires_at_unix_ms: body.expires_at.timestamp_millis(),
                 ledger: &ledger,
@@ -1102,6 +1156,17 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
         .map_err(|_| "peer_claim_welcome_pending")?;
     let welcome = serde_json::from_value::<arkret_core::MlsWelcomePayload>(payload.clone())
         .map_err(|_| "peer_claim_welcome_invalid")?;
+    if let arkret_core::MlsClaimTrustBinding::AgentKeyAuthorizeEventId(authorize_event_id) =
+        &welcome.claim_ref.trust_binding
+        && !current_agent_key_authorization_matches(
+            state,
+            &welcome.recipient_principal_id,
+            authorize_event_id.as_str(),
+        )
+        .await
+    {
+        return Err("peer_claim_welcome_invalid");
+    }
     let receipt = welcome
         .peer_claim_receipt
         .as_ref()
@@ -1483,6 +1548,7 @@ pub(crate) async fn claim_keypackages_for_request(
             claimed_realm_id.as_deref(),
             claim_binding.ssk_generation,
             claim_binding.device_authorize_event_id.as_deref(),
+            claim_binding.agent_key_authorize_event_id.as_deref(),
             claimed_at,
             Some(body.expires_at.timestamp_millis()),
         )
@@ -1965,6 +2031,7 @@ async fn revoke_keypackages(
                         None,
                         None,
                         None,
+                        None,
                         revoked_at,
                         None,
                     )
@@ -2013,7 +2080,7 @@ pub(crate) async fn retire_device_keypackages(
     }) {
         if state
             .mls_key_packages_store()
-            .try_claim(&row.id, "revoked", None, None, None, retired_at, None)
+            .try_claim(&row.id, "revoked", None, None, None, None, retired_at, None)
             .await
             .map_err(|error| {
                 AppError::internal(format!("mls keypackage retirement failed: {error}"))
@@ -2158,6 +2225,80 @@ fn entry_signature(
     Ok(signature.clone())
 }
 
+async fn validate_agent_keypackage_upload(
+    state: &AppState,
+    principal: &arkret_core::Did,
+    authorize_event_id: &str,
+    key_package_bytes: &[u8],
+    signature: &KeyOperationSignature,
+    upload_signature_value: &Value,
+) -> Result<(), String> {
+    let accepted = state
+        .event_query_application()
+        .accepted_event(authorize_event_id)
+        .await
+        .map_err(|_| "claim_generation_mismatch".to_owned())?
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let event = serde_json::from_value::<arkret_core::Event>(accepted.envelope)
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    let payload =
+        serde_json::to_value(event.payload).map_err(|_| "claim_generation_mismatch".to_owned())?;
+    let verification_method = payload
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let expected_public_key_digest = payload
+        .get("public_key_digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
+        .map_err(|_| "key_package_invalid".to_owned())?;
+    match leaf.credential {
+        arkret_mls::AuthorLeafCredential::Basic { identity }
+            if identity == principal.as_str().as_bytes() => {}
+        _ => return Err("claim_generation_mismatch".to_owned()),
+    }
+    let public_key: [u8; 32] = leaf
+        .signature_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    let public_key_value = json!({
+        "kty": "OKP",
+        "kid": verification_method,
+        "alg": "Ed25519",
+        "key": URL_SAFE_NO_PAD.encode(public_key),
+    });
+    let actual_public_key_digest = arkret_core::agent_runtime_public_key_digest(&public_key_value)
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    if actual_public_key_digest.as_str() != expected_public_key_digest
+        || signature.kid.as_str() != verification_method
+        || signature
+            .alg
+            .as_ref()
+            .is_some_and(|algorithm| !matches!(algorithm.as_str(), "EdDSA" | "Ed25519"))
+    {
+        return Err("claim_generation_mismatch".to_owned());
+    }
+    let canonical = arkret_core::canonical::canonical_json_bytes(upload_signature_value)
+        .map_err(|_| "device_signature_invalid".to_owned())?;
+    let context = "ak.self.keys.keypackages.upload.create";
+    let mut signing_input = Vec::with_capacity(context.len() + 1 + canonical.len());
+    signing_input.extend_from_slice(context.as_bytes());
+    signing_input.push(b'\n');
+    signing_input.extend_from_slice(&canonical);
+    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key)
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    if !crate::routing::identity::cross_signing::ed25519_verify(
+        &verifying_key,
+        &signing_input,
+        signature.sig.as_str(),
+    ) {
+        return Err("device_signature_invalid".to_owned());
+    }
+    Ok(())
+}
+
 fn required_capability_set(capabilities: &[String]) -> Result<BTreeSet<String>, AppError> {
     if capabilities.is_empty() {
         return Err(AppError::missing_param("required_capabilities is required"));
@@ -2191,11 +2332,120 @@ fn current_accepted_ssk_generation(state: &AppState, principal: &arkret_core::Di
         .map(|publish| publish.generation.get())
 }
 
+async fn current_agent_keypackage_trust_binding(
+    state: &AppState,
+    principal: &arkret_core::Did,
+) -> Result<Option<KeyPackageTrustBinding>, AppError> {
+    let Some(agent) = state
+        .agents_store()
+        .get(principal.as_str())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    if agent.state != "active" {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Native Agent must be active before publishing or claiming a KeyPackage",
+        )
+        .with_wire_code("claim_generation_mismatch"));
+    }
+    let event_ref = agent.authorized_event_ref.as_deref().ok_or_else(|| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Native Agent has no accepted key authorization",
+        )
+        .with_wire_code("claim_generation_mismatch")
+    })?;
+    let verification_method = agent
+        .authorized_verification_method
+        .as_deref()
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "Native Agent key authorization is incomplete",
+            )
+            .with_wire_code("claim_generation_mismatch")
+        })?;
+    let active_event = state
+        .projection
+        .lock()
+        .active_agent_key_authorizations(principal.as_str())
+        .into_iter()
+        .any(|(_, active_event_ref)| active_event_ref == event_ref);
+    if !active_event {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Native Agent key authorization is no longer active",
+        )
+        .with_wire_code("claim_generation_mismatch"));
+    }
+    let accepted = state
+        .event_query_application()
+        .accepted_event(event_ref)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Agent key authorization lookup failed: {error}"))
+        })?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "Native Agent key authorization Event is unavailable",
+            )
+            .with_wire_code("claim_generation_mismatch")
+        })?;
+    let event =
+        serde_json::from_value::<arkret_core::Event>(accepted.envelope).map_err(|error| {
+            AppError::internal(format!(
+                "stored Agent key authorization Event invalid: {error}"
+            ))
+        })?;
+    let payload = serde_json::to_value(event.payload)
+        .map_err(|error| AppError::internal(format!("Agent key authorization payload: {error}")))?;
+    let expired = payload
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|expires_at| expires_at.with_timezone(&Utc) <= now());
+    if event.kind.as_str() != arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE
+        || payload.get("agent_id").and_then(Value::as_str) != Some(principal.as_str())
+        || payload.get("verification_method").and_then(Value::as_str) != Some(verification_method)
+        || expired
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Native Agent key authorization does not match current accepted state",
+        )
+        .with_wire_code("claim_generation_mismatch"));
+    }
+    Ok(Some(KeyPackageTrustBinding::agent_key_authorize(
+        event_ref.to_owned(),
+    )))
+}
+
+pub(crate) async fn current_agent_key_authorization_matches(
+    state: &AppState,
+    principal: &arkret_core::Did,
+    authorize_event_id: &str,
+) -> bool {
+    current_agent_keypackage_trust_binding(state, principal)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|binding| binding.agent_key_authorize_event_id)
+        .as_deref()
+        == Some(authorize_event_id)
+}
+
 async fn current_keypackage_trust_binding(
     state: &AppState,
     principal: &arkret_core::Did,
     device_id: &str,
 ) -> Result<KeyPackageTrustBinding, AppError> {
+    if let Some(binding) = current_agent_keypackage_trust_binding(state, principal).await? {
+        return Ok(binding);
+    }
     if let Some(generation) = current_accepted_ssk_generation(state, principal) {
         return Ok(KeyPackageTrustBinding::cross_signing(generation));
     }
@@ -2225,6 +2475,9 @@ async fn current_keypackage_claim_trust_selector(
     principal: &arkret_core::Did,
     target_device_ids: &BTreeSet<String>,
 ) -> Result<KeyPackageTrustSelector, AppError> {
+    if let Some(binding) = current_agent_keypackage_trust_binding(state, principal).await? {
+        return Ok(KeyPackageTrustSelector::Principal(binding));
+    }
     if let Some(generation) = current_accepted_ssk_generation(state, principal) {
         return Ok(KeyPackageTrustSelector::Principal(
             KeyPackageTrustBinding::cross_signing(generation),
@@ -2433,6 +2686,7 @@ fn keypackage_claim_record(
             .map_err(|error| AppError::internal(format!("invalid capabilities_digest: {error}")))?,
         ssk_generation: trust_binding.ssk_generation,
         device_authorize_event_id: trust_binding.device_authorize_event_id,
+        agent_key_authorize_event_id: trust_binding.agent_key_authorize_event_id,
         expires_at: match record.claim_expires_at_unix_ms {
             Some(expires_at_unix_ms) => unix_millis_datetime(expires_at_unix_ms)?,
             None => unix_timestamp_datetime(record.lifetime_not_after)?,
@@ -2492,9 +2746,137 @@ fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRow {
         claimed_by_mls_group_id: kp.claimed_by.clone(),
         ssk_generation: kp.ssk_generation,
         device_authorize_event_id: kp.device_authorize_event_id.clone(),
+        agent_key_authorize_event_id: kp.agent_key_authorize_event_id.clone(),
         claimed_at: kp.claimed_at,
         claim_expires_at_unix_ms: kp.claim_expires_at_unix_ms,
         consumed_at: kp.consumed_at,
         created_at: kp.created_at,
+    }
+}
+
+#[cfg(test)]
+mod trust_binding_tests {
+    use super::*;
+
+    #[test]
+    fn native_agent_binding_is_a_third_exclusive_branch() {
+        let event_id = "ak:event:01904100-0000-7000-8000-000000000001";
+        let binding =
+            KeyPackageTrustBinding::from_parts(None, None, Some(event_id.to_owned()), "invalid")
+                .unwrap();
+        assert_eq!(
+            binding.agent_key_authorize_event_id.as_deref(),
+            Some(event_id)
+        );
+        assert!(
+            KeyPackageTrustBinding::from_parts(Some(1), None, Some(event_id.to_owned()), "invalid")
+                .is_err()
+        );
+        assert!(
+            KeyPackageTrustBinding::from_parts(
+                None,
+                Some(event_id.to_owned()),
+                Some(event_id.to_owned()),
+                "invalid"
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn native_agent_keypackage_upload_binds_leaf_and_publish_signature_to_authorized_key() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal = arkret_core::Did::new("did:web:agent.example".to_owned()).unwrap();
+        let device =
+            arkret_core::DeviceId::new("ak:device:01904100-0000-7000-8000-00000000000f".to_owned())
+                .unwrap();
+        let verification_method = "did:web:agent.example#runtime-1";
+        let signing_seed = [17_u8; 32];
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed);
+        let public_key_value = json!({
+            "kty": "OKP",
+            "kid": verification_method,
+            "alg": "Ed25519",
+            "key": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
+        });
+        let public_key_digest =
+            arkret_core::agent_runtime_public_key_digest(&public_key_value).unwrap();
+        let realm_id =
+            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000000f".to_owned())
+                .unwrap();
+        let authorize_event = arkret_core::Event::new(
+            arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE,
+            realm_id,
+            principal.clone(),
+            1,
+            arkret_core::Hlc::new("019041000000-0001-0000000f").unwrap(),
+            json!({
+                "agent_id": principal.as_str(),
+                "key_id": "ak:agent_key:01904100-0000-7000-8000-00000000000f",
+                "verification_method": verification_method,
+                "public_key_digest": public_key_digest.as_str(),
+                "accountable_principal_id": "did:web:alice.example",
+                "agent_key_scope": {"actions": ["ak.message.create"]},
+                "audience": [state.service_id.as_str()],
+                "issued_at": "2026-01-01T00:00:00.000Z",
+                "expires_at": "2099-01-01T00:00:00.000Z"
+            }),
+        )
+        .unwrap();
+        let authorize_event_id = authorize_event.event_id.to_string();
+        state
+            .events_store()
+            .put(soland_storage::CanonicalEventRecord {
+                event_id: authorize_event_id.clone(),
+                actor_id: principal.to_string(),
+                actor_seq: 1,
+                realm_id: Some(authorize_event.realm_id.to_string()),
+                kind: arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                schema_id: "ak.schema.event.v1".to_owned(),
+                canonical_digest: format!("sha256:{}", "a".repeat(64)),
+                canonical_bytes: Vec::new(),
+                envelope: serde_json::to_value(authorize_event).unwrap(),
+                received_at: now(),
+            })
+            .await
+            .unwrap();
+
+        let identity = arkret_mls::ArkretMlsIdentity::from_ed25519_signing_seed(
+            principal.clone(),
+            device.clone(),
+            signing_seed,
+        )
+        .unwrap();
+        let record = identity.key_package_record().unwrap();
+        let key_package_bytes = URL_SAFE_NO_PAD.decode(record.key_package.as_str()).unwrap();
+        let upload_value = json!({
+            "principal_id": principal.as_str(),
+            "device_id": device.as_str(),
+            "key_packages": [{"keypackage_id": record.keypackage_id.as_str()}]
+        });
+        let canonical = arkret_core::canonical::canonical_json_bytes(&upload_value).unwrap();
+        let mut signing_input = b"ak.self.keys.keypackages.upload.create\n".to_vec();
+        signing_input.extend_from_slice(&canonical);
+        let signature = signing_key.sign(&signing_input);
+        let signature = arkret_core::KeyOperationSignature {
+            kid: arkret_core::NonEmptyString::new(verification_method).unwrap(),
+            alg: Some(arkret_core::NonEmptyString::new("Ed25519").unwrap()),
+            sig: arkret_core::Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+                .unwrap(),
+        };
+
+        validate_agent_keypackage_upload(
+            &state,
+            &principal,
+            &authorize_event_id,
+            &key_package_bytes,
+            &signature,
+            &upload_value,
+        )
+        .await
+        .unwrap();
     }
 }

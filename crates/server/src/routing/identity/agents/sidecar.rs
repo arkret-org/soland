@@ -1537,6 +1537,7 @@ mod tests {
                 device_authorize_event_id: Some(
                     "ak:event:01964137-0000-7000-8000-000000000048".to_owned(),
                 ),
+                agent_key_authorize_event_id: None,
                 claimed_at: Some(1),
                 claim_expires_at_unix_ms: Some(i64::MAX),
                 consumed_at: None,

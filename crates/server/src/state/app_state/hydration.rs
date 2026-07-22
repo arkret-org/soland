@@ -860,6 +860,7 @@ pub(super) async fn hydrate_projections_from_persistence(
                     claimed_by: row.claimed_by_mls_group_id,
                     ssk_generation: row.ssk_generation,
                     device_authorize_event_id: row.device_authorize_event_id,
+                    agent_key_authorize_event_id: row.agent_key_authorize_event_id,
                     claimed_at: row.claimed_at,
                     claim_expires_at_unix_ms: row.claim_expires_at_unix_ms,
                     consumed_at: row.consumed_at,

@@ -24,6 +24,7 @@ pub struct MlsKeyPackageRow {
     pub claimed_by_mls_group_id: Option<String>,
     pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<String>,
+    pub agent_key_authorize_event_id: Option<String>,
     /// Unix seconds at which the single-use claim was accepted.
     pub claimed_at: Option<i64>,
     /// Unix milliseconds for the claim authorization deadline. An unconsumed
@@ -64,6 +65,7 @@ pub struct PeerKeyPackageClaimAttempt<'a> {
     pub mls_group_id: &'a str,
     pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<&'a str>,
+    pub agent_key_authorize_event_id: Option<&'a str>,
     pub claimed_at: i64,
     pub claim_expires_at_unix_ms: i64,
     pub ledger: &'a PeerKeyPackageClaimLedgerRecord,
@@ -139,6 +141,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
         intended_realm_id: Option<&str>,
         ssk_generation: Option<u64>,
         device_authorize_event_id: Option<&str>,
+        agent_key_authorize_event_id: Option<&str>,
         claimed_at: i64,
         claim_expires_at_unix_ms: Option<i64>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
