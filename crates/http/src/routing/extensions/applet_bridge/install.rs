@@ -1480,16 +1480,23 @@ mod tests {
             extra: Default::default(),
         }];
         package
-            .seal_registration_epoch(arkret_core::applet::AppletRegistrationEpochEvidence::new(
-                package.service_id.clone(),
-                Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
-                arkret_core::applet::AppletDidMethodVersionEvidence::unversioned("did:web")
+            .seal_registration_epoch(
+                arkret_models_integration::applet::AppletRegistrationEpochEvidence::new(
+                    package.service_id.clone(),
+                    Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
+                    arkret_models_integration::applet::AppletDidMethodVersionEvidence::unversioned(
+                        "did:web",
+                    )
                     .unwrap(),
-                vec![arkret_core::applet::AppletAcceptedSigningKeyEvidence {
-                    key_ref: package.webhook_auth.key_ref.clone(),
-                    public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
-                }],
-            ))
+                    vec![
+                        arkret_models_integration::applet::AppletAcceptedSigningKeyEvidence {
+                            key_ref: package.webhook_auth.key_ref.clone(),
+                            public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32)))
+                                .unwrap(),
+                        },
+                    ],
+                ),
+            )
             .unwrap();
         package.seal().unwrap();
         let signer = Ed25519MoveSigner::from_did_key_seed(
@@ -1607,7 +1614,7 @@ mod tests {
     #[test]
     fn allow_ghost_actors_uses_package_ghost_policy_enabled() {
         let mut package = sample_package();
-        package.ghost_policy = arkret_core::applet::AppletGhostPolicy {
+        package.ghost_policy = arkret_models_integration::applet::AppletGhostPolicy {
             enabled: true,
             accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
             ..Default::default()
@@ -1622,7 +1629,7 @@ mod tests {
             Some(&actor_policy)
         ));
 
-        package.ghost_policy = arkret_core::applet::AppletGhostPolicy {
+        package.ghost_policy = arkret_models_integration::applet::AppletGhostPolicy {
             enabled: false,
             accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
             ..Default::default()
@@ -1668,17 +1675,23 @@ mod tests {
     #[test]
     fn applet_record_round_trip_preserves_registration_epoch_evidence() {
         let mut package = sample_package();
-        package.registration_epoch_evidence =
-            Some(arkret_core::applet::AppletRegistrationEpochEvidence::new(
+        package.registration_epoch_evidence = Some(
+            arkret_models_integration::applet::AppletRegistrationEpochEvidence::new(
                 package.service_id.clone(),
                 Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
-                arkret_core::applet::AppletDidMethodVersionEvidence::unversioned("did:web")
-                    .unwrap(),
-                vec![arkret_core::applet::AppletAcceptedSigningKeyEvidence {
-                    key_ref: package.webhook_auth.key_ref.clone(),
-                    public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
-                }],
-            ));
+                arkret_models_integration::applet::AppletDidMethodVersionEvidence::unversioned(
+                    "did:web",
+                )
+                .unwrap(),
+                vec![
+                    arkret_models_integration::applet::AppletAcceptedSigningKeyEvidence {
+                        key_ref: package.webhook_auth.key_ref.clone(),
+                        public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32)))
+                            .unwrap(),
+                    },
+                ],
+            ),
+        );
         let response = sample_response(&package);
         let record = sample_record(&package, &response);
 

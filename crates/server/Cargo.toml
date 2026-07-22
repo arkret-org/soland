@@ -78,6 +78,7 @@ uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
 arkret-models-discovery.workspace = true
+arkret-models-integration.workspace = true
 arkret-policy.workspace = true
 proptest = {workspace = true}
 salvo = {workspace = true,features = ["test"]}

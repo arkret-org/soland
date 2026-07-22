@@ -8,10 +8,12 @@
 
 use std::collections::BTreeMap;
 
-use arkret_core::applet::WebhookSignatureAlg;
 use arkret_core::{
     AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry,
     AppletPackage, AppletWireNamespaces, Did, WebhookAuth,
+};
+use arkret_models_integration::applet::{
+    AppletEndpointPolicy, AppletGhostPolicy, WebhookSignatureAlg,
 };
 use arkret_signatures::Ed25519MoveSigner;
 use base64::Engine as _;
@@ -903,7 +905,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         "ak.message.create".to_owned(),
         "ak.applet.ghost.provision".to_owned(),
     ];
-    package.endpoint_policy = arkret_core::applet::AppletEndpointPolicy {
+    package.endpoint_policy = AppletEndpointPolicy {
         endpoints: [
             "/_arkret/edge/applet/transactions",
             "/_arkret/edge/applet/actors/{actor_id}",
@@ -920,7 +922,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         .collect(),
         extra: Default::default(),
     };
-    package.ghost_policy = arkret_core::applet::AppletGhostPolicy {
+    package.ghost_policy = AppletGhostPolicy {
         enabled: true,
         accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
         ..Default::default()
