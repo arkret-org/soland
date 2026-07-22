@@ -4542,6 +4542,8 @@ mod membership_hydration_tests {
                 &effective_scope,
                 group_id,
                 "did:web:alice.example",
+                "ak:device:alice-1",
+                "ak:event:genesis",
                 &[],
                 &governance_binding,
                 1,
@@ -4576,6 +4578,9 @@ mod membership_hydration_tests {
             .expect("commit epoch rehydrated");
         assert_eq!(epoch.epoch, 0);
         assert_eq!(epoch.policy_root, "sha256:locked-root");
+        assert_eq!(epoch.creator_device_id, "ak:device:alice-1");
+        assert_eq!(epoch.genesis_event_ref, "ak:event:genesis");
+        assert_eq!(epoch.governance_binding, governance_binding);
     }
 
     #[test]

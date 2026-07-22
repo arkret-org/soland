@@ -81,6 +81,8 @@ fn welcome_payload(welcome_id: &str) -> Value {
     json!({
         "welcome_id": welcome_id,
         "group_id": "ak:mls_group:abc",
+        "epoch": 1,
+        "commit_ref": "ak:event:0196419b-0000-7000-8000-000000000010",
         "recipient_actor_id": "did:web:bob.example",
         "recipient_device_id": "ak:device:bob-phone",
         "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
@@ -665,14 +667,20 @@ fn commit_epoch_in_order_succeeds() {
             effective_scope: realm_scope(),
             epoch: 2,
             leader_actor_id: "did:web:alice.example".to_owned(),
+            creator_device_id: "ak:device:alice-desktop".to_owned(),
+            genesis_event_ref: "ak:operation:0196419b-0000-7000-8000-000000000001".to_owned(),
             covered_seals: vec![
                 "ak:event:0196419b-0000-7000-8000-000000000000".to_owned(),
                 "ak:event:0196419b-0000-7000-8000-000000000001".to_owned()
             ],
             committed_at: 501,
+            governance_binding: governance_binding(1),
             policy_root: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
                 .to_owned(),
             accepted_commit_digest: Some(b64(b"opaque-commit-2")),
+            accepted_commit_ref: Some(
+                "ak:operation:0196419b-0000-7000-8000-000000000001".to_owned(),
+            ),
             accepted_from_epoch: Some(1),
             frontier_contested: false,
         }

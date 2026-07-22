@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use soland_application::identity::{
     AccountLocalpartState as AccountLocalpartRecord, AccountProfileState as AccountRecord,
-    DeviceIdentity,
+    AgentPairingState, DeviceIdentity,
 };
 use soland_domain::identity::{ContactRecord, DirectConversationBindingRecord};
 use soland_http::error::AppError;
@@ -671,6 +671,75 @@ async fn enforce_account_registration_policy(
         AccountRegistrationAuditOutcome::Accepted,
         None,
     )
+}
+
+async fn managed_agent_direct_authorization_basis(
+    state: &AppState,
+    controller: &str,
+    agent_id: &str,
+) -> Result<Option<arkret_core::DirectConversationAuthorizationBasis>, AppError> {
+    let Some(record) = state
+        .agent_pairing_application()
+        .agent(agent_id)
+        .await
+        .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
+    else {
+        return Ok(None);
+    };
+    if record.controller_id != controller {
+        return Ok(None);
+    }
+    let unavailable = || {
+        direct_resolve_precondition(
+            arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+            "direct conversation is unavailable",
+        )
+    };
+    if record.state != "active" {
+        return Err(unavailable());
+    }
+    if let Err(error) =
+        crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+            state,
+            &record,
+            now(),
+        )
+        .await
+    {
+        tracing::warn!(
+            agent_id,
+            controller,
+            error = %error,
+            "owned-Agent direct conversation controller binding validation failed"
+        );
+        return Err(unavailable());
+    }
+    managed_agent_direct_authorization_basis_from_record(&record)
+        .ok_or_else(unavailable)
+        .map(Some)
+}
+
+fn managed_agent_direct_authorization_basis_from_record(
+    record: &AgentPairingState,
+) -> Option<arkret_core::DirectConversationAuthorizationBasis> {
+    let provision_refs = record.provision_event_refs.as_ref()?;
+    let refs = [
+        provision_refs
+            .get("accountability_grant_event_id")
+            .and_then(Value::as_str),
+        provision_refs
+            .get("selector_claim_event_id")
+            .and_then(Value::as_str),
+        record.authorized_event_ref.as_deref(),
+    ];
+    let event_refs = refs
+        .into_iter()
+        .map(|event_ref| EventId::new(event_ref?.to_owned()).ok())
+        .collect::<Option<Vec<_>>>()?;
+    let basis =
+        arkret_core::DirectConversationAuthorizationBasis::managed_agent_controller(event_refs);
+    basis.validate_shape().ok()?;
+    Some(basis)
 }
 
 #[endpoint(
@@ -1348,27 +1417,32 @@ async fn direct_conversation_resolve(
         return Err(AppError::invalid_param("invalid direct conversation peer"));
     }
     let peer = body.peer.as_str().to_owned();
-    // The peer MAY be remote (hosted on another Principal Server): a cross-PS
-    // accepted contact is established by federated `ak.contact.*` facts (spec
-    // §4.1), and the resolver only needs a verifiable accepted contact + the
-    // peer's direct_message consent, both of which the federated accept fact
-    // projects locally. So we do NOT require the peer to be a local account;
-    // the accepted-contact precondition below is the real gate (a stranger
-    // pair has no accepted row and fails closed there).
+    // The peer MAY be either an active controller-owned local Agent or a
+    // contact hosted on this or another Principal Server. The former is
+    // authorized by its immutable controller/provisioning/runtime-key facts;
+    // the latter by accepted contact plus direct-message consent.
     let scope = normalize_scope(Some("direct_message"))?;
-    let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, &scope).await?
-    else {
-        return Err(direct_resolve_precondition(
-            arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
-            "direct conversation is unavailable",
-        ));
+    let (contact, authorization_basis) = if let Some(basis) =
+        managed_agent_direct_authorization_basis(state, &session.actor, &peer).await?
+    {
+        (None, basis)
+    } else {
+        let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, &scope).await?
+        else {
+            return Err(direct_resolve_precondition(
+                arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+                "direct conversation is unavailable",
+            ));
+        };
+        if !has_active_consent_for_scope(state, &peer, &session.actor, &scope, now()) {
+            return Err(direct_resolve_precondition(
+                arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+                "direct conversation is unavailable",
+            ));
+        }
+        let basis = direct_authorization_basis_from_contact(&contact)?;
+        (Some(contact), basis)
     };
-    if !has_active_consent_for_scope(state, &peer, &session.actor, &scope, now()) {
-        return Err(direct_resolve_precondition(
-            arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
-            "direct conversation is unavailable",
-        ));
-    }
     let pair_key = direct_pair_key(state, &session.actor, &peer)?;
     if let Some(binding) = active_direct_binding(state, &pair_key) {
         return json_ok(direct_resolve_response(
@@ -1400,10 +1474,13 @@ async fn direct_conversation_resolve(
         ));
     }
     let remote_peer_service_id = contact
-        .peer_service_id
-        .as_deref()
+        .as_ref()
+        .and_then(|contact| contact.peer_service_id.as_deref())
         .filter(|service_id| *service_id != state.service_id);
     if let Some(peer_service_id) = remote_peer_service_id {
+        let contact = contact
+            .as_ref()
+            .expect("remote direct conversation authorization requires an accepted contact");
         if let Some(signed_claim) = body.peer_claim_request.as_ref() {
             let (binding, created, materialization_draft) =
                 complete_remote_direct_binding_with_realm(
@@ -1412,7 +1489,7 @@ async fn direct_conversation_resolve(
                     &session.actor,
                     &session.device_id,
                     &peer,
-                    &contact,
+                    contact,
                     signed_claim,
                 )
                 .await?;
@@ -1460,7 +1537,8 @@ async fn direct_conversation_resolve(
         &session.actor,
         &session.device_id,
         &peer,
-        &contact,
+        contact.as_ref(),
+        authorization_basis,
     )
     .await?;
     let resolve_state = if materialization_draft.is_some() {
@@ -1579,6 +1657,46 @@ fn account_device_summary(device: DeviceIdentity) -> Result<AccountDeviceSummary
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_agent_direct_basis_uses_provisioning_and_runtime_key_facts() {
+        let created_at = chrono::Utc::now();
+        let mut record = AgentPairingState::new(
+            "did:web:agents.example:assistant".to_owned(),
+            "did:web:alice.example".to_owned(),
+            "ak:realm:019f0000-0000-7000-8000-000000000001".to_owned(),
+            "ak:event:019f0000-0000-7000-8000-000000000002".to_owned(),
+            "active".to_owned(),
+            created_at,
+        );
+        record.provision_event_refs = Some(json!({
+            "accountability_grant_event_id": "ak:event:019f0000-0000-7000-8000-000000000003",
+            "selector_claim_event_id": "ak:event:019f0000-0000-7000-8000-000000000004"
+        }));
+        record.authorized_event_ref =
+            Some("ak:event:019f0000-0000-7000-8000-000000000005".to_owned());
+
+        let basis = managed_agent_direct_authorization_basis_from_record(&record).unwrap();
+        assert_eq!(
+            basis.kind,
+            arkret_core::DirectConversationAuthorizationKind::ManagedAgentController
+        );
+        assert_eq!(
+            basis
+                .event_refs
+                .iter()
+                .map(EventId::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "ak:event:019f0000-0000-7000-8000-000000000003",
+                "ak:event:019f0000-0000-7000-8000-000000000004",
+                "ak:event:019f0000-0000-7000-8000-000000000005",
+            ]
+        );
+
+        record.authorized_event_ref = None;
+        assert!(managed_agent_direct_authorization_basis_from_record(&record).is_none());
+    }
 
     #[test]
     fn account_localpart_uses_the_handle_preparation_profile() {

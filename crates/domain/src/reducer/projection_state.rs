@@ -141,6 +141,13 @@ pub struct ProjectionState {
     pub circles: BTreeMap<String, CircleProjection>,
     /// First-class Sidecars keyed by `sidecar_id`.
     pub sidecars: BTreeMap<String, SidecarProjection>,
+    /// Accepted control ref that created each Sidecar.
+    pub sidecar_create_refs: BTreeMap<String, String>,
+    /// Current accepted join ref for each active Circle member.
+    pub circle_member_join_refs: BTreeMap<(String, String), String>,
+    /// Every accepted MLS Commit ref, used to bind Welcome evidence to an
+    /// actually accepted epoch transition.
+    pub accepted_mls_commit_refs: BTreeSet<String>,
     /// Side-band membership boundaries for Circle history filtering. Keyed by
     /// `(circle_id, actor_id)` and retained across leave/ban transitions so
     /// read-side helpers can enforce invited/joined floors deterministically.

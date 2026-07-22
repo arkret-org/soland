@@ -21,10 +21,11 @@ mod direct;
 use direct::*;
 pub(crate) use direct::{
     active_direct_binding, complete_remote_direct_binding_with_realm,
-    create_direct_binding_with_realm, direct_binding_matches_projection, direct_pair_key,
-    ensure_direct_peer_resolvable, pending_direct_materialization,
-    prepare_remote_direct_keypackage_claim, project_canonical_direct_binding,
-    retire_direct_bindings_for_operation, validate_direct_binding_operation,
+    create_direct_binding_with_realm, direct_authorization_basis_from_contact,
+    direct_binding_matches_projection, direct_pair_key, ensure_direct_peer_resolvable,
+    pending_direct_materialization, prepare_remote_direct_keypackage_claim,
+    project_canonical_direct_binding, retire_direct_bindings_for_operation,
+    validate_direct_binding_operation,
 };
 
 #[endpoint(

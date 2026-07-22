@@ -430,8 +430,8 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
         sql_query(
             "INSERT INTO mls_welcomes \
              (id, mls_group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
-              key_package_id, enqueued_at, delivered_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+              key_package_id, epoch, commit_ref, governance_binding, enqueued_at, delivered_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
@@ -440,6 +440,13 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
         .bind::<Text, _>(&record.recipient_device_id)
         .bind::<Binary, _>(&record.welcome_bytes)
         .bind::<Text, _>(&record.key_package_id)
+        .bind::<BigInt, _>(
+            i64::try_from(record.epoch).map_err(|_| {
+                PersistenceError::Internal("MLS Welcome epoch exceeds i64".to_owned())
+            })?,
+        )
+        .bind::<Nullable<Text>, _>(&record.commit_ref)
+        .bind::<Jsonb, _>(&record.governance_binding)
         .bind::<BigInt, _>(record.enqueued_at)
         .bind::<Nullable<BigInt>, _>(record.delivered_at)
         .execute(&mut *conn)
@@ -474,7 +481,8 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
              FROM picked \
              WHERE w.id = picked.id \
              RETURNING w.id, w.mls_group_id, w.recipient_actor_id, w.recipient_device_id, \
-             w.welcome_bytes, w.key_package_id, w.enqueued_at, w.delivered_at",
+             w.welcome_bytes, w.key_package_id, w.epoch, w.commit_ref, w.governance_binding, \
+             w.enqueued_at, w.delivered_at",
         )
         .bind::<Text, _>(recipient_actor_id)
         .bind::<Text, _>(recipient_device_id)
@@ -492,7 +500,7 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT id, mls_group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
-             key_package_id, enqueued_at, delivered_at \
+             key_package_id, epoch, commit_ref, governance_binding, enqueued_at, delivered_at \
              FROM mls_welcomes ORDER BY enqueued_at ASC, id ASC",
         )
         .load::<MlsWelcomeRow>(&mut *conn)
@@ -513,8 +521,8 @@ impl MlsCommitStore for PgMlsCommitStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, \
-             governance_binding, committed_at, frontier_contested \
+            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, \
+             genesis_event_ref, covered_seals, governance_binding, accepted_commit_ref, committed_at, frontier_contested \
              FROM mls_commits \
              WHERE effective_scope_kind = $1 \
                AND realm_id = $2 \
@@ -537,6 +545,8 @@ impl MlsCommitStore for PgMlsCommitStore {
         effective_scope: &Value,
         group_id: &str,
         leader_actor_id: &str,
+        creator_device_id: &str,
+        genesis_event_ref: &str,
         covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,
@@ -550,10 +560,10 @@ impl MlsCommitStore for PgMlsCommitStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO mls_commits \
-             (id, effective_scope_kind, realm_id, circle_id, effective_scope, mls_group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, false) \
+             (id, effective_scope_kind, realm_id, circle_id, effective_scope, mls_group_id, epoch, leader_actor_id, creator_device_id, genesis_event_ref, covered_seals, governance_binding, accepted_commit_ref, committed_at, frontier_contested) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, NULL, $12, false) \
              ON CONFLICT DO NOTHING \
-             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested",
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, covered_seals, governance_binding, accepted_commit_ref, committed_at, frontier_contested",
         )
         .bind::<SqlUuid, _>(Uuid::now_v7())
         .bind::<Text, _>(&scope.kind)
@@ -562,6 +572,8 @@ impl MlsCommitStore for PgMlsCommitStore {
         .bind::<Jsonb, _>(effective_scope)
         .bind::<Text, _>(group_id)
         .bind::<Text, _>(leader_actor_id)
+        .bind::<Text, _>(creator_device_id)
+        .bind::<Text, _>(genesis_event_ref)
         .bind::<Jsonb, _>(serde_json::json!(frontier))
         .bind::<Jsonb, _>(governance_binding)
         .bind::<BigInt, _>(committed_at)
@@ -595,14 +607,15 @@ impl MlsCommitStore for PgMlsCommitStore {
                  FROM jsonb_array_elements_text(mls_commits.covered_seals || $8::jsonb) AS merged(value) \
                ), \
                governance_binding = $9, \
-               committed_at = $10, \
+               accepted_commit_ref = $10, \
+               committed_at = $11, \
                frontier_contested = false \
              WHERE effective_scope_kind = $1 \
                AND realm_id = $2 \
                AND circle_id IS NOT DISTINCT FROM $3 \
                AND mls_group_id = $4 \
                AND epoch = $5 \
-             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested",
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, covered_seals, governance_binding, accepted_commit_ref, committed_at, frontier_contested",
         )
         .bind::<Text, _>(&scope.kind)
         .bind::<Text, _>(&scope.realm_id)
@@ -613,6 +626,7 @@ impl MlsCommitStore for PgMlsCommitStore {
         .bind::<Text, _>(advance.leader_actor_id)
         .bind::<Jsonb, _>(serde_json::json!(advance.covered_seals))
         .bind::<Jsonb, _>(advance.governance_binding)
+        .bind::<Text, _>(advance.accepted_commit_ref)
         .bind::<BigInt, _>(advance.committed_at)
         .get_result::<MlsCommitEpochRow>(&mut *conn).await
         .optional()
@@ -639,7 +653,7 @@ impl MlsCommitStore for PgMlsCommitStore {
                AND circle_id IS NOT DISTINCT FROM $3 \
                AND mls_group_id = $4 \
                AND epoch = $5 \
-             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested",
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, covered_seals, governance_binding, accepted_commit_ref, committed_at, frontier_contested",
         )
         .bind::<Text, _>(&scope.kind)
         .bind::<Text, _>(&scope.realm_id)
@@ -657,7 +671,7 @@ impl MlsCommitStore for PgMlsCommitStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at, frontier_contested \
+            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, covered_seals, governance_binding, accepted_commit_ref, committed_at, frontier_contested \
              FROM mls_commits ORDER BY effective_scope_kind ASC, realm_id ASC, circle_id ASC, mls_group_id ASC",
         )
         .load::<MlsCommitEpochRow>(&mut *conn).await
@@ -790,6 +804,12 @@ struct MlsWelcomeRow {
     #[diesel(sql_type = Text)]
     key_package_id: String,
     #[diesel(sql_type = BigInt)]
+    epoch: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    commit_ref: Option<String>,
+    #[diesel(sql_type = Jsonb)]
+    governance_binding: Value,
+    #[diesel(sql_type = BigInt)]
     enqueued_at: i64,
     #[diesel(sql_type = Nullable<BigInt>)]
     delivered_at: Option<i64>,
@@ -803,6 +823,9 @@ impl From<MlsWelcomeRow> for MlsWelcomeRecord {
             recipient_device_id: row.recipient_device_id,
             welcome_bytes: row.welcome_bytes,
             key_package_id: row.key_package_id,
+            epoch: row.epoch.max(0) as u64,
+            commit_ref: row.commit_ref,
+            governance_binding: row.governance_binding,
             enqueued_at: row.enqueued_at,
             delivered_at: row.delivered_at,
         }
@@ -820,10 +843,16 @@ struct MlsCommitEpochRow {
     epoch: i64,
     #[diesel(sql_type = Text)]
     leader_actor_id: String,
+    #[diesel(sql_type = Text)]
+    creator_device_id: String,
+    #[diesel(sql_type = Text)]
+    genesis_event_ref: String,
     #[diesel(sql_type = Jsonb)]
     covered_seals: Value,
     #[diesel(sql_type = Jsonb)]
     governance_binding: Value,
+    #[diesel(sql_type = Nullable<Text>)]
+    accepted_commit_ref: Option<String>,
     #[diesel(sql_type = BigInt)]
     committed_at: i64,
     #[diesel(sql_type = Bool)]
@@ -837,8 +866,11 @@ impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
             effective_scope: row.effective_scope,
             epoch: row.epoch.max(0) as u64,
             leader_actor_id: row.leader_actor_id,
+            creator_device_id: row.creator_device_id,
+            genesis_event_ref: row.genesis_event_ref,
             covered_seals: json_string_array(row.covered_seals),
             governance_binding: row.governance_binding,
+            accepted_commit_ref: row.accepted_commit_ref,
             committed_at: row.committed_at,
             frontier_contested: row.frontier_contested,
         }

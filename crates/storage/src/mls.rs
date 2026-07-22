@@ -90,6 +90,9 @@ pub struct MlsWelcomeRecord {
     pub recipient_device_id: String,
     pub welcome_bytes: Vec<u8>,
     pub key_package_id: String,
+    pub epoch: u64,
+    pub commit_ref: Option<String>,
+    pub governance_binding: Value,
     pub enqueued_at: i64,
     pub delivered_at: Option<i64>,
 }
@@ -104,8 +107,11 @@ pub struct MlsCommitEpochRecord {
     pub effective_scope: Value,
     pub epoch: u64,
     pub leader_actor_id: String,
+    pub creator_device_id: String,
+    pub genesis_event_ref: String,
     pub covered_seals: Vec<String>,
     pub governance_binding: Value,
+    pub accepted_commit_ref: Option<String>,
     pub committed_at: i64,
     /// `true` once concurrent commits resolved the group's
     /// `covered_frontier_cell` to `⊥` (encryption-and-audit.md §2.5.2). Cleared
@@ -201,6 +207,7 @@ pub struct MlsCommitEpochAdvance<'a> {
     pub leader_actor_id: &'a str,
     pub covered_seals: &'a [String],
     pub governance_binding: &'a Value,
+    pub accepted_commit_ref: &'a str,
     pub committed_at: i64,
 }
 
@@ -218,6 +225,8 @@ pub trait MlsCommitStore: Send + Sync {
         effective_scope: &Value,
         group_id: &str,
         leader_actor_id: &str,
+        creator_device_id: &str,
+        genesis_event_ref: &str,
         covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,

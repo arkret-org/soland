@@ -45,6 +45,14 @@ impl ProjectionState {
         };
         self.sidecars
             .insert(projection.sidecar_id.clone(), projection);
+        let control_ref = operation
+            .payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| operation.operation_id.as_str())
+            .to_owned();
+        self.sidecar_create_refs
+            .insert(sidecar.id.to_string(), control_ref);
         ProjectionEffect::Ignored
     }
 }
@@ -81,6 +89,12 @@ mod tests {
             ProjectionEffect::Ignored
         ));
         assert_eq!(state.sidecars.len(), 1);
+        assert_eq!(
+            state
+                .sidecar_create_refs
+                .get("ak:sidecar:01964137-0000-7000-8000-000000000042"),
+            Some(&"ak:operation:01964137-0000-7000-8000-000000000040".to_owned())
+        );
 
         let second = create("ak:sidecar:01964137-0000-7000-8000-000000000043");
         assert!(matches!(

@@ -367,6 +367,21 @@ pub(super) async fn submit_event_value_with_context(
                 message,
             ));
         }
+        if let Err(reason) =
+            crate::routing::identity::agents::sidecar::validate_sidecar_mls_event_binding(
+                state,
+                &parsed.actor_id,
+                &parsed.device_id,
+                operation,
+            )
+            .await
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                reason,
+                reason,
+            ));
+        }
         validate_active_series_authority_before_commit(state, &parsed, operation).await?;
         if let Err(reason) =
             validate_content_encryption_floor(state, std::slice::from_ref(operation)).await

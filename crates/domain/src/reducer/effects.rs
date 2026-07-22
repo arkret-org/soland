@@ -393,6 +393,7 @@ pub enum MlsEffect {
         effective_scope: Value,
         epoch: u64,
         creator_actor_id: String,
+        creator_device_id: String,
         covered_seals: Vec<String>,
     },
     /// `apply_commit_epoch` — the group's epoch was bumped from

@@ -1,10 +1,14 @@
 use arkret_core::models::{
     AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
     AgentSidecarEncryptionProfile, AgentSidecarEnsureOutcome, AgentSidecarEnsureRequestBody,
-    AgentSidecarList, AgentSidecarSchema, AgentSidecarState, AgentSidecarView,
-    PendingSidecarAccessReconciliationItem, PendingSidecarAccessReconciliationStage,
+    AgentSidecarList, AgentSidecarMlsContext, AgentSidecarSchema, AgentSidecarState,
+    AgentSidecarView, PendingSidecarAccessReconciliationItem,
+    PendingSidecarAccessReconciliationStage,
 };
-use arkret_core::{NonEmptyString, SidecarId};
+use arkret_core::{
+    MlsGovernanceBindingPayload, MlsGroupId, NonEmptyString, SidecarId, SidecarMlsBinding,
+    agent_sidecar_desired_access_digest,
+};
 use salvo::oapi::extract::QueryParam;
 use soland_storage::{AgentSidecarContextRecord, AgentSidecarRecord};
 
@@ -466,6 +470,44 @@ async fn ensure_sidecar_member(
     }
 }
 
+pub(crate) async fn remove_agent_from_controller_sidecars(
+    state: &AppState,
+    controller: &str,
+    agent_id: &str,
+) -> Result<(), AppError> {
+    let sidecars = state
+        .sidecars_store()
+        .list_for_controller(controller, None)
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar list failed: {error}")))?;
+    for sidecar in sidecars {
+        let _sidecar_guard = lock_sidecar_ensure(&sidecar.realm_id, controller).await;
+        if !circle_has_member(state, &sidecar.backing_circle_id, agent_id) {
+            continue;
+        }
+        let realm_id = RealmId::new(sidecar.realm_id.clone())
+            .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?;
+        let circle_id = CircleId::new(sidecar.backing_circle_id.clone())
+            .map_err(|error| AppError::internal(format!("stored Circle id: {error}")))?;
+        let operation = new_sidecar_operation(
+            &realm_id,
+            arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
+            json!({"circle_id": circle_id, "actor_id": agent_id, "membership": "leave"}),
+        )?;
+        crate::routing::events::projection::accept_trusted_sidecar_member_operation(
+            state, controller, &operation,
+        )
+        .await
+        .map_err(sidecar_reducer_reject_to_app_error)?;
+        if circle_has_member(state, &sidecar.backing_circle_id, agent_id) {
+            return Err(AppError::internal(
+                "Sidecar backing membership leave accepted but not projected",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn private_tracks_for_context(state: &AppState, context_ref: &AgentSidecarContextRef) -> Value {
     let AgentSidecarContextRef::Strand(context) = context_ref else {
         return json!({"synthesis": {}, "discussion": {"profile": "discussion", "is_primary": true}});
@@ -618,52 +660,433 @@ fn sidecar_from_record(record: &AgentSidecarRecord) -> Result<AgentSidecar, AppE
 
 fn sidecar_access_readiness(
     pending: &[PendingSidecarAccessReconciliationItem],
+    has_group: bool,
+    controller_device_ready: bool,
+    frontier_contested: bool,
 ) -> AgentSidecarAccessReadiness {
     if pending
         .iter()
         .any(|item| item.stage == PendingSidecarAccessReconciliationStage::BackingScopeMembership)
     {
         AgentSidecarAccessReadiness::AccessReconciliationPending
-    } else {
-        // An empty reconciliation list does not prove that the controller's
-        // current device holds the accepted MLS group state. Until the wire
-        // contract exposes authoritative device-readiness evidence, keep the
-        // send path fail-closed instead of deriving Ready from a group ref.
+    } else if frontier_contested
+        || pending.iter().any(|item| {
+            matches!(
+                item.stage,
+                PendingSidecarAccessReconciliationStage::MlsRemove
+                    | PendingSidecarAccessReconciliationStage::EpochRotation
+            )
+        })
+    {
+        AgentSidecarAccessReadiness::EpochUpdateRequired
+    } else if !has_group || !controller_device_ready || !pending.is_empty() {
         AgentSidecarAccessReadiness::KeyMaterialPending
+    } else {
+        AgentSidecarAccessReadiness::Ready
     }
+}
+
+fn typed_desired_agents(desired: &[String]) -> Result<Vec<Did>, AppError> {
+    desired
+        .iter()
+        .cloned()
+        .map(Did::new)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))
+}
+
+fn sidecar_control_frontier(
+    projection: &soland_domain::reducer::ProjectionState,
+    record: &AgentSidecarRecord,
+    desired: &[String],
+) -> Result<Vec<NonEmptyString>, AppError> {
+    let mut refs = vec![
+        projection
+            .sidecar_create_refs
+            .get(&record.sidecar_id)
+            .cloned()
+            .ok_or_else(|| AppError::internal("Sidecar create control ref is unavailable"))?,
+    ];
+    for principal_id in std::iter::once(&record.controller_id).chain(desired.iter()) {
+        if let Some(join_ref) = projection
+            .circle_member_join_refs
+            .get(&(record.backing_circle_id.clone(), principal_id.clone()))
+        {
+            refs.push(join_ref.clone());
+        }
+    }
+    refs.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    refs.dedup();
+    refs.into_iter()
+        .map(NonEmptyString::new)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| AppError::internal(format!("Sidecar control ref: {error}")))
+}
+
+pub(crate) async fn expected_sidecar_mls_binding(
+    state: &AppState,
+    record: &AgentSidecarRecord,
+) -> Result<SidecarMlsBinding, AppError> {
+    let desired =
+        eligible_sidecar_agents(state, &record.realm_id, &record.controller_id, &[]).await?;
+    let desired_typed = typed_desired_agents(&desired)?;
+    let sidecar_id = SidecarId::new(record.sidecar_id.clone())
+        .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?;
+    let realm_id = RealmId::new(record.realm_id.clone())
+        .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?;
+    let controller_id = Did::new(record.controller_id.clone())
+        .map_err(|error| AppError::internal(format!("stored controller id: {error}")))?;
+    let projection = state.projection.lock();
+    let control_frontier = sidecar_control_frontier(&projection, record, &desired)?;
+    let desired_access_digest = agent_sidecar_desired_access_digest(
+        sidecar_id.clone(),
+        realm_id,
+        controller_id,
+        &desired_typed,
+    )
+    .map_err(|error| AppError::internal(format!("Sidecar desired access digest: {error}")))?;
+    Ok(SidecarMlsBinding {
+        sidecar_id,
+        desired_access_digest,
+        control_frontier,
+    })
+}
+
+pub(crate) async fn validate_sidecar_mls_event_binding(
+    state: &AppState,
+    actor_id: &str,
+    device_id: &str,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if !matches!(
+        operation.object_type.as_str(),
+        arkret_core::events::EventKind::MLS_GENESIS
+            | arkret_core::events::EventKind::MLS_PROPOSAL
+            | arkret_core::events::EventKind::MLS_COMMIT
+            | arkret_core::events::EventKind::MLS_WELCOME
+    ) {
+        return Ok(());
+    }
+    let binding_value = operation
+        .payload
+        .get("governance_binding")
+        .or_else(|| operation.payload.get("mls_governance_binding"))
+        .ok_or("mls_governance_binding_missing")?;
+    let binding = serde_json::from_value::<MlsGovernanceBindingPayload>(binding_value.clone())
+        .map_err(|_| "mls_governance_binding_invalid")?;
+    let circle_id = binding.circle_id().map(ToString::to_string);
+    let sidecar_for_scope = circle_id.as_deref().and_then(|circle_id| {
+        state
+            .projection
+            .lock()
+            .sidecars
+            .values()
+            .find(|sidecar| sidecar.backing_circle_id == circle_id)
+            .cloned()
+    });
+    let Some(sidecar_projection) = sidecar_for_scope else {
+        return if binding.sidecar_binding().is_some() {
+            Err("mls_sidecar_binding_forbidden")
+        } else {
+            Ok(())
+        };
+    };
+    let supplied = binding
+        .sidecar_binding()
+        .ok_or("mls_sidecar_binding_missing")?;
+    if supplied.sidecar_id.as_str() != sidecar_projection.sidecar_id {
+        return Err("mls_sidecar_binding_mismatch");
+    }
+    let record = state
+        .sidecars_store()
+        .get(&sidecar_projection.sidecar_id)
+        .await
+        .map_err(|_| "mls_sidecar_binding_state_unavailable")?
+        .ok_or("mls_sidecar_binding_mismatch")?;
+    let _sidecar_guard = lock_sidecar_ensure(&record.realm_id, &record.controller_id).await;
+    let expected = expected_sidecar_mls_binding(state, &record)
+        .await
+        .map_err(|_| "mls_sidecar_binding_state_unavailable")?;
+    if supplied != &expected {
+        return Err("mls_sidecar_binding_stale");
+    }
+    let desired = eligible_sidecar_agents(
+        state,
+        &sidecar_projection.realm_id,
+        &sidecar_projection.controller_id,
+        &[],
+    )
+    .await
+    .map_err(|_| "mls_sidecar_binding_state_unavailable")?;
+    let expected_members = std::iter::once(sidecar_projection.controller_id.clone())
+        .chain(desired)
+        .collect::<std::collections::BTreeSet<_>>();
+    let materialized_members = state
+        .projection
+        .lock()
+        .circles
+        .get(&sidecar_projection.backing_circle_id)
+        .map(|circle| circle.members.clone())
+        .unwrap_or_default();
+    if materialized_members != expected_members {
+        return Err("mls_sidecar_membership_reconciliation_pending");
+    }
+    let payload_group_id = operation
+        .payload
+        .get("mls_group_id")
+        .or_else(|| operation.payload.get("group_id"))
+        .and_then(Value::as_str)
+        .ok_or("mls_group_id_missing")?;
+    if binding.mls_group_id() != payload_group_id {
+        return Err("mls_sidecar_binding_mismatch");
+    }
+    let current_group = state
+        .projection
+        .lock()
+        .circles
+        .get(&sidecar_projection.backing_circle_id)
+        .and_then(|circle| circle.mls_group_ref.clone());
+    match operation.object_type.as_str() {
+        arkret_core::events::EventKind::MLS_GENESIS => {
+            if current_group.is_some()
+                || operation
+                    .payload
+                    .get("creator_principal_id")
+                    .and_then(Value::as_str)
+                    != Some(sidecar_projection.controller_id.as_str())
+                || operation
+                    .payload
+                    .get("creator_device_id")
+                    .and_then(Value::as_str)
+                    != Some(device_id)
+                || actor_id != sidecar_projection.controller_id
+            {
+                return Err("mls_sidecar_genesis_authority_mismatch");
+            }
+        }
+        arkret_core::events::EventKind::MLS_WELCOME => {
+            if current_group.as_deref() != Some(payload_group_id) {
+                return Err("mls_sidecar_group_mismatch");
+            }
+            let projection = state.projection.lock();
+            let commit_ref = operation
+                .payload
+                .get("commit_ref")
+                .and_then(Value::as_str)
+                .ok_or("mls_sidecar_welcome_commit_ref_missing")?;
+            if !projection.accepted_mls_commit_refs.contains(commit_ref) {
+                return Err("mls_sidecar_welcome_commit_ref_unaccepted");
+            }
+            let epoch = operation
+                .payload
+                .get("epoch")
+                .and_then(Value::as_u64)
+                .ok_or("mls_welcome_epoch_missing")?;
+            if !projection
+                .mls_commit_epochs
+                .values()
+                .any(|row| row.group_id == payload_group_id && row.epoch == epoch)
+            {
+                return Err("mls_sidecar_welcome_epoch_mismatch");
+            }
+        }
+        _ if current_group.as_deref() != Some(payload_group_id) => {
+            return Err("mls_sidecar_group_mismatch");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn welcome_matches_sidecar_binding(
+    welcome: &soland_domain::reducer::MlsWelcome,
+    sidecar_id: &SidecarId,
+    current_join_ref: &str,
+) -> bool {
+    serde_json::from_value::<MlsGovernanceBindingPayload>(welcome.governance_binding.clone())
+        .ok()
+        .and_then(|binding| binding.sidecar_binding().cloned())
+        .is_some_and(|binding| {
+            &binding.sidecar_id == sidecar_id
+                && binding
+                    .control_frontier
+                    .iter()
+                    .any(|control_ref| control_ref.as_str() == current_join_ref)
+        })
+}
+
+fn device_has_effective_sidecar_evidence(
+    projection: &soland_domain::reducer::ProjectionState,
+    principal_id: &str,
+    device_id: Option<&str>,
+    group_id: &str,
+    current_epoch: u64,
+    sidecar_id: &SidecarId,
+    current_join_ref: &str,
+) -> bool {
+    projection.mls_key_packages.values().any(|key_package| {
+        key_package.actor_id == principal_id
+            && device_id.is_none_or(|expected| key_package.device_id == expected)
+            && key_package.claimed_by.as_deref() == Some(group_id)
+            && key_package.consumed_at.is_some()
+            && projection.mls_welcomes.values().flatten().any(|welcome| {
+                welcome.group_id == group_id
+                    && welcome.recipient_actor_id == principal_id
+                    && welcome.recipient_device_id == key_package.device_id
+                    && welcome.key_package_id == key_package.id
+                    && welcome.delivered_at.is_some()
+                    && welcome.epoch <= current_epoch
+                    && welcome.commit_ref.as_ref().is_some_and(|commit_ref| {
+                        projection.accepted_mls_commit_refs.contains(commit_ref)
+                    })
+                    && welcome_matches_sidecar_binding(welcome, sidecar_id, current_join_ref)
+            })
+    })
+}
+
+fn principal_has_pending_sidecar_welcome(
+    projection: &soland_domain::reducer::ProjectionState,
+    principal_id: &str,
+    group_id: &str,
+    sidecar_id: &SidecarId,
+    current_join_ref: &str,
+) -> bool {
+    projection.mls_welcomes.values().flatten().any(|welcome| {
+        welcome.group_id == group_id
+            && welcome.recipient_actor_id == principal_id
+            && projection
+                .mls_key_packages
+                .get(&welcome.key_package_id)
+                .is_some_and(|key_package| {
+                    key_package.claimed_by.as_deref() == Some(group_id)
+                        && key_package.consumed_at.is_none()
+                })
+            && welcome
+                .commit_ref
+                .as_ref()
+                .is_some_and(|commit_ref| projection.accepted_mls_commit_refs.contains(commit_ref))
+            && welcome_matches_sidecar_binding(welcome, sidecar_id, current_join_ref)
+    })
+}
+
+fn epoch_matches_sidecar_binding(
+    row: &soland_domain::reducer::MlsCommitEpoch,
+    expected: &SidecarMlsBinding,
+) -> bool {
+    serde_json::from_value::<MlsGovernanceBindingPayload>(row.governance_binding.clone())
+        .ok()
+        .and_then(|binding| binding.sidecar_binding().cloned())
+        .as_ref()
+        == Some(expected)
 }
 
 async fn sidecar_view(
     state: &AppState,
     record: &AgentSidecarRecord,
+    controller_device_id: &str,
 ) -> Result<AgentSidecarView, AppError> {
     let desired =
         eligible_sidecar_agents(state, &record.realm_id, &record.controller_id, &[]).await?;
-    let (circle_members, mls_ready) = state
-        .projection
-        .lock()
+    let desired_typed = typed_desired_agents(&desired)?;
+    let expected_binding = expected_sidecar_mls_binding(state, record).await?;
+    let projection = state.projection.lock();
+    let (circle_members, group_id) = projection
         .circles
         .get(&record.backing_circle_id)
-        .map(|circle| (circle.members.clone(), circle.mls_group_ref.is_some()))
+        .map(|circle| (circle.members.clone(), circle.mls_group_ref.clone()))
         .unwrap_or_default();
+    let expected_scope = json!({
+        "kind": "circle",
+        "realm_id": record.realm_id,
+        "circle_id": record.backing_circle_id,
+    });
+    let epoch_row = group_id.as_deref().and_then(|group_id| {
+        projection
+            .mls_commit_epochs
+            .values()
+            .find(|row| row.group_id == group_id && row.effective_scope == expected_scope)
+    });
+    let epoch_binding_current =
+        epoch_row.is_some_and(|row| epoch_matches_sidecar_binding(row, &expected_binding));
+    let controller_join_ref = projection.circle_member_join_refs.get(&(
+        record.backing_circle_id.clone(),
+        record.controller_id.clone(),
+    ));
+    let controller_device_ready = epoch_binding_current
+        && epoch_row.is_some_and(|row| {
+            row.creator_device_id == controller_device_id
+                || controller_join_ref.is_some_and(|join_ref| {
+                    device_has_effective_sidecar_evidence(
+                        &projection,
+                        &record.controller_id,
+                        Some(controller_device_id),
+                        &row.group_id,
+                        row.epoch,
+                        &expected_binding.sidecar_id,
+                        join_ref,
+                    )
+                })
+        });
     let mut pending = Vec::new();
-    let effective = Vec::<Did>::new();
+    let mut effective = Vec::<Did>::new();
     for agent_id in &desired {
         let stage = if !circle_members.contains(agent_id) {
             Some((
                 PendingSidecarAccessReconciliationStage::BackingScopeMembership,
                 "backing_scope_membership_pending",
             ))
-        } else if !mls_ready {
+        } else if epoch_row.is_none() {
             Some((
                 PendingSidecarAccessReconciliationStage::MlsWelcome,
                 "mls_group_or_welcome_pending",
             ))
-        } else {
+        } else if !epoch_binding_current {
             Some((
                 PendingSidecarAccessReconciliationStage::MlsWelcome,
-                "mls_welcome_or_epoch_commit_pending",
+                "mls_epoch_binding_update_pending",
             ))
+        } else if !projection
+            .circle_member_join_refs
+            .get(&(record.backing_circle_id.clone(), agent_id.clone()))
+            .is_some_and(|join_ref| {
+                device_has_effective_sidecar_evidence(
+                    &projection,
+                    agent_id,
+                    None,
+                    &epoch_row.expect("presence checked").group_id,
+                    epoch_row.expect("presence checked").epoch,
+                    &expected_binding.sidecar_id,
+                    join_ref,
+                )
+            })
+        {
+            let join_ref = projection
+                .circle_member_join_refs
+                .get(&(record.backing_circle_id.clone(), agent_id.clone()))
+                .expect("membership presence checked");
+            if principal_has_pending_sidecar_welcome(
+                &projection,
+                agent_id,
+                &epoch_row.expect("presence checked").group_id,
+                &expected_binding.sidecar_id,
+                join_ref,
+            ) {
+                Some((
+                    PendingSidecarAccessReconciliationStage::DeviceKeyMaterial,
+                    "mls_welcome_delivery_or_consume_pending",
+                ))
+            } else {
+                Some((
+                    PendingSidecarAccessReconciliationStage::MlsWelcome,
+                    "mls_welcome_or_epoch_commit_pending",
+                ))
+            }
+        } else {
+            effective.push(
+                Did::new(agent_id.clone())
+                    .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))?,
+            );
+            None
         };
         if let Some((stage, reason)) = stage {
             pending.push(PendingSidecarAccessReconciliationItem {
@@ -673,18 +1096,67 @@ async fn sidecar_view(
                 reason: NonEmptyString::new(reason).map_err(|error| {
                     AppError::internal(format!("reconciliation reason: {error}"))
                 })?,
+                membership_frontier: None,
             });
         }
     }
-    let access_readiness = sidecar_access_readiness(&pending);
+    for obligation in projection.pending_mls_removals.iter().filter(|obligation| {
+        obligation.realm_id == record.realm_id
+            && obligation.circle_id.as_deref() == Some(record.backing_circle_id.as_str())
+            && !desired.contains(&obligation.actor_id)
+    }) {
+        let mut membership_frontier = obligation
+            .membership_frontier
+            .iter()
+            .map(|event_id| {
+                EventId::new(event_id.clone()).map_err(|error| {
+                    AppError::internal(format!("stored MLS removal frontier ref: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        membership_frontier.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        membership_frontier.dedup();
+        if membership_frontier.is_empty() {
+            return Err(AppError::internal(
+                "stored Sidecar MLS removal obligation has an empty membership frontier",
+            ));
+        }
+        pending.push(PendingSidecarAccessReconciliationItem {
+            agent_id: Did::new(obligation.actor_id.clone()).map_err(|error| {
+                AppError::internal(format!("stored Sidecar removal Agent id: {error}"))
+            })?,
+            stage: PendingSidecarAccessReconciliationStage::MlsRemove,
+            reason: NonEmptyString::new("mls_remove_obligation_pending")
+                .expect("static reconciliation reason is non-empty"),
+            membership_frontier: Some(membership_frontier),
+        });
+    }
+    let access_readiness = sidecar_access_readiness(
+        &pending,
+        epoch_row.is_some(),
+        controller_device_ready,
+        epoch_row.is_some_and(|row| row.frontier_contested)
+            || (epoch_row.is_some() && !epoch_binding_current),
+    );
+    let mls_context = AgentSidecarMlsContext {
+        desired_access_digest: expected_binding.desired_access_digest.clone(),
+        control_frontier: expected_binding.control_frontier.clone(),
+        mls_group_id: epoch_row
+            .map(|row| MlsGroupId::new(row.group_id.clone()))
+            .transpose()
+            .map_err(|error| AppError::internal(format!("stored MLS group id: {error}")))?,
+        epoch: epoch_row.map(|row| row.epoch),
+        genesis_event_ref: epoch_row
+            .map(|row| EventId::new(row.genesis_event_ref.clone()))
+            .transpose()
+            .map_err(|error| AppError::internal(format!("stored genesis Event ref: {error}")))?,
+        current_controller_device_ready: controller_device_ready,
+    };
     let view = AgentSidecarView {
         sidecar: sidecar_from_record(record)?,
-        desired_agent_ids: desired
-            .into_iter()
-            .map(Did::new)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))?,
+        desired_agent_ids: desired_typed,
         effective_agent_ids: effective,
+        mls_context,
         access_readiness,
         pending_access_reconciliations: pending,
     };
@@ -735,7 +1207,7 @@ async fn ensure_sidecar_impl(
         &normalized_context_ref_digest,
     )
     .await?;
-    let view = sidecar_view(state, &sidecar).await?;
+    let view = sidecar_view(state, &sidecar, &session.device_id).await?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -798,7 +1270,7 @@ pub(super) async fn get_sidecar(
         .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?
         .filter(|record| record.controller_id == session.actor)
         .ok_or_else(|| AppError::not_found("Sidecar not found"))?;
-    json_ok(sidecar_view(state, &record).await?)
+    json_ok(sidecar_view(state, &record, &session.device_id).await?)
 }
 
 #[endpoint(
@@ -835,7 +1307,7 @@ pub(super) async fn list_sidecars(
         .map_err(|error| AppError::internal(format!("Sidecar cursor: {error}")))?;
     let mut items = Vec::with_capacity(records.len());
     for record in records {
-        items.push(sidecar_view(state, &record).await?);
+        items.push(sidecar_view(state, &record, &session.device_id).await?);
     }
     json_ok(AgentSidecarList { items, next_cursor })
 }
@@ -928,7 +1400,7 @@ mod tests {
     #[test]
     fn empty_agent_reconciliation_does_not_prove_controller_device_readiness() {
         assert_eq!(
-            sidecar_access_readiness(&[]),
+            sidecar_access_readiness(&[], false, false, false),
             AgentSidecarAccessReadiness::KeyMaterialPending
         );
     }
@@ -939,11 +1411,152 @@ mod tests {
             agent_id: Did::new("did:web:example.com:agents:assistant".to_owned()).unwrap(),
             stage: PendingSidecarAccessReconciliationStage::BackingScopeMembership,
             reason: NonEmptyString::new("backing_scope_membership_pending").unwrap(),
+            membership_frontier: None,
         };
 
         assert_eq!(
-            sidecar_access_readiness(&[pending]),
+            sidecar_access_readiness(&[pending], true, true, false),
             AgentSidecarAccessReadiness::AccessReconciliationPending
         );
+    }
+
+    #[test]
+    fn stale_epoch_requires_update_before_ready() {
+        assert_eq!(
+            sidecar_access_readiness(&[], true, true, true),
+            AgentSidecarAccessReadiness::EpochUpdateRequired
+        );
+    }
+
+    #[test]
+    fn pending_sidecar_removal_requires_epoch_update() {
+        let pending = PendingSidecarAccessReconciliationItem {
+            agent_id: Did::new("did:web:example.com:agents:assistant".to_owned()).unwrap(),
+            stage: PendingSidecarAccessReconciliationStage::MlsRemove,
+            reason: NonEmptyString::new("mls_remove_obligation_pending").unwrap(),
+            membership_frontier: Some(vec![
+                EventId::new("ak:event:01964137-0000-7000-8000-000000000001").unwrap(),
+            ]),
+        };
+
+        assert_eq!(
+            sidecar_access_readiness(&[pending], true, true, false),
+            AgentSidecarAccessReadiness::EpochUpdateRequired
+        );
+    }
+
+    #[test]
+    fn historical_welcome_tracks_the_current_join_ref_not_the_full_frontier() {
+        let sidecar_id = SidecarId::new("ak:sidecar:01964137-0000-7000-8000-000000000031").unwrap();
+        let governance_binding = json!({
+            "binding_version": 1,
+            "encoding_profile": "cbor-deterministic-rfc8949-v1",
+            "realm_id": "ak:realm:01964137-0000-7000-8000-000000000030",
+            "circle_id": "ak:circle:01964137-0000-7000-8000-000000000032",
+            "effective_scope": {
+                "kind": "circle",
+                "realm_id": "ak:realm:01964137-0000-7000-8000-000000000030",
+                "circle_id": "ak:circle:01964137-0000-7000-8000-000000000032"
+            },
+            "mls_group_id": "YXJrcmV0LW1scy10ZXN0LWdyb3Vw",
+            "previous_epoch": 0,
+            "next_epoch": 1,
+            "membership_frontier": ["ak:event:01964137-0000-7000-8000-000000000040"],
+            "policy_root": format!("sha256:{}", "1".repeat(64)),
+            "capability_root": format!("sha256:{}", "2".repeat(64)),
+            "discussion_metadata_digest": format!("sha256:{}", "3".repeat(64)),
+            "binding_profile": "ak.profile.mls_governance_binding.full.v1",
+            "reducer_profile": "ak.reducer.v1",
+            "sidecar_binding": {
+                "sidecar_id": sidecar_id,
+                "desired_access_digest": format!("sha256:{}", "4".repeat(64)),
+                "control_frontier": [
+                    "ak:event:01964137-0000-7000-8000-000000000041",
+                    "ak:event:01964137-0000-7000-8000-000000000042"
+                ]
+            }
+        });
+        let welcome = soland_domain::reducer::MlsWelcome {
+            id: "ak:mls_welcome:01964137-0000-7000-8000-000000000043".to_owned(),
+            group_id: "YXJrcmV0LW1scy10ZXN0LWdyb3Vw".to_owned(),
+            recipient_actor_id: "did:web:example.com:agents:assistant".to_owned(),
+            recipient_device_id: "ak:device:01964137-0000-7000-8000-000000000044".to_owned(),
+            welcome_bytes: vec![1],
+            key_package_id: "ak:mls_keypackage:01964137-0000-7000-8000-000000000045".to_owned(),
+            epoch: 1,
+            commit_ref: Some("ak:event:01964137-0000-7000-8000-000000000046".to_owned()),
+            governance_binding,
+            enqueued_at: 1,
+            delivered_at: Some(2),
+        };
+        serde_json::from_value::<MlsGovernanceBindingPayload>(welcome.governance_binding.clone())
+            .unwrap();
+
+        assert!(welcome_matches_sidecar_binding(
+            &welcome,
+            &sidecar_id,
+            "ak:event:01964137-0000-7000-8000-000000000042"
+        ));
+        assert!(!welcome_matches_sidecar_binding(
+            &welcome,
+            &sidecar_id,
+            "ak:event:01964137-0000-7000-8000-000000000047"
+        ));
+
+        let mut projection = soland_domain::reducer::ProjectionState::new();
+        projection
+            .accepted_mls_commit_refs
+            .insert("ak:event:01964137-0000-7000-8000-000000000046".to_owned());
+        projection
+            .mls_welcomes
+            .insert(welcome.recipient_actor_id.clone(), vec![welcome.clone()]);
+        projection.mls_key_packages.insert(
+            welcome.key_package_id.clone(),
+            soland_domain::reducer::MlsKeyPackage {
+                id: welcome.key_package_id.clone(),
+                keypackage_ref: "sha256:keypackage".to_owned(),
+                keypackage_digest: format!("sha256:{}", "5".repeat(64)),
+                actor_id: welcome.recipient_actor_id.clone(),
+                device_id: welcome.recipient_device_id.clone(),
+                lifetime: soland_domain::reducer::KeyPackageLifetime {
+                    not_before: 0,
+                    not_after: i64::MAX,
+                },
+                key_package_bytes: vec![1],
+                capabilities: Vec::new(),
+                capabilities_digest: format!("sha256:{}", "6".repeat(64)),
+                device_signature: json!({}),
+                last_resort: false,
+                last_resort_realm_id: None,
+                claimed_by: Some(welcome.group_id.clone()),
+                ssk_generation: None,
+                device_authorize_event_id: Some(
+                    "ak:event:01964137-0000-7000-8000-000000000048".to_owned(),
+                ),
+                claimed_at: Some(1),
+                claim_expires_at_unix_ms: Some(i64::MAX),
+                consumed_at: None,
+                created_at: 1,
+            },
+        );
+        assert!(principal_has_pending_sidecar_welcome(
+            &projection,
+            &welcome.recipient_actor_id,
+            &welcome.group_id,
+            &sidecar_id,
+            "ak:event:01964137-0000-7000-8000-000000000042",
+        ));
+        projection
+            .mls_key_packages
+            .get_mut(&welcome.key_package_id)
+            .unwrap()
+            .consumed_at = Some(2);
+        assert!(!principal_has_pending_sidecar_welcome(
+            &projection,
+            &welcome.recipient_actor_id,
+            &welcome.group_id,
+            &sidecar_id,
+            "ak:event:01964137-0000-7000-8000-000000000042",
+        ));
     }
 }

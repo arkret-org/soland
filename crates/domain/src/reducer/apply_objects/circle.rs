@@ -485,8 +485,18 @@ impl ProjectionState {
         match target_state.as_str() {
             "join" => {
                 circle.members.insert(actor.clone());
+                let control_ref = operation
+                    .payload
+                    .get("event_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| operation.operation_id.as_str())
+                    .to_owned();
+                self.circle_member_join_refs
+                    .insert((circle_id.clone(), actor.clone()), control_ref);
             }
             "leave" | "ban" => {
+                self.circle_member_join_refs
+                    .remove(&(circle_id.clone(), actor.clone()));
                 if circle.members.remove(&actor) && circle.encryption_profile == "mls_rfc9420" {
                     removed_mls_member =
                         Some((circle.realm_id.clone(), circle.mls_group_ref.clone()));

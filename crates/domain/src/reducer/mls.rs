@@ -352,6 +352,17 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     else {
         return reject("mls_welcome_key_package_id_missing");
     };
+    let Some(epoch) = payload.get("epoch").and_then(Value::as_u64) else {
+        return reject("mls_welcome_epoch_missing");
+    };
+    let commit_ref = payload
+        .get("commit_ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let Some(governance_binding) = payload.get("governance_binding").cloned() else {
+        return reject("mls_welcome_governance_binding_missing");
+    };
     let welcome_bytes = match (
         payload.get("welcome_bytes_b64").and_then(Value::as_str),
         payload.get("ciphertext").and_then(Value::as_str),
@@ -386,6 +397,9 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
         recipient_device_id: recipient_device_id.to_owned(),
         welcome_bytes,
         key_package_id: key_package_id.to_owned(),
+        epoch,
+        commit_ref,
+        governance_binding,
         enqueued_at: op.created_at.timestamp(),
         delivered_at: None,
     };
@@ -494,13 +508,25 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     else {
         return reject("mls_genesis_creator_missing");
     };
-    if payload
+    let Some(creator_device_id) = payload
+        .get("creator_device_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return reject("mls_genesis_creator_device_missing");
+    };
+    let genesis_event_ref = payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| op.operation_id.as_str())
+        .to_owned();
+    let Some(governance_binding) = payload
         .get("governance_binding")
         .or_else(|| payload.get("mls_governance_binding"))
-        .is_none()
-    {
+        .cloned()
+    else {
         return reject("mls_genesis_governance_binding_missing");
-    }
+    };
     let effective_scope = match genesis_effective_scope(payload) {
         Ok(scope) => scope,
         Err(reason) => return reject(reason),
@@ -524,10 +550,14 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
             effective_scope: effective_scope.clone(),
             epoch: 0,
             leader_actor_id: creator_actor_id.to_owned(),
+            creator_device_id: creator_device_id.to_owned(),
+            genesis_event_ref,
             covered_seals: covered_seals.clone(),
             committed_at: op.created_at.timestamp(),
+            governance_binding,
             policy_root,
             accepted_commit_digest: None,
+            accepted_commit_ref: None,
             accepted_from_epoch: None,
             frontier_contested: false,
         },
@@ -538,6 +568,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
         effective_scope,
         epoch: 0,
         creator_actor_id: creator_actor_id.to_owned(),
+        creator_device_id: creator_device_id.to_owned(),
         covered_seals,
     })
 }
@@ -621,7 +652,14 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     };
     let current = existing.epoch;
     let locked_policy_root = existing.policy_root.clone();
+    let governance_binding = payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))
+        .cloned()
+        .unwrap_or(Value::Null);
     let accepted_digest = existing.accepted_commit_digest.clone();
+    let creator_device_id = existing.creator_device_id.clone();
+    let genesis_event_ref = existing.genesis_event_ref.clone();
     let accepted_from_epoch = existing.accepted_from_epoch;
     let prior_contested = existing.frontier_contested;
     let mut covered_seals = existing.covered_seals.clone();
@@ -716,6 +754,11 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
 
     let new_epoch = current.saturating_add(1);
     let committed_at = op.created_at.timestamp();
+    let accepted_commit_ref = payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| op.operation_id.as_str())
+        .to_owned();
     merge_frontier(&mut covered_seals, &covered_delta);
     state.mls_commit_epochs.insert(
         epoch_key,
@@ -724,14 +767,19 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
             effective_scope: effective_scope.clone(),
             epoch: new_epoch,
             leader_actor_id: leader_actor_id.to_owned(),
+            creator_device_id,
+            genesis_event_ref,
             covered_seals: covered_seals.clone(),
             committed_at,
+            governance_binding,
             policy_root: locked_policy_root,
             accepted_commit_digest: Some(commit_digest),
+            accepted_commit_ref: Some(accepted_commit_ref.clone()),
             accepted_from_epoch: Some(expected_prev_epoch),
             frontier_contested: false,
         },
     );
+    state.accepted_mls_commit_refs.insert(accepted_commit_ref);
     if !pending_removals.is_empty() {
         state
             .pending_mls_removals
