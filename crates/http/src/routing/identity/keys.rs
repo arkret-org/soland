@@ -427,7 +427,7 @@ fn verification_method_controller(verification_method: &str) -> &str {
         .unwrap_or(no_query)
 }
 
-fn device_signature_kid_points_to_device_key(
+pub(crate) fn device_signature_kid_points_to_device_key(
     kid: &str,
     actor: &str,
     device_public_key: &str,

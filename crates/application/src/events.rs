@@ -1148,13 +1148,6 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
         retired_at: i64,
     ) -> ApplicationResult<usize>;
     async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ApplicationResult<()>;
-    async fn drain_welcomes(
-        &self,
-        recipient_actor_id: &str,
-        recipient_device_id: &str,
-        now_unix_secs: i64,
-        limit: usize,
-    ) -> ApplicationResult<Vec<MlsWelcomeState>>;
 }
 
 #[derive(Clone, Debug)]
@@ -1257,23 +1250,6 @@ impl MlsKeyPackageApplicationService {
 
     pub async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ApplicationResult<()> {
         self.key_packages.enqueue_welcome(welcome).await
-    }
-
-    pub async fn drain_welcomes(
-        &self,
-        recipient_actor_id: &str,
-        recipient_device_id: &str,
-        now_unix_secs: i64,
-        limit: usize,
-    ) -> ApplicationResult<Vec<MlsWelcomeState>> {
-        self.key_packages
-            .drain_welcomes(
-                recipient_actor_id,
-                recipient_device_id,
-                now_unix_secs,
-                limit,
-            )
-            .await
     }
 }
 

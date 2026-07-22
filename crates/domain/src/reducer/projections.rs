@@ -347,10 +347,9 @@ pub struct MlsKeyPackage {
 
 /// G3.S1 — single Welcome envelope queued for a recipient device.
 ///
-/// The reducer's `apply_welcome_enqueue` appends one row per Welcome
-/// fanout target; the recipient device drains its queue via
-/// `GET /_arkret/self/keys/keypackages/welcomes/pending`, which marks each delivered row
-/// with `delivered_at = now()` so a re-poll won't redeliver.
+/// The reducer's `apply_welcome_enqueue` appends one row per Welcome fanout
+/// target. Delivery uses the standard durable device-message stream; this
+/// projection retains the Welcome binding for claim and consume validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsWelcome {
     /// Canonical `ak:mls_welcome:<uuid>` identifier.

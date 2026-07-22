@@ -1095,46 +1095,6 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .await?;
         Ok(())
     }
-
-    async fn drain_welcomes(
-        &self,
-        recipient_actor_id: &str,
-        recipient_device_id: &str,
-        now_unix_secs: i64,
-        limit: usize,
-    ) -> crate::ApplicationResult<Vec<crate::events::MlsWelcomeState>> {
-        Ok(self
-            .0
-            .mls_welcomes()
-            .drain_pending(
-                recipient_actor_id,
-                recipient_device_id,
-                now_unix_secs,
-                limit,
-            )
-            .await?
-            .into_iter()
-            .map(application_mls_welcome)
-            .collect())
-    }
-}
-
-fn application_mls_welcome(
-    welcome: soland_storage::MlsWelcomeRecord,
-) -> crate::events::MlsWelcomeState {
-    crate::events::MlsWelcomeState {
-        id: welcome.id,
-        group_id: welcome.group_id,
-        recipient_actor_id: welcome.recipient_actor_id,
-        recipient_device_id: welcome.recipient_device_id,
-        welcome_bytes: welcome.welcome_bytes,
-        key_package_id: welcome.key_package_id,
-        epoch: welcome.epoch,
-        commit_ref: welcome.commit_ref,
-        governance_binding: welcome.governance_binding,
-        enqueued_at: welcome.enqueued_at,
-        delivered_at: welcome.delivered_at,
-    }
 }
 
 fn persistence_mls_welcome(

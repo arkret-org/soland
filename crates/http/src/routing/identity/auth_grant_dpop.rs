@@ -367,6 +367,12 @@ fn session_binding_from_introspection(
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
     let is_agent_session = grant.proof_kind == Some(SessionGrantProofKind::AgentKeyProof);
     if is_agent_session {
+        let device_id = grant
+            .device_id
+            .as_ref()
+            .ok_or_else(|| unauthenticated("agent session grant omitted stable device binding"))?
+            .as_str()
+            .to_owned();
         validate_agent_session_scope_details(grant)?;
         match grant.freshness_state.unwrap_or(FreshnessState::Unknown) {
             FreshnessState::Fresh => {}
@@ -387,7 +393,7 @@ fn session_binding_from_introspection(
         }
         let scope_details = agent_session_scope_details(grant);
         return Ok((
-            format!("agent-session:{}", grant.id.as_str()),
+            device_id,
             Some(AgentSessionRecord {
                 granted_scope: grant.scopes.clone(),
                 scope_details,
@@ -691,7 +697,6 @@ mod tests {
         let mut grant = test_introspection_grant();
         grant.id = GrantId::new("ak:grant:0196419b-0000-7000-8000-000000000002").unwrap();
         grant.subject = "did:web:agent.example".to_owned();
-        grant.device_id = None;
         grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
         grant.scope_details = Some(arkret_core::SessionGrantScopeDetails {
@@ -704,10 +709,7 @@ mod tests {
 
         let (device_id, agent_session) = session_binding_from_introspection(&grant).unwrap();
 
-        assert_eq!(
-            device_id,
-            "agent-session:ak:grant:0196419b-0000-7000-8000-000000000002"
-        );
+        assert_eq!(device_id, "ak:device:0196419b-0000-7000-8000-000000000001");
         let agent_session = agent_session.unwrap();
         assert_eq!(agent_session.freshness_state, FreshnessState::Fresh);
         assert_eq!(
@@ -718,6 +720,28 @@ mod tests {
             agent_session.scope_details["realm_ids"][0],
             "ak:realm:0196419b-0000-7000-8000-000000000003"
         );
+    }
+
+    #[test]
+    fn agent_session_binding_requires_stable_device_id() {
+        let mut grant = test_introspection_grant();
+        grant.subject = "did:web:agent.example".to_owned();
+        grant.device_id = None;
+        grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
+        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
+        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails {
+            realm_ids: vec![
+                RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000003".to_owned()).unwrap(),
+            ],
+            ..Default::default()
+        });
+        grant.freshness_state = Some(FreshnessState::Fresh);
+
+        let err = session_binding_from_introspection(&grant).unwrap_err();
+
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(err.1, "unauthenticated");
+        assert_eq!(err.2, "agent session grant omitted stable device binding");
     }
 
     #[test]
