@@ -964,7 +964,7 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     realm_id: &str,
     event: &mut Value,
 ) {
-    let frontier: Value = TestClient::get(format!(
+    let frontier_value: Value = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -972,18 +972,17 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     .await
     .take_json()
     .await
-    .expect("HTTP fixture actor Realm frontier JSON");
-    let actor_seq = frontier["frontier"]["actor_seq"]
-        .as_u64()
-        .unwrap_or_else(|| {
-            panic!("HTTP fixture actor Realm frontier missing actor_seq: {frontier}")
-        })
-        + 1;
-    event["actor_seq"] = Value::Number(actor_seq.into());
-    event["prev_refs"] = frontier["frontier"]["event_id"]
-        .as_str()
-        .map(|event_id| serde_json::json!([event_id]))
-        .unwrap_or_else(|| serde_json::json!([]));
+    .expect("typed HTTP fixture actor Realm frontier");
+    let frontier: arkret_core::EventsFrontierAccountClientState =
+        serde_json::from_value(frontier_value.clone()).unwrap_or_else(|error| {
+            panic!("invalid typed HTTP fixture actor Realm frontier: {error}; {frontier_value}")
+        });
+    let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
+        panic!("combined Realm+actor selector returned the wrong variant");
+    };
+    event["actor_seq"] = Value::Number(frontier.next_actor_seq.into());
+    event["prev_refs"] =
+        serde_json::to_value(frontier.frontier_event_ids).expect("frontier Event ids serialize");
     resign_canonical_event(event);
 }
 
@@ -1375,11 +1374,12 @@ pub(crate) fn test_sha256_multihash_base58btc(bytes: &[u8]) -> String {
 /// carry a message body.
 pub(crate) fn signed_space_event(
     event_id: &str,
-    actor_seq: u64,
+    authoring_step: u64,
     kind: &str,
     mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
+    let actor_seq = fixture_actor_seq(authoring_step);
     normalize_space_container_payload(kind, &mut payload);
     payload = typed_space_container_payload(kind, payload);
     signed_canonical_event(
@@ -1479,11 +1479,12 @@ fn optional_string(payload: &Value, field: &str) -> Option<String> {
 /// normalization selected from the event kind.
 pub(crate) fn signed_strand_event(
     event_id: &str,
-    actor_seq: u64,
+    authoring_step: u64,
     kind: &str,
     mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
+    let actor_seq = fixture_actor_seq(authoring_step);
     normalize_strand_payload(kind, &mut payload);
     signed_canonical_event(
         event_id,
@@ -1547,11 +1548,12 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
 /// Build a signed `ak.morph.*` event envelope.
 pub(crate) fn signed_morph_event(
     event_id: &str,
-    actor_seq: u64,
+    authoring_step: u64,
     kind: &str,
     mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
+    let actor_seq = fixture_actor_seq(authoring_step);
     normalize_morph_payload(kind, &mut payload);
     payload = typed_morph_payload(kind, payload);
     signed_canonical_event(
@@ -1639,10 +1641,11 @@ fn required_string(payload: &Value, field: &str, context: &str) -> String {
 /// Build a signed relation event envelope for read-model projection tests.
 pub(crate) fn signed_relation_event(
     event_id: &str,
-    actor_seq: u64,
+    authoring_step: u64,
     mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
+    let actor_seq = fixture_actor_seq(authoring_step);
     payload = typed_relation_create_payload(payload);
     signed_canonical_event(
         event_id,
@@ -1702,10 +1705,11 @@ fn relation_payload_str(payload: &Value, fields: &[&str]) -> Option<String> {
 /// reuses `ak.schema.message.v1`.
 pub(crate) fn signed_redaction_event(
     event_id: &str,
-    actor_seq: u64,
+    authoring_step: u64,
     mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
+    let actor_seq = fixture_actor_seq(authoring_step);
     if let Some(object) = payload.as_object_mut()
         && !object.contains_key("target_ref")
         && let Some(object_ref) = object.get("object_ref").cloned()
@@ -1726,6 +1730,14 @@ pub(crate) fn signed_redaction_event(
         prev_refs,
         payload,
     )
+}
+
+/// Lifecycle/projection scenarios number their authoring operations from one,
+/// while the wire actor chain starts at sequence zero.
+fn fixture_actor_seq(authoring_step: u64) -> u64 {
+    authoring_step
+        .checked_sub(1)
+        .expect("HTTP fixture authoring steps start at one")
 }
 
 // The following comment blocks are descriptive notes for tests that have

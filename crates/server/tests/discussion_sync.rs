@@ -544,7 +544,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         kind,
         payload,
     } = input;
-    let frontier: Value = TestClient::get(format!(
+    let frontier: arkret_core::EventsFrontierAccountClientState = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?actor_id={actor_id}&realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -552,20 +552,12 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     .await
     .take_json()
     .await
-    .expect("discussion actor Realm frontier JSON");
-    let actor_seq = frontier["frontier"]["actor_seq"]
-        .as_u64()
-        .unwrap_or_else(|| panic!("discussion actor Realm frontier missing actor_seq: {frontier}"))
-        + 1;
-    let prev_refs = frontier["frontier"]["event_id"]
-        .as_str()
-        .map(|event_id| {
-            vec![
-                arkret_core::EventId::new(event_id.to_owned())
-                    .expect("discussion actor Realm frontier Event id is canonical"),
-            ]
-        })
-        .unwrap_or_default();
+    .expect("typed discussion actor Realm frontier");
+    let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
+        panic!("combined Realm+actor selector returned the wrong variant");
+    };
+    let actor_seq = frontier.next_actor_seq;
+    let prev_refs = frontier.frontier_event_ids;
     let now = chrono::Utc::now();
     let actor = arkret_core::Did::new(actor_id.to_owned()).expect("fixture actor DID");
     let verification_method = actor_id.strip_prefix("did:key:").map_or_else(

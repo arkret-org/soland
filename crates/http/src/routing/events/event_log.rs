@@ -20,12 +20,13 @@ use arkret_core::http::{
     EventsSubmitOutcome, EventsSubmitStatus,
 };
 use arkret_core::{
-    ActorFrontierView, Audience, Did, Event, EventId, EventRef, EventsFrontierAccountClientState,
-    EventsFrontierView, EventsSubmitFederationRequestBody, FederationServiceBindingRef, Hash, Hlc,
+    ActorAggregateFrontierKind, ActorAggregateFrontierView, Audience, Did, Event, EventId,
+    EventRef, EventsFrontierAccountClientState, EventsFrontierView,
+    EventsSubmitFederationRequestBody, FederationServiceBindingRef, Hash, Hlc,
     MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_RESOLVE,
     MAX_EVENT_SUBMIT_BATCH, ManagedAgentPcrSealHeadReceipt, ManagedAgentPcrSealHeadReceiptKind,
-    NotarySig, Operation, OperationId, Proof, RealmId, RealmSealFrontierView, Seal,
-    TypedTrustDomainId, canonical, proof_kind,
+    NotarySig, Operation, OperationId, Proof, RealmActorFrontierView, RealmId,
+    RealmSealFrontierView, Seal, TypedTrustDomainId, canonical, proof_kind,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -77,8 +78,7 @@ pub(in crate::routing::events) use endpoints::router;
 
 mod inception;
 use inception::{
-    canonical_value_digest, event_ref_list, principal_control_genesis_shape, require_object_field,
-    resolve_event_root_anchor_method,
+    canonical_value_digest, event_ref_list, require_object_field, resolve_event_root_anchor_method,
 };
 
 mod realm_index;

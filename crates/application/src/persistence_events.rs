@@ -235,6 +235,20 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .map(application_accepted_event)
             .collect())
     }
+    async fn canonical_events_for_realm_actor(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> crate::ApplicationResult<Vec<crate::events::CanonicalEventRecord>> {
+        Ok(self
+            .0
+            .events()
+            .list_for_realm_actor(realm_id, actor_id)
+            .await?
+            .into_iter()
+            .map(application_accepted_event)
+            .collect())
+    }
     async fn canonical_batch_receipts_for_event(
         &self,
         event_id: &str,

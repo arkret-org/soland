@@ -308,7 +308,7 @@ async fn submit_event(
     actor_seq: u64,
     payload: Value,
 ) -> Value {
-    let frontier: Value = TestClient::get(format!(
+    let frontier: arkret_core::EventsFrontierAccountClientState = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
@@ -316,21 +316,12 @@ async fn submit_event(
     .await
     .take_json()
     .await
-    .expect("actor Realm frontier JSON");
-    let accepted_seq = frontier["frontier"]["actor_seq"]
-        .as_u64()
-        .unwrap_or_else(|| panic!("actor Realm frontier missing actor_seq: {frontier}"));
-    let prev_refs = frontier["frontier"]["event_id"]
-        .as_str()
-        .map(|event_id| {
-            vec![
-                arkret_core::EventId::new(event_id.to_owned())
-                    .expect("actor Realm frontier Event id is canonical"),
-            ]
-        })
-        .unwrap_or_default();
+    .expect("typed actor Realm frontier");
+    let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
+        panic!("combined Realm+actor selector returned the wrong variant");
+    };
     assert!(
-        actor_seq > accepted_seq,
+        actor_seq >= frontier.next_actor_seq,
         "fixture-requested actor_seq must not precede the accepted frontier"
     );
     let event = signed_event_with_prev_refs(
@@ -338,9 +329,9 @@ async fn submit_event(
         actor,
         realm_id,
         kind,
-        accepted_seq + 1,
+        frontier.next_actor_seq,
         payload,
-        prev_refs,
+        frontier.frontier_event_ids,
     );
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -364,7 +355,7 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
         actor,
         &realm_id,
         "ak.realm.create",
-        1,
+        0,
         serde_json::json!({
             "object": {
                 "id": realm_id,
@@ -456,7 +447,7 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
         actor,
         &realm_id,
         arkret_core::events::EventKind::CAPABILITY_GRANT,
-        2,
+        1,
         serde_json::json!({
             "grant_id": grant_id,
             "grant": grant
@@ -525,7 +516,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
     assert_eq!(pending_contact["status"], "pending");
 
     let consent_id = ids::generate("consent");
-    let grant_seq = 3_u64;
+    let grant_seq = 2_u64;
     let grant_response = submit_event(
         &app,
         &alice_token,
@@ -586,7 +577,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
         &alice,
         &realm_id,
         "ak.consent.revoke",
-        4,
+        3,
         revoke_payload,
     )
     .await;

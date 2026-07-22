@@ -57,9 +57,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
     let entry = account_data_entry(&sync, "ak.client.ui_state");
     assert_eq!(entry["payload"]["body"], body);
 
-    let denied = submit_actor_private_event(
-        state.clone(),
-        &bob,
+    let mut denied_event = signed_actor_private_event_envelope(
         "did:web:bob.example",
         BOB_DEVICE,
         &principal_realm,
@@ -75,8 +73,18 @@ async fn account_data_accepts_fresh_principal_control_realm() {
             ),
             "updated_at": "2026-06-08T00:01:00.000Z"
         }),
-    )
-    .await;
+    );
+    denied_event["actor_seq"] = serde_json::json!(0);
+    denied_event["prev_refs"] = serde_json::json!([]);
+    resign_canonical_event(&mut denied_event);
+    let denied: Value = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&denied_event)
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
     assert_eq!(denied["error"]["code"], "capability_denied", "{denied}");
 }
 

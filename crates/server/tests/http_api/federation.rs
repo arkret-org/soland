@@ -247,7 +247,7 @@ async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
     seed_peer_delivery_binding(&state);
     let event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede00000003",
-        1,
+        0,
         Vec::new(),
     );
     let mut body = peer_submit_body(&event);
@@ -412,7 +412,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     // acceptance exercises the membership-index path.
     let event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede00000098",
-        1,
+        0,
         Vec::new(),
     );
     let body = peer_submit_body(&event);

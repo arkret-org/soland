@@ -38,7 +38,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use soland_application::events::ProjectedEvent as ProjectionEventRecord;
 use soland_application::jobs::IdempotencyState as IdempotencyRecord;
-use soland_http::error::AppError;
+use soland_http::error::{AppError, ErrorCode};
 use soland_http::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 use soland_http::result::{JsonResult, json_ok};
 

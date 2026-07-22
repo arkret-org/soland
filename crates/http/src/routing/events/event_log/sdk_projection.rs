@@ -122,23 +122,26 @@ pub(in crate::routing) async fn event_submit_response(
     state: &AppState,
     status: EventsSubmitStatus,
     event_id: String,
+    realm_actor_frontier: RealmActorFrontierView,
 ) -> SubmittedEventOutcome {
     let duplicate = matches!(status, EventsSubmitStatus::Duplicate);
+    let mut outcome = events_submit_outcome(
+        status,
+        vec![event_id.clone()],
+        if duplicate {
+            vec![event_id.clone()]
+        } else {
+            Vec::new()
+        },
+        Vec::new(),
+        Vec::new(),
+        Some(super::super::sync::sync_token_for_state(state).await),
+    );
+    outcome.realm_actor_frontiers = vec![realm_actor_frontier];
     SubmittedEventOutcome {
         event_id: event_id.clone(),
         duplicate,
-        outcome: events_submit_outcome(
-            status,
-            vec![event_id.clone()],
-            if duplicate {
-                vec![event_id]
-            } else {
-                Vec::new()
-            },
-            Vec::new(),
-            Vec::new(),
-            Some(super::super::sync::sync_token_for_state(state).await),
-        ),
+        outcome,
     }
 }
 

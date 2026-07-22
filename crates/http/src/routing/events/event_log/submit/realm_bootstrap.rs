@@ -73,7 +73,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         }
     }
 
-    let actor_lock = actor_submit_lock(&unit.actor_id);
+    let actor_lock = actor_submit_lock(&unit.realm_id, &unit.actor_id);
     let _guard = actor_lock.lock().await;
     if let Some(outcome) = identical_historical_retry(state, &envelopes).await? {
         return Ok(outcome);
@@ -284,12 +284,12 @@ pub(super) async fn submit_realm_bootstrap_batch(
 fn validate_actor_chain(events: &[ValidatedEventEnvelope]) -> Result<(), SubmitOneError> {
     if events
         .first()
-        .is_none_or(|first| first.actor_seq != 1 || !first.prev_refs.is_empty())
+        .is_none_or(|first| first.actor_seq != 0 || !first.prev_refs.is_empty())
     {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
-            "ordinary Realm bootstrap must begin the Realm-scoped actor chain at actor_seq=1",
+            "ordinary Realm bootstrap must begin the Realm-scoped actor chain at actor_seq=0",
         ));
     }
     for pair in events.windows(2) {

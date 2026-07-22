@@ -9,9 +9,10 @@ use arkret_core::{
 use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind,
 };
+use salvo::http::StatusCode;
 use serde_json::{Value, json};
 use soland_application::identity::SessionIdentityState as SessionRecord;
-use soland_http::error::AppError;
+use soland_http::error::{AppError, ErrorCode};
 
 use super::record::{
     applet_record, applet_records, ensure_not_revoked, extension_actor_id_document,
@@ -347,27 +348,30 @@ pub(super) async fn next_actor_frontier(
 ) -> Result<(u64, Vec<arkret_core::EventId>), AppError> {
     let records = state
         .event_query_application()
-        .canonical_events_for_actor(actor_id)
+        .canonical_events_for_realm_actor(realm_id.as_str(), actor_id)
         .await
         .map_err(|error| AppError::internal(format!("event frontier lookup failed: {error}")))?;
-    let scoped = records
+    let Some(max_seq) = records.iter().map(|record| record.actor_seq).max() else {
+        return Ok((0, Vec::new()));
+    };
+    let next_actor_seq = max_seq.checked_add(1).ok_or_else(|| {
+        AppError::new(
+            ErrorCode::FrontierSequenceExhausted,
+            "applet service actor sequence is exhausted",
+        )
+        .with_status(StatusCode::CONFLICT)
+    })?;
+    let mut prev_refs = records
         .into_iter()
-        .filter(|record| record.realm_id.as_deref() == Some(realm_id.as_str()))
-        .collect::<Vec<_>>();
-    let max_seq = scoped
-        .iter()
-        .map(|record| record.actor_seq)
-        .max()
-        .unwrap_or(0);
-    let prev_refs = scoped
-        .into_iter()
-        .filter(|record| record.actor_seq == max_seq && max_seq > 0)
+        .filter(|record| record.actor_seq == max_seq)
         .map(|record| {
             arkret_core::EventId::new(record.event_id)
                 .map_err(|error| AppError::internal(format!("stored Event id invalid: {error}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((max_seq + 1, prev_refs))
+    prev_refs.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
+    prev_refs.dedup();
+    Ok((next_actor_seq, prev_refs))
 }
 
 pub(super) fn next_hlc(state: &AppState) -> Result<Hlc, AppError> {

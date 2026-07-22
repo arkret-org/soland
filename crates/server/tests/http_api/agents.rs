@@ -350,7 +350,7 @@ pub(super) async fn provision_agent_with_sdk_events(
         preparation["requested_scope_digest"],
         expected_scope_digest.as_str()
     );
-    let actor_frontier: Value = TestClient::get(format!(
+    let actor_frontier: arkret_core::EventsFrontierAccountClientState = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?actor_id={controller}&realm_id={controller_realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -359,10 +359,13 @@ pub(super) async fn provision_agent_with_sdk_events(
     .take_json()
     .await
     .expect("controller actor frontier");
-    let next_actor_seq = actor_frontier["frontier"]["actor_seq"]
-        .as_u64()
-        .unwrap_or(0)
-        + 1;
+    let arkret_core::EventsFrontierView::RealmActor(actor_frontier) = actor_frontier.frontier
+    else {
+        panic!("combined Realm+actor selector must return realm_actor frontier");
+    };
+    assert_eq!(actor_frontier.realm_id, controller_realm_id);
+    assert_eq!(actor_frontier.actor_id.as_str(), controller);
+    let next_actor_seq = actor_frontier.next_actor_seq;
     let now =
         chrono::DateTime::<chrono::Utc>::from_timestamp(chrono::Utc::now().timestamp(), 0).unwrap();
     let timestamp_hex = format!("{:012x}", now.timestamp_millis());
@@ -388,10 +391,7 @@ pub(super) async fn provision_agent_with_sdk_events(
         &signer,
     )
     .unwrap();
-    events.accountability_grant.prev_refs = actor_frontier["frontier"]["event_id"]
-        .as_str()
-        .map(|event_id| vec![arkret_core::EventId::new(event_id.to_owned()).unwrap()])
-        .unwrap_or_default();
+    events.accountability_grant.prev_refs = actor_frontier.frontier_event_ids;
     events.selector_claim.prev_refs = vec![events.accountability_grant.event_id.clone()];
     let mut frontier_response = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?realm_id={controller_realm_id}"
@@ -410,7 +410,7 @@ pub(super) async fn provision_agent_with_sdk_events(
         .take_json()
         .await
         .expect("typed controller Realm Seal frontier");
-    let arkret_core::EventsFrontierView::RealmSealView(frontier) = frontier.frontier else {
+    let arkret_core::EventsFrontierView::RealmSeal(frontier) = frontier.frontier else {
         panic!("controller Realm frontier must materialize a Seal view");
     };
     for event in [&mut events.accountability_grant, &mut events.selector_claim] {

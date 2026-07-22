@@ -53,7 +53,9 @@ pub(super) async fn submit_identity_anchor_batch(
     }
     let lock_actor = event_string_field_from_value(&envelopes[0], "actor_id")
         .ok_or_else(|| unit_error("identity anchor Event requires actor_id"))?;
-    let actor_lock = actor_submit_lock(&lock_actor);
+    let lock_realm = event_string_field_from_value(&envelopes[0], "realm_id")
+        .ok_or_else(|| unit_error("identity anchor Event requires realm_id"))?;
+    let actor_lock = actor_submit_lock(&lock_realm, &lock_actor);
     let _guard = actor_lock.lock().await;
     let generation_lock =
         crate::routing::identity::device_generation::device_generation_admission_lock(&lock_actor);

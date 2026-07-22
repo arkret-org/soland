@@ -36,6 +36,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 "realm_already_exists".to_owned(),
             ));
         }
+        soland_storage::validate_actor_scope_commit(staged_events.values(), &request.event)?;
         staged_events.insert(request.event.event_id.clone(), request.event);
 
         let mut projections_inserted = 0;

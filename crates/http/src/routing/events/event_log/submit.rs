@@ -9,8 +9,8 @@ use crate::invite_claim_proofs::{
     invite_claim_proof_context_from_projection, verify_invite_claim_proofs_for_operation,
 };
 
-/// SOL-SEC-03 — per-actor submit serialization uses a fixed-size pool of locks
-/// keyed by a hash of the actor DID, instead of an unbounded per-actor
+/// SOL-SEC-03 — per-Realm-actor submit serialization uses a fixed-size pool of
+/// locks keyed by a hash of `(realm_id, actor_id)`, instead of an unbounded
 /// `HashMap` entry that was never evicted. Federation inbound can carry
 /// arbitrarily many distinct actor DIDs, so a per-actor map grows without bound
 /// (memory DoS). A fixed pool bounds memory to `ACTOR_SUBMIT_LOCK_SHARDS`
@@ -27,13 +27,14 @@ use identity_anchor::{batch_contains_identity_anchor, submit_identity_anchor_bat
 mod realm_bootstrap;
 use realm_bootstrap::{batch_begins_realm_create, submit_realm_bootstrap_batch};
 
-fn actor_submit_lock(actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+fn actor_submit_lock(realm_id: &str, actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = ACTOR_SUBMIT_LOCKS.get_or_init(|| {
         (0..ACTOR_SUBMIT_LOCK_SHARDS)
             .map(|_| Arc::new(tokio::sync::Mutex::new(())))
             .collect()
     });
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(realm_id, &mut hasher);
     std::hash::Hash::hash(actor_id, &mut hasher);
     let shard = (hasher.finish() as usize) % ACTOR_SUBMIT_LOCK_SHARDS;
     locks[shard].clone()
@@ -107,6 +108,7 @@ pub(in crate::routing) struct SubmitOneError {
     pub status: StatusCode,
     pub code: String,
     pub message: String,
+    pub details: Option<Value>,
     pub quarantine_event_id: Option<String>,
 }
 
@@ -388,8 +390,14 @@ impl SubmitOneError {
             status,
             code: code.into(),
             message: message.into(),
+            details: None,
             quarantine_event_id: None,
         }
+    }
+
+    pub(in crate::routing) fn with_details(mut self, details: impl serde::Serialize) -> Self {
+        self.details = serde_json::to_value(details).ok();
+        self
     }
 
     pub(in crate::routing) fn quarantine(
@@ -401,6 +409,7 @@ impl SubmitOneError {
             status: StatusCode::OK,
             code: code.into(),
             message: message.into(),
+            details: None,
             quarantine_event_id: Some(event_id.into()),
         }
     }
@@ -452,7 +461,17 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
         )));
         return;
     }
-    if error.status == StatusCode::PRECONDITION_FAILED
+    if let Some(details) = error.details {
+        let mut envelope = arkret_core::ErrorEnvelope::new(error.code, error.message)
+            .with_request_id(crate::ids::generate_request_id());
+        if let Some(object) = details.as_object() {
+            for (key, value) in object {
+                envelope = envelope.with_detail(key.clone(), value.clone());
+            }
+        }
+        res.status_code(error.status);
+        res.render(Json(envelope));
+    } else if error.status == StatusCode::PRECONDITION_FAILED
         && error.code == "failed_precondition"
         && error.message != error.code
     {
@@ -516,6 +535,7 @@ pub(super) async fn submit_event_batch_outcome(
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
     let mut quarantine = Vec::new();
+    let mut realm_actor_frontiers = BTreeMap::new();
     let mut realm_bootstrap_contexts: Vec<RealmBootstrapBatchContext> = Vec::new();
 
     for envelope in envelopes {
@@ -535,6 +555,15 @@ pub(super) async fn submit_event_batch_outcome(
         .await
         {
             Ok(response) => {
+                for frontier in response.outcome.realm_actor_frontiers.iter().cloned() {
+                    realm_actor_frontiers.insert(
+                        (
+                            frontier.realm_id.as_str().to_owned(),
+                            frontier.actor_id.as_str().to_owned(),
+                        ),
+                        frontier,
+                    );
+                }
                 accepted.push(response.event_id.clone());
                 if response.duplicate {
                     duplicate.push(response.event_id);
@@ -573,14 +602,16 @@ pub(super) async fn submit_event_batch_outcome(
     } else {
         EventsSubmitStatus::Accepted
     };
-    Ok(events_submit_outcome(
+    let mut outcome = events_submit_outcome(
         status,
         accepted,
         duplicate,
         rejected,
         quarantine,
         Some(super::super::sync::sync_token_for_state(state).await),
-    ))
+    );
+    outcome.realm_actor_frontiers = realm_actor_frontiers.into_values().collect();
+    Ok(outcome)
 }
 
 async fn direct_bootstrap_source_is_contact_authority(
