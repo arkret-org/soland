@@ -37,6 +37,7 @@ arkret-http-client.workspace = true
 arkret-identity.workspace = true
 arkret-signatures = {workspace = true,features = ["protocol", "signer"]}
 arkret-state = {workspace = true,features = ["salvo"]}
+arkret-wire.workspace = true
 dotenvy = {workspace = true}
 ed25519-dalek = {workspace = true}
 futures-util = {workspace = true}

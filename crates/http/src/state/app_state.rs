@@ -1375,7 +1375,7 @@ impl AppState {
     pub fn test_record_cross_signing_publish(
         &self,
         publish: arkret_core::CrossSigningPublish,
-    ) -> arkret_core::Result<()> {
+    ) -> arkret_identity::Result<()> {
         self.identity_application
             .record_cross_signing_publish(publish)
     }
@@ -1385,7 +1385,7 @@ impl AppState {
     pub fn test_record_cross_signing_reset(
         &self,
         reset: &arkret_core::CrossSigningResetPayload,
-    ) -> arkret_core::Result<()> {
+    ) -> arkret_identity::Result<()> {
         self.identity_application.record_cross_signing_reset(reset)
     }
 

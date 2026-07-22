@@ -163,16 +163,16 @@ pub fn is_valid_sha256_hex(value: &str) -> bool {
 // ── Identifier / handle validators ──────────────────────────────────────────
 
 /// Validate and parse a DID.
-pub fn validate_did(value: &str) -> arkret_core::Result<Did> {
-    Did::new(value.to_owned()).map_err(Into::into)
+pub fn validate_did(value: &str) -> arkret_identifiers::Result<Did> {
+    Did::new(value.to_owned())
 }
 
-pub fn validate_device_id(value: &str) -> arkret_core::Result<DeviceId> {
-    DeviceId::new(value.to_owned()).map_err(Into::into)
+pub fn validate_device_id(value: &str) -> arkret_identifiers::Result<DeviceId> {
+    DeviceId::new(value.to_owned())
 }
 
-pub fn validate_space_id(value: &str) -> arkret_core::Result<SpaceId> {
-    SpaceId::new(value.to_owned()).map_err(Into::into)
+pub fn validate_space_id(value: &str) -> arkret_identifiers::Result<SpaceId> {
+    SpaceId::new(value.to_owned())
 }
 
 /// Lowercase + ensure leading `@`.

@@ -6,6 +6,7 @@ use arkret_core::{
     DeviceId, Did, Hash, NonEmptyString, RecoveryIdentityModel, SealBasis, ServiceRegistrationKey,
     ServiceRegistrationOutcome,
 };
+use arkret_identity::IdentityError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -933,7 +934,7 @@ impl CrossSigningRegistry {
     pub fn record_cross_signing_publish(
         &mut self,
         publish: CrossSigningPublish,
-    ) -> arkret_core::Result<()> {
+    ) -> arkret_identity::Result<()> {
         publish.validate_structure()?;
         let principal = publish.principal_id.clone();
         let current_generation = self
@@ -942,13 +943,13 @@ impl CrossSigningRegistry {
             .copied()
             .unwrap_or(0);
         if publish.expected_previous_generation != current_generation {
-            return Err(arkret_core::Error::Protocol(format!(
+            return Err(IdentityError::Protocol(format!(
                 "cross-signing publish expected_previous_generation {} does not match accepted {} (cas_conflict)",
                 publish.expected_previous_generation, current_generation
             )));
         }
         if publish.generation.get() != current_generation + 1 {
-            return Err(arkret_core::Error::Protocol(format!(
+            return Err(IdentityError::Protocol(format!(
                 "cross-signing publish generation {} must equal current {} + 1 (cas_conflict)",
                 publish.generation, current_generation
             )));
@@ -962,16 +963,16 @@ impl CrossSigningRegistry {
     pub fn record_cross_signing_reset(
         &mut self,
         reset: &CrossSigningResetPayload,
-    ) -> arkret_core::Result<()> {
+    ) -> arkret_identity::Result<()> {
         reset.validate_structure()?;
         let principal = reset.principal_id();
         let current = self.publishes.get(principal).ok_or_else(|| {
-            arkret_core::Error::Protocol(
+            IdentityError::Protocol(
                 "cannot reset cross-signing: no current publish accepted for principal".to_owned(),
             )
         })?;
         if reset.previous_generation() != current.generation.get() {
-            return Err(arkret_core::Error::Protocol(format!(
+            return Err(IdentityError::Protocol(format!(
                 "cross-signing reset previous_generation {} does not match accepted {}",
                 reset.previous_generation(),
                 current.generation
@@ -1793,7 +1794,7 @@ impl IdentityApplicationService {
     pub fn record_cross_signing_publish(
         &self,
         publish: CrossSigningPublish,
-    ) -> arkret_core::Result<()> {
+    ) -> arkret_identity::Result<()> {
         self.cross_signing
             .lock()
             .record_cross_signing_publish(publish)
@@ -1802,7 +1803,7 @@ impl IdentityApplicationService {
     pub fn record_cross_signing_reset(
         &self,
         reset: &CrossSigningResetPayload,
-    ) -> arkret_core::Result<()> {
+    ) -> arkret_identity::Result<()> {
         self.cross_signing.lock().record_cross_signing_reset(reset)
     }
 
