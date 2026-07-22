@@ -166,13 +166,6 @@ pub(crate) async fn validate_event_envelope_with_context(
                 "actor_seq is required",
             )
         })?;
-    if actor_seq == 0 && !principal_control_genesis_shape(object, &actor_id) {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "actor_seq may be zero only for principal-control Realm genesis",
-        ));
-    }
     validate_event_time_fields(state, object)?;
 
     let realm_id = event_realm_id(object)?;

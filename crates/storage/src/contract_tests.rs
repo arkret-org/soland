@@ -75,7 +75,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         event: CanonicalEventRecord {
             event_id: event_id.clone(),
             actor_id: principal_id.clone(),
-            actor_seq: 1,
+            actor_seq: 0,
             realm_id: Some(realm_id.clone()),
             kind: "ak.message.create".to_owned(),
             schema_id: "arkret://events/message/create/v1".to_owned(),
@@ -164,7 +164,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         event: CanonicalEventRecord {
             event_id: rollback_event_id.clone(),
             actor_id: principal_id.clone(),
-            actor_seq: 2,
+            actor_seq: 1,
             realm_id: Some(realm_id),
             kind: "ak.message.create".to_owned(),
             schema_id: "arkret://events/message/create/v1".to_owned(),

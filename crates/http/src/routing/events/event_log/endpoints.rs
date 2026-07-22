@@ -363,6 +363,14 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
         arkret_core::ErrorEnvelope::new(error.code.clone(), error.message.clone())
             .with_request_id(crate::ids::generate_request_id())
     );
+    if let Some(details) = error.details.as_ref().and_then(Value::as_object)
+        && let Some(error_body) = body
+            .as_object_mut()
+            .and_then(|object| object.get_mut("error"))
+            .and_then(Value::as_object_mut)
+    {
+        error_body.insert("details".to_owned(), Value::Object(details.clone()));
+    }
     if error.status == StatusCode::PRECONDITION_FAILED
         && error.code == "failed_precondition"
         && error.message != error.code
@@ -605,15 +613,15 @@ async fn events_frontier(
                 )
                 .with_status(StatusCode::SERVICE_UNAVAILABLE));
             };
-            let frontier = RealmSealFrontierView {
+            let frontier = RealmSealFrontierView::new(
                 realm_id,
-                seal_id: seal.id.clone(),
-                control_event_set_root: seal.control_event_set_root.clone(),
-                state_root: seal.state_root.clone(),
-                hlc: Some(seal.hlc.clone()),
-            };
+                seal.id.clone(),
+                seal.control_event_set_root.clone(),
+                seal.state_root.clone(),
+                Some(seal.hlc.clone()),
+            );
             return soland_http::result::json_ok(EventsFrontierAccountClientState {
-                frontier: EventsFrontierView::RealmSealView(frontier),
+                frontier: EventsFrontierView::RealmSeal(frontier),
                 receipts: vec![ManagedAgentPcrSealHeadReceipt {
                     kind: ManagedAgentPcrSealHeadReceiptKind::ManagedAgentPcrSealHeadV1,
                     seal,
@@ -654,28 +662,64 @@ async fn events_frontier(
             }
         };
         return soland_http::result::json_ok(EventsFrontierAccountClientState {
-            frontier: EventsFrontierView::RealmSealView(RealmSealFrontierView {
+            frontier: EventsFrontierView::RealmSeal(RealmSealFrontierView::new(
                 realm_id,
-                seal_id: seal.id,
-                control_event_set_root: seal.control_event_set_root,
-                state_root: seal.state_root,
-                hlc: Some(seal.hlc),
-            }),
+                seal.id,
+                seal.control_event_set_root,
+                seal.state_root,
+                Some(seal.hlc),
+            )),
             receipts: Vec::new(),
         });
     }
 
-    // Actor selector → `{actor_id, actor_seq, event_id?}`: highest accepted
-    // actor_seq among events visible to the caller. An empty frontier is a
-    // successful genesis state rather than an expected-error probe.
+    // Actor selectors are split deliberately: combined Realm+actor is the
+    // only authoring surface; actor-only is a read-only per-Realm aggregate.
     let actor = actor_id.expect("selector presence checked above");
     let actor_id = Did::new(actor.clone())
         .map_err(|_| AppError::invalid_param("actor_id must be a valid DID"))?;
-    let events = state
-        .event_query_application()
-        .canonical_events()
-        .await
-        .unwrap_or_default();
+    if let Some(realm_value) = realm_selector {
+        let realm_id = RealmId::new(realm_value.clone())
+            .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+        let own_actor_pcr = actor == session.actor
+            && realm_value == soland_application::identity::principal_control_realm_for_did(&actor);
+        let managed_actor_pcr = state
+            .agent_pairing_application()
+            .agent(&actor)
+            .await
+            .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
+            .is_some_and(|record| {
+                record.controller_id == session.actor
+                    && record.state != "deactivated"
+                    && record.principal_control_realm_id == realm_value
+            });
+        let invited_actor = actor == session.actor
+            && crate::routing::spaces::space::realm_member_invited_or_joined_at(
+                state,
+                realm_id.as_str(),
+                &actor,
+            )
+            .await
+            .is_some();
+        if !own_actor_pcr
+            && !managed_actor_pcr
+            && !invited_actor
+            && !crate::routing::spaces::space::realm_id_accessible(
+                state,
+                realm_id.as_str(),
+                Some(&session),
+            )
+            .await
+        {
+            return Err(AppError::not_found("realm not found"));
+        }
+        let frontier = load_realm_actor_frontier(state, realm_id, actor_id).await?;
+        return soland_http::result::json_ok(EventsFrontierAccountClientState {
+            frontier: EventsFrontierView::RealmActor(frontier),
+            receipts: Vec::new(),
+        });
+    }
+
     let managed_actor_pcr = state
         .agent_pairing_application()
         .agent(&actor)
@@ -683,51 +727,109 @@ async fn events_frontier(
         .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
         .filter(|record| record.controller_id == session.actor && record.state != "deactivated")
         .map(|record| record.principal_control_realm_id);
-    let mut best: Option<(u64, String)> = None;
-    for record in &events {
-        if record.actor_id != actor {
+    let records = state
+        .event_query_application()
+        .canonical_events_for_actor(actor_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("actor frontier unavailable: {error}")))?;
+    let mut realm_ids = records
+        .iter()
+        .filter_map(|record| record.realm_id.clone())
+        .collect::<Vec<_>>();
+    realm_ids.sort();
+    realm_ids.dedup();
+    let mut realms = Vec::new();
+    for realm_value in realm_ids {
+        let visible = managed_actor_pcr.as_deref() == Some(realm_value.as_str())
+            || crate::routing::spaces::space::realm_id_accessible(
+                state,
+                &realm_value,
+                Some(&session),
+            )
+            .await;
+        if !visible {
             continue;
         }
-        let record_realm_id = record
-            .envelope
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .or(record.realm_id.as_deref());
-        if realm_selector
-            .as_deref()
-            .is_some_and(|realm_id| record_realm_id != Some(realm_id))
-        {
-            continue;
-        }
-        let managed_actor_event_visible = managed_actor_pcr
-            .as_deref()
-            .is_some_and(|pcr_id| record_realm_id == Some(pcr_id));
-        if !managed_actor_event_visible && !event_visible_to_session(state, record, &session).await
-        {
-            continue;
-        }
-        if best.as_ref().is_none_or(|(seq, _)| record.actor_seq > *seq) {
-            best = Some((record.actor_seq, record.event_id.clone()));
-        }
+        let realm_id = RealmId::new(realm_value)
+            .map_err(|_| AppError::internal("stored realm_id is invalid"))?;
+        realms.push(load_realm_actor_frontier(state, realm_id, actor_id.clone()).await?);
     }
-    let (actor_seq, event_id) = match best {
-        Some((actor_seq, event_id)) => (
-            actor_seq,
-            Some(
-                EventId::new(event_id)
-                    .map_err(|_| AppError::internal("stored event_id is invalid"))?,
-            ),
-        ),
-        // Unknown, invisible, and genuinely empty actors deliberately share
-        // the same response so this surface does not disclose existence.
-        None => (0, None),
+    let aggregate = ActorAggregateFrontierView {
+        kind: ActorAggregateFrontierKind::ActorAggregate,
+        actor_id,
+        realms,
     };
+    aggregate
+        .validate()
+        .map_err(|error| AppError::internal(format!("actor aggregate is invalid: {error}")))?;
     soland_http::result::json_ok(EventsFrontierAccountClientState {
-        frontier: EventsFrontierView::Actor(ActorFrontierView {
-            actor_id,
-            actor_seq,
-            event_id,
-        }),
+        frontier: EventsFrontierView::ActorAggregate(aggregate),
         receipts: Vec::new(),
     })
+}
+
+pub(super) async fn load_realm_actor_frontier(
+    state: &AppState,
+    realm_id: RealmId,
+    actor_id: Did,
+) -> Result<RealmActorFrontierView, AppError> {
+    let records = state
+        .event_query_application()
+        .canonical_events_for_realm_actor(realm_id.as_str(), actor_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("actor frontier unavailable: {error}")))?;
+    let (next_actor_seq, frontier_event_ids) =
+        if let Some(max_seq) = records.iter().map(|record| record.actor_seq).max() {
+            let next_actor_seq = max_seq.checked_add(1).ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FrontierSequenceExhausted,
+                    "actor sequence is exhausted",
+                )
+                .with_status(StatusCode::CONFLICT)
+            })?;
+            let mut ids = records
+                .iter()
+                .filter(|record| record.actor_seq == max_seq)
+                .map(|record| {
+                    EventId::new(record.event_id.clone())
+                        .map_err(|_| AppError::internal("stored event_id is invalid"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+            ids.dedup();
+            (next_actor_seq, ids)
+        } else {
+            (0, Vec::new())
+        };
+    build_realm_actor_frontier(
+        state,
+        realm_id,
+        actor_id,
+        next_actor_seq,
+        frontier_event_ids,
+    )
+}
+
+pub(super) fn build_realm_actor_frontier(
+    state: &AppState,
+    realm_id: RealmId,
+    actor_id: Did,
+    next_actor_seq: u64,
+    frontier_event_ids: Vec<EventId>,
+) -> Result<RealmActorFrontierView, AppError> {
+    let suite_name = state
+        .projection_application()
+        .snapshot()
+        .realm_digest_algorithm(realm_id.as_str())
+        .unwrap_or_else(|| "sha256".to_owned());
+    let suite = canonical::digest_suite(&suite_name)
+        .map_err(|_| AppError::internal("Realm digest algorithm is unsupported"))?;
+    RealmActorFrontierView::new(
+        realm_id,
+        actor_id,
+        next_actor_seq,
+        frontier_event_ids,
+        suite,
+    )
+    .map_err(|error| AppError::internal(format!("actor frontier is invalid: {error}")))
 }

@@ -47,6 +47,14 @@ pub trait EventStore: Send + Sync {
     async fn contains(&self, event_id: &str) -> PersistenceResult<bool>;
     async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>>;
     async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+    /// Accepted records for one Realm-scoped actor chain, ordered by
+    /// `(actor_seq, event_id)`. Frontier producers and admission use this same
+    /// typed source instead of filtering a full-store snapshot.
+    async fn list_for_realm_actor(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     /// Cheap Realm-local cardinality/byte preflight for bounded proof
     /// materialization. Implementations must not load Event envelopes.

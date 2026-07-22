@@ -661,12 +661,14 @@ pub(crate) async fn managed_agent_event_frontier(
 ) -> Result<Option<RealmSealFrontierView>, AppError> {
     Ok(managed_agent_event_seal_head(state, pcr_id)
         .await?
-        .map(|seal| RealmSealFrontierView {
-            realm_id: seal.realm_id,
-            seal_id: seal.id,
-            control_event_set_root: seal.control_event_set_root,
-            state_root: seal.state_root,
-            hlc: Some(seal.hlc),
+        .map(|seal| {
+            RealmSealFrontierView::new(
+                seal.realm_id,
+                seal.id,
+                seal.control_event_set_root,
+                seal.state_root,
+                Some(seal.hlc),
+            )
         }))
 }
 

@@ -3,10 +3,11 @@ use diesel::sql_query;
 use diesel::sql_types::{BigInt, Binary, Integer, Jsonb, Nullable, Text, Timestamptz, Uuid};
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use soland_storage::{
-    EventCommitOutcome, EventCommitRequest, EventCommitUnitOfWork, PersistenceError,
-    PersistenceResult, ids,
+    CanonicalEventRecord, EventCommitOutcome, EventCommitRequest, EventCommitUnitOfWork,
+    PersistenceError, PersistenceResult, ids, validate_actor_scope_commit,
 };
 
+use crate::events::CanonicalEventRow;
 use crate::{PgPool, PgTransactionError, pg_conn};
 
 #[derive(Clone)]
@@ -35,6 +36,36 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .as_deref()
                 .map(ids::typed_uuid_part_or_schema_violation)
                 .transpose()?;
+            let realm_id_value = request.event.realm_id.as_deref().ok_or_else(|| {
+                PersistenceError::Conflict("schema_violation: missing realm_id".to_owned())
+            })?;
+            // PostgreSQL `text` rejects embedded NUL bytes. Length-prefix the
+            // Realm component so the lock transcript remains unambiguous
+            // without relying on a forbidden separator.
+            let scope_lock = format!(
+                "realm_actor:{}:{}{}",
+                realm_id_value.len(),
+                realm_id_value,
+                request.event.actor_id
+            );
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(&scope_lock)
+                .execute(conn)
+                .await
+                .map_err(PersistenceError::database)?;
+            let scoped = sql_query(
+                "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+                 FROM canonical_events WHERE realm_id = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
+            )
+            .bind::<Uuid, _>(realm_id.expect("realm_id checked above"))
+            .bind::<Text, _>(&request.event.actor_id)
+            .load::<CanonicalEventRow>(conn)
+            .await
+            .map_err(PersistenceError::database)?
+            .into_iter()
+            .map(CanonicalEventRecord::from)
+            .collect::<Vec<_>>();
+            validate_actor_scope_commit(scoped.iter(), &request.event)?;
             sql_query(
                 "INSERT INTO canonical_events \
                  (id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at) \

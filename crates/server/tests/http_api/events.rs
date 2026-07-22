@@ -63,7 +63,7 @@ async fn fetch_chunked_mls_governance_proof(
         .take_json()
         .await
         .expect("typed Realm Seal frontier");
-    let arkret_core::EventsFrontierView::RealmSealView(frontier) = frontier.frontier else {
+    let arkret_core::EventsFrontierView::RealmSeal(frontier) = frontier.frontier else {
         panic!("Realm frontier must materialize a Seal view");
     };
     let object = request_value
@@ -263,7 +263,7 @@ async fn agent_session_without_submit_scope_cannot_submit_events() {
     seed_agent_session_with_scopes(&state, token, &["ak.self.events.query.scan"]).await;
     let event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-5c0fedead001",
-        1,
+        0,
         Vec::new(),
     );
 
@@ -372,7 +372,7 @@ async fn events_describe_and_single_event_submit_work() {
 
     let first = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-f15c8ea06c11",
-        1,
+        0,
         Vec::new(),
     );
     let submitted: Value = TestClient::post("http://server/_arkret/self/events")
@@ -447,7 +447,7 @@ async fn events_describe_and_single_event_submit_work() {
 
     let second = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-63f16896f0b0",
-        2,
+        1,
         vec!["ak:event:01904100-0000-7000-8000-f15c8ea06c11"],
     );
     let second_submitted: Value = TestClient::post("http://server/_arkret/self/events")
@@ -488,7 +488,7 @@ async fn events_describe_and_single_event_submit_work() {
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
-        3,
+        2,
         vec!["ak:event:01904100-0000-7000-8000-63f16896f0b0"],
         artifact_kind_payload,
     );
@@ -504,7 +504,7 @@ async fn events_describe_and_single_event_submit_work() {
 
     let mut unknown_schema = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-80be9d943c27",
-        4,
+        3,
         Vec::new(),
     );
     unknown_schema["requirements"] = serde_json::json!({
@@ -555,7 +555,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
-    let frontier: Value = TestClient::get(
+    let frontier: arkret_core::EventsFrontierAccountClientState = TestClient::get(
         "http://server/_arkret/self/events/frontier?actor_id=did:web:alice.example",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -564,10 +564,14 @@ async fn events_describe_and_single_event_submit_work() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(frontier["frontier"]["actor_id"], "did:web:alice.example");
-    assert_eq!(frontier["frontier"]["actor_seq"], 3);
+    let arkret_core::EventsFrontierView::ActorAggregate(frontier) = frontier.frontier else {
+        panic!("actor-only selector must return non-authoring aggregate");
+    };
+    assert_eq!(frontier.actor_id.as_str(), "did:web:alice.example");
+    assert_eq!(frontier.realms.len(), 1);
+    assert_eq!(frontier.realms[0].next_actor_seq, 3);
     assert_eq!(
-        frontier["frontier"]["event_id"],
+        frontier.realms[0].frontier_event_ids[0].as_str(),
         "ak:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
@@ -616,7 +620,7 @@ async fn events_describe_and_single_event_submit_work() {
 
     let mut conflicting = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-f15c8ea06c11",
-        4,
+        3,
         Vec::new(),
     );
     conflicting["payload"]["content"]["body"] =
@@ -680,7 +684,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         &actor,
         "01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
-        1,
+        0,
         Vec::new(),
         payload.clone(),
     );
@@ -762,7 +766,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         &actor,
         "01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
-        2,
+        1,
         vec![event["event_id"].as_str().unwrap()],
         serde_json::json!({
             "grant_id": grant_id,
@@ -800,7 +804,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     };
     let join_rule = facet(
         "ak:event:01904100-0000-7000-8000-c7ea7e000003",
-        3,
+        2,
         founding["event_id"].as_str().unwrap(),
         arkret_core::events::EventKind::REALM_JOIN_RULE,
         "ak.component.realm.join_rule.v1",
@@ -808,7 +812,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     );
     let history_visibility = facet(
         "ak:event:01904100-0000-7000-8000-c7ea7e000004",
-        4,
+        3,
         join_rule["event_id"].as_str().unwrap(),
         arkret_core::events::EventKind::REALM_HISTORY_VISIBILITY,
         "ak.component.realm.history_visibility.v1",
@@ -816,7 +820,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     );
     let discovery = facet(
         "ak:event:01904100-0000-7000-8000-c7ea7e000005",
-        5,
+        4,
         history_visibility["event_id"].as_str().unwrap(),
         arkret_core::events::EventKind::REALM_DISCOVERY,
         "ak.component.realm.discovery.v1",
@@ -1277,7 +1281,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         arkret_core::events::EventKind::REALM_CREATE,
         RealmId::new(realm_id.clone()).unwrap(),
         Did::new(agent_id.clone()).unwrap(),
-        1,
+        0,
         arkret_core::Hlc::new("01980b44cc00-0000-aabbcce0").unwrap(),
         serde_json::json!({
             "object": {
@@ -1588,7 +1592,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
         realm_id,
-        1,
+        0,
         Vec::new(),
         payload.clone(),
     );

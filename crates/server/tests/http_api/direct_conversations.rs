@@ -62,23 +62,28 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
         })
         .await
         .unwrap();
+    let realm_id = drafts[0]["realm_id"].as_str().expect("draft Realm");
     let mut frontier_response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?actor_id={actor}"
+        "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
     .await;
-    let (mut actor_seq, mut previous_event_id) =
+    let (mut actor_seq, mut previous_event_ids) =
         if frontier_response.status_code == Some(StatusCode::OK) {
-            let frontier: Value = frontier_response.take_json().await.unwrap();
-            (
-                frontier["frontier"]["actor_seq"].as_u64().unwrap_or(0) + 1,
-                frontier["frontier"]["event_id"]
-                    .as_str()
-                    .map(ToOwned::to_owned),
-            )
+            let frontier: arkret_core::EventsFrontierAccountClientState =
+                frontier_response.take_json().await.unwrap();
+            let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
+                panic!("combined Realm+actor selector returned the wrong frontier variant");
+            };
+            (frontier.next_actor_seq, frontier.frontier_event_ids)
         } else {
-            (1, None)
+            assert_eq!(frontier_response.status_code, Some(StatusCode::NOT_FOUND));
+            assert_eq!(
+                drafts[0]["kind"],
+                arkret_core::events::EventKind::REALM_CREATE
+            );
+            (0, Vec::new())
         };
     let verification_method = format!("{actor}#{ALICE_SIGNING_DEVICE}");
     let signer = arkret_signatures::Ed25519MoveSigner::new(
@@ -115,10 +120,7 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
         }
         let mut event: arkret_core::Event = serde_json::from_value(draft).unwrap();
         event.actor_seq = actor_seq;
-        event.prev_refs = previous_event_id
-            .iter()
-            .map(|event_id| arkret_core::EventId::new(event_id.clone()).unwrap())
-            .collect();
+        event.prev_refs = previous_event_ids;
         event.proofs.clear();
         arkret_signatures::sign_event(
             &mut event,
@@ -127,7 +129,7 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
             arkret_signatures::SignEventOptions::new().with_created_at(now),
         )
         .unwrap();
-        previous_event_id = Some(event.event_id.to_string());
+        previous_event_ids = vec![event.event_id.clone()];
         actor_seq += 1;
         events.push(event);
     }
@@ -176,31 +178,22 @@ async fn submit_direct_event_draft(
         })
         .await
         .unwrap();
+    let realm_id = draft["realm_id"].as_str().expect("binding Realm");
     let mut frontier_response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?actor_id={actor}"
+        "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
     .await;
-    let (actor_seq, prev_event_id) = if frontier_response.status_code == Some(StatusCode::OK) {
-        let frontier: Value = frontier_response.take_json().await.unwrap();
-        let observed_seq = frontier["frontier"]["actor_seq"].as_u64().unwrap_or(0);
-        (
-            observed_seq + 1,
-            frontier["frontier"]["event_id"]
-                .as_str()
-                .map(ToOwned::to_owned),
-        )
-    } else {
-        (1, None)
+    assert_eq!(frontier_response.status_code, Some(StatusCode::OK));
+    let frontier: arkret_core::EventsFrontierAccountClientState =
+        frontier_response.take_json().await.unwrap();
+    let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
+        panic!("combined Realm+actor selector returned the wrong frontier variant");
     };
     let mut event: arkret_core::Event = serde_json::from_value(draft.clone()).unwrap();
-    event.actor_seq = actor_seq;
-    event.prev_refs = prev_event_id
-        .into_iter()
-        .map(arkret_core::EventId::new)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+    event.actor_seq = frontier.next_actor_seq;
+    event.prev_refs = frontier.frontier_event_ids;
     event.proofs.clear();
     let verification_method = format!("{actor}#{ALICE_SIGNING_DEVICE}");
     let signer = arkret_signatures::Ed25519MoveSigner::new(
@@ -894,7 +887,14 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         &created["materialization_draft"],
     )
     .await;
-    assert_eq!(rejected["error"]["code"], "schema_violation", "{rejected}");
+    assert_eq!(
+        rejected["error"]["code"], "failed_precondition",
+        "{rejected}"
+    );
+    assert_eq!(
+        rejected["error"]["reason"], "direct_conversation_binding_invalid",
+        "{rejected}"
+    );
 
     let still_authoring: Value =
         TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
@@ -991,7 +991,14 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
         &authoring["materialization_draft"],
     )
     .await;
-    assert_eq!(rejected["error"]["code"], "schema_violation", "{rejected}");
+    assert_eq!(
+        rejected["error"]["code"], "failed_precondition",
+        "{rejected}"
+    );
+    assert_eq!(
+        rejected["error"]["reason"], "direct_conversation_binding_invalid",
+        "{rejected}"
+    );
     let retried: Value =
         TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
             .add_header("authorization", format!("Bearer {alice}"), true)

@@ -24,7 +24,7 @@ fn map_canonical_event_put_error(error: diesel::result::Error) -> PersistenceErr
     PersistenceError::database(error)
 }
 #[derive(QueryableByName)]
-struct CanonicalEventRow {
+pub(crate) struct CanonicalEventRow {
     #[diesel(sql_type = SqlUuid)]
     id: Uuid,
     #[diesel(sql_type = Text)]
@@ -452,6 +452,27 @@ impl EventStore for PgEventStore {
             "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
              FROM canonical_events WHERE actor_id = $1 ORDER BY actor_seq ASC, received_at ASC, id ASC",
         )
+        .bind::<Text, _>(actor_id)
+        .load::<CanonicalEventRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn list_for_realm_actor(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
+        sql_query(
+            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE realm_id = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
+        )
+        .bind::<SqlUuid, _>(realm_id_uuid)
         .bind::<Text, _>(actor_id)
         .load::<CanonicalEventRow>(&mut *conn)
         .await

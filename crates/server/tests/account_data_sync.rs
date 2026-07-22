@@ -161,7 +161,7 @@ fn signed_actor_private_event_envelope(
     kind: &str,
     payload: Value,
     actor_seq: u64,
-    prev_event_id: Option<&str>,
+    prev_refs: Vec<arkret_core::EventId>,
 ) -> Value {
     let now = chrono::Utc::now();
     let actor_id = arkret_core::Did::new(actor.to_owned()).expect("fixture actor DID");
@@ -185,12 +185,7 @@ fn signed_actor_private_event_envelope(
         now,
     )
     .expect("SDK Event builder accepts actor-private fixture");
-    if let Some(prev_event_id) = prev_event_id {
-        event.prev_refs.push(
-            arkret_core::EventId::new(prev_event_id.to_owned())
-                .expect("accepted actor frontier Event id"),
-        );
-    }
+    event.prev_refs = prev_refs;
     let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
         [21_u8; 32],
         actor_id,
@@ -215,7 +210,7 @@ async fn submit_actor_private_event(
     kind: &str,
     payload: Value,
 ) -> Value {
-    let frontier: Value = TestClient::get(format!(
+    let frontier: arkret_core::EventsFrontierAccountClientState = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -223,24 +218,19 @@ async fn submit_actor_private_event(
     .await
     .take_json()
     .await
-    .expect("actor Realm frontier JSON");
-    let accepted_seq = frontier["frontier"]["actor_seq"]
-        .as_u64()
-        .unwrap_or_else(|| panic!("actor Realm frontier missing actor_seq: {frontier}"));
-    let prev_event_id = frontier["frontier"]["event_id"].as_str();
-    assert_eq!(
-        accepted_seq == 0,
-        prev_event_id.is_none(),
-        "actor Realm frontier must pair sequence and Event id: {frontier}"
-    );
+    .expect("typed actor Realm frontier");
+    let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
+        panic!("combined Realm+actor selector returned the wrong variant");
+    };
+    frontier.validate().expect("valid actor Realm frontier");
     let event = signed_actor_private_event_envelope(
         actor,
         device_id,
         realm_id,
         kind,
         payload,
-        accepted_seq + 1,
-        prev_event_id,
+        frontier.next_actor_seq,
+        frontier.frontier_event_ids,
     );
     TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)

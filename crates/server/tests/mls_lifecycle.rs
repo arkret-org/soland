@@ -407,7 +407,7 @@ async fn mls_lifecycle_end_to_end() {
     // ── 3a. Realm + MLS group genesis enter through canonical events ─
     let realm_create = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e0",
-        1,
+        0,
         alice_did,
         alice_device,
         realm_id,
@@ -480,7 +480,7 @@ async fn mls_lifecycle_end_to_end() {
     grant.proofs.push(grant_proof);
     let mut founding_grant = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2ef",
-        2,
+        1,
         alice_did,
         alice_device,
         realm_id,
@@ -504,7 +504,7 @@ async fn mls_lifecycle_end_to_end() {
 
     let mut genesis = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e1",
-        3,
+        2,
         alice_did,
         alice_device,
         realm_id,
@@ -576,7 +576,7 @@ async fn mls_lifecycle_end_to_end() {
 
     let mut welcome = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e2",
-        4,
+        3,
         alice_did,
         alice_device,
         realm_id,
@@ -647,7 +647,7 @@ async fn mls_lifecycle_end_to_end() {
     });
     let mut commit = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e3",
-        5,
+        4,
         alice_did,
         alice_device,
         realm_id,

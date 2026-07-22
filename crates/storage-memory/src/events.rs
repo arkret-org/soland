@@ -207,6 +207,28 @@ impl EventStore for MemoryEventStore {
         Ok(records)
     }
 
+    async fn list_for_realm_actor(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut records = self
+            .data
+            .lock()
+            .values()
+            .filter(|record| {
+                record.actor_id == actor_id && record.realm_id.as_deref() == Some(realm_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| {
+            left.actor_seq
+                .cmp(&right.actor_seq)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        });
+        Ok(records)
+    }
+
     async fn peer_authz_state_records(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
         let mut records = self
             .data

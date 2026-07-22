@@ -20,27 +20,33 @@ pub(super) async fn persist_mimi_canonical_message_event(
     let actor_id = state.service_id().as_str();
     let scoped_records = state
         .event_query_application()
-        .canonical_events_for_actor(actor_id)
+        .canonical_events_for_realm_actor(realm_id, actor_id)
         .await
-        .map_err(|error| AppError::internal(format!("MIMI actor frontier lookup: {error}")))?
+        .map_err(|error| AppError::internal(format!("MIMI actor frontier lookup: {error}")))?;
+    let max_actor_seq = scoped_records.iter().map(|record| record.actor_seq).max();
+    let mut prev_refs = scoped_records
         .into_iter()
-        .filter(|record| record.realm_id.as_deref() == Some(realm_id))
-        .collect::<Vec<_>>();
-    let max_actor_seq = scoped_records
-        .iter()
-        .map(|record| record.actor_seq)
-        .max()
-        .unwrap_or(0);
-    let prev_refs = scoped_records
-        .into_iter()
-        .filter(|record| max_actor_seq > 0 && record.actor_seq == max_actor_seq)
+        .filter(|record| Some(record.actor_seq) == max_actor_seq)
         .map(|record| {
             arkret_core::EventId::new(record.event_id).map_err(|error| {
                 AppError::internal(format!("stored MIMI actor frontier id invalid: {error}"))
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let actor_seq = max_actor_seq + 1;
+    prev_refs.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
+    prev_refs.dedup();
+    let actor_seq = max_actor_seq
+        .map(|value| {
+            value.checked_add(1).ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FrontierSequenceExhausted,
+                    "MIMI service actor sequence is exhausted",
+                )
+                .with_status(StatusCode::CONFLICT)
+            })
+        })
+        .transpose()?
+        .unwrap_or(0);
     let service_did = arkret_core::Did::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let mut event = arkret_core::Event::new_with_id_at(

@@ -214,16 +214,42 @@ pub(super) async fn submit_event_value_with_context(
             .as_object()
             .is_some_and(|object| admission.matches(session, object))
     });
-    let actor_lock = actor_submit_lock(&parsed.actor_id);
+    let actor_lock = actor_submit_lock(&parsed.realm_id, &parsed.actor_id);
     let _actor_submit_guard = actor_lock.lock().await;
     let received_at = now();
     let service = state.event_query_application();
     if let Ok(Some(existing)) = service.canonical_event(&parsed.event_id).await {
         if existing.canonical_bytes == parsed.canonical_bytes {
+            let frontier = super::super::endpoints::load_realm_actor_frontier(
+                state,
+                RealmId::new(parsed.realm_id.clone()).map_err(|_| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "validated realm_id is invalid",
+                    )
+                })?,
+                Did::new(parsed.actor_id.clone()).map_err(|_| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "validated actor_id is invalid",
+                    )
+                })?,
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("post-submit frontier unavailable: {error}"),
+                )
+            })?;
             return Ok(event_submit_response(
                 state,
                 EventsSubmitStatus::Duplicate,
                 existing.event_id.clone(),
+                frontier,
             )
             .await);
         }
@@ -245,52 +271,105 @@ pub(super) async fn submit_event_value_with_context(
             "event_id already exists with different canonical bytes",
         ));
     }
-    let existing_records = service.canonical_events().await.map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("events store unavailable: {error}"),
-        )
-    })?;
     if parsed.kind == arkret_core::events::EventKind::REALM_CREATE
-        && existing_records.iter().any(|record| {
-            record.kind == arkret_core::events::EventKind::REALM_CREATE
-                && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
-        })
+        && service
+            .realm_event_stats(parsed.realm_id.as_str())
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("events store unavailable: {error}"),
+                )
+            })?
+            .count
+            > 0
     {
         return Err(realm_already_exists_error());
     }
-    let scoped_actor_records = existing_records
-        .iter()
-        .filter(|record| {
-            record.actor_id == parsed.actor_id
-                && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
-        })
-        .collect::<Vec<_>>();
+    let scoped_actor_records = service
+        .canonical_events_for_realm_actor(parsed.realm_id.as_str(), parsed.actor_id.as_str())
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("events store unavailable: {error}"),
+            )
+        })?;
     if let Some(max_seq) = scoped_actor_records
         .iter()
         .map(|record| record.actor_seq)
         .max()
         && parsed.actor_seq < max_seq
     {
+        let next_actor_seq = max_seq.checked_add(1).ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "frontier_sequence_exhausted",
+                "actor sequence is exhausted",
+            )
+        })?;
+        let mut frontier_event_ids = scoped_actor_records
+            .iter()
+            .filter(|record| record.actor_seq == max_seq)
+            .map(|record| {
+                EventId::new(record.event_id.clone()).map_err(|_| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "stored event_id is invalid",
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        frontier_event_ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        frontier_event_ids.dedup();
+        let current_frontier = super::super::endpoints::build_realm_actor_frontier(
+            state,
+            RealmId::new(parsed.realm_id.clone()).map_err(|_| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "validated realm_id is invalid",
+                )
+            })?,
+            Did::new(parsed.actor_id.clone()).map_err(|_| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "validated actor_id is invalid",
+                )
+            })?,
+            next_actor_seq,
+            frontier_event_ids,
+        )
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("actor frontier unavailable: {error}"),
+            )
+        })?;
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "cas_conflict",
             "actor_seq is older than the accepted actor frontier",
-        ));
-    }
-    if parsed.prev_refs.is_empty() && parsed.actor_seq != 1 {
-        return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "a Realm-scoped actor-chain genesis must use actor_seq=1",
-        ));
+        )
+        .with_details(arkret_core::EventsActorCasConflictDetails {
+            accepted: false,
+            current_frontier,
+        }));
     }
     let mut max_actor_predecessor_seq = None;
     for prev_ref in &parsed.prev_refs {
-        let predecessor = existing_records
-            .iter()
-            .find(|record| record.event_id == *prev_ref);
+        let predecessor = service.canonical_event(prev_ref).await.map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("events store unavailable: {error}"),
+            )
+        })?;
         if predecessor.is_none() {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
@@ -315,8 +394,8 @@ pub(super) async fn submit_event_value_with_context(
         }
     }
     if max_actor_predecessor_seq
-        .is_some_and(|predecessor_seq| predecessor_seq.saturating_add(1) != parsed.actor_seq)
-        || (max_actor_predecessor_seq.is_none() && parsed.actor_seq != 1)
+        .is_some_and(|predecessor_seq| predecessor_seq.checked_add(1) != Some(parsed.actor_seq))
+        || (max_actor_predecessor_seq.is_none() && parsed.actor_seq != 0)
     {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -325,9 +404,16 @@ pub(super) async fn submit_event_value_with_context(
         ));
     }
     for authorized_ref in &parsed.authorized_refs {
-        if !existing_records
-            .iter()
-            .any(|record| record.event_id == *authorized_ref)
+        if !service
+            .has_canonical_event(authorized_ref)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("events store unavailable: {error}"),
+                )
+            })?
         {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
@@ -336,7 +422,7 @@ pub(super) async fn submit_event_value_with_context(
             ));
         }
     }
-    enforce_sibling_fork_limit(state, session, &parsed, &existing_records).await?;
+    enforce_sibling_fork_limit(state, session, &parsed, &scoped_actor_records).await?;
 
     let mut projection_operation = projection_operation_from_event(&parsed, &envelope);
     // Active-series pointer versions are a per-(actor,class) CAS. Keep the
@@ -888,8 +974,68 @@ pub(super) async fn submit_event_value_with_context(
     } else {
         peer_event_fanout_records(state, &parsed, &envelope_for_bootstrap).await
     };
-    let accepted_response =
-        event_submit_response(state, EventsSubmitStatus::Accepted, parsed.event_id.clone()).await;
+    let next_actor_seq = parsed.actor_seq.checked_add(1).ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "frontier_sequence_exhausted",
+            "actor sequence is exhausted",
+        )
+    })?;
+    let mut prospective_frontier_ids = scoped_actor_records
+        .iter()
+        .filter(|record| record.actor_seq == parsed.actor_seq)
+        .map(|record| {
+            EventId::new(record.event_id.clone()).map_err(|_| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "stored event_id is invalid",
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    prospective_frontier_ids.push(EventId::new(parsed.event_id.clone()).map_err(|_| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "validated event_id is invalid",
+        )
+    })?);
+    prospective_frontier_ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    prospective_frontier_ids.dedup();
+    let prospective_frontier = super::super::endpoints::build_realm_actor_frontier(
+        state,
+        RealmId::new(parsed.realm_id.clone()).map_err(|_| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "validated realm_id is invalid",
+            )
+        })?,
+        Did::new(parsed.actor_id.clone()).map_err(|_| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "validated actor_id is invalid",
+            )
+        })?,
+        next_actor_seq,
+        prospective_frontier_ids,
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("post-submit frontier unavailable: {error}"),
+        )
+    })?;
+    let accepted_response = event_submit_response(
+        state,
+        EventsSubmitStatus::Accepted,
+        parsed.event_id.clone(),
+        prospective_frontier,
+    )
+    .await;
     let command = soland_application::events::CommitAcceptedEventCommand {
         event: soland_application::events::AcceptedEvent {
             event_id: parsed.event_id.clone(),
@@ -953,6 +1099,102 @@ pub(super) async fn submit_event_value_with_context(
             && error.is_realm_already_exists()
         {
             return Err(realm_already_exists_error());
+        }
+        if error.is_conflict_kind() {
+            let message = error.detail();
+            if message.contains("cas_conflict") {
+                let current_frontier = super::super::endpoints::load_realm_actor_frontier(
+                    state,
+                    RealmId::new(parsed.realm_id.clone()).map_err(|_| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            "validated realm_id is invalid",
+                        )
+                    })?,
+                    Did::new(parsed.actor_id.clone()).map_err(|_| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            "validated actor_id is invalid",
+                        )
+                    })?,
+                )
+                .await
+                .map_err(|frontier_error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("actor frontier unavailable: {frontier_error}"),
+                    )
+                })?;
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "cas_conflict",
+                    "actor_seq is older than the accepted actor frontier",
+                )
+                .with_details(arkret_core::EventsActorCasConflictDetails {
+                    accepted: false,
+                    current_frontier,
+                }));
+            }
+            if message.contains("fork_quarantine") {
+                return Err(SubmitOneError::quarantine(
+                    parsed.event_id.clone(),
+                    "fork_quarantine",
+                    "actor_seq sibling fork limit exceeded; event is quarantined pending actor-chain repair",
+                ));
+            }
+            if message.contains("schema_violation") {
+                return Err(SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    message,
+                ));
+            }
+            if message.contains("duplicate") {
+                if let Ok(Some(existing)) = service.canonical_event(&parsed.event_id).await
+                    && existing.canonical_bytes == parsed.canonical_bytes
+                {
+                    let frontier = super::super::endpoints::load_realm_actor_frontier(
+                        state,
+                        RealmId::new(parsed.realm_id.clone()).map_err(|_| {
+                            SubmitOneError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "internal_error",
+                                "validated realm_id is invalid",
+                            )
+                        })?,
+                        Did::new(parsed.actor_id.clone()).map_err(|_| {
+                            SubmitOneError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "internal_error",
+                                "validated actor_id is invalid",
+                            )
+                        })?,
+                    )
+                    .await
+                    .map_err(|frontier_error| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            format!("actor frontier unavailable: {frontier_error}"),
+                        )
+                    })?;
+                    return Ok(event_submit_response(
+                        state,
+                        EventsSubmitStatus::Duplicate,
+                        parsed.event_id.clone(),
+                        frontier,
+                    )
+                    .await);
+                }
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "duplicate_conflict",
+                    "event_id already exists with different canonical bytes",
+                ));
+            }
         }
         tracing::error!(%error, "failed to persist canonical event");
         return Err(SubmitOneError::new(

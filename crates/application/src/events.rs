@@ -540,6 +540,11 @@ pub trait EventReadPort: Send + Sync {
         &self,
         actor_id: &str,
     ) -> ApplicationResult<Vec<CanonicalEventRecord>>;
+    async fn canonical_events_for_realm_actor(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> ApplicationResult<Vec<CanonicalEventRecord>>;
     async fn canonical_batch_receipts_for_event(
         &self,
         event_id: &str,
@@ -668,6 +673,15 @@ impl EventQueryApplicationService {
         actor_id: &str,
     ) -> ApplicationResult<Vec<CanonicalEventRecord>> {
         self.events.canonical_events_for_actor(actor_id).await
+    }
+    pub async fn canonical_events_for_realm_actor(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+        self.events
+            .canonical_events_for_realm_actor(realm_id, actor_id)
+            .await
     }
     pub async fn canonical_batch_receipts_for_event(
         &self,

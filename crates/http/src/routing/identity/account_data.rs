@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use soland_application::identity::{
     AccountDataState, FindAgentControllerQuery, IdentityApplicationService,
 };
-use soland_http::error::AppError;
+use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, now};
 use crate::state::AppState;
@@ -201,18 +201,29 @@ async fn persist_account_data_event(
     let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
     let _service_event_guard = service_event_lock.lock().await;
     let service_actor = state.service_id().as_str();
+    let realm_id =
+        RealmId::new(soland_application::identity::principal_control_realm_for_did(&session.actor))
+            .map_err(|error| AppError::internal(format!("account_data realm invalid: {error}")))?;
     let records = state
         .event_query_application()
-        .canonical_events()
+        .canonical_events_for_realm_actor(realm_id.as_str(), service_actor)
         .await
         .map_err(|error| {
             AppError::internal(format!("account_data frontier lookup failed: {error}"))
         })?;
-    let previous = records
-        .iter()
-        .filter(|record| record.actor_id == service_actor)
-        .max_by_key(|record| record.actor_seq);
-    let actor_seq = previous.map_or(1, |record| record.actor_seq.saturating_add(1));
+    let max_actor_seq = records.iter().map(|record| record.actor_seq).max();
+    let actor_seq = max_actor_seq
+        .map(|value| {
+            value.checked_add(1).ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FrontierSequenceExhausted,
+                    "account_data actor sequence is exhausted",
+                )
+                .with_status(StatusCode::CONFLICT)
+            })
+        })
+        .transpose()?
+        .unwrap_or(0);
     let created_at = now();
     let mut payload = json!({
         "owner": session.actor,
@@ -226,9 +237,6 @@ async fn persist_account_data_event(
     }
     let service_did = Did::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
-    let realm_id =
-        RealmId::new(soland_application::identity::principal_control_realm_for_did(&session.actor))
-            .map_err(|error| AppError::internal(format!("account_data realm invalid: {error}")))?;
     let mut event = Event::new_with_id_at(
         EventId::new(arkret_core::new_prefixed_uuid7("ak:event:")).map_err(|error| {
             AppError::internal(format!("account_data Event id invalid: {error}"))
@@ -243,12 +251,20 @@ async fn persist_account_data_event(
         created_at,
     )
     .map_err(|error| AppError::internal(format!("account_data Event build failed: {error}")))?;
-    if let Some(previous) = previous {
+    if let Some(max_actor_seq) = max_actor_seq {
+        event.prev_refs = records
+            .iter()
+            .filter(|record| record.actor_seq == max_actor_seq)
+            .map(|record| {
+                EventId::new(record.event_id.clone()).map_err(|error| {
+                    AppError::internal(format!("account_data predecessor invalid: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         event
             .prev_refs
-            .push(EventId::new(previous.event_id.clone()).map_err(|error| {
-                AppError::internal(format!("account_data predecessor invalid: {error}"))
-            })?);
+            .sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        event.prev_refs.dedup();
     }
     let verification_method = format!("{}#notary-key", state.service_id());
     let signer = arkret_signatures::Ed25519MoveSigner::new(
