@@ -9,13 +9,14 @@ use std::sync::Arc;
 
 use arkret_core::{
     CanonicalServiceUrl, Did, FileIdentityBundleBackend, IdentityBundleBackend,
-    IdentityBundleBackendAvailability, KeyStore, LocalServiceIdentity, ServiceIdentityBundle,
+    IdentityBundleBackendAvailability, LocalServiceIdentity, ServiceIdentityBundle,
     ServiceIdentityDiagnostic, ServiceIdentityKeyRef, ServiceIdentityProviderRef,
     ServiceIdentityState, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
     ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceType,
     ServiceWebvhDataIntegrityProof, StoredServiceIdentity,
 };
 use arkret_http_client::{Auth, Client, ClientBuilder};
+use arkret_keystore::KeyStore;
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
@@ -74,7 +75,7 @@ pub async fn resolve_and_build_persistence(
     {
         Some(Arc::from(key_store))
     } else if config.development_mode && db.pool.is_none() {
-        Some(Arc::new(arkret_core::InMemoryKeyStore::new()))
+        Some(Arc::new(arkret_keystore::InMemoryKeyStore::new()))
     } else {
         None
     };
@@ -1310,7 +1311,7 @@ fn seed_public_multibase(seed: &[u8; 32]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use arkret_core::{InMemoryKeyStore, KeyStore};
+    use arkret_keystore::{InMemoryKeyStore, KeyStore};
     use soland_storage::DeliveryPolicyStoreRegistry;
 
     use super::*;

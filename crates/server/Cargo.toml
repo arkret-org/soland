@@ -35,6 +35,7 @@ arkret-bootstrap.workspace = true
 arkret-crypto = {workspace = true,features = ["account-data"]}
 arkret-http-client.workspace = true
 arkret-identity.workspace = true
+arkret-keystore.workspace = true
 arkret-signatures = {workspace = true,features = ["protocol", "signer"]}
 arkret-state = {workspace = true,features = ["salvo"]}
 arkret-wire.workspace = true

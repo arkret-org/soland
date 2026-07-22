@@ -670,11 +670,11 @@ impl AppState {
         // without a provisioned key fall back to
         // `service_admin_signer` at signing time with a sticky-warn.
         let admin_app_id = format!("soland.{service_id}");
-        let admin_keystore_inner: Box<dyn arkret_core::KeyStore> = config
+        let admin_keystore_inner: Box<dyn arkret_keystore::KeyStore> = config
             .key_store
             .open(&admin_app_id)
             .expect("configured KeyStore must open every namespace")
-            .unwrap_or_else(|| Box::new(arkret_core::keystore::InMemoryKeyStore::new()));
+            .unwrap_or_else(|| Box::new(arkret_keystore::InMemoryKeyStore::new()));
         let admin_keystore =
             arkret_core::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
         if config.development_mode {

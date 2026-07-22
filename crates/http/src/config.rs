@@ -152,7 +152,7 @@ impl KeyStoreConfig {
     pub fn open(
         &self,
         application_id: &str,
-    ) -> anyhow::Result<Option<Box<dyn arkret_core::KeyStore>>> {
+    ) -> anyhow::Result<Option<Box<dyn arkret_keystore::KeyStore>>> {
         match self {
             Self::Disabled => Ok(None),
             Self::Platform => arkret_keystore::durable_platform_keystore(application_id)
@@ -163,7 +163,7 @@ impl KeyStoreConfig {
                 let store = arkret_keystore::EncryptedFileKeyStore::new(path, application_id, key);
                 key.zeroize();
                 store
-                    .map(|store| Some(Box::new(store) as Box<dyn arkret_core::KeyStore>))
+                    .map(|store| Some(Box::new(store) as Box<dyn arkret_keystore::KeyStore>))
                     .map_err(|error| {
                         anyhow::anyhow!("opening encrypted-file KeyStore failed: {error}")
                     })
