@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::BTreeSet;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -508,16 +508,40 @@ impl AppState {
         self.storage_mode
     }
 
-    pub fn runtime_settings_handle(
+    pub fn install_federation_peer_verifying_key(
         &self,
-    ) -> &Arc<ArcSwap<crate::runtime_settings::RuntimeSettings>> {
-        &self.settings
+        previous_service_id: Option<&str>,
+        service_id: &str,
+        verifying_key: VerifyingKey,
+    ) {
+        self.federation_peer_verifying_keys.rcu(|current| {
+            let mut next = (**current).clone();
+            if let Some(previous_service_id) = previous_service_id
+                && previous_service_id != service_id
+            {
+                next.remove(previous_service_id);
+            }
+            next.insert(service_id.to_owned(), verifying_key);
+            Arc::new(next)
+        });
     }
 
-    pub fn federation_peer_verifying_keys_handle(
-        &self,
-    ) -> &Arc<ArcSwap<BTreeMap<String, VerifyingKey>>> {
-        &self.federation_peer_verifying_keys
+    pub fn apply_resolved_federation_peers(&self, resolved: &HashMap<String, String>) {
+        self.settings.rcu(|current| {
+            let mut next = (**current).clone();
+            for entry in &mut next.federation_peers {
+                if let Some(discovered) = resolved.get(entry) {
+                    *entry = discovered.clone();
+                }
+            }
+            Arc::new(next)
+        });
+    }
+
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_registry_key(&self) -> usize {
+        Arc::as_ptr(&self.settings) as usize
     }
 
     /// Snapshot the current service-identity lifecycle state.
@@ -1055,12 +1079,20 @@ impl AppState {
         Ok(())
     }
 
-    /// MID-1..6 — borrow a clone of the in-memory MemberIdentity
-    /// registry, suitable for read-only projection paths (sync roster,
-    /// describe payload). Callers that need to mutate state must lock
-    /// `self.member_identity` directly.
-    pub fn member_identity_registry(&self) -> MemberIdentityRegistry {
-        self.member_identity.lock().clone()
+    pub(crate) fn member_identity_snapshot(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> Option<super::MemberIdentitySnapshot> {
+        self.member_identity
+            .lock()
+            .snapshot_for_actor(realm_id, actor_id)
+    }
+
+    pub(crate) fn handle_claims_snapshot(
+        &self,
+    ) -> BTreeMap<String, Vec<super::HandleClaimEvidenceRecord>> {
+        self.member_identity.lock().snapshot_handle_claims()
     }
 
     pub(crate) fn member_identity_state_digest(
@@ -1104,11 +1136,13 @@ impl AppState {
             .invalidate_handle_claims_for_subject(subject_id)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_insert_member_identity(&self, record: super::MemberIdentityEventRecord) {
         self.member_identity.lock().insert(record);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_cache_handle_claim(&self, envelope: Value) -> Option<String> {
         self.cache_handle_claim(envelope)
@@ -1225,6 +1259,7 @@ impl AppState {
 }
 
 impl AppState {
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_set_service_id(&mut self, service_id: String) {
         self.service_id = service_id;
@@ -1242,15 +1277,11 @@ impl AppState {
         self.projection_application.test_state()
     }
 
-    #[doc(hidden)]
-    pub fn test_seal_store(&self) -> &dyn arkret_state::SealStore {
-        self.projection_application.seal_store()
-    }
-
     pub(crate) fn realm_directory_application(&self) -> &RealmDirectoryApplicationService {
         &self.realm_directory_application
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_hlc(&self) -> &ApplicationClock {
         self.hlc()
@@ -1260,6 +1291,7 @@ impl AppState {
         self.projection_application.clock()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_authz(&self) -> &AuthorizationApplicationService {
         &self.authorization_application
@@ -1269,11 +1301,13 @@ impl AppState {
         &self.authorization_application
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_object_key_for_sha256(&self, sha256: &str) -> String {
         self.delivery_application.object_key_for_sha256(sha256)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub async fn test_put_object(&self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
         self.delivery_application.put_object(key, bytes).await
@@ -1292,6 +1326,7 @@ impl AppState {
         self.event_broadcast.send(notification)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_subscribe_event_notifications(
         &self,
@@ -1299,6 +1334,7 @@ impl AppState {
         self.subscribe_event_notifications()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_publish_event_notification(
         &self,
@@ -1307,6 +1343,7 @@ impl AppState {
         self.publish_event_notification(notification)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_cache_resolved_webvh_record(
         &self,
@@ -1315,21 +1352,25 @@ impl AppState {
         self.did_application.cache_resolved_document_state(record)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_account_registration_policy(&self) -> &Arc<Mutex<AccountRegistrationPolicy>> {
         &self.account_registration_policy
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_install_consent_cell(&self, cell: soland_application::identity::ConsentCellRecord) {
         self.consent_application.install_runtime_cell(cell);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_direct_conversation_binding_count(&self) -> usize {
         self.contact_application.runtime_direct_binding_count()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_record_cross_signing_publish(
         &self,
@@ -1339,6 +1380,7 @@ impl AppState {
             .record_cross_signing_publish(publish)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_record_cross_signing_reset(
         &self,
@@ -1347,6 +1389,7 @@ impl AppState {
         self.identity_application.record_cross_signing_reset(reset)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_has_current_cross_signing(&self, principal: &arkret_core::Did) -> bool {
         self.identity_application

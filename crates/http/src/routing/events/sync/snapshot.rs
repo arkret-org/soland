@@ -457,7 +457,6 @@ pub(super) fn roster_members_for_realm(
     body: &SyncRequestBody,
 ) -> Vec<Value> {
     let membership_states = roster_membership_states_for_realm(state, realm_entry);
-    let registry = state.member_identity_registry();
     let context =
         RosterDisclosureContext::new(state, realm_entry, session, body, &membership_states);
     membership_states
@@ -468,7 +467,7 @@ pub(super) fn roster_members_for_realm(
             entry.insert("actor_id".to_owned(), json!(actor_id));
             entry.insert("membership".to_owned(), json!(membership));
             if let Some(snapshot) =
-                registry.snapshot_for_actor(realm_entry.realm_id.as_str(), actor_id)
+                state.member_identity_snapshot(realm_entry.realm_id.as_str(), actor_id)
             {
                 if !snapshot.identity_event_ids.is_empty() {
                     entry.insert(
@@ -500,8 +499,8 @@ pub(super) fn roster_members_for_realm(
                             json!(snapshot.identity_events),
                         );
                     }
-                    let visible_claims: Vec<HandleClaimEvidenceRecord> = registry
-                        .handle_claims_for_subject(subject_id)
+                    let visible_claims: Vec<HandleClaimEvidenceRecord> = state
+                        .cached_handle_claims_for_subject(subject_id)
                         .into_iter()
                         .filter(|claim| handle_claim_visible_to_caller(&context, claim))
                         .collect();

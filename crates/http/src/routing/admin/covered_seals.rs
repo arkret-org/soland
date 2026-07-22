@@ -43,8 +43,7 @@ pub(super) fn router() -> Router {
 fn governance_seals_for_realm(state: &AppState, realm: &RealmId) -> Vec<String> {
     state
         .projection_application()
-        .seal_store()
-        .list_leaves(realm)
+        .realm_seal_leaves(realm)
         .unwrap_or_default()
         .into_iter()
         .map(|seal| seal.to_string())

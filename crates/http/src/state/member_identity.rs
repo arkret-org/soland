@@ -133,20 +133,6 @@ impl MemberIdentityRegistry {
         Self::default()
     }
 
-    /// Number of stored events. Used by debug surfaces.
-    pub fn len(&self) -> usize {
-        self.events.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
-    }
-
-    /// Look up by event_id.
-    pub fn get(&self, event_id: &str) -> Option<&MemberIdentityEventRecord> {
-        self.events.get(event_id)
-    }
-
     /// Insert an accepted event. Replaces any prior entry under the same
     /// `event_id` (idempotent re-projection on replay).
     pub fn insert(&mut self, record: MemberIdentityEventRecord) {

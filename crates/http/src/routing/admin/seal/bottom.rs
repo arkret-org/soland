@@ -96,8 +96,7 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
     let proj = state.projection_application().snapshot();
     let mut cells: BTreeSet<CellRef> = state
         .projection_application()
-        .cell_store()
-        .list_cells(&realm)
+        .realm_cells(&realm)
         .unwrap_or_default()
         .into_iter()
         .collect();
@@ -244,8 +243,7 @@ pub(crate) async fn admin_repair_bottom(
             })?;
             let witness_seal = state
                 .projection_application()
-                .seal_store()
-                .get(&state_witness_seal)
+                .seal_by_id(&state_witness_seal)
                 .map_err(|e| app_error!(InternalError, "seal_store.get failed: {e}"))?
                 .ok_or_else(|| {
                     app_error!(
@@ -354,8 +352,7 @@ pub(crate) async fn admin_repair_bottom(
 
             state
                 .projection_application()
-                .move_store()
-                .put_pending(&signed_move)
+                .put_pending_move(&signed_move)
                 .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
 
             let outcome = crate::notary::run_one_signing_pass(state, &realm, 1024);

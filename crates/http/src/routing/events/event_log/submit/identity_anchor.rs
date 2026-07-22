@@ -226,8 +226,7 @@ pub(super) async fn submit_identity_anchor_batch(
         })?;
         let raw_leaves = state
             .projection_application()
-            .seal_store()
-            .list_leaves(&realm_id)
+            .realm_seal_leaves(&realm_id)
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -645,7 +644,9 @@ async fn validate_reanchor_actor_frontier(
     basis: Option<&arkret_core::SealBasis>,
 ) -> Result<(), SubmitOneError> {
     let covered_digests = if let Some(basis) = basis {
-        arkret_state::leaf_union_proof(&basis.leaves, state.projection_application().seal_store())
+        state
+            .projection_application()
+            .seal_leaf_union_proof(&basis.leaves)
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::CONFLICT,
@@ -988,14 +989,10 @@ async fn validate_pre_fence_basis(
     if declared_sorted != expected_leaves {
         return Err(frontier_error());
     }
-    let view = arkret_state::effective_seal_view(
-        &leaves,
-        &realm_id,
-        state.projection_application().seal_store(),
-        state.projection_application().cell_store(),
-        state.projection_application().cell_registry(),
-    )
-    .map_err(|_| frontier_error())?;
+    let view = state
+        .projection_application()
+        .effective_seal_view(&leaves, &realm_id)
+        .map_err(|_| frontier_error())?;
     if basis.control_event_set_root != view.control_event_set_root
         || basis.state_root != view.state_root
     {

@@ -756,18 +756,11 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             .federation_peer_verifying_key(description.service_id.as_str())
                             .as_ref()
                             != Some(&verifying_key);
-                        state
-                            .federation_peer_verifying_keys_handle()
-                            .rcu(|current| {
-                                let mut next = (**current).clone();
-                                if let Some(previous_service_id) = previous_service_id.as_deref()
-                                    && previous_service_id != description.service_id.as_str()
-                                {
-                                    next.remove(previous_service_id);
-                                }
-                                next.insert(description.service_id.to_string(), verifying_key);
-                                std::sync::Arc::new(next)
-                            });
+                        state.install_federation_peer_verifying_key(
+                            previous_service_id.as_deref(),
+                            description.service_id.as_str(),
+                            verifying_key,
+                        );
                         if configured != discovered || key_changed {
                             tracing::info!(
                                 peer_endpoint = %endpoint,
@@ -795,15 +788,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                 retry_delay = retry_delay.saturating_mul(2).min(max_retry);
                 continue;
             }
-            state.runtime_settings_handle().rcu(|current| {
-                let mut next = (**current).clone();
-                for entry in &mut next.federation_peers {
-                    if let Some(discovered) = resolved.get(entry) {
-                        *entry = discovered.clone();
-                    }
-                }
-                std::sync::Arc::new(next)
-            });
+            state.apply_resolved_federation_peers(&resolved);
             retry_delay = max_retry;
         }
     });

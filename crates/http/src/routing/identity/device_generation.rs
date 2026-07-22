@@ -368,8 +368,7 @@ pub async fn accepted_device_generation_seal_leaves(
     let quarantined = quarantined_generation_event_digests(state, principal_id).await?;
     let raw_leaves = state
         .projection_application()
-        .seal_store()
-        .list_leaves(realm_id)
+        .realm_seal_leaves(realm_id)
         .map_err(|error| {
             ApplicationError::internal(format!("Seal frontier unavailable: {error}"))
         })?;
@@ -390,22 +389,22 @@ pub async fn accepted_device_generation_seal_leaves(
         if !visited.insert(seal_id.clone()) {
             continue;
         }
-        let coverage = arkret_state::leaf_union_proof(
-            std::slice::from_ref(&seal_id),
-            state.projection_application().seal_store(),
-        )
-        .map_err(|error| ApplicationError::internal(format!("Seal coverage unavailable: {error}")))?
-        .into_iter()
-        .flat_map(|proof| proof.covered_event_digests)
-        .collect::<BTreeSet<_>>();
+        let coverage = state
+            .projection_application()
+            .seal_leaf_union_proof(std::slice::from_ref(&seal_id))
+            .map_err(|error| {
+                ApplicationError::internal(format!("Seal coverage unavailable: {error}"))
+            })?
+            .into_iter()
+            .flat_map(|proof| proof.covered_event_digests)
+            .collect::<BTreeSet<_>>();
         if coverage.is_disjoint(&quarantined) {
             accepted.insert(seal_id);
             continue;
         }
         let seal = state
             .projection_application()
-            .seal_store()
-            .get(&seal_id)
+            .seal_by_id(&seal_id)
             .map_err(|error| {
                 ApplicationError::internal(format!("Seal lookup unavailable: {error}"))
             })?
@@ -416,8 +415,7 @@ pub async fn accepted_device_generation_seal_leaves(
     for seal_id in accepted_snapshot {
         let mut ancestors = state
             .projection_application()
-            .seal_store()
-            .get(&seal_id)
+            .seal_by_id(&seal_id)
             .map_err(|error| {
                 ApplicationError::internal(format!("Seal lookup unavailable: {error}"))
             })?
@@ -431,8 +429,7 @@ pub async fn accepted_device_generation_seal_leaves(
             accepted.remove(&ancestor);
             if let Some(seal) = state
                 .projection_application()
-                .seal_store()
-                .get(&ancestor)
+                .seal_by_id(&ancestor)
                 .map_err(|error| {
                     ApplicationError::internal(format!("Seal lookup unavailable: {error}"))
                 })?

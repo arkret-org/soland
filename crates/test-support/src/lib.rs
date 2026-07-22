@@ -94,7 +94,7 @@ pub fn app_state_with_identity(
         .to_string();
     let projection_application = ProjectionApplicationService::new(
         move_store,
-        seal_store,
+        seal_store.clone(),
         cell_store,
         cell_registry,
         event_seal_committer,
@@ -126,6 +126,7 @@ pub fn app_state_with_identity(
             persistence,
             projection: Some(projection),
             realms: Some(realms),
+            seal_store: Some(seal_store),
         },
     );
     state
@@ -135,6 +136,7 @@ pub trait AppStateTestExt {
     fn test_persistence(&self) -> Arc<dyn PersistenceStore>;
     fn test_projection(&self) -> &'static Arc<Mutex<ProjectionSnapshot>>;
     fn test_realms(&self) -> &'static Arc<Mutex<RealmDirectoryIndex>>;
+    fn test_put_seal(&self, seal: &Seal) -> StoreResult<()>;
 }
 
 pub fn register_persistence(state: &AppState, persistence: Arc<dyn PersistenceStore>) {
@@ -144,6 +146,7 @@ pub fn register_persistence(state: &AppState, persistence: Arc<dyn PersistenceSt
             persistence,
             projection: None,
             realms: None,
+            seal_store: None,
         },
     );
 }
@@ -172,16 +175,26 @@ impl AppStateTestExt for AppState {
             .and_then(|resources| resources.realms)
             .expect("test Realm directory is unavailable for this AppState")
     }
+
+    fn test_put_seal(&self, seal: &Seal) -> StoreResult<()> {
+        state_test_registry()
+            .lock()
+            .get(&app_state_key(self))
+            .and_then(|resources| resources.seal_store.clone())
+            .expect("test Seal store is unavailable for this AppState")
+            .put(seal)
+    }
 }
 
 fn app_state_key(state: &AppState) -> usize {
-    Arc::as_ptr(state.runtime_settings_handle()) as usize
+    state.test_registry_key()
 }
 
 struct StateTestResources {
     persistence: Arc<dyn PersistenceStore>,
     projection: Option<&'static Arc<Mutex<ProjectionSnapshot>>>,
     realms: Option<&'static Arc<Mutex<RealmDirectoryIndex>>>,
+    seal_store: Option<Arc<dyn SealStore>>,
 }
 
 fn state_test_registry() -> &'static Mutex<BTreeMap<usize, StateTestResources>> {

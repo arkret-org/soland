@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_core::{Did, EventBatchReceipt, Operation, PrincipalLocatorDisplayHint, RealmId};
+use arkret_core::{
+    AccountabilityGrantPayload, Did, EventBatchReceipt, Operation, PrincipalLocatorDisplayHint,
+    RealmId,
+};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use soland_storage::RealmEventStats;
@@ -25,6 +28,14 @@ pub struct PeerEventsPageQuery {
     pub cursor_event_id: Option<String>,
     pub backward: bool,
     pub limit: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActiveAgentAccountabilityQuery {
+    pub accountability_event_id: String,
+    pub controller_id: String,
+    pub agent_id: String,
+    pub accepted_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -622,7 +633,76 @@ pub struct EventQueryApplicationService {
     projections: Arc<dyn ProjectionWritePort>,
 }
 
+fn active_agent_accountability(
+    original_event: &CanonicalEventRecord,
+    events: &[CanonicalEventRecord],
+    query: &ActiveAgentAccountabilityQuery,
+) -> bool {
+    let original_payload = original_event
+        .envelope
+        .get("payload")
+        .unwrap_or(&original_event.envelope);
+    let Ok(original_grant) =
+        serde_json::from_value::<AccountabilityGrantPayload>(original_payload.clone())
+    else {
+        return false;
+    };
+    let current_grant = events
+        .iter()
+        .filter(|candidate| {
+            candidate.kind == "ak.identity.accountability_grant"
+                && candidate.received_at <= query.accepted_at
+                && candidate.realm_id == original_event.realm_id
+                && candidate
+                    .envelope
+                    .get("executed_by")
+                    .and_then(Value::as_str)
+                    .unwrap_or(candidate.actor_id.as_str())
+                    == query.controller_id
+        })
+        .filter_map(|candidate| {
+            let payload = candidate
+                .envelope
+                .get("payload")
+                .unwrap_or(&candidate.envelope);
+            let grant =
+                serde_json::from_value::<AccountabilityGrantPayload>(payload.clone()).ok()?;
+            (grant.issuer.as_str() == query.controller_id
+                && grant.subject.as_str() == query.agent_id
+                && grant.accountability_scope == original_grant.accountability_scope)
+                .then_some((candidate.actor_seq, grant))
+        })
+        .max_by_key(|(actor_seq, _)| *actor_seq)
+        .map(|(_, grant)| grant);
+    let signed_by_controller = original_event
+        .envelope
+        .get("executed_by")
+        .and_then(Value::as_str)
+        .unwrap_or(original_event.actor_id.as_str())
+        == query.controller_id;
+    original_event.kind == "ak.identity.accountability_grant"
+        && signed_by_controller
+        && original_grant.issuer.as_str() == query.controller_id
+        && original_grant.subject.as_str() == query.agent_id
+        && current_grant.is_some_and(|grant| grant.validate_lifecycle_at(query.accepted_at).is_ok())
+}
+
 impl EventQueryApplicationService {
+    pub async fn has_active_agent_accountability(
+        &self,
+        query: &ActiveAgentAccountabilityQuery,
+    ) -> ApplicationResult<bool> {
+        let Some(original_event) = self
+            .events
+            .canonical_event(&query.accountability_event_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let events = self.events.canonical_events().await?;
+        Ok(active_agent_accountability(&original_event, &events, query))
+    }
+
     pub async fn persist_projected_operation(
         &self,
         origin: &str,
@@ -1513,5 +1593,90 @@ mod tests {
             .expect("commit accepted event");
         assert_eq!(result.projections_inserted, 1);
         assert_eq!(result.deliveries_inserted, 1);
+    }
+
+    fn accountability_event(
+        event_id: &str,
+        actor_seq: u64,
+        grant_status: &str,
+        received_at: DateTime<Utc>,
+    ) -> CanonicalEventRecord {
+        CanonicalEventRecord {
+            event_id: event_id.to_owned(),
+            actor_id: "did:web:controller.example".to_owned(),
+            actor_seq,
+            realm_id: Some("ak:realm:019f0000-0000-7000-8000-000000000001".to_owned()),
+            kind: "ak.identity.accountability_grant".to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
+            canonical_digest: format!("sha256:{actor_seq}"),
+            canonical_bytes: Vec::new(),
+            envelope: serde_json::json!({
+                "executed_by": "did:web:controller.example",
+                "payload": {
+                    "schema": "ak.schema.accountability_grant.v1",
+                    "issuer": "did:web:controller.example",
+                    "subject": "did:web:agent.example",
+                    "accountability_scope": "agent_operator",
+                    "not_before": "2026-01-01T00:00:00.000Z",
+                    "expires_at": "2099-01-01T00:00:00.000Z",
+                    "grant_status": grant_status,
+                    "proof": {
+                        "kind": "detached_jws",
+                        "alg": "EdDSA",
+                        "verification_method": "did:web:controller.example#key-1",
+                        "payload_digest": format!("sha256:{}", "3".repeat(64)),
+                        "created_at": "2026-01-01T00:00:00.000Z",
+                        "jws": "test"
+                    }
+                }
+            }),
+            received_at,
+        }
+    }
+
+    #[test]
+    fn active_agent_accountability_uses_latest_matching_grant_lifecycle() {
+        let accepted_at = DateTime::parse_from_rfc3339("2027-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let original = accountability_event(
+            "ak:event:019f0000-0000-7000-8000-000000000001",
+            1,
+            "active",
+            accepted_at - chrono::Duration::minutes(2),
+        );
+        let query = ActiveAgentAccountabilityQuery {
+            accountability_event_id: original.event_id.clone(),
+            controller_id: "did:web:controller.example".to_owned(),
+            agent_id: "did:web:agent.example".to_owned(),
+            accepted_at,
+        };
+        assert!(active_agent_accountability(
+            &original,
+            std::slice::from_ref(&original),
+            &query
+        ));
+
+        let revoked = accountability_event(
+            "ak:event:019f0000-0000-7000-8000-000000000002",
+            2,
+            "revoked",
+            accepted_at - chrono::Duration::minutes(1),
+        );
+        assert!(!active_agent_accountability(
+            &original,
+            &[original.clone(), revoked],
+            &query
+        ));
+
+        let wrong_controller = ActiveAgentAccountabilityQuery {
+            controller_id: "did:web:other.example".to_owned(),
+            ..query
+        };
+        assert!(!active_agent_accountability(
+            &original,
+            std::slice::from_ref(&original),
+            &wrong_controller
+        ));
     }
 }

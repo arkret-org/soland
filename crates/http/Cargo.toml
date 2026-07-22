@@ -12,7 +12,7 @@ description = "Soland HTTP transport, middleware, routing, and OpenAPI surface."
 [features]
 default = []
 openmls-keypackage-validation = []
-test-support = []
+test-support = ["soland-application/test-support"]
 
 [dependencies]
 anyhow.workspace = true
@@ -66,6 +66,7 @@ zeroize = { workspace = true, features = ["derive"] }
 [dev-dependencies]
 proptest.workspace = true
 salvo = { workspace = true, features = ["test"] }
+soland-application = { workspace = true, features = ["test-support"] }
 soland-domain.workspace = true
 soland-storage.workspace = true
 soland-storage-memory.workspace = true

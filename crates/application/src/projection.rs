@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_core::{CellRef, MoveId, Operation, RealmId, Seal, SealId};
+use arkret_core::{CellRef, Move, MoveId, Operation, RealmId, Seal, SealId};
 use arkret_state::lattice::{CellState, SealedOp};
-use arkret_state::state::{MoveStore, SealStore, StoreResult};
-use arkret_state::{CellRegistry, CellStore};
+use arkret_state::state::{
+    CellLatticeBinding, MoveReject, MoveStore, SealEffect, SealLeafUnionProof, SealReject,
+    SealStore, SealedMoveRecord, StoreResult,
+};
+use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -454,24 +457,204 @@ impl ProjectionApplicationService {
         Arc::new(soland_domain::reducer::lattice_kinds::build_sdk_cell_registry())
     }
 
-    pub fn move_store(&self) -> &dyn MoveStore {
+    fn move_store(&self) -> &dyn MoveStore {
         self.move_store.as_ref()
     }
 
-    pub fn seal_store(&self) -> &dyn SealStore {
+    fn seal_store(&self) -> &dyn SealStore {
         self.seal_store.as_ref()
     }
 
-    pub fn cell_store(&self) -> &dyn CellStore {
+    fn cell_store(&self) -> &dyn CellStore {
         self.cell_store.as_ref()
     }
 
-    pub fn cell_registry(&self) -> &dyn CellRegistry {
+    fn cell_registry(&self) -> &dyn CellRegistry {
         self.cell_registry.as_ref()
     }
 
-    pub fn event_seal_committer(&self) -> &dyn EventSealCommitPort {
+    fn event_seal_committer(&self) -> &dyn EventSealCommitPort {
         self.event_seal_committer.as_ref()
+    }
+
+    pub fn put_pending_move(&self, move_value: &Move) -> StoreResult<()> {
+        self.move_store().put_pending(move_value)
+    }
+
+    pub fn move_by_id(&self, move_id: &MoveId) -> StoreResult<Option<Move>> {
+        self.move_store().get(move_id)
+    }
+
+    pub fn pending_moves_for_notary(
+        &self,
+        realm_id: &RealmId,
+        cursor: Option<&MoveId>,
+        limit: usize,
+    ) -> StoreResult<Vec<Move>> {
+        self.move_store()
+            .list_pending_for_notary(realm_id, cursor, limit)
+    }
+
+    pub fn sealed_moves(
+        &self,
+        realm_id: &RealmId,
+        cursor: Option<&MoveId>,
+        limit: usize,
+    ) -> StoreResult<Vec<SealedMoveRecord>> {
+        self.move_store().list_sealed(realm_id, cursor, limit)
+    }
+
+    pub fn seal_by_id(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
+        self.seal_store().get(seal_id)
+    }
+
+    pub fn realm_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
+        self.seal_store().list_leaves(realm_id)
+    }
+
+    pub fn seal_predecessors_known(&self, predecessor_refs: &[SealId]) -> StoreResult<bool> {
+        self.seal_store().predecessors_known(predecessor_refs)
+    }
+
+    pub fn genesis_seal_id(&self, realm_id: &RealmId) -> StoreResult<Option<SealId>> {
+        self.seal_store().genesis(realm_id)
+    }
+
+    pub fn seal_successors(
+        &self,
+        realm_id: &RealmId,
+        seal_id: &SealId,
+    ) -> StoreResult<Vec<SealId>> {
+        self.seal_store().successors(realm_id, seal_id)
+    }
+
+    pub fn prune_seal_predecessor(
+        &self,
+        realm_id: &RealmId,
+        seal_id: &SealId,
+    ) -> StoreResult<Vec<SealId>> {
+        self.seal_store().prune_predecessor(realm_id, seal_id)
+    }
+
+    pub fn realm_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
+        self.cell_store().list_cells(realm_id)
+    }
+
+    pub fn sealed_ops_for_cell(
+        &self,
+        realm_id: &RealmId,
+        cell: &CellRef,
+    ) -> StoreResult<Vec<SealedOp>> {
+        self.cell_store().sealed_ops_for_cell(realm_id, cell)
+    }
+
+    pub fn resolve_cell(
+        &self,
+        realm_id: &RealmId,
+        cell: &CellRef,
+    ) -> StoreResult<CellLatticeBinding> {
+        self.cell_registry().resolve(realm_id, cell)
+    }
+
+    pub fn predecessor_covered_events(
+        &self,
+        predecessor_refs: &[SealId],
+    ) -> Result<std::collections::BTreeSet<MoveId>, SealReject> {
+        arkret_state::union_predecessor_covered_events(predecessor_refs, self.seal_store())
+    }
+
+    pub fn seal_leaf_union_proof(
+        &self,
+        leaves: &[SealId],
+    ) -> Result<Vec<SealLeafUnionProof>, SealReject> {
+        arkret_state::leaf_union_proof(leaves, self.seal_store())
+    }
+
+    pub fn effective_seal_view(
+        &self,
+        leaves: &[SealId],
+        realm_id: &RealmId,
+    ) -> Result<EffectiveSealView, SealReject> {
+        arkret_state::effective_seal_view(
+            leaves,
+            realm_id,
+            self.seal_store(),
+            self.cell_store(),
+            self.cell_registry(),
+        )
+    }
+
+    pub fn effective_state_at(
+        &self,
+        leaves: &[SealId],
+        realm_id: &RealmId,
+    ) -> Result<BTreeMap<CellRef, CellState>, SealReject> {
+        arkret_state::effective_state_at(
+            leaves,
+            realm_id,
+            self.seal_store(),
+            self.cell_store(),
+            self.cell_registry(),
+        )
+    }
+
+    pub fn verify_move<F>(
+        &self,
+        move_value: &Move,
+        pre_state: &BTreeMap<CellRef, CellState>,
+        verify_jws: F,
+    ) -> Result<(), MoveReject>
+    where
+        F: Fn(&[u8], &str, &str, &str) -> Result<(), String>,
+    {
+        arkret_state::verify_move(move_value, pre_state, self.cell_registry(), verify_jws)
+    }
+
+    pub fn apply_seal<F>(&self, seal: &Seal, verify_jws: F) -> Result<SealEffect, SealReject>
+    where
+        F: Fn(&[u8], &str, &str, &str) -> Result<(), String> + Copy,
+    {
+        arkret_state::apply_seal(
+            seal,
+            self.move_store(),
+            self.seal_store(),
+            self.cell_store(),
+            self.cell_registry(),
+            verify_jws,
+        )
+    }
+
+    pub fn commit_event_seal_if_frontier(
+        &self,
+        seal: &Seal,
+        expected_store_frontier: &[SealId],
+        new_ops: &[(CellRef, SealedOp)],
+        covered: &std::collections::BTreeSet<MoveId>,
+    ) -> StoreResult<bool> {
+        self.event_seal_committer().commit_if_frontier(
+            seal,
+            expected_store_frontier,
+            new_ops,
+            covered,
+        )
+    }
+
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_put_seal(&self, seal: &Seal) -> StoreResult<()> {
+        self.seal_store().put(seal)
+    }
+
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_append_sealed_effects(
+        &self,
+        realm_id: &RealmId,
+        seal_id: &SealId,
+        new_ops: &[(CellRef, SealedOp)],
+    ) -> StoreResult<()> {
+        self.cell_store()
+            .append_sealed_effects(realm_id, seal_id, new_ops)
     }
 
     #[must_use]
@@ -1087,12 +1270,10 @@ impl ProjectionApplicationService {
     pub fn reload_cells_from_store(
         &self,
         realm_id: &RealmId,
-        store: &dyn CellStore,
-        registry: &dyn CellRegistry,
     ) -> Result<(), arkret_state::StoreError> {
         self.state
             .lock()
-            .reload_cells_from_store(realm_id, store, registry)
+            .reload_cells_from_store(realm_id, self.cell_store(), self.cell_registry())
     }
 
     #[allow(clippy::too_many_arguments)]

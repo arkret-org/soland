@@ -132,8 +132,7 @@ pub(super) fn pick_admin_seal_basis(
 ) -> Result<arkret_core::SealBasis, AppError> {
     let leaves = state
         .projection_application()
-        .seal_store()
-        .list_leaves(realm_id)
+        .realm_seal_leaves(realm_id)
         .map_err(|e| {
             app_error!(
                 InternalError,
@@ -154,14 +153,10 @@ pub(super) fn pick_admin_seal_basis(
                 .map_err(|e| app_error!(InternalError, "empty state_root invalid: {e}"))?,
         });
     }
-    let view = arkret_state::effective_seal_view(
-        &leaves,
-        realm_id,
-        state.projection_application().seal_store(),
-        state.projection_application().cell_store(),
-        state.projection_application().cell_registry(),
-    )
-    .map_err(|e| app_error!(InternalError, "effective_seal_view failed: {e}"))?;
+    let view = state
+        .projection_application()
+        .effective_seal_view(&leaves, realm_id)
+        .map_err(|e| app_error!(InternalError, "effective_seal_view failed: {e}"))?;
     Ok(arkret_core::SealBasis {
         leaves: view.predecessor_refs,
         control_event_set_root: view.control_event_set_root,

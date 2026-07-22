@@ -265,14 +265,10 @@ fn member_state_at_history_basis(
         return None;
     }
     let cell = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor}")).ok()?;
-    let state_at_basis = arkret_state::state::effective_state_at(
-        &seals,
-        &realm,
-        state.projection_application().seal_store(),
-        state.projection_application().cell_store(),
-        state.projection_application().cell_registry(),
-    )
-    .ok()?;
+    let state_at_basis = state
+        .projection_application()
+        .effective_state_at(&seals, &realm)
+        .ok()?;
     match state_at_basis.get(&cell) {
         Some(arkret_state::lattice::CellState::Value(Value::String(member_state))) => {
             Some(member_state.clone())

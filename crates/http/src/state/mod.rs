@@ -9,11 +9,10 @@ mod member_identity;
 mod notification;
 
 pub use app_state::{AppState, AppStateRuntime, build_realm_directory_application, getrandom_seed};
-pub(crate) use member_identity::display_state_digest;
-pub use member_identity::{
-    EffectiveIdentityEntry, HandleClaimDigestInput, HandleClaimEvidenceRecord,
-    MemberIdentityEventRecord, MemberIdentityRegistry, MemberIdentityReplacementEdge,
-    MemberIdentitySnapshot, MemberIdentitySubjectKey,
+pub(crate) use member_identity::{
+    HandleClaimDigestInput, HandleClaimEvidenceRecord, MemberIdentityEventRecord,
+    MemberIdentityReplacementEdge, MemberIdentitySnapshot, MemberIdentitySubjectKey,
+    display_state_digest,
 };
 pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,

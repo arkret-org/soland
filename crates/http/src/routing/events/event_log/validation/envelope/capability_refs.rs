@@ -205,8 +205,7 @@ pub(super) fn validate_data_event_joined_capability_view(
     })?;
     let leaves = state
         .projection_application()
-        .seal_store()
-        .list_leaves(&realm)
+        .realm_seal_leaves(&realm)
         .map_err(|error| {
             event_validation_error(
                 StatusCode::PRECONDITION_FAILED,
@@ -215,20 +214,16 @@ pub(super) fn validate_data_event_joined_capability_view(
             )
         })?;
     if !leaves.is_empty() {
-        let joined_state = arkret_state::state::effective_state_at(
-            &leaves,
-            &realm,
-            state.projection_application().seal_store(),
-            state.projection_application().cell_store(),
-            state.projection_application().cell_registry(),
-        )
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::PRECONDITION_FAILED,
-                "stale_seal_ref",
-                format!("DataEvent joined control view could not be resolved: {error}"),
-            )
-        })?;
+        let joined_state = state
+            .projection_application()
+            .effective_state_at(&leaves, &realm)
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::PRECONDITION_FAILED,
+                    "stale_seal_ref",
+                    format!("DataEvent joined control view could not be resolved: {error}"),
+                )
+            })?;
         match joined_state.get(&cell_ref) {
             Some(arkret_state::lattice::CellState::Bottom(_)) => {
                 return Err(event_validation_error(
@@ -294,9 +289,10 @@ pub(super) fn data_event_state_at_seal_ref(
     std::collections::BTreeMap<arkret_core::CellRef, arkret_state::lattice::CellState>,
     EventValidationError,
 > {
-    let seal =
-        arkret_state::state::SealStore::get(state.projection_application().seal_store(), seal_id)
-            .map_err(|error| {
+    let seal = state
+        .projection_application()
+        .seal_by_id(seal_id)
+        .map_err(|error| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
@@ -318,20 +314,16 @@ pub(super) fn data_event_state_at_seal_ref(
         ));
     }
 
-    let state_at_ref = arkret_state::state::effective_state_at(
-        std::slice::from_ref(seal_id),
-        realm,
-        state.projection_application().seal_store(),
-        state.projection_application().cell_store(),
-        state.projection_application().cell_registry(),
-    )
-    .map_err(|error| {
-        event_validation_error(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            format!("DataEvent seal_ref pre-state could not be resolved: {error}"),
-        )
-    })?;
+    let state_at_ref = state
+        .projection_application()
+        .effective_state_at(std::slice::from_ref(seal_id), realm)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!("DataEvent seal_ref pre-state could not be resolved: {error}"),
+            )
+        })?;
 
     Ok(state_at_ref)
 }

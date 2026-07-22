@@ -194,19 +194,18 @@ async fn materialize_realm_control(
     let preserved_generation_coverage = if let Some(requirement) = &generation_fence
         && !requirement.accepted_frontier_refs.is_empty()
     {
-        arkret_state::leaf_union_proof(
-            &requirement.accepted_frontier_refs,
-            state.projection_application().seal_store(),
-        )
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
-                format!("accepted generation Seal coverage unavailable: {error}"),
-            )
-        })?
-        .into_iter()
-        .flat_map(|proof| proof.covered_event_digests)
-        .collect::<BTreeSet<_>>()
+        state
+            .projection_application()
+            .seal_leaf_union_proof(&requirement.accepted_frontier_refs)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("accepted generation Seal coverage unavailable: {error}"),
+                )
+            })?
+            .into_iter()
+            .flat_map(|proof| proof.covered_event_digests)
+            .collect::<BTreeSet<_>>()
     } else {
         BTreeSet::new()
     };
@@ -381,8 +380,7 @@ async fn materialize_realm_control(
         ops.sort_by(|left, right| right.move_id.as_str().cmp(left.move_id.as_str()));
         let binding = state
             .projection_application()
-            .cell_registry()
-            .resolve(realm_id, &cell)
+            .resolve_cell(realm_id, &cell)
             .map_err(|error| {
                 AppError::new(
                     ErrorCode::ProfileUnsupported,
