@@ -2349,6 +2349,46 @@ fn available_keypackage_count(
         .count() as u64
 }
 
+/// Whether `actor_id` currently has a KeyPackage that the canonical Realm
+/// membership admission path can actually claim.
+///
+/// This intentionally reuses the same accepted device / cross-signing trust
+/// selector and capability-subset rules as `claim_keypackages_for_request`.
+/// Merely having an untrusted or capability-incomplete KeyPackage row is not
+/// sufficient for the native-agent `leave -> join` carve-out in actor.md
+/// section 3.3 / realm-and-space.md section 2.7.
+pub(crate) async fn has_claimable_realm_membership_keypackage(
+    state: &AppState,
+    actor_id: &str,
+    intended_realm_id: &str,
+) -> bool {
+    let Ok(principal) = arkret_core::Did::new(actor_id.to_owned()) else {
+        return false;
+    };
+    let target_device_ids = BTreeSet::new();
+    let Ok(trust_selector) =
+        current_keypackage_claim_trust_selector(state, &principal, &target_device_ids).await
+    else {
+        return false;
+    };
+    let required_capabilities =
+        BTreeSet::from(["ak.content.v1".to_owned(), "mimi.content.v1".to_owned()]);
+    let now_secs = now().timestamp();
+    let projection = state.projection.lock();
+    projection.mls_key_packages.values().any(|keypackage| {
+        ((!keypackage.last_resort && keypackage.claimed_by.is_none())
+            || (keypackage.last_resort && last_resort_matches_realm(keypackage, intended_realm_id)))
+            && keypackage_matches_claim(
+                keypackage,
+                actor_id,
+                &target_device_ids,
+                &trust_selector,
+                now_secs,
+                &required_capabilities,
+            )
+    })
+}
+
 fn keypackage_matches_claim(
     kp: &MlsKeyPackage,
     actor_id: &str,

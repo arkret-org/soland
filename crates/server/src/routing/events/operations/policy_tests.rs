@@ -640,6 +640,237 @@ async fn register_agent_selection(
         .expect("agent participation selection");
 }
 
+async fn register_native_agent_membership_context(
+    state: &AppState,
+    realm_id: &arkret_core::RealmId,
+    encrypted: bool,
+    with_claimable_keypackage: bool,
+) {
+    let controller = "did:web:alice.example";
+    let agent = "did:web:agent.example";
+    let now = chrono::Utc::now();
+    let mut record = soland_storage::AgentPrincipalRecord::new(
+        agent.to_owned(),
+        controller.to_owned(),
+        "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+        format!("{agent}#managed-controller"),
+        "active".to_owned(),
+        now,
+    );
+    record.agent_slug = Some("summary".to_owned());
+    state
+        .agents_store()
+        .put(record)
+        .await
+        .expect("agent record");
+    let accountability_grant_payload = json!({
+        "schema": "ak.schema.accountability_grant.v1",
+        "issuer": controller,
+        "subject": agent,
+        "accountability_scope": "agent_operator",
+        "grant_status": "active",
+        "not_before": "2026-01-01T00:00:00.000Z",
+        "expires_at": "2099-01-01T00:00:00.000Z",
+        "proof": {
+            "kind": "detached_jws",
+            "alg": "EdDSA",
+            "verification_method": "did:web:alice.example#key-1",
+            "payload_digest": format!("sha256:{}", "3".repeat(64)),
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "jws": "test"
+        }
+    });
+    serde_json::from_value::<arkret_core::AccountabilityGrantPayload>(
+        accountability_grant_payload.clone(),
+    )
+    .expect("standard accountability grant payload");
+    state
+        .events_store()
+        .put(CanonicalEventRecord {
+            event_id: "ak:event:01904100-0000-7000-8000-0000000007d1".to_owned(),
+            actor_id: controller.to_owned(),
+            actor_seq: 1,
+            realm_id: Some("ak:realm:01904100-0000-7000-8000-000000000001".to_owned()),
+            kind: "ak.identity.accountability_grant".to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
+            canonical_digest: "sha256:test".to_owned(),
+            canonical_bytes: Vec::new(),
+            envelope: json!({
+                "actor_id": controller,
+                "executed_by": controller,
+                "kind": "ak.identity.accountability_grant",
+                "payload": accountability_grant_payload
+            }),
+            received_at: now,
+        })
+        .await
+        .expect("accountability grant");
+    state
+        .realm_meta_store()
+        .put(
+            realm_id.as_str(),
+            &soland_storage::RealmMetaRecord {
+                owner: controller.to_owned(),
+                deleted: false,
+                discoverability: "invite_only".to_owned(),
+                history_visibility: "joined".to_owned(),
+                history_sharing_policy: None,
+                history_sharing_policy_digest: None,
+                preview_policy: None,
+                preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
+                encryption_profile: encrypted.then(|| "mls_rfc9420".to_owned()),
+                plaintext_visible_services: std::collections::BTreeSet::new(),
+                plaintext_visible_service_classes: std::collections::BTreeMap::new(),
+                minimal_metadata_realm: false,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("realm meta");
+    state.projection.lock().members.insert(
+        (realm_id.to_string(), controller.to_owned()),
+        soland_domain::reducer::SolandMembershipState {
+            member: controller.to_owned(),
+            realm_id: realm_id.to_string(),
+            state: "join".to_owned(),
+            role: "owner".to_owned(),
+            delivery_status: Some("unroutable".to_owned()),
+            recipient_service_id: None,
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
+    );
+
+    if !with_claimable_keypackage {
+        return;
+    }
+    let device_id = "ak:device:01904100-0000-7000-8000-0000000007d1";
+    let device_authorize_event_id = "ak:event:01904100-0000-7000-8000-0000000007d2";
+    state
+        .devices_store()
+        .put(&DeviceInventoryRecord {
+            actor: agent.to_owned(),
+            device_id: device_id.to_owned(),
+            display_name: None,
+            verification_state: "verified".to_owned(),
+            payload: json!({"device_authorize_event_id": device_authorize_event_id}),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        })
+        .await
+        .expect("agent device");
+    state.projection.lock().mls_key_packages.insert(
+        "ak:mls_keypackage:01904100-0000-7000-8000-0000000007d1".to_owned(),
+        soland_domain::reducer::MlsKeyPackage {
+            id: "ak:mls_keypackage:01904100-0000-7000-8000-0000000007d1".to_owned(),
+            keypackage_ref: "ak:mls_keypackage:01904100-0000-7000-8000-0000000007d1".to_owned(),
+            keypackage_digest: format!("sha256:{}", "1".repeat(64)),
+            actor_id: agent.to_owned(),
+            device_id: device_id.to_owned(),
+            lifetime: soland_domain::reducer::KeyPackageLifetime {
+                not_before: now.timestamp() - 60,
+                not_after: now.timestamp() + 3600,
+            },
+            key_package_bytes: vec![1, 2, 3],
+            capabilities: vec!["mimi.content.v1".to_owned(), "ak.content.v1".to_owned()],
+            capabilities_digest: format!("sha256:{}", "2".repeat(64)),
+            device_signature: json!({"kid": "test", "sig": "test"}),
+            last_resort: false,
+            last_resort_realm_id: None,
+            claimed_by: None,
+            ssk_generation: None,
+            device_authorize_event_id: Some(device_authorize_event_id.to_owned()),
+            claimed_at: None,
+            claim_expires_at_unix_ms: None,
+            consumed_at: None,
+            created_at: now.timestamp(),
+        },
+    );
+}
+
+#[tokio::test]
+async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
+    let state = test_state();
+    let realm_id =
+        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d1").unwrap();
+    register_native_agent_membership_context(&state, &realm_id, true, false).await;
+    let operation = op(
+        realm_id,
+        "0000000007d1",
+        arkret_core::events::EventKind::MEMBER_STATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "actor_id": "did:web:agent.example",
+            "membership": "join",
+            "reason": "controller_add_agent",
+            "delivery_status": "unroutable"
+        }),
+    );
+
+    assert_eq!(
+        validate_member_state_policy_for_test(&state, &operation)
+            .await
+            .unwrap_err(),
+        soland_domain::reducer::mls::REASON_KEYPACKAGE_NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage() {
+    let state = test_state();
+    let realm_id =
+        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d2").unwrap();
+    register_native_agent_membership_context(&state, &realm_id, true, true).await;
+    let operation = op(
+        realm_id,
+        "0000000007d2",
+        arkret_core::events::EventKind::MEMBER_STATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "actor_id": "did:web:agent.example",
+            "membership": "join",
+            "reason": "controller_add_agent",
+            "delivery_status": "unroutable"
+        }),
+    );
+
+    validate_member_state_policy_for_test(&state, &operation)
+        .await
+        .expect("standard claimable KeyPackage satisfies encrypted admission precondition");
+}
+
+#[tokio::test]
+async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
+    let state = test_state();
+    let realm_id =
+        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d3").unwrap();
+    register_native_agent_membership_context(&state, &realm_id, false, false).await;
+    let operation = op(
+        realm_id,
+        "0000000007d3",
+        arkret_core::events::EventKind::MEMBER_STATE,
+        json!({
+            "sender": "did:web:alice.example",
+            "actor_id": "did:web:agent.example",
+            "membership": "join",
+            "reason": "controller_add_agent",
+            "delivery_status": "unroutable"
+        }),
+    );
+
+    validate_member_state_policy_for_test(&state, &operation)
+        .await
+        .expect("plaintext Realm membership does not require MLS material");
+}
+
 fn agent_context(agent_id: &str, authorization_ref: &str) -> serde_json::Value {
     json!({
         "agent_id": agent_id,

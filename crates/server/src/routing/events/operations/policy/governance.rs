@@ -74,7 +74,29 @@ pub(super) async fn validate_member_state_policy(
         if actor == target {
             return Ok(());
         }
-        if active_native_agent_controlled_by(state, target, actor).await {
+        if let Some(agent) = native_agent_controlled_by_record(state, target, actor).await {
+            match agent.state.as_str() {
+                "active" => {}
+                "paused" => return Err("agent_paused"),
+                "deactivated" => return Err("agent_deactivated"),
+                _ => return Err("agent_pcr_recovery_not_ready"),
+            }
+            if !realm_member_is_joined(state, operation.realm_id.as_str(), actor).await {
+                return Err("not_member");
+            }
+            if !has_active_accountability_grant(state, target, actor).await {
+                return Err(arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
+            }
+            if realm_requires_content_encryption(state, operation.realm_id.as_str()).await
+                && !crate::routing::mls::has_claimable_realm_membership_keypackage(
+                    state,
+                    target,
+                    operation.realm_id.as_str(),
+                )
+                .await
+            {
+                return Err(soland_domain::reducer::mls::REASON_KEYPACKAGE_NOT_FOUND);
+            }
             return Ok(());
         }
         let realm_id = operation.realm_id.as_str();
@@ -178,12 +200,54 @@ pub(super) async fn validate_member_state_policy(
     Err("missing_capability")
 }
 
-async fn active_native_agent_controlled_by(
+async fn native_agent_controlled_by_record(
+    state: &AppState,
+    agent_id: &str,
+    controller_id: &str,
+) -> Option<soland_storage::AgentPrincipalRecord> {
+    state
+        .agents_store()
+        .get(agent_id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|record| record.controller_id == controller_id)
+}
+
+async fn realm_member_is_joined(state: &AppState, realm_id: &str, actor_id: &str) -> bool {
+    if state
+        .projection
+        .lock()
+        .member(realm_id, actor_id)
+        .is_some_and(|member| member.state == "join")
+    {
+        return true;
+    }
+    crate::routing::spaces::space::realm_has_member_by_id(state, realm_id, actor_id).await
+}
+
+async fn has_active_accountability_grant(
     state: &AppState,
     agent_id: &str,
     controller_id: &str,
 ) -> bool {
-    native_agent_controlled_by(state, agent_id, controller_id, true).await
+    let now = chrono::Utc::now();
+    state
+        .events_store()
+        .snapshot_all()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .any(|record| {
+            record.kind == "ak.identity.accountability_grant"
+                && accountability_grant_envelope_signed_by(record, controller_id)
+                && accountability_grant_value_active_for(
+                    record.envelope.get("payload").unwrap_or(&record.envelope),
+                    controller_id,
+                    agent_id,
+                    now,
+                )
+        })
 }
 
 async fn native_agent_controlled_by(

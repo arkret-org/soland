@@ -14,6 +14,13 @@ pub(crate) use agent_participation::{
     validate_agent_reply_participation,
 };
 use governance::*;
+#[cfg(test)]
+pub(crate) async fn validate_member_state_policy_for_test(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    governance::validate_member_state_policy(state, operation).await
+}
 pub(crate) use message_rules::validate_content_encryption_floor;
 #[cfg(test)]
 pub(super) use message_rules::validate_principal_control_realm_binding;
@@ -130,6 +137,11 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
             arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+        )
+    } else if message == soland_domain::reducer::mls::REASON_KEYPACKAGE_NOT_FOUND {
+        (
+            salvo::http::StatusCode::PRECONDITION_FAILED,
+            soland_domain::reducer::mls::REASON_KEYPACKAGE_NOT_FOUND,
         )
     } else if message == arkret_core::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
         (
