@@ -164,7 +164,7 @@ fn validate_capability_action(action: &str) -> Result<(), &'static str> {
     if !saw_segment {
         return Err("capability_grant_action_invalid");
     }
-    match arkret_core::schema::embedded_capability_action(action) {
+    match arkret_schema::embedded_capability_action(action) {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err("capability_grant_action_unknown"),
         Err(_) => Err("capability_action_registry_unavailable"),

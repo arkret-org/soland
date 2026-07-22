@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use arkret_core::Operation;
-use arkret_core::schema::event_payload_validator_catalog;
+use arkret_schema::event_payload_validator_catalog;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 

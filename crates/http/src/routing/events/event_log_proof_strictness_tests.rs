@@ -1094,7 +1094,7 @@ fn event_payload_validator_catalog_covers_active_standard_durable_events() {
         arkret_core::events::EventKind::MODERATION_FRANKING_PROOF,
         arkret_core::events::EventKind::RELATION_TOMBSTONE,
     ];
-    let catalog = arkret_core::schema::event_payload_validator_catalog().unwrap();
+    let catalog = arkret_schema::event_payload_validator_catalog().unwrap();
     let event_kinds = soland_application::protocol_artifacts::active_durable_event_kinds()
         .iter()
         .map(String::as_str)
@@ -1114,7 +1114,7 @@ fn event_payload_validator_catalog_covers_active_standard_durable_events() {
 
 #[test]
 fn event_payload_validator_enforces_patch_family_schema() {
-    let catalog = arkret_core::schema::event_payload_validator_catalog().unwrap();
+    let catalog = arkret_schema::event_payload_validator_catalog().unwrap();
     let patch_kinds = [
         "ak.realm.update",
         "ak.strand.update",

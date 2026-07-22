@@ -99,7 +99,7 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
     )
     .unwrap();
 
-    arkret_core::schema::event_payload_validator_catalog()
+    arkret_schema::event_payload_validator_catalog()
         .unwrap()
         .validate_payload(arkret_core::events::EventKind::REALM_CREATE, &payload)
         .unwrap();
@@ -129,7 +129,7 @@ fn direct_member_join_payload_is_sdk_schema_valid() {
     )
     .unwrap();
 
-    arkret_core::schema::event_payload_validator_catalog()
+    arkret_schema::event_payload_validator_catalog()
         .unwrap()
         .validate_payload(arkret_core::events::EventKind::MEMBER_STATE, &payload)
         .unwrap();
@@ -163,7 +163,7 @@ fn direct_strand_create_payload_is_sdk_schema_valid() {
     )
     .unwrap();
 
-    arkret_core::schema::event_payload_validator_catalog()
+    arkret_schema::event_payload_validator_catalog()
         .unwrap()
         .validate_payload(arkret_core::events::EventKind::STRAND_CREATE, &payload)
         .unwrap();

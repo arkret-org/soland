@@ -22,11 +22,11 @@
 //! Production note: see `_todos.md` B9 (merge `policy_check` and `authz_check`
 //! into a single evaluator), B10 (obligation execution), B12 (cache TTL).
 
-use arkret_core::schema::{CapabilityRiskTier, embedded_capability_action};
 use arkret_core::{
     AuthzDecision, Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome,
     PolicyCheckRequestBody, PolicyCheckSignature, RealmId,
 };
+use arkret_schema::{CapabilityRiskTier, embedded_capability_action};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};

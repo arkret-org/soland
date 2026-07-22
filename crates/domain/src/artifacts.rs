@@ -357,7 +357,7 @@ pub fn registry_summary() -> Value {
 }
 
 fn embedded_artifact(path: &str, label: &str) -> Value {
-    arkret_core::schema::embedded_json_artifact(path).unwrap_or_else(|error| {
+    arkret_schema::embedded_json_artifact(path).unwrap_or_else(|error| {
         // Should be unreachable for release builds because
         // `validate_embedded_artifacts` runs in main.rs at startup. Lazy
         // callers may still hit this if validation was skipped — fail loudly.
@@ -379,7 +379,7 @@ pub fn validate_embedded_artifacts() -> Result<(), ArtifactError> {
         ("registry/id-kind-registry.json", "id-kind registry"),
         ("deployment-probes.json", "deployment probes"),
     ] {
-        arkret_core::schema::embedded_json_artifact(path).map_err(|error| ArtifactError {
+        arkret_schema::embedded_json_artifact(path).map_err(|error| ArtifactError {
             label,
             detail: error.to_string(),
         })?;

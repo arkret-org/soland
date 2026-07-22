@@ -216,7 +216,7 @@ pub(crate) fn validate_event_schema_and_payload(
     is_self_principal_pcr_bootstrap_create: bool,
 ) -> Result<(), EventValidationError> {
     if !state.config().development_mode {
-        let registry = arkret_core::schema::schema_registry_from_default_spec_artifacts()
+        let registry = arkret_schema::schema_registry_from_default_spec_artifacts()
             .map_err(|_| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
@@ -263,7 +263,7 @@ pub(crate) fn validate_event_schema_and_payload(
     ) {
         return validate_space_container_lifecycle_payload(payload);
     }
-    let catalog = arkret_core::schema::event_payload_validator_catalog().map_err(|error| {
+    let catalog = arkret_schema::event_payload_validator_catalog().map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",

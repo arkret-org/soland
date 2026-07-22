@@ -5017,6 +5017,7 @@ dependencies = [
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-policy",
+ "arkret-schema",
  "arkret-state",
  "arkret-wire",
  "base64",

@@ -1040,7 +1040,7 @@ mod tests {
         )
         .unwrap();
 
-        arkret_core::schema::event_payload_validator_catalog()
+        arkret_schema::event_payload_validator_catalog()
             .unwrap()
             .validate_payload(arkret_core::events::EventKind::CIRCLE_CREATE, &payload)
             .unwrap();

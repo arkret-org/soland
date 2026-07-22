@@ -286,7 +286,7 @@ fn validate_agent_subject_grant_constraints(
     body: &Value,
     subject_is_agent: impl Fn(&str) -> bool,
 ) -> Result<(), &'static str> {
-    use arkret_core::schema::CapabilityRiskTier;
+    use arkret_schema::CapabilityRiskTier;
 
     let Some(subject) = body.get("subject").and_then(Value::as_str) else {
         return Ok(());
@@ -299,7 +299,7 @@ fn validate_agent_subject_grant_constraints(
     };
     let has_finite_expiry = body_effective_expires_at(body).is_some();
     for action in actions.iter().filter_map(Value::as_str) {
-        let descriptor = arkret_core::schema::embedded_capability_action(action)
+        let descriptor = arkret_schema::embedded_capability_action(action)
             .ok()
             .flatten();
         let (risk_tier, required_constraints) = match descriptor {

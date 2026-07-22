@@ -712,7 +712,7 @@ fn validate_registered_capability_action(
     action: &str,
     unknown_reason: &'static str,
 ) -> Result<(), &'static str> {
-    match arkret_core::schema::embedded_capability_action(action) {
+    match arkret_schema::embedded_capability_action(action) {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err(unknown_reason),
         Err(_) => Err(REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE),
@@ -1047,7 +1047,7 @@ pub(crate) fn revocation_freshness_fail_closed(
     freshness_state: arkret_core::FreshnessState,
 ) -> bool {
     use arkret_core::FreshnessState;
-    use arkret_core::schema::CapabilityRiskTier;
+    use arkret_schema::CapabilityRiskTier;
 
     match freshness_state {
         FreshnessState::Fresh => false,
@@ -1062,8 +1062,8 @@ pub(crate) fn revocation_freshness_fail_closed(
     }
 }
 
-fn capability_action_risk_tier(action: &str) -> Option<arkret_core::schema::CapabilityRiskTier> {
-    arkret_core::schema::embedded_capability_action(action)
+fn capability_action_risk_tier(action: &str) -> Option<arkret_schema::CapabilityRiskTier> {
+    arkret_schema::embedded_capability_action(action)
         .ok()
         .flatten()
         .map(|descriptor| descriptor.risk_tier)
