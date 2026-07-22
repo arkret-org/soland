@@ -3,9 +3,10 @@
 
 use arkret_core::{
     ActorProfileId, AppletDelegatedEventAuthorization, AppletId, AppletNamespaceDomain, Did, Event,
-    EventRef, GhostActorProfileRequest, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof,
-    RealmId, canonical, namespace_pattern_matches,
+    EventRef, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof, RealmId, canonical,
+    namespace_pattern_matches,
 };
+use arkret_event_draft::GhostActorProfileRequest;
 use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind,
 };
