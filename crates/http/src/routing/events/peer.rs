@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
 use arkret_core::{
     Did, EventId, EventsFrontierFederationPeerState, EventsQueryPostRequestBody,
     EventsSubmitFederationRequestBody, RealmId,
+};
+use arkret_models_collaboration::http_bodies::{
+    EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody,
 };
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;

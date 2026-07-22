@@ -5053,6 +5053,7 @@ dependencies = [
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-models-discovery",
+ "arkret-models-identity",
  "arkret-models-integration",
  "arkret-policy",
  "arkret-schema",

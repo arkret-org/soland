@@ -16,8 +16,8 @@
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
-use arkret_core::http::ServerDescribeOutcome;
 use arkret_core::{ServiceDescribe, ServiceIdentityState};
+use arkret_models_discovery::http_bodies::ServerDescribeOutcome;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;

@@ -15,10 +15,6 @@
 
 use std::collections::BTreeMap;
 
-use arkret_core::http::{
-    EventSealSubmitOutcome, EventView, EventsResolveOutcome, EventsResolveRequestBody,
-    EventsSubmitOutcome, EventsSubmitStatus,
-};
 use arkret_core::{
     ActorAggregateFrontierKind, ActorAggregateFrontierView, Audience, Did, Event, EventId,
     EventRef, EventsFrontierAccountClientState, EventsFrontierView,
@@ -27,6 +23,10 @@ use arkret_core::{
     MAX_EVENT_SUBMIT_BATCH, ManagedAgentPcrSealHeadReceipt, ManagedAgentPcrSealHeadReceiptKind,
     NotarySig, Operation, OperationId, Proof, RealmActorFrontierView, RealmId,
     RealmSealFrontierView, Seal, TypedTrustDomainId, canonical, proof_kind,
+};
+use arkret_models_collaboration::http_bodies::{
+    EventSealSubmitOutcome, EventView, EventsResolveOutcome, EventsResolveRequestBody,
+    EventsSubmitOutcome, EventsSubmitStatus,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

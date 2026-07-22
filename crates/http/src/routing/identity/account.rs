@@ -11,13 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::http::{
-    ContactAgentProjection, ContactList, ContactListRow, ContactRequestOutcome,
-    ContactRequestRequestBody, ContactRespondOutcome, ContactRespondRequestBody, ContactState,
-    ContactTombstone, ContactTombstoneRequestBody, DirectConversationBindingState,
-    DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
-    DirectConversationResolveState, DirectConversationSummary,
-};
 // `arkret_core::InviteReceivePolicy` also resolves at the crate root, but the
 // invite-addressing strong type lives under `model`; import it via the
 // `model` path to avoid binding the wrong same-named re-export.
@@ -30,6 +23,13 @@ use arkret_core::{
     AccountUpdateProfileRequestBody, AccountView, ActorKind, ActorProfile, ActorProfileId, BlobRef,
     ContactIntroductionEvidence, DeviceId, Did, EventId, Hash, Patch, PatchOpKind, RealmId,
     StrandId,
+};
+use arkret_models_collaboration::http_bodies::{
+    ContactAgentProjection, ContactList, ContactListRow, ContactRequestOutcome,
+    ContactRequestRequestBody, ContactRespondOutcome, ContactRespondRequestBody, ContactState,
+    ContactTombstone, ContactTombstoneRequestBody, DirectConversationBindingState,
+    DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
+    DirectConversationResolveState, DirectConversationSummary,
 };
 use arkret_wire::ErrorCode;
 use base64::Engine;
