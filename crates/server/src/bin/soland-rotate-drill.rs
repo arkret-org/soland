@@ -221,7 +221,7 @@ enum DrillError {
 
 const SERVICE_IDENTITY_KEYSTORE_APP: &str = "soland.service-identity";
 
-fn open_service_identity_key_store() -> Result<Box<dyn arkret_core::KeyStore>, DrillError> {
+fn open_service_identity_key_store() -> Result<Box<dyn arkret_keystore::KeyStore>, DrillError> {
     soland_http::config::KeyStoreConfig::from_env()
         .map_err(|error| DrillError::Io(format!("invalid KeyStore configuration: {error}")))?
         .open(SERVICE_IDENTITY_KEYSTORE_APP)

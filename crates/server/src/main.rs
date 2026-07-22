@@ -550,7 +550,7 @@ async fn service_identity_waiting(res: &mut Response) {
 fn spawn_service_identity_supervisor(
     state: AppState,
     persistence: soland_application::persistence::PersistenceHandle,
-    key_store: Option<std::sync::Arc<dyn arkret_core::KeyStore>>,
+    key_store: Option<std::sync::Arc<dyn arkret_keystore::KeyStore>>,
 ) {
     if !matches!(
         state.service_identity_state().as_ref(),
