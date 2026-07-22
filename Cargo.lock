@@ -173,6 +173,7 @@ version = "0.3.0"
 dependencies = [
  "arkret-auth",
  "arkret-canonical",
+ "arkret-crypto",
  "arkret-event-draft",
  "arkret-hlc",
  "arkret-identifiers",
@@ -200,7 +201,9 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "subtle",
+ "thiserror",
  "unicode-normalization",
+ "url",
  "zeroize",
 ]
 
