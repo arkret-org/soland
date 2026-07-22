@@ -669,7 +669,15 @@ fn sidecar_access_readiness(
         .any(|item| item.stage == PendingSidecarAccessReconciliationStage::BackingScopeMembership)
     {
         AgentSidecarAccessReadiness::AccessReconciliationPending
-    } else if frontier_contested {
+    } else if frontier_contested
+        || pending.iter().any(|item| {
+            matches!(
+                item.stage,
+                PendingSidecarAccessReconciliationStage::MlsRemove
+                    | PendingSidecarAccessReconciliationStage::EpochRotation
+            )
+        })
+    {
         AgentSidecarAccessReadiness::EpochUpdateRequired
     } else if !has_group || !controller_device_ready || !pending.is_empty() {
         AgentSidecarAccessReadiness::KeyMaterialPending
@@ -1416,6 +1424,23 @@ mod tests {
     fn stale_epoch_requires_update_before_ready() {
         assert_eq!(
             sidecar_access_readiness(&[], true, true, true),
+            AgentSidecarAccessReadiness::EpochUpdateRequired
+        );
+    }
+
+    #[test]
+    fn pending_sidecar_removal_requires_epoch_update() {
+        let pending = PendingSidecarAccessReconciliationItem {
+            agent_id: Did::new("did:web:example.com:agents:assistant".to_owned()).unwrap(),
+            stage: PendingSidecarAccessReconciliationStage::MlsRemove,
+            reason: NonEmptyString::new("mls_remove_obligation_pending").unwrap(),
+            membership_frontier: Some(vec![
+                EventId::new("ak:event:01964137-0000-7000-8000-000000000001").unwrap(),
+            ]),
+        };
+
+        assert_eq!(
+            sidecar_access_readiness(&[pending], true, true, false),
             AgentSidecarAccessReadiness::EpochUpdateRequired
         );
     }
