@@ -174,7 +174,6 @@ dependencies = [
  "arkret-auth",
  "arkret-canonical",
  "arkret-event-draft",
- "arkret-hlc",
  "arkret-identifiers",
  "arkret-identity",
  "arkret-models-collaboration",
@@ -5012,6 +5011,7 @@ name = "soland-domain"
 version = "0.3.0"
 dependencies = [
  "arkret-core",
+ "arkret-hlc",
  "arkret-lattice-registry",
  "arkret-models-collaboration",
  "arkret-models-crypto",
@@ -5041,6 +5041,7 @@ dependencies = [
  "arkret-core",
  "arkret-crypto",
  "arkret-event-draft",
+ "arkret-hlc",
  "arkret-http-client",
  "arkret-identifiers",
  "arkret-identity",

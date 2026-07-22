@@ -10,7 +10,8 @@
 //! in their owning module so they can carry their own invariants. They will
 //! land here only if they outgrow that scope.
 
-use arkret_core::{Cursor, CursorPurpose, DeviceId, Did, SpaceId};
+use arkret_core::{DeviceId, Did, SpaceId};
+use arkret_hlc::{Cursor, CursorPurpose};
 use salvo::http::header;
 use salvo::prelude::*;
 

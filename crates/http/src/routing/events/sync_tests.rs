@@ -46,7 +46,7 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
     let h2 = derive_cursor_handle(key, &binding);
     assert_eq!(h1, h2, "same binding -> same handle");
     assert!(
-        h1.len() >= arkret_core::cursor::CURSOR_HANDLE_MIN_LEN,
+        h1.len() >= arkret_hlc::CURSOR_HANDLE_MIN_LEN,
         "handle >= 22 base64url chars"
     );
     assert!(

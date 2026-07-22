@@ -88,19 +88,19 @@ mod tests {
             .and_hms_opt(0, 0, 0)
             .expect("midnight is valid")
             .and_utc();
-        let cursor = arkret_core::Cursor {
+        let cursor = arkret_hlc::Cursor {
             v: "1".to_owned(),
-            purpose: arkret_core::CursorPurpose::Stream,
+            purpose: arkret_hlc::CursorPurpose::Stream,
             issued_at,
             expires_at: chrono::DateTime::from_timestamp_millis(
-                issued_at.timestamp_millis() + arkret_core::Cursor::STREAM_TTL_MAX_MS,
+                issued_at.timestamp_millis() + arkret_hlc::Cursor::STREAM_TTL_MAX_MS,
             )
             .unwrap(),
             h: "abcdefghijklmnopqrstuv".to_owned(),
         };
         let encoded = cursor.encode().unwrap();
         assert!(encoded.starts_with("ak:cursor:"));
-        let decoded = arkret_core::Cursor::decode(&encoded).unwrap();
+        let decoded = arkret_hlc::Cursor::decode(&encoded).unwrap();
         assert_eq!(decoded.v, cursor.v);
         assert_eq!(decoded.purpose, cursor.purpose);
         assert_eq!(decoded.issued_at, cursor.issued_at);
