@@ -286,33 +286,6 @@ impl MlsWelcomeStore for MemoryMlsWelcomeStore {
         Ok(())
     }
 
-    async fn drain_pending(
-        &self,
-        recipient_actor_id: &str,
-        recipient_device_id: &str,
-        now_unix_secs: i64,
-        limit: usize,
-    ) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
-        let mut queue = self.queue.lock();
-        let mut drained = Vec::new();
-        for row in queue.iter_mut() {
-            if drained.len() >= limit {
-                break;
-            }
-            if row.delivered_at.is_some() {
-                continue;
-            }
-            if row.recipient_actor_id != recipient_actor_id
-                || row.recipient_device_id != recipient_device_id
-            {
-                continue;
-            }
-            row.delivered_at = Some(now_unix_secs);
-            drained.push(row.clone());
-        }
-        Ok(drained)
-    }
-
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
         Ok(self.queue.lock().iter().cloned().collect())
     }

@@ -5,7 +5,7 @@
 //!   2. claim it atomically (and assert a second claim returns 409),
 //!   3. submit canonical `ak.mls.genesis` and `ak.mls.welcome` events and assert they mirror into
 //!      the MLS epoch / Welcome stores,
-//!   4. drain the calling device's queue via `GET /_soland/self/keys/keypackages/welcomes/pending`.
+//!   4. receive the Welcome through the standard durable device-message stream.
 //!
 //! MLS commits no longer have a dedicated REST surface — clients submit
 //! `ak.mls.commit` events via the canonical `POST /_arkret/self/events` pipeline
@@ -250,38 +250,42 @@ async fn mls_lifecycle_end_to_end() {
     let capabilities = json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
     let capabilities_digest = sha256_json(&capabilities);
     let mismatch_capabilities = json!(["ak.mls.rfc9420"]);
-    let device_signature = json!({
-        "kid": format!("{alice_did}#{alice_device}"),
-        "alg": "EdDSA",
-        "sig": b64(b"device-signature")
-    });
-    let publish_body = json!({
-        "principal_id": alice_did,
-        "device_id": alice_device,
-        "device_signature": device_signature.clone(),
-        "key_packages": [
-            {
-                "keypackage_id": keypackage_id,
-                "keypackage_ref": uploaded_keypackage_ref,
-                "keypackage_digest": keypackage_digest.clone(),
-                "key_package": b64(keypackage_bytes),
-                "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
-                "capabilities": capabilities.clone(),
-                "expires_at": "2100-01-01T00:00:00.000Z",
-                "created_at": "2026-05-25T00:00:00.000Z"
-            },
-            {
-                "keypackage_id": keypackage_id_mismatch,
-                "keypackage_ref": mismatch_keypackage_ref,
-                "keypackage_digest": mismatch_keypackage_digest,
-                "key_package": b64(mismatch_keypackage_bytes),
-                "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
-                "capabilities": mismatch_capabilities,
-                "expires_at": "2100-01-01T00:00:00.000Z",
-                "created_at": "2026-05-25T00:00:01.000Z"
-            }
-        ]
-    });
+    let publish_unsigned: arkret_core::KeyPackagesUploadUnsignedRequest =
+        serde_json::from_value(json!({
+            "principal_id": alice_did,
+            "device_id": alice_device,
+            "key_packages": [
+                {
+                    "keypackage_id": keypackage_id,
+                    "keypackage_ref": uploaded_keypackage_ref,
+                    "keypackage_digest": keypackage_digest.clone(),
+                    "key_package": b64(keypackage_bytes),
+                    "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
+                    "capabilities": capabilities.clone(),
+                    "expires_at": "2100-01-01T00:00:00.000Z",
+                    "created_at": "2026-05-25T00:00:00.000Z"
+                },
+                {
+                    "keypackage_id": keypackage_id_mismatch,
+                    "keypackage_ref": mismatch_keypackage_ref,
+                    "keypackage_digest": mismatch_keypackage_digest,
+                    "key_package": b64(mismatch_keypackage_bytes),
+                    "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
+                    "capabilities": mismatch_capabilities,
+                    "expires_at": "2100-01-01T00:00:00.000Z",
+                    "created_at": "2026-05-25T00:00:01.000Z"
+                }
+            ]
+        }))
+        .unwrap();
+    let publish_signature = arkret_core::sign_keypackages_upload_request(
+        &publish_unsigned,
+        &format!("{alice_did}#{alice_device}"),
+        &[21_u8; 32],
+    )
+    .unwrap();
+    let publish_body = publish_unsigned.into_signed(publish_signature);
+    let device_signature = serde_json::to_value(&publish_body.device_signature).unwrap();
     let publish_resp = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&publish_body)
@@ -738,40 +742,6 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(
         device_message["unsigned"]["mls_welcome_id"],
         json!(welcome_ref)
-    );
-
-    // ── 4b. Bob drains his legacy Welcome queue via the HTTP route ─
-    let drain_resp =
-        TestClient::get("http://server/_soland/self/keys/keypackages/welcomes/pending")
-            .add_header("authorization", format!("Bearer {bob_token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await;
-    assert_eq!(drain_resp.status_code, Some(StatusCode::OK));
-    let mut drain_resp = drain_resp;
-    let drain_json: Value = drain_resp.take_json().await.unwrap();
-    let welcomes = drain_json["welcomes"].as_array().expect("welcomes array");
-    assert_eq!(welcomes.len(), 1);
-    assert_eq!(welcomes[0]["welcome_id"], json!(welcome_ref));
-    assert_eq!(welcomes[0]["mls_group_ref"], json!("ak:mls_group:abc"));
-    assert!(welcomes[0].get("group_id").is_none());
-    assert_eq!(welcomes[0]["key_package_id"], json!(keypackage_ref));
-    assert!(
-        welcomes[0]["delivered_at"].is_i64(),
-        "delivered_at must be set after drain"
-    );
-
-    // Second drain must return zero rows — `delivered_at` flips
-    // ensures we don't redeliver.
-    let drain2_resp =
-        TestClient::get("http://server/_soland/self/keys/keypackages/welcomes/pending")
-            .add_header("authorization", format!("Bearer {bob_token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await;
-    let mut drain2_resp = drain2_resp;
-    let drain2_json: Value = drain2_resp.take_json().await.unwrap();
-    assert!(
-        drain2_json["welcomes"].as_array().unwrap().is_empty(),
-        "second drain must return zero welcomes (delivered_at flag): {drain2_json}"
     );
 
     // ── 5. MLS commits no longer have a dedicated REST surface ──

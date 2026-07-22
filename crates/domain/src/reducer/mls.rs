@@ -8,10 +8,8 @@
 //!    "mls_keypackage_already_claimed" }` which the routing layer maps to HTTP 409 `cas_conflict`.
 //!
 //! 2. **Welcome to-device persistence** — `apply_welcome_enqueue`. Each accepted Welcome is
-//!    appended to a per-`(recipient_actor_id, recipient_device_id)` queue inside
-//!    `ProjectionState::mls_welcomes`. The recipient device drains its queue via the `GET
-//!    /_soland/self/keys/keypackages/welcomes/pending` route, which marks delivered rows with
-//!    `delivered_at = now()` so subsequent polls don't redeliver.
+//!    appended to a per-`(recipient_actor_id, recipient_device_id)` binding projection while the
+//!    standard durable device-message stream carries delivery.
 //!
 //! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for a new MLS group and
 //!    initializes its covered_seals accumulator.

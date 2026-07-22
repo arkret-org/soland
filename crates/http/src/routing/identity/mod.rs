@@ -18,6 +18,7 @@ pub(super) mod device_messages;
 pub(super) mod did;
 pub(in crate::routing) mod key_backup;
 mod keys;
+pub(crate) use keys::device_signature_kid_points_to_device_key;
 pub(crate) mod managed_agent_pcr;
 // R3 spec-sync (arkret-spec b47ff6ec) — recovery policy / receipt
 // endpoints (HTTP-4 / REC-1).

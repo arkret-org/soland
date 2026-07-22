@@ -120,7 +120,7 @@ fn test_session_credential_hash(token: &str, audience: &str) -> String {
 
 async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &[&str]) {
     let actor = "did:web:agent.example";
-    let device_id = "agent-session:ak:grant:0196419b-0000-7000-8000-000000000001";
+    let device_id = "ak:device:0196419b-0000-7000-8000-000000000001";
     let now = chrono::Utc::now();
     state
         .test_persistence()

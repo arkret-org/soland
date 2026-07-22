@@ -1482,15 +1482,6 @@ impl ProjectionApplicationService {
         }
     }
 
-    pub fn mark_welcomes_delivered(&self, actor_id: String, device_id: String, delivered_at: i64) {
-        let key = MlsWelcomeQueueKey::new(actor_id, device_id);
-        if let Some(queue) = self.state.lock().mls_welcomes.get_mut(&key) {
-            for row in queue.iter_mut().filter(|row| row.delivered_at.is_none()) {
-                row.delivered_at = Some(delivered_at);
-            }
-        }
-    }
-
     pub fn update_erasure_peer_status(
         &self,
         receipt_id: &str,

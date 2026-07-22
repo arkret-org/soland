@@ -276,20 +276,31 @@ fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: 
 
 async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: &str) {
     seed_cross_signing_generation(&state, BOB_DID, 1);
+    let signing_key = test_ephemeral_device_signing_key(BOB_DID, BOB_DEVICE);
+    let mut device = state
+        .test_persistence()
+        .devices()
+        .get(BOB_DID, BOB_DEVICE)
+        .await
+        .unwrap()
+        .expect("Bob dev-login device");
+    device.verification_state = "verified".to_owned();
+    device.payload["device_public_key"] =
+        serde_json::json!(test_ed25519_multibase_public(&signing_key));
+    state
+        .test_persistence()
+        .devices()
+        .put(&device)
+        .await
+        .unwrap();
     let keypackage_id = format!("ak:mls_keypackage:direct-{suffix}");
     let keypackage_ref = format!("ak:mls:keypackage:direct-{suffix}");
     let keypackage_bytes = format!("opaque-direct-keypackage-{suffix}");
     let capabilities = serde_json::json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
-    let response = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
-        .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .json(&serde_json::json!({
+    let unsigned: arkret_core::KeyPackagesUploadUnsignedRequest =
+        serde_json::from_value(serde_json::json!({
             "principal_id": BOB_DID,
             "device_id": BOB_DEVICE,
-            "device_signature": {
-                "kid": format!("{BOB_DID}#{BOB_DEVICE}"),
-                "alg": "EdDSA",
-                "sig": URL_SAFE_NO_PAD.encode(format!("direct-device-signature-{suffix}").as_bytes())
-            },
             "key_packages": [{
                 "keypackage_id": keypackage_id,
                 "keypackage_ref": keypackage_ref,
@@ -301,6 +312,16 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
                 "created_at": "2026-05-25T00:00:00.000Z"
             }]
         }))
+        .unwrap();
+    let signature = arkret_core::sign_keypackages_upload_request(
+        &unsigned,
+        &format!("{BOB_DID}#{BOB_DEVICE}"),
+        &signing_key.to_bytes(),
+    )
+    .unwrap();
+    let response = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
+        .add_header("authorization", format!("Bearer {bob_token}"), true)
+        .json(&unsigned.into_signed(signature))
         .send(&app_from_state(state))
         .await;
     assert_eq!(response.status_code, Some(StatusCode::OK));

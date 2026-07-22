@@ -467,45 +467,6 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
         Ok(())
     }
 
-    async fn drain_pending(
-        &self,
-        recipient_actor_id: &str,
-        recipient_device_id: &str,
-        now_unix_secs: i64,
-        limit: usize,
-    ) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX).max(0);
-        sql_query(
-            "WITH picked AS ( \
-                 SELECT id FROM mls_welcomes \
-                 WHERE recipient_actor_id = $1 \
-                   AND recipient_device_id = $2 \
-                   AND delivered_at IS NULL \
-                 ORDER BY enqueued_at ASC, id ASC \
-                 LIMIT $4 \
-                 FOR UPDATE SKIP LOCKED \
-             ) \
-             UPDATE mls_welcomes AS w \
-             SET delivered_at = $3 \
-             FROM picked \
-             WHERE w.id = picked.id \
-             RETURNING w.id, w.mls_group_id, w.recipient_actor_id, w.recipient_device_id, \
-             w.welcome_bytes, w.key_package_id, w.epoch, w.commit_ref, w.governance_binding, \
-             w.enqueued_at, w.delivered_at",
-        )
-        .bind::<Text, _>(recipient_actor_id)
-        .bind::<Text, _>(recipient_device_id)
-        .bind::<BigInt, _>(now_unix_secs)
-        .bind::<BigInt, _>(limit)
-        .load::<MlsWelcomeRow>(&mut *conn)
-        .await
-        .map(|rows| rows.into_iter().map(MlsWelcomeRecord::from).collect())
-        .map_err(PersistenceError::database)
-    }
-
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await

@@ -8,12 +8,6 @@
 //! - `POST /_arkret/self/keys/keypackages/claim`  — op `ak.self.keys.keypackages.command.claim`
 //!   (atomically claim a published KeyPackage; second claim of the same id returns `409
 //!   cas_conflict`).
-//! - `GET  /_soland/self/keys/keypackages/welcomes/pending` — extension op
-//!   `org.arkret.soland.mls.welcomes.pending` (drain the calling device's Welcome queue; caps at 50
-//!   per call; marks delivered rows with `delivered_at = now()` so subsequent polls don't
-//!   redeliver). This is a soland-specific extension (not in the canonical spec registry), so it is
-//!   served from the `/_soland/` product surface only.
-//!
 //! MLS *commits* are no longer served by a dedicated REST surface — clients
 //! submit `ak.mls.commit` events via the normal `POST /_arkret/self/events`
 //! pipeline (`ak.self.events.command.submit` of the registered durable `ak.mls.commit`
@@ -52,10 +46,9 @@ use arkret_core::{
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
-use ed25519_dalek::Signer;
-use salvo::oapi::extract::{JsonBody, QueryParam};
+use ed25519_dalek::Signer as _;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use soland_application::events::{
     MlsKeyPackageState as MlsKeyPackageRow,
@@ -207,9 +200,6 @@ pub fn router() -> Router {
 }
 
 pub fn protocol_router() -> Router {
-    // `/_arkret/` carries only operation-registry routes. The soland-private
-    // Welcome drain (`welcomes/pending`) lives on the `/_soland/` product
-    // surface (see `local_router`).
     Router::with_path("keys").push(
         Router::with_path("keypackages")
             .push(Router::with_path("upload").post(upload_keypackage))
@@ -219,40 +209,10 @@ pub fn protocol_router() -> Router {
     )
 }
 
-pub fn local_router() -> Router {
-    Router::with_path("keys").push(
-        Router::with_path("keypackages")
-            .push(Router::with_path("welcomes/pending").get(pending_welcomes)),
-    )
-}
-
 pub(crate) fn peer_router() -> Router {
     Router::with_path("keys/keypackages")
         .push(Router::with_path("claim").post(peer_claim_keypackage))
         .push(Router::with_path("claims/query").post(peer_query_keypackage_claim))
-}
-
-/// Maximum Welcomes returned per `GET /welcomes/pending` call. Mirrors
-/// the spec recommendation for per-poll fan-out caps so a backlog can't
-/// starve other sync surfaces.
-pub const MAX_WELCOMES_PER_POLL: usize = 50;
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct PendingWelcome {
-    welcome_id: String,
-    mls_group_ref: String,
-    recipient_actor_id: String,
-    recipient_device_id: String,
-    welcome_bytes_b64: String,
-    key_package_id: String,
-    enqueued_at: i64,
-    delivered_at: Option<i64>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct PendingWelcomesOutcome {
-    welcomes: Vec<PendingWelcome>,
-    limit: usize,
 }
 
 // ── publish ───────────────────────────────────────────────────────────
@@ -301,15 +261,38 @@ async fn upload_keypackage(
     }
     let trust_binding =
         current_keypackage_trust_binding(state, &body.principal_id, &device_id).await?;
-    let mut unsigned_key_packages = body.key_packages.clone();
-    for entry in &mut unsigned_key_packages {
-        entry.device_signature = None;
+    let unsigned_upload = body.unsigned();
+    let upload_signing_input = arkret_core::keypackages_upload_signing_input(&unsigned_upload)
+        .map_err(|error| {
+            AppError::invalid_param(format!("KeyPackage upload canonical input failed: {error}"))
+        })?;
+    if let Some(authorize_event_id) = trust_binding.agent_key_authorize_event_id.as_deref() {
+        let first_entry = body
+            .key_packages
+            .first()
+            .expect("non-empty KeyPackage upload checked above");
+        let first_key_package = decode_key_package(first_entry.key_package.as_str())
+            .map_err(AppError::invalid_param)?;
+        validate_agent_keypackage_upload(
+            state,
+            &body.principal_id,
+            authorize_event_id,
+            &first_key_package,
+            &body.device_signature,
+            &upload_signing_input,
+        )
+        .await
+        .map_err(AppError::invalid_param)?;
+    } else {
+        verify_device_keypackage_signature(
+            state,
+            &body.principal_id,
+            &device_id,
+            &body.device_signature,
+            &upload_signing_input,
+        )
+        .await?;
     }
-    let upload_signature_value = json!({
-        "principal_id": body.principal_id.as_str(),
-        "device_id": body.device_id.as_str(),
-        "key_packages": unsigned_key_packages,
-    });
 
     let default_device_signature = body.device_signature.clone();
     let mut accepted = 0_u32;
@@ -374,6 +357,25 @@ async fn upload_keypackage(
                     continue;
                 }
             };
+        let entry_signing_input = if entry.device_signature.is_some() {
+            match arkret_core::keypackage_upload_entry_signing_input(
+                &body.principal_id,
+                &body.device_id,
+                &entry,
+            ) {
+                Ok(input) => input,
+                Err(error) => {
+                    rejected.push(keypackage_failure(
+                        &entry,
+                        &device_id,
+                        format!("device_signature_invalid:{error}"),
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            upload_signing_input.clone()
+        };
         if let Some(authorize_event_id) = trust_binding.agent_key_authorize_event_id.as_deref()
             && let Err(reason) = validate_agent_keypackage_upload(
                 state,
@@ -381,11 +383,25 @@ async fn upload_keypackage(
                 authorize_event_id,
                 &key_package_bytes,
                 &device_signature,
-                &upload_signature_value,
+                &entry_signing_input,
             )
             .await
         {
             rejected.push(keypackage_failure(&entry, &device_id, reason));
+            continue;
+        }
+        if trust_binding.agent_key_authorize_event_id.is_none()
+            && entry.device_signature.is_some()
+            && let Err(error) = verify_device_keypackage_signature(
+                state,
+                &body.principal_id,
+                &device_id,
+                &device_signature,
+                &entry_signing_input,
+            )
+            .await
+        {
+            rejected.push(keypackage_failure(&entry, &device_id, error.to_string()));
             continue;
         }
         let created_at = entry.created_at.timestamp();
@@ -1490,9 +1506,23 @@ async fn consume_keypackages(
             "consumer_device_id must match the calling session",
         ));
     }
+    let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
+    let consume_signing_input = arkret_core::keypackages_consume_signing_input(&body.unsigned())
+        .map_err(|error| {
+            AppError::invalid_param(format!(
+                "KeyPackage consume canonical input failed: {error}"
+            ))
+        })?;
+    verify_session_keypackage_write_signature(
+        state,
+        &session,
+        &refs,
+        &body.signature,
+        &consume_signing_input,
+    )
+    .await?;
     validate_direct_keypackage_consume(state, &session, &body).await?;
     validate_sidecar_keypackage_consume(state, &session, &body).await?;
-    let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
     let group_id = consume_group_ref(&body);
     let consume_realm_id = body.realm_id.as_ref().map(ToString::to_string);
     let consumed_at = now().timestamp();
@@ -1896,6 +1926,18 @@ async fn revoke_keypackages(
         ));
     }
     let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
+    let revoke_signing_input = arkret_core::keypackages_revoke_signing_input(&body.unsigned())
+        .map_err(|error| {
+            AppError::invalid_param(format!("KeyPackage revoke canonical input failed: {error}"))
+        })?;
+    verify_session_keypackage_write_signature(
+        state,
+        &session,
+        &refs,
+        &body.signature,
+        &revoke_signing_input,
+    )
+    .await?;
     let revoked_at = now().timestamp();
     let mut revoked = Vec::new();
     let mut failures = Vec::new();
@@ -1997,64 +2039,6 @@ pub(crate) async fn retire_device_keypackages(
     Ok(retired)
 }
 
-// ── welcomes/pending ──────────────────────────────────────────────────
-
-#[endpoint(
-    operation_id = "org.arkret.soland.mls.welcomes.pending",
-    tags("keys"),
-    summary = "Drain the calling device's MLS Welcome queue (G3.S1; soland extension)"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.mls.welcomes.pending"))]
-async fn pending_welcomes(
-    aa: AuthArgs,
-    limit: QueryParam<usize, false>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<PendingWelcomesOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-
-    let cap = limit
-        .into_inner()
-        .unwrap_or(MAX_WELCOMES_PER_POLL)
-        .min(MAX_WELCOMES_PER_POLL);
-    let now_secs = now().timestamp();
-
-    // Drain the durable store first (this is the authoritative queue);
-    // then mirror the marked-delivered state into the in-process
-    // projection so subsequent same-process polls see it.
-    let drained = state
-        .mls_key_package_application()
-        .drain_welcomes(&session.actor, &session.device_id, now_secs, cap)
-        .await
-        .map_err(|err| AppError::internal(format!("mls_welcomes.drain_pending: {err}")))?;
-
-    state.projection_application().mark_welcomes_delivered(
-        session.actor.clone(),
-        session.device_id.clone(),
-        now_secs,
-    );
-
-    let welcomes: Vec<PendingWelcome> = drained
-        .into_iter()
-        .map(|row| PendingWelcome {
-            welcome_id: row.id,
-            mls_group_ref: row.group_id,
-            recipient_actor_id: row.recipient_actor_id,
-            recipient_device_id: row.recipient_device_id,
-            welcome_bytes_b64: URL_SAFE_NO_PAD.encode(&row.welcome_bytes),
-            key_package_id: row.key_package_id,
-            enqueued_at: row.enqueued_at,
-            delivered_at: row.delivered_at,
-        })
-        .collect();
-
-    json_ok(PendingWelcomesOutcome {
-        welcomes,
-        limit: cap,
-    })
-}
-
 // ── commits ───────────────────────────────────────────────────────────
 //
 // Deleted as part of the spec-canonical refactor. MLS commits are now
@@ -2120,7 +2104,7 @@ async fn validate_agent_keypackage_upload(
     authorize_event_id: &str,
     key_package_bytes: &[u8],
     signature: &KeyOperationSignature,
-    upload_signature_value: &Value,
+    signing_input: &[u8],
 ) -> Result<(), String> {
     let accepted = state
         .event_query_application()
@@ -2169,23 +2153,126 @@ async fn validate_agent_keypackage_upload(
     {
         return Err("claim_generation_mismatch".to_owned());
     }
-    let canonical = arkret_core::canonical::canonical_json_bytes(upload_signature_value)
-        .map_err(|_| "device_signature_invalid".to_owned())?;
-    let context = "ak.self.keys.keypackages.upload.create";
-    let mut signing_input = Vec::with_capacity(context.len() + 1 + canonical.len());
-    signing_input.extend_from_slice(context.as_bytes());
-    signing_input.push(b'\n');
-    signing_input.extend_from_slice(&canonical);
-    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key)
-        .map_err(|_| "claim_generation_mismatch".to_owned())?;
-    if !crate::routing::identity::cross_signing::ed25519_verify(
-        &verifying_key,
-        &signing_input,
-        signature.sig.as_str(),
-    ) {
-        return Err("device_signature_invalid".to_owned());
+    arkret_core::verify_keypackage_signing_input(
+        &public_key,
+        verification_method,
+        signing_input,
+        signature,
+    )
+    .map_err(|_| "device_signature_invalid".to_owned())
+}
+
+async fn verify_device_keypackage_signature(
+    state: &AppState,
+    principal: &arkret_core::Did,
+    device_id: &str,
+    signature: &KeyOperationSignature,
+    signing_input: &[u8],
+) -> Result<(), AppError> {
+    let device = state
+        .identity_application()
+        .find_device(soland_application::identity::FindDeviceQuery {
+            actor_id: principal.to_string(),
+            device_id: device_id.to_owned(),
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "accepted device authorization is required for KeyPackage signature",
+            )
+            .with_wire_code("claim_generation_mismatch")
+        })?;
+    if device.verification_state != "verified" || device.revoked_at.is_some() {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "KeyPackage signature requires a verified, non-revoked device",
+        )
+        .with_wire_code("claim_generation_mismatch"));
     }
-    Ok(())
+    let device_public_key = device
+        .payload
+        .get("device_public_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::invalid_param("authorized device signing key is unavailable"))?;
+    if !crate::routing::identity::device_signature_kid_points_to_device_key(
+        signature.kid.as_str(),
+        principal.as_str(),
+        device_public_key,
+    ) {
+        return Err(AppError::invalid_param(
+            "KeyPackage signature kid does not point to the authorized device key",
+        ));
+    }
+    let verifying_key =
+        crate::routing::identity::cross_signing::decode_ed25519_key(device_public_key, "multibase")
+            .map_err(|error| {
+                AppError::invalid_param(format!("device signing key is invalid: {error}"))
+            })?;
+    arkret_core::verify_keypackage_signing_input(
+        &verifying_key.to_bytes(),
+        signature.kid.as_str(),
+        signing_input,
+        signature,
+    )
+    .map_err(|_| AppError::invalid_param("device_signature_invalid"))
+}
+
+async fn verify_session_keypackage_write_signature(
+    state: &AppState,
+    session: &SessionRecord,
+    keypackage_refs: &[String],
+    signature: &KeyOperationSignature,
+    signing_input: &[u8],
+) -> Result<(), AppError> {
+    let principal = arkret_core::Did::new(session.actor.clone())
+        .map_err(|error| AppError::invalid_param(format!("invalid session principal: {error}")))?;
+    if let Some(binding) = current_agent_keypackage_trust_binding(state, &principal).await? {
+        let authorize_event_id = binding
+            .agent_key_authorize_event_id
+            .as_deref()
+            .expect("Agent trust binding always carries authorization Event");
+        for keypackage_ref in keypackage_refs {
+            let record = state
+                .mls_key_package_application()
+                .key_package(keypackage_ref)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(|| AppError::invalid_param("KeyPackage signature target is missing"))?;
+            if record.actor_id != session.actor
+                || record.device_id != session.device_id
+                || record.agent_key_authorize_event_id.as_deref() != Some(authorize_event_id)
+            {
+                return Err(AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "Agent KeyPackage write binding differs from current authorization",
+                )
+                .with_wire_code("claim_generation_mismatch"));
+            }
+            validate_agent_keypackage_upload(
+                state,
+                &principal,
+                authorize_event_id,
+                &record.key_package_bytes,
+                signature,
+                signing_input,
+            )
+            .await
+            .map_err(AppError::invalid_param)?;
+        }
+        return Ok(());
+    }
+    verify_device_keypackage_signature(
+        state,
+        &principal,
+        &session.device_id,
+        signature,
+        signing_input,
+    )
+    .await
 }
 
 fn required_capability_set(capabilities: &[String]) -> Result<BTreeSet<String>, AppError> {
@@ -2722,29 +2809,19 @@ mod trust_binding_tests {
         .unwrap();
         let record = identity.key_package_record().unwrap();
         let key_package_bytes = URL_SAFE_NO_PAD.decode(record.key_package.as_str()).unwrap();
-        let upload_value = json!({
-            "principal_id": principal.as_str(),
-            "device_id": device.as_str(),
-            "key_packages": [{"keypackage_id": record.keypackage_id.as_str()}]
-        });
-        let canonical = arkret_core::canonical::canonical_json_bytes(&upload_value).unwrap();
-        let mut signing_input = b"ak.self.keys.keypackages.upload.create\n".to_vec();
-        signing_input.extend_from_slice(&canonical);
-        let signature = signing_key.sign(&signing_input);
-        let signature = arkret_core::KeyOperationSignature {
-            kid: arkret_core::NonEmptyString::new(verification_method).unwrap(),
-            alg: Some(arkret_core::NonEmptyString::new("Ed25519").unwrap()),
-            sig: arkret_core::Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
-                .unwrap(),
-        };
+        let upload = identity
+            .signed_key_packages_upload_request(&[record], verification_method)
+            .unwrap();
+        let signing_input =
+            arkret_core::keypackages_upload_signing_input(&upload.unsigned()).unwrap();
 
         validate_agent_keypackage_upload(
             &state,
             &principal,
             &authorize_event_id,
             &key_package_bytes,
-            &signature,
-            &upload_value,
+            &upload.device_signature,
+            &signing_input,
         )
         .await
         .unwrap();

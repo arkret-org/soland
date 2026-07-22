@@ -189,22 +189,11 @@ pub trait MlsKeyPackageStore: Send + Sync {
         mls_group_id: &str,
     ) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
 }
-/// G3.S1 — Welcome to-device queue store. Each recipient device drains
-/// its queue via `drain_pending`, which marks pending rows
-/// `delivered_at = now()` so a re-poll won't redeliver.
+/// G3.S1 — durable Welcome binding store. Delivery uses the standard
+/// device-message stream; these rows support claim and consume validation.
 #[async_trait]
 pub trait MlsWelcomeStore: Send + Sync {
     async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()>;
-    /// Return at most `limit` rows where `delivered_at IS NULL`. Marks
-    /// each returned row with `delivered_at = now_unix_secs` in the
-    /// same call so subsequent polls skip them.
-    async fn drain_pending(
-        &self,
-        recipient_actor_id: &str,
-        recipient_device_id: &str,
-        now_unix_secs: i64,
-        limit: usize,
-    ) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
 }
 /// G3.S1 — per-group MLS commit epoch store.

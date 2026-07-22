@@ -268,14 +268,7 @@ fn soland_local_router() -> Router {
                 // is a spec candidate concept that must stay off the protocol root;
                 // the handler is fail-closed (404) unless the
                 // `ak.profile.candidate.join_policy.v1` profile is declared.
-                .push(realms::local_router())
-                // The old soland-internal WebRTC session stack
-                // (`/_soland/self/webrtc/*`, `/_soland/self/calls/*`) is retired:
-                // media token / ICE config are served only from the spec
-                // `/_arkret/self/rtc/*` surface, and call lifecycle / signaling
-                // live on durable `ak.call.state` + the `/_arkret/self/ephemeral`
-                // `ak.call.signal` channel.
-                .push(mls::local_router()),
+                .push(realms::local_router()),
         )
         // `/_soland/find/directory/*` mirror retired — directory
         // discovery is served only from the canonical `/_arkret/find/...`

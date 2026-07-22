@@ -374,6 +374,7 @@ dependencies = [
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto",
+ "openmls_traits",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -523,6 +524,7 @@ version = "0.3.0"
 dependencies = [
  "arkret-canonical",
  "arkret-models-collaboration",
+ "arkret-models-crypto",
  "arkret-models-discovery",
  "arkret-models-identity",
  "arkret-wire",
