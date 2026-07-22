@@ -224,6 +224,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_OBJECT_STORAGE_S3_ENDPOINT` | region endpoint | Optional custom endpoint for MinIO/R2/etc. |
 | `SOLAND_CORS_ALLOW_ORIGIN` | unset | Single explicit CORS origin for browser clients |
 | `SOLAND_DEVELOPMENT_MODE` | `false` | Enable dev-only endpoints (`dev_login`, admin snapshots, relaxed DID validation) |
+| `SOLAND_DEBUG_MODE` | `false` | Log detailed server-side error diagnostics without changing protocol responses or enabling development-only behavior. If `RUST_LOG` is unset, the default filter becomes `debug`. Do not leave enabled in production because diagnostics may contain sensitive deployment data. |
 | `SOLAND_MAX_REQUEST_SIZE` | `1048576` | Maximum request body bytes Salvo will read before returning `413 Payload Too Large` |
 | `SOLAND_METRICS_BIND` | `127.0.0.1:9090` | Separate Prometheus listener; scrape `/metrics` |
 | `SOLAND_OTEL_EXPORTER` | unset | Set to `otlp` when built with `--features otel` to export traces |

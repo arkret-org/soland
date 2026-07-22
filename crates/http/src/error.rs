@@ -22,6 +22,17 @@ use salvo::prelude::*;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ErrorExposure {
     pub development_mode: bool,
+    pub debug_mode: bool,
+}
+
+/// Return whether deployment-local diagnostic logging is enabled.
+///
+/// This switch only affects server logs. It never changes protocol responses
+/// or enables any of the relaxed behavior guarded by `development_mode`.
+#[must_use]
+pub fn debug_mode_from_env() -> bool {
+    std::env::var("SOLAND_DEBUG_MODE")
+        .is_ok_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 /// Construct an [`AppError`] with a canonical [`ErrorCode`] variant.
@@ -231,6 +242,12 @@ pub struct AppError {
     /// doc on the response: clients MUST NOT parse this value, only
     /// log/display it.
     pub reason_detail: Option<Box<str>>,
+    /// Deployment-local diagnostic that is never rendered on the wire.
+    ///
+    /// Privacy-sensitive endpoints use this field to retain the concrete
+    /// rejection cause while returning the same indistinguishable protocol
+    /// error to every caller.
+    pub private_detail: Option<Box<str>>,
     /// When set, render a top-level `reason` field on the error envelope.
     ///
     /// Unlike [`Self::reason_detail`] (an opaque diagnostic at
@@ -253,6 +270,7 @@ impl AppError {
             wire_code_override: None,
             reason_code: None,
             reason_detail: None,
+            private_detail: None,
             top_level_reason: None,
         }
     }
@@ -282,6 +300,13 @@ impl AppError {
     /// it as unstable / opaque.
     pub fn with_reason_detail(mut self, reason_detail: impl Into<String>) -> Self {
         self.reason_detail = Some(reason_detail.into().into_boxed_str());
+        self
+    }
+
+    /// Attach a deployment-local diagnostic without changing the response.
+    #[must_use]
+    pub fn with_private_detail(mut self, private_detail: impl Into<String>) -> Self {
+        self.private_detail = Some(private_detail.into().into_boxed_str());
         self
     }
 
@@ -363,8 +388,23 @@ impl Writer for AppError {
             .get_typed::<ErrorExposure>()
             .map(|exposure| exposure.development_mode)
             .unwrap_or(false);
+        let debug_mode = depot
+            .get_typed::<ErrorExposure>()
+            .map(|exposure| exposure.debug_mode)
+            .unwrap_or(false);
         let redact_internal = self.code == ErrorCode::InternalError && !development_mode;
-        if redact_internal {
+        if debug_mode {
+            tracing::warn!(
+                status = status.as_u16(),
+                wire_code = %wire,
+                error_code = %self.code.as_str(),
+                message = %self.message,
+                reason_code = self.reason_code.as_deref(),
+                reason_detail = self.reason_detail.as_deref(),
+                private_detail = self.private_detail.as_deref(),
+                "detailed application error"
+            );
+        } else if redact_internal {
             tracing::error!(
                 status = status.as_u16(),
                 wire_code = %wire,

@@ -354,7 +354,12 @@ fn init_tracing(log_format: soland_http::config::LogFormat) -> anyhow::Result<Tr
     use soland_http::config::LogFormat;
     use tracing_subscriber::{Layer, Registry, fmt};
 
-    let filter = tracing_subscriber::EnvFilter::from_default_env();
+    let filter =
+        if std::env::var_os("RUST_LOG").is_none() && soland_http::error::debug_mode_from_env() {
+            tracing_subscriber::EnvFilter::new("debug")
+        } else {
+            tracing_subscriber::EnvFilter::from_default_env()
+        };
     // Stdout writer: structured JSON in production, ANSI-decorated text in
     // development. JSON is required by the runbook log-search recipes; the
     // operator can force either side via `SOLAND_LOG_FORMAT=json|plain`.

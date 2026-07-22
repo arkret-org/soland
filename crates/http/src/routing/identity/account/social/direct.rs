@@ -1058,7 +1058,8 @@ async fn execute_remote_peer_claim(
             ),
             Ok((status, _)) if status.as_u16() == 412 => {
                 rollback_reserved_direct_binding(state, pair_key, reserved).await;
-                return Err(direct_conversation_unavailable());
+                return Err(direct_conversation_unavailable()
+                    .with_private_detail("remote KeyPackage claim returned HTTP 412"));
             }
             Ok(_) | Err(_) => {
                 query_remote_peer_claim(
@@ -1100,7 +1101,8 @@ async fn execute_remote_peer_claim(
                 })?
             } else if status.as_u16() == 412 {
                 rollback_reserved_direct_binding(state, pair_key, reserved).await;
-                return Err(direct_conversation_unavailable());
+                return Err(direct_conversation_unavailable()
+                    .with_private_detail("remote KeyPackage claim replay returned HTTP 412"));
             } else {
                 return Err(AppError::new(
                     ErrorCode::TemporarilyUnavailable,
@@ -1116,7 +1118,8 @@ async fn execute_remote_peer_claim(
         }
         RemotePeerClaimRecovery::Failed => {
             rollback_reserved_direct_binding(state, pair_key, reserved).await;
-            return Err(direct_conversation_unavailable());
+            return Err(direct_conversation_unavailable()
+                .with_private_detail("remote KeyPackage claim recovery reported failure"));
         }
     };
     verify_remote_peer_claim_outcome(
@@ -2037,11 +2040,10 @@ pub(super) async fn claim_direct_keypackage(
             ),
             _ => error,
         })?;
-    outcome
-        .claims
-        .into_iter()
-        .next()
-        .ok_or_else(direct_conversation_unavailable)
+    outcome.claims.into_iter().next().ok_or_else(|| {
+        direct_conversation_unavailable()
+            .with_private_detail("local KeyPackage claim returned no usable claim")
+    })
 }
 
 pub(super) fn direct_conversation_unavailable() -> AppError {

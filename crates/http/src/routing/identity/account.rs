@@ -679,14 +679,18 @@ async fn managed_agent_direct_authorization_basis(
     if record.controller_id != controller {
         return Ok(None);
     }
-    let unavailable = || {
+    let unavailable = |detail| {
         direct_resolve_precondition(
             arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation is unavailable",
         )
+        .with_private_detail(detail)
     };
     if record.state != "active" {
-        return Err(unavailable());
+        return Err(unavailable(format!(
+            "owned Agent is not active: agent_id={agent_id}, state={}",
+            record.state
+        )));
     }
     if let Err(error) =
         crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
@@ -696,16 +700,16 @@ async fn managed_agent_direct_authorization_basis(
         )
         .await
     {
-        tracing::warn!(
-            agent_id,
-            controller,
-            error = %error,
-            "owned-Agent direct conversation controller binding validation failed"
-        );
-        return Err(unavailable());
+        return Err(unavailable(format!(
+            "owned-Agent controller binding validation failed: agent_id={agent_id}, controller={controller}, error={error}"
+        )));
     }
     managed_agent_direct_authorization_basis_from_record(&record)
-        .ok_or_else(unavailable)
+        .ok_or_else(|| {
+            unavailable(format!(
+                "owned-Agent authorization basis is incomplete: agent_id={agent_id}, controller={controller}"
+            ))
+        })
         .map(Some)
 }
 
@@ -1422,13 +1426,21 @@ async fn direct_conversation_resolve(
             return Err(direct_resolve_precondition(
                 arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
                 "direct conversation is unavailable",
-            ));
+            )
+            .with_private_detail(format!(
+                "no owned active managed-Agent authorization or accepted contact projection: requester={}, peer={peer}",
+                session.actor
+            )));
         };
         if !has_active_consent_for_scope(state, &peer, &session.actor, &scope, now()) {
             return Err(direct_resolve_precondition(
                 arkret_core::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
                 "direct conversation is unavailable",
-            ));
+            )
+            .with_private_detail(format!(
+                "peer has no active direct_message or any consent for requester: requester={}, peer={peer}",
+                session.actor
+            )));
         }
         let basis = direct_authorization_basis_from_contact(&contact)?;
         (Some(contact), basis)

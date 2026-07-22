@@ -588,6 +588,7 @@ async fn direct_resolve_fails_closed_without_accepted_contact() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
+    assert!(body["error"]["details"]["reason_detail"].is_null());
 }
 
 #[tokio::test]
@@ -624,6 +625,7 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
+    assert!(body["error"]["details"]["reason_detail"].is_null());
 }
 
 #[tokio::test]
@@ -756,6 +758,7 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
+    assert!(body["error"]["details"]["reason_detail"].is_null());
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 
