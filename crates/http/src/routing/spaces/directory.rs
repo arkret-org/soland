@@ -29,7 +29,7 @@ use arkret_core::models::{
 };
 use arkret_core::{
     AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, BlobRef,
-    CursorPurpose, DeliveryBindingHint, DeliveryMode, Did, DirectoryActorSearchOutcome,
+    DeliveryBindingHint, DeliveryMode, Did, DirectoryActorSearchOutcome,
     DirectoryAgentSelectorResolutionOutcome, DirectoryAnnounceOutcome,
     DirectoryAnnounceRequestBody, DirectoryHandleResolutionOutcome, DirectoryIntent,
     DirectoryListHandlesForSubjectRequestBody, DirectoryOrganizationResolutionOutcome,
@@ -49,6 +49,7 @@ use arkret_core::{
     RecipientServiceType, ServiceDescribe, StrandId, TargetDescriptor, TargetKind,
     UserSearchOutcome, canonical, parse_address, proof_kind, target_digest, validate_agent_slug,
 };
+use arkret_hlc::CursorPurpose;
 use arkret_server::{
     CursorAuthority, CursorAuthorityError, CursorBindingContext, CursorBindingRecord,
 };

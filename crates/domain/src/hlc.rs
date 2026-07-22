@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use arkret_core::HlcGenerator;
+use arkret_hlc::HlcGenerator;
 use parking_lot::Mutex;
 
 /// Thread-safe HLC state for the server.

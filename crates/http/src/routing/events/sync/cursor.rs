@@ -130,7 +130,7 @@ pub async fn sync_token_for_client_sync_frontiers(
         notification_position,
     );
     let handle = derive_cursor_handle(state.sync_application().cursor_hmac_key(), &binding);
-    let cursor = arkret_core::Cursor::new_at(issued_at, 60 * 60 * 1000)
+    let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
     let issued_at_ms = cursor.issued_at.timestamp_millis();
@@ -171,7 +171,7 @@ pub(crate) async fn sync_token_for_events_query(
         &target,
     );
     let handle = derive_cursor_handle(state.sync_application().cursor_hmac_key(), &binding);
-    let cursor = arkret_core::Cursor::new_at(issued_at, 60 * 60 * 1000)
+    let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
     let issued_at_ms = cursor.issued_at.timestamp_millis();
@@ -206,7 +206,7 @@ async fn sync_token_for_state_positions(
     let issued_at = chrono::Utc::now();
     let binding = service_cursor_handle_binding(state.service_id(), &realms_positions);
     let handle = derive_cursor_handle(state.sync_application().cursor_hmac_key(), &binding);
-    let cursor = arkret_core::Cursor::new_at(issued_at, 60 * 60 * 1000)
+    let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
     let issued_at_ms = cursor.issued_at.timestamp_millis();
@@ -489,7 +489,7 @@ pub async fn parse_and_validate_sync_cursor(
     now_ms: i64,
 ) -> Result<SyncCursor, SyncCursorError> {
     let cursor = decode_sync_cursor(token, now_ms)?;
-    if cursor.purpose != arkret_core::CursorPurpose::Stream {
+    if cursor.purpose != arkret_hlc::CursorPurpose::Stream {
         return Err(SyncCursorError::Invalid(
             "after must be a v1 account cursor",
         ));
@@ -620,7 +620,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
         ));
     }
     let cursor = decode_sync_cursor(token, now_ms)?;
-    if cursor.purpose != arkret_core::CursorPurpose::Stream {
+    if cursor.purpose != arkret_hlc::CursorPurpose::Stream {
         return Err(SyncCursorError::Integrity(
             "cursor purpose does not match stream",
         ));
@@ -678,8 +678,8 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
     })
 }
 
-fn decode_sync_cursor(token: &str, now_ms: i64) -> Result<arkret_core::Cursor, SyncCursorError> {
-    arkret_core::Cursor::decode_at(token, now_ms).map_err(|error| {
+fn decode_sync_cursor(token: &str, now_ms: i64) -> Result<arkret_hlc::Cursor, SyncCursorError> {
+    arkret_hlc::Cursor::decode_at(token, now_ms).map_err(|error| {
         if error.to_string().contains("cursor has expired") {
             SyncCursorError::Expired
         } else {
@@ -690,7 +690,7 @@ fn decode_sync_cursor(token: &str, now_ms: i64) -> Result<arkret_core::Cursor, S
 
 #[cfg(test)]
 pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCursorError> {
-    let cursor = arkret_core::Cursor::decode(token)
+    let cursor = arkret_hlc::Cursor::decode(token)
         .map_err(|_| SyncCursorError::Invalid("cursor must use the canonical SDK wire profile"))?;
     serde_json::to_value(cursor)
         .map_err(|_| SyncCursorError::Invalid("cursor cannot be represented as JSON"))

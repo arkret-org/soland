@@ -30,7 +30,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use arkret_core::{Cursor, CursorPurpose};
+use arkret_hlc::{Cursor, CursorPurpose};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
