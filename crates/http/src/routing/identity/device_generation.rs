@@ -165,7 +165,7 @@ async fn bootstrap_generation_ref(
             .is_some_and(|services| {
                 services.iter().any(|service| {
                     service.get("type").and_then(Value::as_str)
-                        == Some(arkret_core::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY)
+                        == Some(arkret_models_discovery::service_requirements::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY)
                         && service
                             .get("serviceEndpoint")
                             .and_then(Value::as_str)

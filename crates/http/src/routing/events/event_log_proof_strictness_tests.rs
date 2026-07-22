@@ -2052,7 +2052,7 @@ async fn ingest_principal_with_enrollment_authority(
                 "verificationMethod": [],
                 "service": [{
                     "id": service_id,
-                    "type": arkret_core::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
+                    "type": arkret_models_discovery::service_requirements::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
                     "serviceEndpoint": authority_did,
                 }],
             }),

@@ -4928,6 +4928,7 @@ dependencies = [
  "arkret-http-client",
  "arkret-identity",
  "arkret-keystore",
+ "arkret-models-discovery",
  "arkret-policy",
  "arkret-signatures",
  "arkret-state",

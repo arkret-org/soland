@@ -71,7 +71,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
                 "state": {
                     "service": [{
                         "id": format!("{controller}#device-enrollment-authority"),
-                        "type": arkret_core::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
+                        "type": arkret_models_discovery::service_requirements::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
                         "serviceEndpoint": "did:web:device-authority.example"
                     }]
                 }

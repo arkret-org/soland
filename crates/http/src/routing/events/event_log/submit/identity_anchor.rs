@@ -850,7 +850,7 @@ async fn validate_reanchor_entry_delegation(
         .flatten()
         .any(|service| {
             service.get("type").and_then(Value::as_str)
-                == Some(arkret_core::service::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY)
+                == Some(arkret_models_discovery::service_requirements::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY)
                 && service.get("id").and_then(Value::as_str)
                     == Some(binding.authorization_ref.as_str())
                 && service.get("serviceEndpoint").and_then(Value::as_str)
