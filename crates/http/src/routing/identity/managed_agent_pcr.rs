@@ -745,10 +745,11 @@ async fn validate_active_agent_accountability(
                 arkret_core::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
             )
         })?;
-    let events =
-        state.events_store().snapshot_all().await.map_err(|error| {
-            AppError::internal(format!("accountability lookup failed: {error}"))
-        })?;
+    let events = state
+        .event_query_application()
+        .accepted_events()
+        .await
+        .map_err(|error| AppError::internal(format!("accountability lookup failed: {error}")))?;
     let event = events
         .iter()
         .find(|event| event.event_id == accountability_event_id)
