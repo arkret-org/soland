@@ -24,8 +24,8 @@ use std::sync::Arc;
 // Delegation primitives — `Grant`, `Constraint` (alias of `GrantConstraint`),
 // `DelegationError`, and the chain-integrity / cascade / expiry helpers —
 // live in the SDK so inkson and sodmin admin can call them client-side. See
-// `arkret_core::authz::delegation` (crates/sdk/src/authz/delegation.rs).
-pub use arkret_core::authz::delegation::{
+// `arkret_policy::authz::delegation`.
+pub use arkret_policy::authz::delegation::{
     AppletDelegationBindingError, DelegationError, Grant, GrantConstraint as Constraint,
     GrantDecisionVerdict, GrantRequestDraft, delegation_chain_intact, grant_effective_expiry,
     is_grant_expired, max_delegation_depth, resource_within, revoke_with_cascade,
@@ -148,7 +148,7 @@ impl SolandAuthzEngine {
     /// - delegated expiry MUST NOT exceed the parent's
     /// - resource MUST NOT widen the parent's scope
     ///
-    /// Thin wrapper around [`arkret_core::authz::delegation::create_delegated_grant`]:
+    /// Thin wrapper around [`arkret_policy::authz::delegation::create_delegated_grant`]:
     /// the SDK helper does the pure validation work; this method snapshots the
     /// engine's grant table, runs the check, assigns a server-issued grant id,
     /// and persists. inkson / sodmin call the SDK helper directly for client-side
@@ -189,7 +189,7 @@ impl SolandAuthzEngine {
             constraints,
             expires_at,
         };
-        let mut child = arkret_core::authz::delegation::create_delegated_grant(
+        let mut child = arkret_policy::authz::delegation::create_delegated_grant(
             parent_grant_id,
             &request,
             &snapshot,
@@ -217,7 +217,7 @@ impl SolandAuthzEngine {
     /// `revoked` as part of this call (does NOT include `grant_id` itself).
     ///
     /// The cascade *plan* (which ids would be revoked) comes from
-    /// [`arkret_core::authz::delegation::revoke_with_cascade`]; this method
+    /// [`arkret_policy::authz::delegation::revoke_with_cascade`]; this method
     /// applies the resulting mutation to the engine's in-memory map.
     pub fn revoke_grant_with_cascade(&self, grant_id: &str) -> (bool, Vec<String>) {
         let mut grants = self.grants.lock();

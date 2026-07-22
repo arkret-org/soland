@@ -1446,12 +1446,12 @@ impl AuthorizationPort for SolandAuthzEngine {
         subject: String,
         resource: String,
         actions: Vec<String>,
-        constraints: Vec<arkret_core::authz::delegation::GrantConstraint>,
-    ) -> arkret_core::authz::delegation::Grant {
+        constraints: Vec<arkret_policy::authz::delegation::GrantConstraint>,
+    ) -> arkret_policy::authz::delegation::Grant {
         self.create_grant(realm_id, issuer, subject, resource, actions, constraints)
     }
 
-    fn upsert_projected_grant(&self, grant: arkret_core::authz::delegation::Grant) {
+    fn upsert_projected_grant(&self, grant: arkret_policy::authz::delegation::Grant) {
         self.upsert_projected_grant(grant);
     }
 
@@ -1463,7 +1463,7 @@ impl AuthorizationPort for SolandAuthzEngine {
         self.mark_projected_grants_revoked_for_subject(subject)
     }
 
-    fn get_grant(&self, grant_id: &str) -> Option<arkret_core::authz::delegation::Grant> {
+    fn get_grant(&self, grant_id: &str) -> Option<arkret_policy::authz::delegation::Grant> {
         self.get_grant(grant_id)
     }
 
@@ -1471,18 +1471,18 @@ impl AuthorizationPort for SolandAuthzEngine {
         &self,
         subject: &str,
         realm_id: &str,
-    ) -> Vec<arkret_core::authz::delegation::Grant> {
+    ) -> Vec<arkret_policy::authz::delegation::Grant> {
         self.grants_for_subject(subject, realm_id)
     }
 
     fn grants_for_subject_all_realms(
         &self,
         subject: &str,
-    ) -> Vec<arkret_core::authz::delegation::Grant> {
+    ) -> Vec<arkret_policy::authz::delegation::Grant> {
         self.grants_for_subject_all_realms(subject)
     }
 
-    fn grants_snapshot(&self) -> Vec<arkret_core::authz::delegation::Grant> {
+    fn grants_snapshot(&self) -> Vec<arkret_policy::authz::delegation::Grant> {
         self.grants_snapshot()
     }
 }

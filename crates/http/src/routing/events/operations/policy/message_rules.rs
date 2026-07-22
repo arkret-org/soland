@@ -505,8 +505,8 @@ pub(super) async fn validate_message_edit_redact_window_policy(
 pub(crate) fn message_window_permits(
     is_redact: bool,
     age: chrono::Duration,
-    message_edit_window: Option<&arkret_core::authz::ConstraintDuration>,
-    message_redact_window: Option<&arkret_core::authz::ConstraintDuration>,
+    message_edit_window: Option<&arkret_policy::authz::ConstraintDuration>,
+    message_redact_window: Option<&arkret_policy::authz::ConstraintDuration>,
     allow_redact_after_window: bool,
 ) -> bool {
     if is_redact {
@@ -533,7 +533,7 @@ pub(crate) fn message_window_permits(
 /// `true` when `age` is within the constraint window (mirror of the SDK
 /// `max_age_contains` helper). Unknown units fail closed.
 pub(super) fn duration_covers_age(
-    window: &arkret_core::authz::ConstraintDuration,
+    window: &arkret_policy::authz::ConstraintDuration,
     age: chrono::Duration,
 ) -> bool {
     let allowed = match window.unit.as_str() {

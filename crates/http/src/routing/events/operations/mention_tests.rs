@@ -137,8 +137,8 @@ mod reaction_and_window_policy_tests {
         assert!(!realm_ids_match("ak:realm:abc", "ak:realm:def"));
     }
 
-    fn dur(value: u64, unit: &str) -> arkret_core::authz::ConstraintDuration {
-        arkret_core::authz::ConstraintDuration {
+    fn dur(value: u64, unit: &str) -> arkret_policy::authz::ConstraintDuration {
+        arkret_policy::authz::ConstraintDuration {
             value,
             unit: unit.to_owned(),
         }

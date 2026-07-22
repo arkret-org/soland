@@ -1142,7 +1142,7 @@ pub fn hydrate_applet_install_grants(
         let (Some(grant_id), Some(action)) = (grant_id.as_str(), action.as_str()) else {
             continue;
         };
-        authz.upsert_projected_grant(arkret_core::authz::delegation::Grant {
+        authz.upsert_projected_grant(arkret_policy::authz::delegation::Grant {
             grant_id: grant_id.to_owned(),
             realm_id: portal_realm_id.to_owned(),
             issuer: owner_actor_id.to_owned(),
@@ -1151,7 +1151,7 @@ pub fn hydrate_applet_install_grants(
             actions: vec![action.to_owned()],
             capability_action_registry_digest: None,
             constraints: vec![
-                arkret_core::authz::delegation::GrantConstraint::AppletDelegationBinding {
+                arkret_policy::authz::delegation::GrantConstraint::AppletDelegationBinding {
                     applet_id: package.applet_id.clone(),
                     executed_by: package.service_id.to_string(),
                     registration_epoch: package.registration_epoch.to_string(),

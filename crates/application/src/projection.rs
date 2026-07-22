@@ -55,7 +55,7 @@ pub fn morph_document_body(fields: &BTreeMap<String, Value>) -> Option<Value> {
 pub fn engine_grant_from_capability_cell_state(
     grant_id: &str,
     cell_state: &CellState,
-) -> Option<arkret_core::authz::delegation::Grant> {
+) -> Option<arkret_policy::authz::delegation::Grant> {
     soland_domain::reducer::engine_grant_from_capability_cell_state(grant_id, cell_state)
 }
 
@@ -852,7 +852,7 @@ impl ProjectionApplicationService {
     pub fn effective_engine_grant(
         &self,
         grant_id: &str,
-    ) -> Option<arkret_core::authz::delegation::Grant> {
+    ) -> Option<arkret_policy::authz::delegation::Grant> {
         self.state.lock().effective_engine_grant(grant_id)
     }
 

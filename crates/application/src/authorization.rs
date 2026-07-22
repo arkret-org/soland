@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arkret_core::authz::delegation::{Grant, GrantConstraint};
+use arkret_policy::authz::delegation::{Grant, GrantConstraint};
 use chrono::{DateTime, Utc};
 
 #[derive(Clone, Debug)]
