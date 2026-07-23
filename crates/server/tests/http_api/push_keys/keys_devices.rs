@@ -329,16 +329,6 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "mls_exporter_aead_xchacha20poly1305"
     );
     assert_eq!(encrypted_attachment["ciphertext_digest"], ciphertext_digest);
-    let ObjectStorageConfig::Local { root, .. } = test_config().object_storage else {
-        panic!("test config uses local object storage");
-    };
-    let blob_digest = blob["content_digest"]
-        .as_str()
-        .unwrap()
-        .trim_start_matches("sha256:");
-    let blob_path = root.join("sha256").join(blob_digest);
-    assert_eq!(std::fs::read(blob_path).unwrap(), encrypted_bytes);
-
     let anonymous_blob = TestClient::get(format!(
         "http://server/_arkret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()

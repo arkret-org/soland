@@ -19,7 +19,7 @@ pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::Value;
 pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use soland_domain::artifacts;
-pub(crate) use soland_http::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
+pub(crate) use soland_http::config::{AppConfig, IceServersConfig};
 pub(crate) use soland_http::ratelimit::RateLimiterConfig;
 pub(crate) use soland_http::state::{AppState, EventNotification, RealmDirectoryEntry};
 pub(crate) use soland_http::{
