@@ -115,7 +115,7 @@ pub(crate) async fn federation_transaction(
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let expected_destination = arkret_core::TypedTrustDomainId::new(
+    let expected_destination = arkret_identifiers::TypedTrustDomainId::new(
         state.config().trust_domain.clone(),
     )
     .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
@@ -525,7 +525,7 @@ pub(crate) async fn federation_pull_operations(
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
-    if arkret_core::RealmId::new(realm_id.clone()).is_err() {
+    if arkret_identifiers::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     let after_cursor: Option<String> = after_cursor.into_inner();
@@ -595,7 +595,7 @@ pub(crate) async fn federation_backfill_operations(
     if realm_id.is_empty() {
         return Err(AppError::missing_param("realm_id is required"));
     }
-    if arkret_core::RealmId::new(realm_id.clone()).is_err() {
+    if arkret_identifiers::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     let body_value = serde_json::to_value(&body)
@@ -667,7 +667,7 @@ pub(crate) async fn federation_backfill_operations(
 
 async fn operation_history_visible_for_federation_pull(
     state: &AppState,
-    operation: &arkret_core::Operation,
+    operation: &arkret_event_draft::Operation,
 ) -> bool {
     state
         .realm_query_application()
@@ -700,7 +700,7 @@ pub(crate) async fn federation_operation_frontier(
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
-    if arkret_core::RealmId::new(realm_id.clone()).is_err() {
+    if arkret_identifiers::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     json_ok(operation_frontier_outcome(state, &realm_id).await)
@@ -807,7 +807,7 @@ pub(crate) async fn federation_verify_actor(
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationSealsOutcome {
-    pub seals: Vec<arkret_core::Seal>,
+    pub seals: Vec<arkret_wire::Seal>,
     /// Echo of [`crate::config::FederationFanoutTopology::as_str`] so the calling
     /// peer can reason about whether to fan out to other nodes.
     pub fanout_topology: String,
@@ -817,7 +817,7 @@ pub struct FederationSealsOutcome {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationSealsPushRequestBody {
     pub origin: String,
-    pub seals: Vec<arkret_core::Seal>,
+    pub seals: Vec<arkret_wire::Seal>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -839,7 +839,7 @@ pub(crate) async fn federation_seals_pull(
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
-    if arkret_core::RealmId::new(realm_id.clone()).is_err() {
+    if arkret_identifiers::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     let realm = RealmId::new(realm_id).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
@@ -847,7 +847,7 @@ pub(crate) async fn federation_seals_pull(
         .projection_application()
         .realm_seal_leaves(&realm)
         .unwrap_or_default();
-    let mut seals: Vec<arkret_core::Seal> = Vec::with_capacity(leaves.len());
+    let mut seals: Vec<arkret_wire::Seal> = Vec::with_capacity(leaves.len());
     for leaf in &leaves {
         if let Ok(Some(a)) = state.projection_application().seal_by_id(leaf) {
             seals.push(a);

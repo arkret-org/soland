@@ -78,7 +78,7 @@ async fn authorize_sidecar_ensure(
     let verdict = state.authorization_application().check(
         soland_application::authorization::AuthorizationCheck {
             actor: controller,
-            action: arkret_core::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
+            action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
             resource: realm_id,
             realm_id,
             owner: owner.as_deref(),

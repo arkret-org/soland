@@ -864,13 +864,13 @@ pub fn describe(
     let compat_surfaces = Vec::new();
     let plaintext_visibility = arkret_core::PlaintextVisibility {
         data_classes: vec![
-            arkret_core::PlaintextDataClassKind::MessageContent,
-            arkret_core::PlaintextDataClassKind::AttachmentPlaintext,
-            arkret_core::PlaintextDataClassKind::AttachmentPreview,
-            arkret_core::PlaintextDataClassKind::Thumbnail,
-            arkret_core::PlaintextDataClassKind::FullTextIndex,
-            arkret_core::PlaintextDataClassKind::NotificationSummary,
-            arkret_core::PlaintextDataClassKind::MediaPlaintext,
+            arkret_wire::PlaintextDataClassKind::MessageContent,
+            arkret_wire::PlaintextDataClassKind::AttachmentPlaintext,
+            arkret_wire::PlaintextDataClassKind::AttachmentPreview,
+            arkret_wire::PlaintextDataClassKind::Thumbnail,
+            arkret_wire::PlaintextDataClassKind::FullTextIndex,
+            arkret_wire::PlaintextDataClassKind::NotificationSummary,
+            arkret_wire::PlaintextDataClassKind::MediaPlaintext,
         ],
         max_visibility: Some(arkret_core::PlaintextMaxVisibility::PrivatePlaintext),
         event_kinds: vec![
@@ -908,7 +908,7 @@ pub fn describe(
         trust_domain: trust_domain
             .parse()
             .expect("trust_domain must be ak:trust_domain:<scope>"),
-        service_type: arkret_core::ServiceType::PrincipalServer,
+        service_type: arkret_wire::ServiceType::PrincipalServer,
         protocol_version: arkret_core::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![

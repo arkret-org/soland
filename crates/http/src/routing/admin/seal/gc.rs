@@ -1,6 +1,6 @@
 //! MAL-13 GC candidates admin endpoint.
 
-use arkret_core::RealmId;
+use arkret_identifiers::RealmId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;

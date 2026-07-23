@@ -129,7 +129,7 @@ pub(super) fn admin_signer_for(
 pub(super) fn pick_admin_seal_basis(
     state: &AppState,
     realm_id: &RealmId,
-) -> Result<arkret_core::SealBasis, AppError> {
+) -> Result<arkret_wire::SealBasis, AppError> {
     let leaves = state
         .projection_application()
         .realm_seal_leaves(realm_id)
@@ -143,13 +143,13 @@ pub(super) fn pick_admin_seal_basis(
         let empty = std::collections::BTreeSet::new();
         let control_event_set_root = arkret_state::state::control_event_set_root(&empty)
             .map_err(|e| app_error!(InternalError, "empty control_event_set_root failed: {e}"))?;
-        return Ok(arkret_core::SealBasis {
+        return Ok(arkret_wire::SealBasis {
             leaves: vec![
                 SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
                     .expect("valid genesis seal id"),
             ],
             control_event_set_root,
-            state_root: arkret_core::Hash::new(arkret_state::EMPTY_STATE_ROOT.to_owned())
+            state_root: arkret_identifiers::Hash::new(arkret_state::EMPTY_STATE_ROOT.to_owned())
                 .map_err(|e| app_error!(InternalError, "empty state_root invalid: {e}"))?,
         });
     }
@@ -157,7 +157,7 @@ pub(super) fn pick_admin_seal_basis(
         .projection_application()
         .effective_seal_view(&leaves, realm_id)
         .map_err(|e| app_error!(InternalError, "effective_seal_view failed: {e}"))?;
-    Ok(arkret_core::SealBasis {
+    Ok(arkret_wire::SealBasis {
         leaves: view.predecessor_refs,
         control_event_set_root: view.control_event_set_root,
         state_root: view.state_root,
@@ -172,9 +172,11 @@ pub(super) fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
 }
 
 /// Build the canonical notary cell ref for a Space.
-pub(super) fn notary_cell_for(realm_id: &str) -> Result<arkret_core::CellRef, AppError> {
-    arkret_core::CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}")).map_err(|e| {
-        app_error!(InvalidParam, "invalid realm_id `{realm_id}`: {e}")
-            .with_status(StatusCode::BAD_REQUEST)
-    })
+pub(super) fn notary_cell_for(realm_id: &str) -> Result<arkret_identifiers::CellRef, AppError> {
+    arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}")).map_err(
+        |e| {
+            app_error!(InvalidParam, "invalid realm_id `{realm_id}`: {e}")
+                .with_status(StatusCode::BAD_REQUEST)
+        },
+    )
 }

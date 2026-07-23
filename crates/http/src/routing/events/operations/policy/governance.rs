@@ -556,7 +556,7 @@ pub(super) async fn validate_call_recording_start_policy(
     {
         return Ok(());
     }
-    if action == arkret_core::CapabilityActionId::CALL_TRANSCRIBE {
+    if action == arkret_wire::CapabilityActionId::CALL_TRANSCRIBE {
         Err(arkret_wire::ReasonCode::TRANSCRIPTION_DENIED)
     } else {
         Err("missing_capability")
@@ -594,10 +594,10 @@ pub(super) fn call_recording_start_required_action(
 ) -> &'static str {
     match payload.capture_kind {
         Some(arkret_core::RecordingCaptureKind::Transcript) => {
-            arkret_core::CapabilityActionId::CALL_TRANSCRIBE
+            arkret_wire::CapabilityActionId::CALL_TRANSCRIBE
         }
         Some(arkret_core::RecordingCaptureKind::Recording) | None => {
-            arkret_core::CapabilityActionId::CALL_RECORD
+            arkret_wire::CapabilityActionId::CALL_RECORD
         }
     }
 }

@@ -167,15 +167,15 @@ async fn ordered_projected_events_for_realms(
 
 pub struct FederationIngestResult {
     pub accepted: Vec<OperationId>,
-    pub rejected: Vec<arkret_core::EventsSubmitRejectedItem>,
+    pub rejected: Vec<arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem>,
 }
 
 fn federation_rejection(
     operation_id: &OperationId,
     reason_code: impl Into<String>,
     detail: Option<String>,
-) -> arkret_core::EventsSubmitRejectedItem {
-    arkret_core::EventsSubmitRejectedItem {
+) -> arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem {
+    arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem {
         id: operation_id.to_string(),
         reason_code: reason_code.into(),
         detail,
@@ -363,7 +363,7 @@ pub async fn accept_trusted_sidecar_circle_operation(
 pub async fn accept_trusted_sidecar_create_operation(
     state: &AppState,
     controller: &str,
-    backing_circle_id: &arkret_core::CircleId,
+    backing_circle_id: &arkret_identifiers::CircleId,
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let _active_series_guards = crate::routing::events::operations::lock_active_series_operations(

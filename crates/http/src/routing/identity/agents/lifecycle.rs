@@ -212,7 +212,7 @@ pub(super) async fn provision_agent(
                 "agent provision commit reuses an allocated agent_id with different inputs",
             ));
         }
-        let requested_scope_digest = arkret_core::agent_requested_scope_digest(
+        let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
             prepared_agent_id,
             &Did::new(controller_id.clone())
                 .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?,
@@ -274,7 +274,7 @@ pub(super) async fn provision_agent(
                 })?;
             let principal_control_realm_id =
                 crate::routing::identity::managed_agent_pcr::allocate_principal_control_realm_id()?;
-            let requested_scope_digest = arkret_core::agent_requested_scope_digest(
+            let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
                 &agent_principal_did,
                 &Did::new(controller_id.clone()).map_err(|error| {
                     AppError::internal(format!("controller DID invalid: {error}"))
@@ -342,7 +342,7 @@ pub(super) async fn provision_agent(
     let agent_id = agent_principal_did.to_string();
     let controller_did = Did::new(controller_id.clone())
         .map_err(|err| AppError::internal(format!("controller DID invalid: {err}")))?;
-    let requested_scope_digest = arkret_core::agent_requested_scope_digest(
+    let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
         &agent_principal_did,
         &controller_did,
         &requested_scope_typed,
@@ -596,7 +596,7 @@ pub(super) async fn renew_agent_pairing(
         "accepted",
     )
     .await;
-    let agent_principal_did = arkret_core::Did::new(agent_id)
+    let agent_principal_did = arkret_identifiers::Did::new(agent_id)
         .map_err(|err| AppError::internal(format!("persisted agent DID invalid: {err}")))?;
     let principal_control_realm_id = RealmId::new(record.principal_control_realm_id.clone())
         .map_err(|error| AppError::internal(format!("persisted Agent PCR invalid: {error}")))?;
@@ -782,7 +782,7 @@ pub(super) async fn lifecycle_transition(
     event_kind: &str,
     reason: Option<String>,
     sidecar_exposure_ack: Option<Value>,
-    lifecycle_event: Option<arkret_core::Event>,
+    lifecycle_event: Option<arkret_wire::Event>,
 ) -> Result<AgentLifecycleOutcome, AppError> {
     let session = aa.authenticated_session(state, req).await?;
     let record = require_agent_controller(state, &session, &agent_id).await?;

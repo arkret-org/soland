@@ -23,16 +23,18 @@ fn test_config() -> crate::config::AppConfig {
     }
 }
 
-fn state_with_direct_binding() -> (AppState, arkret_core::RealmId) {
+fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     let state = AppState::new(test_config(), Db { pool: None });
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000601".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000601".to_owned(),
+    )
+    .unwrap();
     let now = chrono::Utc::now();
-    let alice = arkret_core::Did::new("did:web:alice.example".to_owned()).unwrap();
-    let bob = arkret_core::Did::new("did:web:bob.example".to_owned()).unwrap();
+    let alice = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
+    let bob = arkret_identifiers::Did::new("did:web:bob.example".to_owned()).unwrap();
     let strand_id =
-        arkret_core::StrandId::new("ak:strand:01904100-0000-7000-8000-000000000601").unwrap();
+        arkret_identifiers::StrandId::new("ak:strand:01904100-0000-7000-8000-000000000601")
+            .unwrap();
     let realm_create = op(
         realm_id.clone(),
         "000000000691",
@@ -40,7 +42,8 @@ fn state_with_direct_binding() -> (AppState, arkret_core::RealmId) {
         serde_json::to_value(arkret_core::direct_conversation_realm_create_payload(
             realm_id.clone(),
             alice.clone(),
-            arkret_core::TypedTrustDomainId::new(state.config().trust_domain.clone()).unwrap(),
+            arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
+                .unwrap(),
             arkret_core::NotaryProfile::SingleDid,
             arkret_core::NotaryValue::single_did(alice.clone()),
             now,
@@ -97,14 +100,16 @@ fn state_with_direct_binding() -> (AppState, arkret_core::RealmId) {
 }
 
 fn op(
-    realm_id: arkret_core::RealmId,
+    realm_id: arkret_identifiers::RealmId,
     seed: &str,
     kind: &str,
     payload: serde_json::Value,
 ) -> Operation {
     Operation::create(
-        arkret_core::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
-            .unwrap(),
+        arkret_identifiers::OperationId::new(format!(
+            "ak:operation:01904100-0000-7000-8000-{seed}"
+        ))
+        .unwrap(),
         realm_id,
         kind,
         payload,
@@ -114,7 +119,7 @@ fn op(
 #[test]
 fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
     let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000611").unwrap();
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000611").unwrap();
     for definition in [
         json!({"collection": {"page_size": 50}}),
         json!({"collection": {"selection_policy": "multiple"}}),
@@ -183,8 +188,9 @@ fn signed_service_attested_device_authorize_payload(
     device_signer: &SigningKey,
     signing_key: &SigningKey,
 ) -> serde_json::Value {
-    let device_public_key =
-        arkret_core::ed25519_pubkey_to_did_key_multibase(device_signer.verifying_key().as_bytes());
+    let device_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+        device_signer.verifying_key().as_bytes(),
+    );
     let mut payload = json!({
         "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
         "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
@@ -200,7 +206,7 @@ fn signed_service_attested_device_authorize_payload(
             "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
         }
     });
-    let typed: arkret_core::DeviceAuthorizePayload =
+    let typed: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
         serde_json::from_value(payload.clone()).expect("typed device authorize payload");
     let input = typed
         .device_possession_signature_input()
@@ -237,7 +243,7 @@ fn device_authorize_rejects_signature_from_wrong_device_key() {
 
 fn grant_circle_action(
     state: &AppState,
-    realm_id: &arkret_core::RealmId,
+    realm_id: &arkret_identifiers::RealmId,
     circle_id: &str,
     actor: &str,
     action: &str,
@@ -249,15 +255,18 @@ fn grant_circle_action(
         circle_id.to_owned(),
         vec![action.to_owned()],
         vec![crate::authz::Constraint::AllowedCircleIds {
-            allowed_circle_ids: std::collections::BTreeSet::from([arkret_core::CircleId::new(
-                circle_id.to_owned(),
-            )
-            .expect("valid circle id")]),
+            allowed_circle_ids: std::collections::BTreeSet::from([
+                arkret_identifiers::CircleId::new(circle_id.to_owned()).expect("valid circle id"),
+            ]),
         }],
     );
 }
 
-fn grant_moderation_decision(state: &AppState, realm_id: &arkret_core::RealmId, actor: &str) {
+fn grant_moderation_decision(
+    state: &AppState,
+    realm_id: &arkret_identifiers::RealmId,
+    actor: &str,
+) {
     state.authorization_application().create_grant(
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
@@ -268,7 +277,12 @@ fn grant_moderation_decision(state: &AppState, realm_id: &arkret_core::RealmId, 
     );
 }
 
-fn grant_call_action(state: &AppState, realm_id: &arkret_core::RealmId, actor: &str, action: &str) {
+fn grant_call_action(
+    state: &AppState,
+    realm_id: &arkret_identifiers::RealmId,
+    actor: &str,
+    action: &str,
+) {
     state.authorization_application().create_grant(
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
@@ -289,7 +303,7 @@ fn seed_read_receipt_inheritance(
 
     let now = chrono::Utc::now();
     let mut projection = state.test_projection().lock();
-    let cell_id = arkret_core::CellRef::new(format!(
+    let cell_id = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.realm.read_receipt_policy.v1:{parent_realm_id}"
     ))
     .expect("valid read receipt policy cell ref");
@@ -328,9 +342,10 @@ fn seed_read_receipt_inheritance(
 async fn read_receipt_child_policy_rejects_visibility_loosening() {
     let state = test_state();
     let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009911";
-    let child_realm =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009912".to_owned())
-            .unwrap();
+    let child_realm = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000009912".to_owned(),
+    )
+    .unwrap();
     seed_read_receipt_inheritance(
         &state,
         parent_realm,
@@ -363,9 +378,10 @@ async fn read_receipt_child_policy_rejects_visibility_loosening() {
 async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
     let state = test_state();
     let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009921";
-    let child_realm =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009922".to_owned())
-            .unwrap();
+    let child_realm = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000009922".to_owned(),
+    )
+    .unwrap();
     seed_read_receipt_inheritance(
         &state,
         parent_realm,
@@ -398,9 +414,10 @@ async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
 async fn read_receipt_child_policy_allows_required_floor_escape() {
     let state = test_state();
     let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009931";
-    let child_realm =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009932".to_owned())
-            .unwrap();
+    let child_realm = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000009932".to_owned(),
+    )
+    .unwrap();
     seed_read_receipt_inheritance(
         &state,
         parent_realm,
@@ -433,9 +450,10 @@ async fn read_receipt_child_policy_allows_required_floor_escape() {
 async fn read_receipt_child_policy_rejects_any_change_when_overrides_disabled() {
     let state = test_state();
     let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009941";
-    let child_realm =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009942".to_owned())
-            .unwrap();
+    let child_realm = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000009942".to_owned(),
+    )
+    .unwrap();
     seed_read_receipt_inheritance(
         &state,
         parent_realm,
@@ -490,9 +508,10 @@ async fn put_agent_participation_ceiling(
 #[tokio::test]
 async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009951".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000009951".to_owned(),
+    )
+    .unwrap();
     let circle_id = "ak:circle:01904100-0000-7000-8000-000000009952";
     let strand_id = "ak:strand:01904100-0000-7000-8000-000000009953";
     put_agent_participation_ceiling(
@@ -539,13 +558,15 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
 #[tokio::test]
 async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000009961".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000009961".to_owned(),
+    )
+    .unwrap();
     let circle_id = "ak:circle:01904100-0000-7000-8000-000000009962";
-    let strand_id =
-        arkret_core::StrandId::new("ak:strand:01904100-0000-7000-8000-000000009963".to_owned())
-            .unwrap();
+    let strand_id = arkret_identifiers::StrandId::new(
+        "ak:strand:01904100-0000-7000-8000-000000009963".to_owned(),
+    )
+    .unwrap();
     {
         let mut projection = state.test_projection().lock();
         projection.strands.insert(
@@ -600,7 +621,7 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
 
 async fn register_agent_selection(
     state: &AppState,
-    realm_id: &arkret_core::RealmId,
+    realm_id: &arkret_identifiers::RealmId,
     agent_id: &str,
     reply: bool,
     act_on_behalf: bool,
@@ -642,7 +663,7 @@ async fn register_agent_selection(
 
 async fn register_native_agent_membership_context(
     state: &AppState,
-    realm_id: &arkret_core::RealmId,
+    realm_id: &arkret_identifiers::RealmId,
     encrypted: bool,
     with_claimable_keypackage: bool,
 ) {
@@ -772,12 +793,12 @@ async fn register_native_agent_membership_context(
         "issued_at": "2026-01-01T00:00:00.000Z",
         "expires_at": "2099-01-01T00:00:00.000Z"
     });
-    let authorize_event = arkret_core::Event::new(
+    let authorize_event = arkret_wire::Event::new(
         arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE,
         realm_id.clone(),
-        arkret_core::Did::new(agent.to_owned()).unwrap(),
+        arkret_identifiers::Did::new(agent.to_owned()).unwrap(),
         1,
-        arkret_core::Hlc::new("019041000000-0001-000007d2").unwrap(),
+        arkret_identifiers::Hlc::new("019041000000-0001-000007d2").unwrap(),
         authorize_payload.clone(),
     )
     .unwrap();
@@ -849,7 +870,7 @@ async fn register_native_agent_membership_context(
 async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
     let state = test_state();
     let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d1").unwrap();
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d1").unwrap();
     register_native_agent_membership_context(&state, &realm_id, true, false).await;
     let operation = op(
         realm_id,
@@ -876,7 +897,7 @@ async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
 async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage() {
     let state = test_state();
     let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d2").unwrap();
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d2").unwrap();
     register_native_agent_membership_context(&state, &realm_id, true, true).await;
     let operation = op(
         realm_id,
@@ -900,7 +921,7 @@ async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage
 async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
     let state = test_state();
     let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d3").unwrap();
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d3").unwrap();
     register_native_agent_membership_context(&state, &realm_id, false, false).await;
     let operation = op(
         realm_id,
@@ -930,7 +951,7 @@ fn agent_context(agent_id: &str, authorization_ref: &str) -> serde_json::Value {
 }
 
 fn reply_message(
-    realm_id: arkret_core::RealmId,
+    realm_id: arkret_identifiers::RealmId,
     seed: &str,
     agent_id: &str,
     authorization_ref: &str,
@@ -948,7 +969,7 @@ fn reply_message(
 }
 
 fn act_on_behalf_message(
-    realm_id: arkret_core::RealmId,
+    realm_id: arkret_identifiers::RealmId,
     seed: &str,
     agent_id: &str,
     authorization_ref: Option<&str>,
@@ -1118,9 +1139,10 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
 #[tokio::test]
 async fn act_on_behalf_agent_requires_participation_bit() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000701".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000701".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
     let grant = state.authorization_application().create_grant(
@@ -1150,9 +1172,10 @@ async fn act_on_behalf_agent_requires_participation_bit() {
 #[tokio::test]
 async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000702".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000702".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = state.authorization_application().create_grant(
@@ -1182,9 +1205,10 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
 #[tokio::test]
 async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a2".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007a2".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let operation = op(
@@ -1212,9 +1236,10 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
 #[tokio::test]
 async fn act_on_behalf_agent_strand_write_requires_agent_context() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c1".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007c1".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = state.authorization_application().create_grant(
@@ -1251,9 +1276,10 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
 #[tokio::test]
 async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007b1".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007b1".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let operation = op(
@@ -1277,9 +1303,10 @@ async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
 #[tokio::test]
 async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismatch() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c2".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007c2".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let envelope_grant = state.authorization_application().create_grant(
@@ -1325,9 +1352,10 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
 #[tokio::test]
 async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_write() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c3".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007c3".to_owned(),
+    )
+    .unwrap();
     let operation = op(
         realm_id,
         "0000000007c3",
@@ -1355,9 +1383,10 @@ async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_writ
 #[tokio::test]
 async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c4".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007c4".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = state.authorization_application().create_grant(
@@ -1393,9 +1422,10 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
 #[tokio::test]
 async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c5".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007c5".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = state.authorization_application().create_grant(
@@ -1430,9 +1460,10 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
 #[tokio::test]
 async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c6".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007c6".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = state.authorization_application().create_grant(
@@ -1465,9 +1496,10 @@ async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
 #[tokio::test]
 async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c7".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007c7".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
     let grant = state.authorization_application().create_grant(
@@ -1503,9 +1535,10 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
 #[tokio::test]
 async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_record() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007c8".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007c8".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
     let grant = state.authorization_application().create_grant(
@@ -1533,9 +1566,10 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
 #[tokio::test]
 async fn profile_accountable_principal_requires_active_grant() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a3".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007a3".to_owned(),
+    )
+    .unwrap();
     let profile = op(
         realm_id,
         "0000000007a3",
@@ -1558,9 +1592,10 @@ async fn profile_accountable_principal_requires_active_grant() {
 #[tokio::test]
 async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a4".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007a4".to_owned(),
+    )
+    .unwrap();
     let profile = op(
         realm_id.clone(),
         "0000000007a4",
@@ -1597,9 +1632,10 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
 #[tokio::test]
 async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_actor() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a6".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-0000000007a6".to_owned(),
+    )
+    .unwrap();
     state
         .event_query_application()
         .store_canonical_event(CanonicalEventRecord {
@@ -1650,9 +1686,10 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
 #[tokio::test]
 async fn circle_member_manage_rejects_forged_verdict_without_grant() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000881".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000881".to_owned(),
+    )
+    .unwrap();
     let member_add = op(
         realm_id,
         "000000000881",
@@ -1682,9 +1719,10 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
 #[tokio::test]
 async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000882".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000882".to_owned(),
+    )
+    .unwrap();
     let circle_id = "ak:circle:01904100-0000-7000-8000-000000000882";
     grant_circle_action(
         &state,
@@ -1719,9 +1757,10 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
 #[tokio::test]
 async fn circle_lifecycle_requires_circle_manage_grant() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000883".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000883".to_owned(),
+    )
+    .unwrap();
     let circle_id = "ak:circle:01904100-0000-7000-8000-000000000883";
     let tombstone = op(
         realm_id.clone(),
@@ -1755,9 +1794,10 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
 #[tokio::test]
 async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000703".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000703".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = state.authorization_application().create_grant(
@@ -1785,9 +1825,10 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
 #[tokio::test]
 async fn act_on_behalf_agent_requires_fresh_approval_request() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000704".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000704".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = state.authorization_application().create_grant(
@@ -1817,9 +1858,10 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
 #[tokio::test]
 async fn act_on_behalf_agent_consumes_approval_nonce_once() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000705".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000705".to_owned(),
+    )
+    .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = state.authorization_application().create_grant(
@@ -1853,9 +1895,10 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
 #[tokio::test]
 async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000801".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000801".to_owned(),
+    )
+    .unwrap();
     let circle_id = "ak:circle:01904100-0000-7000-8000-000000000801";
     let relation_id = "ak:relation:01904100-0000-7000-8000-000000000801";
     let now = chrono::Utc::now();
@@ -1962,9 +2005,10 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
 #[tokio::test]
 async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000901".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000901".to_owned(),
+    )
+    .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
     let decision = op(
         realm_id,
@@ -1990,9 +2034,10 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
 #[tokio::test]
 async fn moderation_decision_allows_authorized_issuer() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000902".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000902".to_owned(),
+    )
+    .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
     let decision = op(
         realm_id,
@@ -2015,9 +2060,10 @@ async fn moderation_decision_allows_authorized_issuer() {
 #[tokio::test]
 async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000903".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000903".to_owned(),
+    )
+    .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
     let decision = op(
         realm_id,
@@ -2042,14 +2088,15 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
 #[tokio::test]
 async fn call_recording_start_defaults_to_record_capability() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000904".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000904".to_owned(),
+    )
+    .unwrap();
     grant_call_action(
         &state,
         &realm_id,
         "did:web:recorder.example",
-        arkret_core::CapabilityActionId::CALL_RECORD,
+        arkret_wire::CapabilityActionId::CALL_RECORD,
     );
     let start = op(
         realm_id,
@@ -2072,14 +2119,15 @@ async fn call_recording_start_defaults_to_record_capability() {
 #[tokio::test]
 async fn call_recording_start_transcript_requires_transcribe_capability() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000905".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000905".to_owned(),
+    )
+    .unwrap();
     grant_call_action(
         &state,
         &realm_id,
         "did:web:recorder.example",
-        arkret_core::CapabilityActionId::CALL_RECORD,
+        arkret_wire::CapabilityActionId::CALL_RECORD,
     );
     let start = op(
         realm_id,
@@ -2113,14 +2161,15 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
 #[tokio::test]
 async fn call_recording_start_transcript_allows_transcribe_capability() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000906".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000906".to_owned(),
+    )
+    .unwrap();
     grant_call_action(
         &state,
         &realm_id,
         "did:web:recorder.example",
-        arkret_core::CapabilityActionId::CALL_TRANSCRIBE,
+        arkret_wire::CapabilityActionId::CALL_TRANSCRIBE,
     );
     let start = op(
         realm_id,
@@ -2144,14 +2193,15 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
 #[tokio::test]
 async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000907".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-000000000907".to_owned(),
+    )
+    .unwrap();
     grant_call_action(
         &state,
         &realm_id,
         "did:web:recorder.example",
-        arkret_core::CapabilityActionId::CALL_RECORD,
+        arkret_wire::CapabilityActionId::CALL_RECORD,
     );
     let payload = json!({
         "sender": "did:web:recorder.example",
@@ -2192,9 +2242,10 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
 #[tokio::test]
 async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c100".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-00000000c100".to_owned(),
+    )
+    .unwrap();
     let create = op(
         realm_id.clone(),
         "00000000c101",
@@ -2238,9 +2289,10 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
 #[tokio::test]
 async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c200".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-00000000c200".to_owned(),
+    )
+    .unwrap();
     let create = op(
         realm_id.clone(),
         "00000000c201",
@@ -2273,9 +2325,10 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
 #[tokio::test]
 async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c210".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-00000000c210".to_owned(),
+    )
+    .unwrap();
     let create = op(
         realm_id.clone(),
         "00000000c211",
@@ -2299,9 +2352,10 @@ async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme(
 #[tokio::test]
 async fn mls_prejoin_history_rejects_create_object_strict_content_scheme() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c220".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-00000000c220".to_owned(),
+    )
+    .unwrap();
     let create = op(
         realm_id.clone(),
         "00000000c221",
@@ -2331,9 +2385,10 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
     use arkret_state::lattice::CellState;
 
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000c300".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-00000000c300".to_owned(),
+    )
+    .unwrap();
     let now = chrono::Utc::now();
     state
         .realm_query_application()
@@ -2362,7 +2417,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
         .expect("realm meta stored");
     {
         let mut projection = state.test_projection().lock();
-        let cell_id = arkret_core::CellRef::new(format!(
+        let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
@@ -2401,16 +2456,17 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
     use arkret_state::lattice::CellState;
 
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d100".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-00000000d100".to_owned(),
+    )
+    .unwrap();
     let recovery_principal = "did:web:hr.example";
 
     // Seed the projected policy_components cell with an exporter-AEAD scheme +
     // org RRK durability policy naming `recovery_principal` as a recipient.
     {
         let mut projection = state.test_projection().lock();
-        let cell_id = arkret_core::CellRef::new(format!(
+        let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))
@@ -2462,9 +2518,10 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
 #[tokio::test]
 async fn realm_key_share_member_device_accepts_projection_metadata() {
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d300".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-00000000d300".to_owned(),
+    )
+    .unwrap();
     let now = chrono::DateTime::parse_from_rfc3339("2026-07-05T00:00:00.000Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
@@ -2588,12 +2645,13 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
     use arkret_state::lattice::CellState;
 
     let state = test_state();
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000d200".to_owned())
-            .unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:01904100-0000-7000-8000-00000000d200".to_owned(),
+    )
+    .unwrap();
     {
         let mut projection = state.test_projection().lock();
-        let cell_id = arkret_core::CellRef::new(format!(
+        let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.policy_components.v1:{}",
             realm_id.as_str()
         ))

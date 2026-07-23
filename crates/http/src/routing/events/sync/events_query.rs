@@ -59,7 +59,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     if let Some(session) = session.as_ref()
         && let Err(error) = super::super::require_agent_session_scope(
             session,
-            arkret_core::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
+            arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
         )
     {
         render_error(res, error.http_status(), error.wire_code(), &error.message);
@@ -824,7 +824,7 @@ async fn events_query_impl(
     if let Some(session) = session.as_ref() {
         super::super::require_agent_session_scope(
             session,
-            arkret_core::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
+            arkret_wire::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
         )?;
     }
     let filter_digest =
@@ -1101,7 +1101,7 @@ async fn events_query_event_visible(
 async fn full_events_from_projection_json(
     state: &AppState,
     projection_rows: &[Value],
-) -> Vec<arkret_core::Event> {
+) -> Vec<arkret_wire::Event> {
     let mut events = Vec::with_capacity(projection_rows.len());
     for row in projection_rows {
         if let Some(event) = full_event_from_projection_json(state, row).await {
@@ -1120,7 +1120,7 @@ async fn full_events_from_projection_json(
 async fn full_event_from_projection_json(
     state: &AppState,
     row: &Value,
-) -> Option<arkret_core::Event> {
+) -> Option<arkret_wire::Event> {
     let event_id = row.get("event_id").and_then(Value::as_str)?;
     if projection_row_is_redacted_message_tombstone(row) {
         return projection_only_event_from_row(state, row);
@@ -1149,7 +1149,7 @@ fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
     })
 }
 
-fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkret_core::Event> {
+fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkret_wire::Event> {
     let event_id = row.get("event_id").and_then(Value::as_str)?;
     let realm_id = row.get("realm_id").and_then(Value::as_str)?;
     let kind = row.get("event_kind").and_then(Value::as_str)?;
@@ -1214,9 +1214,9 @@ mod tests {
         kind: &str,
         payload: Value,
         created_at: DateTime<Utc>,
-    ) -> arkret_core::Operation {
-        let mut operation = arkret_core::Operation::create(
-            arkret_core::OperationId::new(operation_id.to_owned()).unwrap(),
+    ) -> arkret_event_draft::Operation {
+        let mut operation = arkret_event_draft::Operation::create(
+            arkret_identifiers::OperationId::new(operation_id.to_owned()).unwrap(),
             RealmId::new(TEST_REALM.to_owned()).unwrap(),
             kind,
             payload,

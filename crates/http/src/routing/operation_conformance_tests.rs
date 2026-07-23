@@ -35,7 +35,7 @@ fn operation(index: usize, kind: &str, payload: Value) -> Operation {
     let realm_id = "ak:realm:01904100-0000-7000-8000-000000000001".to_owned();
     Operation::create(
         OperationId::new(op_id).unwrap(),
-        arkret_core::RealmId::new(realm_id).unwrap(),
+        arkret_identifiers::RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )

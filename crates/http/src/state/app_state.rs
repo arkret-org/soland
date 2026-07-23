@@ -366,10 +366,10 @@ mod test_construction {
     impl EventSealCommitPort for TestEventSealCommitter {
         fn commit_if_frontier(
             &self,
-            seal: &arkret_core::Seal,
-            expected_store_frontier: &[arkret_core::SealId],
-            new_ops: &[(arkret_core::CellRef, arkret_state::lattice::SealedOp)],
-            covered: &BTreeSet<arkret_core::MoveId>,
+            seal: &arkret_wire::Seal,
+            expected_store_frontier: &[arkret_identifiers::SealId],
+            new_ops: &[(arkret_identifiers::CellRef, arkret_state::lattice::SealedOp)],
+            covered: &BTreeSet<arkret_identifiers::MoveId>,
         ) -> arkret_state::state::StoreResult<bool> {
             self.0
                 .commit_if_frontier(seal, expected_store_frontier, new_ops, covered)
@@ -440,7 +440,7 @@ mod test_construction {
         async fn persist_projected_operation(
             &self,
             _origin: &str,
-            _operation: &arkret_core::Operation,
+            _operation: &arkret_event_draft::Operation,
             _event_type: &str,
             _is_message_create: bool,
             _is_membership_or_realm_lifecycle: bool,
@@ -1374,7 +1374,7 @@ impl AppState {
     #[doc(hidden)]
     pub fn test_record_cross_signing_publish(
         &self,
-        publish: arkret_core::CrossSigningPublish,
+        publish: arkret_models_identity::CrossSigningPublish,
     ) -> arkret_identity::Result<()> {
         self.identity_application
             .record_cross_signing_publish(publish)
@@ -1384,14 +1384,14 @@ impl AppState {
     #[doc(hidden)]
     pub fn test_record_cross_signing_reset(
         &self,
-        reset: &arkret_core::CrossSigningResetPayload,
+        reset: &arkret_models_identity::CrossSigningResetPayload,
     ) -> arkret_identity::Result<()> {
         self.identity_application.record_cross_signing_reset(reset)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn test_has_current_cross_signing(&self, principal: &arkret_core::Did) -> bool {
+    pub fn test_has_current_cross_signing(&self, principal: &arkret_identifiers::Did) -> bool {
         self.identity_application
             .current_cross_signing(principal)
             .is_some()
@@ -1406,7 +1406,7 @@ impl HydrationProjectionAdapter for RuntimeHydrationProjectionAdapter {
     fn operation_from_canonical_record(
         &self,
         record: &soland_application::events::CanonicalEventRecord,
-    ) -> Option<arkret_core::Operation> {
+    ) -> Option<arkret_event_draft::Operation> {
         crate::routing::events::event_log::projection_operation_from_canonical_record(record)
     }
 }
@@ -1859,7 +1859,7 @@ mod membership_hydration_tests {
             )
             .unwrap(),
             Some(arkret_core::ChildScopePolicy::RequireScopeCircleId {
-                scope_circle_id: arkret_core::CircleId::new(circle_id.to_owned()).unwrap(),
+                scope_circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
             })
         );
         assert!(

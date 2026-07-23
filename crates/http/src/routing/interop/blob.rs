@@ -1191,14 +1191,14 @@ pub(super) fn blob_purpose_requires_encryption(purpose: Option<&str>) -> bool {
 
 pub(super) fn plaintext_blob_data_class(
     purpose: Option<&str>,
-) -> arkret_core::PlaintextDataClassKind {
+) -> arkret_wire::PlaintextDataClassKind {
     match purpose {
         Some("attachment_preview" | "blob_preview" | "preview") => {
-            arkret_core::PlaintextDataClassKind::AttachmentPreview
+            arkret_wire::PlaintextDataClassKind::AttachmentPreview
         }
-        Some("thumbnail") => arkret_core::PlaintextDataClassKind::Thumbnail,
-        Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => arkret_core::PlaintextDataClassKind::FullTextIndex,
-        _ => arkret_core::PlaintextDataClassKind::AttachmentPlaintext,
+        Some("thumbnail") => arkret_wire::PlaintextDataClassKind::Thumbnail,
+        Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => arkret_wire::PlaintextDataClassKind::FullTextIndex,
+        _ => arkret_wire::PlaintextDataClassKind::AttachmentPlaintext,
     }
 }
 

@@ -29,7 +29,7 @@ const CONTROLLER_DELEGATION_PURPOSES: &[&str] = &[
 ];
 
 pub(crate) fn allocate_principal_control_realm_id() -> Result<RealmId, AppError> {
-    RealmId::new(arkret_core::new_prefixed_uuid7("ak:realm:"))
+    RealmId::new(arkret_identifiers::new_prefixed_uuid7("ak:realm:"))
         .map_err(|error| AppError::internal(format!("allocated Agent PCR id invalid: {error}")))
 }
 
@@ -476,7 +476,7 @@ pub(crate) async fn active_series_pointer_is_current(
 
 pub(crate) async fn validate_active_series_operation_authority(
     state: &AppState,
-    operation: &arkret_core::Operation,
+    operation: &arkret_event_draft::Operation,
 ) -> Result<(), &'static str> {
     if soland_application::operation_semantics::canonical_kind_for_operation(operation)
         != Some(arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
@@ -867,7 +867,7 @@ fn validate_agent_pcr_genesis_effect(
         .get("effects")
         .cloned()
         .ok_or_else(|| schema_error("managed Agent PCR genesis effects are missing"))?;
-    let effects = serde_json::from_value::<Vec<arkret_core::Effect>>(effects).map_err(|error| {
+    let effects = serde_json::from_value::<Vec<arkret_wire::Effect>>(effects).map_err(|error| {
         schema_error(format!(
             "managed Agent PCR genesis effect is invalid: {error}"
         ))
@@ -1460,10 +1460,10 @@ mod tests {
     fn recovery_signing_key_cannot_be_used_as_managed_agent_backup_recipient() {
         let now: DateTime<Utc> = "2026-07-15T00:00:00.000Z".parse().unwrap();
         let agreement = RecoveryKeyAgreementEntry {
-            key_agreement_ref: arkret_core::DidUrl::new(format!("{CONTROLLER}#backup-hpke-1"))
+            key_agreement_ref: arkret_wire::DidUrl::new(format!("{CONTROLLER}#backup-hpke-1"))
                 .unwrap(),
             alg: arkret_core::RecoveryKeyAgreementAlgorithm::X25519,
-            public_key_multibase: arkret_core::NonEmptyString::new(
+            public_key_multibase: arkret_wire::NonEmptyString::new(
                 "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW".to_owned(),
             )
             .unwrap(),

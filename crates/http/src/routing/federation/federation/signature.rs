@@ -43,14 +43,14 @@ pub(super) fn validate_federation_request_binding(
             violation.message()
         ))
     })?;
-    let expected_destination = arkret_core::TypedTrustDomainId::new(trust_domain.to_owned())
+    let expected_destination = arkret_identifiers::TypedTrustDomainId::new(trust_domain.to_owned())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     validate_federation_headers(&headers, &expected_destination, request_hash)
 }
 
 pub(super) fn validate_federation_headers(
     headers: &FederationTrustHeaders,
-    expected_destination: &arkret_core::TypedTrustDomainId,
+    expected_destination: &arkret_identifiers::TypedTrustDomainId,
     request_hash: &str,
 ) -> Result<(), AppError> {
     headers

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use arkret_schema::event_payload_validator_catalog;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -1044,8 +1044,8 @@ pub fn payload_key_present(payload: &serde_json::Value, field: &str) -> bool {
 /// `observed_dots[]` is `schema_violation` — implicit cascade revoke is
 /// forbidden.
 pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static str, String)> {
-    let parsed: arkret_core::ConsentRevokePayload = serde_json::from_value(payload.clone())
-        .map_err(|err| {
+    let parsed: arkret_models_collaboration::governance_payloads::ConsentRevokePayload =
+        serde_json::from_value(payload.clone()).map_err(|err| {
             (
                 arkret_wire::ErrorCode::SCHEMA_VIOLATION,
                 format!("ak.consent.revoke payload shape is invalid: {err}"),
@@ -1068,9 +1068,9 @@ mod tests {
 
     fn operation(kind: &str, payload: Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+            arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
                 .unwrap(),
-            arkret_core::RealmId::new(REALM_ID).unwrap(),
+            arkret_identifiers::RealmId::new(REALM_ID).unwrap(),
             kind,
             payload,
         )

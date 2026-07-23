@@ -356,10 +356,12 @@ pub(super) async fn submit_event_value_with_context(
             "cas_conflict",
             "actor_seq is older than the accepted actor frontier",
         )
-        .with_details(arkret_core::EventsActorCasConflictDetails {
-            accepted: false,
-            current_frontier,
-        }));
+        .with_details(
+            arkret_models_collaboration::event_sync::EventsActorCasConflictDetails {
+                accepted: false,
+                current_frontier,
+            },
+        ));
     }
     let mut max_actor_predecessor_seq = None;
     for prev_ref in &parsed.prev_refs {
@@ -1133,10 +1135,12 @@ pub(super) async fn submit_event_value_with_context(
                     "cas_conflict",
                     "actor_seq is older than the accepted actor frontier",
                 )
-                .with_details(arkret_core::EventsActorCasConflictDetails {
-                    accepted: false,
-                    current_frontier,
-                }));
+                .with_details(
+                    arkret_models_collaboration::event_sync::EventsActorCasConflictDetails {
+                        accepted: false,
+                        current_frontier,
+                    },
+                ));
             }
             if message.contains("fork_quarantine") {
                 return Err(SubmitOneError::quarantine(

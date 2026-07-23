@@ -315,7 +315,7 @@ async fn server_describe(
 ) -> JsonResult<ServerDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     if let Some(service_type) = service_type.into_inner()
-        && service_type != arkret_core::ServiceType::PrincipalServer.as_str()
+        && service_type != arkret_wire::ServiceType::PrincipalServer.as_str()
     {
         return Err(soland_http::error::AppError::invalid_param(format!(
             "service_type {service_type:?} is not available on this binding"
@@ -430,7 +430,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
 ///   dropped with a `warn!` line. The wire never advertises a profile we don't also self-claim —
 ///   that would be a silent cross-binding lie.
 pub(crate) fn apply_claim_level_partition(
-    description: &mut arkret_core::ServiceDescribe,
+    description: &mut arkret_models_discovery::ServiceDescribe,
     loaded_verified: &[crate::verified_profiles::VerifiedProfileDescriptor],
     candidate_join_policy_enabled: bool,
 ) {

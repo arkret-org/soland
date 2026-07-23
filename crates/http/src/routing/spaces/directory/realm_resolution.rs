@@ -254,7 +254,7 @@ pub(super) async fn resolve_target(
         as_of,
         source_refs: Vec::new(),
         join_candidates,
-        policy_revision: arkret_core::NonEmptyString::new(policy_revision.unwrap_or_else(|| {
+        policy_revision: arkret_wire::NonEmptyString::new(policy_revision.unwrap_or_else(|| {
             arkret_canonical::sha256_digest(
                 format!("{}:{discoverability}:{join_rule}", realm_entry.realm_id).as_bytes(),
             )
@@ -713,7 +713,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
         return Vec::new();
     };
     let seal = seal_view.accepted_seal;
-    let seal_basis = arkret_core::SealBasis {
+    let seal_basis = arkret_wire::SealBasis {
         leaves: vec![seal.id.clone()],
         control_event_set_root: seal.control_event_set_root.clone(),
         state_root: seal.state_root.clone(),

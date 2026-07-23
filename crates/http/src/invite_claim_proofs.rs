@@ -357,7 +357,7 @@ async fn resolve_current_ed25519_key_for_state(
 }
 
 fn decode_ed25519_multibase_key(value: &str) -> Result<VerifyingKey, String> {
-    let key = arkret_core::decode_ed25519_multibase(value)
+    let key = arkret_canonical::decode_ed25519_multibase(value)
         .map_err(|error| format!("verification_public_key is not Ed25519 multibase: {error}"))?;
     VerifyingKey::from_bytes(&key).map_err(|error| format!("Ed25519 key invalid: {error}"))
 }
@@ -423,7 +423,9 @@ mod tests {
                 });
             entry.verification_methods.insert(
                 method.to_owned(),
-                arkret_core::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes()),
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                    key.verifying_key().as_bytes(),
+                ),
             );
             self
         }

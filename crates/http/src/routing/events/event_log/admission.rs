@@ -228,7 +228,7 @@ pub fn cross_signing_reset_replay_check(
                     .to_owned(),
             )
         })?;
-    if arkret_core::EventId::new(payload_reset_event_id).is_err() {
+    if arkret_identifiers::EventId::new(payload_reset_event_id).is_err() {
         return Err((
             ErrorCode::SchemaViolation,
             "cross_signing.reset.reset_event_id must be a ak:event:<uuidv7>".to_owned(),
@@ -353,14 +353,15 @@ pub fn realm_policy_components_check(
                  for discussion_metadata_digest recomputation"
                     .to_owned(),
             ))?;
-            let covered = arkret_core::Hash::new(covered_digest.to_owned()).map_err(|_| {
-                (
-                    ErrorCode::FailedPrecondition,
-                    "governance binding discussion_metadata_digest is not a valid \
+            let covered =
+                arkret_identifiers::Hash::new(covered_digest.to_owned()).map_err(|_| {
+                    (
+                        ErrorCode::FailedPrecondition,
+                        "governance binding discussion_metadata_digest is not a valid \
                      sha256 hash"
-                        .to_owned(),
-                )
-            })?;
+                            .to_owned(),
+                    )
+                })?;
             if arkret_models_crypto::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
                 return Err((
                     ErrorCode::FailedPrecondition,
@@ -385,7 +386,7 @@ pub fn realm_policy_components_check(
 /// rule 2 (service DIDs whose `data_classes[]` contains `media_plaintext` in
 /// `plaintext_visible_services[]`). Free-text purposes do not grant authority
 /// and are excluded from the digest input.
-fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_core::Hash> {
+fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_identifiers::Hash> {
     use arkret_models_crypto::{
         MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
     };
@@ -415,7 +416,7 @@ fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_cor
                     .flatten()
             });
             if let Some(did_str) = did_str
-                && let Ok(service_id) = arkret_core::Did::new(did_str.to_owned())
+                && let Ok(service_id) = arkret_identifiers::Did::new(did_str.to_owned())
             {
                 plaintext_visible_services.push(MediaPlaintextService { service_id });
             }

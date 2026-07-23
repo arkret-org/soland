@@ -28,7 +28,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 "DataEvent requires seal_ref to resolve the authorization pre-state",
             )
         })?;
-    let seal_id = arkret_core::SealId::new(seal_ref.to_owned()).map_err(|_| {
+    let seal_id = arkret_identifiers::SealId::new(seal_ref.to_owned()).map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -186,7 +186,7 @@ pub(super) fn validate_data_event_joined_capability_view(
     realm_id: &str,
     grant_id: &str,
 ) -> Result<(), EventValidationError> {
-    let cell_ref = arkret_core::CellRef::new(format!(
+    let cell_ref = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
     .map_err(|_| {
@@ -284,9 +284,9 @@ pub(super) fn validate_data_event_joined_capability_view(
 pub(super) fn data_event_state_at_seal_ref(
     state: &AppState,
     realm: &RealmId,
-    seal_id: &arkret_core::SealId,
+    seal_id: &arkret_identifiers::SealId,
 ) -> Result<
-    std::collections::BTreeMap<arkret_core::CellRef, arkret_state::lattice::CellState>,
+    std::collections::BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
     EventValidationError,
 > {
     let seal = state
@@ -330,7 +330,7 @@ pub(super) fn data_event_state_at_seal_ref(
 
 pub(super) fn data_event_grants_from_state_at_ref(
     state_at_ref: &std::collections::BTreeMap<
-        arkret_core::CellRef,
+        arkret_identifiers::CellRef,
         arkret_state::lattice::CellState,
     >,
 ) -> std::collections::BTreeMap<String, crate::authz::Grant> {
@@ -354,10 +354,10 @@ pub(super) fn data_event_grants_from_state_at_ref(
 
 pub(super) fn validate_data_event_covered_seals(
     realm: &RealmId,
-    seal_id: &arkret_core::SealId,
+    seal_id: &arkret_identifiers::SealId,
     object: &serde_json::Map<String, Value>,
     state_at_ref: &std::collections::BTreeMap<
-        arkret_core::CellRef,
+        arkret_identifiers::CellRef,
         arkret_state::lattice::CellState,
     >,
 ) -> Result<(), EventValidationError> {
@@ -429,11 +429,11 @@ pub(super) fn encrypted_content_is_mls(value: Option<&Value>) -> bool {
 pub(super) fn seal_view_declares_relaxed_e2ee(
     realm: &RealmId,
     state_at_ref: &std::collections::BTreeMap<
-        arkret_core::CellRef,
+        arkret_identifiers::CellRef,
         arkret_state::lattice::CellState,
     >,
 ) -> bool {
-    let Ok(policy_cell) = arkret_core::CellRef::new(format!(
+    let Ok(policy_cell) = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.realm.policy_components.v1:{}",
         realm.as_str()
     )) else {

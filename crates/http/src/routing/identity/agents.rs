@@ -290,10 +290,10 @@ mod tests {
             "key": encoded_public_key.clone(),
         });
         let public_key = PublicKey {
-            kty: arkret_core::NonEmptyString::new("OKP").unwrap(),
-            kid: arkret_core::NonEmptyString::new(verification_method).unwrap(),
-            alg: arkret_core::NonEmptyString::new("Ed25519").unwrap(),
-            key: arkret_core::Base64UrlString::new(encoded_public_key).unwrap(),
+            kty: arkret_wire::NonEmptyString::new("OKP").unwrap(),
+            kid: arkret_wire::NonEmptyString::new(verification_method).unwrap(),
+            alg: arkret_wire::NonEmptyString::new("Ed25519").unwrap(),
+            key: arkret_wire::Base64UrlString::new(encoded_public_key).unwrap(),
             key_digest: None,
         };
         let agent_id = Did::new(agent.to_owned()).expect("agent did");
@@ -324,9 +324,12 @@ mod tests {
         let controller_id = Did::new("did:web:controller.example".to_owned()).unwrap();
         let requested_scope: AgentKeyScope =
             serde_json::from_value(requested_agent_scope()).unwrap();
-        let requested_scope_digest =
-            arkret_core::agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
-                .unwrap();
+        let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
+            &agent_id,
+            &controller_id,
+            &requested_scope,
+        )
+        .unwrap();
         let requested_scope_disclosure = serde_json::from_value(json!({
             "schema": "ak.schema.agent_requested_scope_disclosure.v1",
             "request_id": "ak:request:01999999-0000-7000-8000-000000000099",
@@ -350,9 +353,9 @@ mod tests {
         }))
         .unwrap();
         AgentKeyPairRequestBody {
-            pairing_request_id: arkret_core::NonEmptyString::new(pairing_request_id).unwrap(),
+            pairing_request_id: arkret_wire::NonEmptyString::new(pairing_request_id).unwrap(),
             agent_id,
-            verification_method: arkret_core::DidUrl::new(verification_method).unwrap(),
+            verification_method: arkret_wire::DidUrl::new(verification_method).unwrap(),
             public_key,
             proof_of_possession: arkret_core::NonEmptyJsonObject::new(
                 std::collections::BTreeMap::from([
@@ -378,12 +381,13 @@ mod tests {
             .unwrap(),
             requested_scope_disclosure,
             runtime_attestation: None,
-            authorize_event: arkret_core::Event::new(
+            authorize_event: arkret_wire::Event::new(
                 "ak.agent.key.authorize",
-                arkret_core::RealmId::new("ak:realm:01999999-0000-7000-8000-00000000feed").unwrap(),
-                arkret_core::Did::new("did:web:agent.example").unwrap(),
+                arkret_identifiers::RealmId::new("ak:realm:01999999-0000-7000-8000-00000000feed")
+                    .unwrap(),
+                arkret_identifiers::Did::new("did:web:agent.example").unwrap(),
                 1,
-                arkret_core::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
+                arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
                 json!({}),
             )
             .unwrap(),
@@ -599,7 +603,7 @@ mod tests {
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let key_pair = key_pair_request_body(agent, verification_method, service_id);
         let request = AgentRuntimeApprovalRequestBody {
-            pairing_code: arkret_core::NonEmptyString::new("12345678").unwrap(),
+            pairing_code: arkret_wire::NonEmptyString::new("12345678").unwrap(),
             pairing_request_id: key_pair.pairing_request_id.clone(),
             agent_id: key_pair.agent_id.clone(),
             verification_method: key_pair.verification_method.clone(),

@@ -154,7 +154,7 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
     let honest = derive_media_decrypt_metadata_digest(&MediaDecryptPolicyValue {
         media_service_decrypts: true,
         plaintext_visible_services: vec![MediaPlaintextService {
-            service_id: arkret_core::Did::new(service_id.to_owned()).unwrap(),
+            service_id: arkret_identifiers::Did::new(service_id.to_owned()).unwrap(),
         }],
     })
     .unwrap();
@@ -222,16 +222,24 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
     let req = EventsSubmitFederationRequestBody {
         service_binding_ref: arkret_core::FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-            realm_policy_digest: arkret_core::Hash::new(format!("sha256:{}", "1".repeat(64)))
-                .unwrap(),
+            realm_policy_digest: arkret_identifiers::Hash::new(format!(
+                "sha256:{}",
+                "1".repeat(64)
+            ))
+            .unwrap(),
             membership_frontier: vec![
-                arkret_core::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
-                arkret_core::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
+                arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001")
+                    .unwrap(),
+                arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001")
+                    .unwrap(),
             ],
             delivery_binding_frontier: Vec::new(),
             destination_service_type: "principal_server".to_owned(),
-            reducer_profile_digest: arkret_core::Hash::new(format!("sha256:{}", "2".repeat(64)))
-                .unwrap(),
+            reducer_profile_digest: arkret_identifiers::Hash::new(format!(
+                "sha256:{}",
+                "2".repeat(64)
+            ))
+            .unwrap(),
         },
         events: Vec::new(),
         signer_key_evidence: Vec::new(),
@@ -247,17 +255,23 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
 #[test]
 fn federation_binding_rejects_reducer_profile_digest_mismatch() {
     let event_id =
-        arkret_core::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
+        arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
     let req = EventsSubmitFederationRequestBody {
         service_binding_ref: arkret_core::FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-            realm_policy_digest: arkret_core::Hash::new(format!("sha256:{}", "1".repeat(64)))
-                .unwrap(),
+            realm_policy_digest: arkret_identifiers::Hash::new(format!(
+                "sha256:{}",
+                "1".repeat(64)
+            ))
+            .unwrap(),
             membership_frontier: vec![event_id.clone()],
             delivery_binding_frontier: vec![event_id],
             destination_service_type: "principal_server".to_owned(),
-            reducer_profile_digest: arkret_core::Hash::new(format!("sha256:{}", "2".repeat(64)))
-                .unwrap(),
+            reducer_profile_digest: arkret_identifiers::Hash::new(format!(
+                "sha256:{}",
+                "2".repeat(64)
+            ))
+            .unwrap(),
         },
         events: Vec::new(),
         signer_key_evidence: Vec::new(),
@@ -274,16 +288,19 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
 #[test]
 fn federation_binding_accepts_registry_reducer_profile_digest() {
     let event_id =
-        arkret_core::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
+        arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
     let req = EventsSubmitFederationRequestBody {
         service_binding_ref: arkret_core::FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-            realm_policy_digest: arkret_core::Hash::new(format!("sha256:{}", "1".repeat(64)))
-                .unwrap(),
+            realm_policy_digest: arkret_identifiers::Hash::new(format!(
+                "sha256:{}",
+                "1".repeat(64)
+            ))
+            .unwrap(),
             membership_frontier: vec![event_id.clone()],
             delivery_binding_frontier: vec![event_id],
             destination_service_type: "principal_server".to_owned(),
-            reducer_profile_digest: arkret_core::Hash::new(
+            reducer_profile_digest: arkret_identifiers::Hash::new(
                 arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
             )
             .unwrap(),
@@ -300,13 +317,14 @@ fn federation_binding_accepts_registry_reducer_profile_digest() {
 #[test]
 fn federation_delivery_binding_frontier_rejects_empty_or_stale_basis() {
     let event_id =
-        arkret_core::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
+        arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
     let current = vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()];
 
     federation_delivery_binding_frontier_is_current(std::slice::from_ref(&event_id), current)
         .unwrap();
 
-    let stale = arkret_core::EventId::new("ak:event:01904100-0000-7000-8000-000000000002").unwrap();
+    let stale =
+        arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000002").unwrap();
     let err = federation_delivery_binding_frontier_is_current(
         &[stale],
         vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()],

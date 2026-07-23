@@ -230,7 +230,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
 /// to fail duplicate `ak.realm.create` with `realm_already_exists` before
 /// applying the genesis-member bootstrap exception.
 pub(super) fn realm_exists_in_index(state: &AppState, realm_id: &str) -> bool {
-    let Ok(realm_id_typed) = arkret_core::RealmId::new(realm_id.to_owned()) else {
+    let Ok(realm_id_typed) = arkret_identifiers::RealmId::new(realm_id.to_owned()) else {
         return false;
     };
     state
@@ -263,11 +263,11 @@ pub(super) async fn bootstrap_realm_member_index(
     actor: &str,
     object: &serde_json::Map<String, Value>,
 ) {
-    let Ok(realm_id_typed) = arkret_core::RealmId::new(realm_id.to_owned()) else {
+    let Ok(realm_id_typed) = arkret_identifiers::RealmId::new(realm_id.to_owned()) else {
         tracing::warn!(%realm_id, "bootstrap_realm_member_index: invalid realm_id shape");
         return;
     };
-    let Ok(actor_typed) = arkret_core::Did::new(actor.to_owned()) else {
+    let Ok(actor_typed) = arkret_identifiers::Did::new(actor.to_owned()) else {
         tracing::warn!(%actor, "bootstrap_realm_member_index: invalid actor DID");
         return;
     };

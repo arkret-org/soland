@@ -55,7 +55,7 @@ pub(super) async fn verify_key_backup_delete_jws_proof(
     let canonical = key_backup_delete_proof_canonical_bytes(actor_id, backup_id)?;
     // High-risk path: enforce DID document freshness before key-backup delete
     // proof verification (fail-closed-on-stale).
-    let actor_id = arkret_core::Did::new(actor_id.to_owned()).map_err(|error| {
+    let actor_id = arkret_identifiers::Did::new(actor_id.to_owned()).map_err(|error| {
         AppError::capability_denied(format!(
             "key backup delete proof actor_id is not a valid DID: {error}"
         ))

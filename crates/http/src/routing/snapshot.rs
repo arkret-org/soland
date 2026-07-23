@@ -10,7 +10,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Result<arkret_state::SnapshotManifest, soland_http::error::AppError> {
-    let realm_id_value = arkret_core::RealmId::new(realm_id.to_owned())
+    let realm_id_value = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .map_err(|_| soland_http::error::AppError::invalid_param("invalid realm_id"))?;
     {
         let realms = state.realm_directory_application().snapshot();
@@ -69,7 +69,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
     .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let created_at = now();
     let timeline_hlc = snapshot_timeline_hlc(state, &events, created_at)?;
-    let service_id = arkret_core::Did::new(state.service_id().clone())
+    let service_id = arkret_identifiers::Did::new(state.service_id().clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let auth_state_digest = snapshot_auth_state_digest(
         state.service_id(),
@@ -115,7 +115,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
         },
         signature: arkret_state::DetachedJwsProof::eddsa(
             verification_method.clone(),
-            arkret_core::Hash::new(arkret_state::EMPTY_SHA256_DIGEST.to_owned())
+            arkret_identifiers::Hash::new(arkret_state::EMPTY_SHA256_DIGEST.to_owned())
                 .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
             created_at,
             "header..signature".to_owned(),
@@ -124,8 +124,9 @@ pub(crate) async fn snapshot_manifest_for_realm(
     let canonical_bytes = manifest
         .unsigned_canonical_bytes()
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let payload_digest = arkret_core::Hash::new(arkret_canonical::sha256_digest(&canonical_bytes))
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let payload_digest =
+        arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(&canonical_bytes))
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let jws = arkret_signatures::jws::sign_jws_ed25519(
         &canonical_bytes,
         state.notary_signing_key().as_ref(),
@@ -165,7 +166,7 @@ async fn persist_snapshot_chunk_blobs(
             encryption: None,
             legal_hold: false,
             redacted: false,
-            visibility: arkret_core::BlobVisibility::RealmBound,
+            visibility: arkret_models_collaboration::objects::blob::BlobVisibility::RealmBound,
             uploaded_by: state.service_id().clone(),
             created_at: now(),
         };
@@ -181,7 +182,7 @@ async fn persist_snapshot_chunk_blobs(
 fn snapshot_item_from_event(
     record: &CanonicalEventRecord,
 ) -> Result<arkret_state::SnapshotMaterializedItem, soland_http::error::AppError> {
-    let event_id = arkret_core::EventId::new(record.event_id.clone())
+    let event_id = arkret_identifiers::EventId::new(record.event_id.clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     Ok(arkret_state::SnapshotMaterializedItem {
         kind: "ak.event.accepted".to_owned(),
@@ -206,11 +207,11 @@ fn snapshot_event_set_leaf(
     record: &CanonicalEventRecord,
 ) -> Result<arkret_state::EventSetLeaf, soland_http::error::AppError> {
     Ok(arkret_state::EventSetLeaf {
-        event_id: arkret_core::EventId::new(record.event_id.clone())
+        event_id: arkret_identifiers::EventId::new(record.event_id.clone())
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
-        event_digest: arkret_core::Hash::new(record.canonical_digest.clone())
+        event_digest: arkret_identifiers::Hash::new(record.canonical_digest.clone())
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
-        actor_id: arkret_core::Did::new(record.actor_id.clone())
+        actor_id: arkret_identifiers::Did::new(record.actor_id.clone())
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
         actor_seq: record.actor_seq,
         hlc: event_hlc_or_received_at(state, record)?,
@@ -219,7 +220,7 @@ fn snapshot_event_set_leaf(
 
 fn snapshot_frontier_event_ids(
     events: &[CanonicalEventRecord],
-) -> Result<Vec<arkret_core::EventId>, soland_http::error::AppError> {
+) -> Result<Vec<arkret_identifiers::EventId>, soland_http::error::AppError> {
     let mut by_actor: std::collections::BTreeMap<&str, &CanonicalEventRecord> =
         std::collections::BTreeMap::new();
     for record in events {
@@ -237,7 +238,7 @@ fn snapshot_frontier_event_ids(
     by_actor
         .values()
         .map(|record| {
-            arkret_core::EventId::new(record.event_id.clone())
+            arkret_identifiers::EventId::new(record.event_id.clone())
                 .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
         })
         .collect()
@@ -247,7 +248,7 @@ fn snapshot_timeline_hlc(
     state: &AppState,
     events: &[CanonicalEventRecord],
     fallback: chrono::DateTime<chrono::Utc>,
-) -> Result<arkret_core::Hlc, soland_http::error::AppError> {
+) -> Result<arkret_identifiers::Hlc, soland_http::error::AppError> {
     let max_received_at = events
         .iter()
         .map(|record| record.received_at)
@@ -259,9 +260,9 @@ fn snapshot_timeline_hlc(
 fn event_hlc_or_received_at(
     state: &AppState,
     record: &CanonicalEventRecord,
-) -> Result<arkret_core::Hlc, soland_http::error::AppError> {
+) -> Result<arkret_identifiers::Hlc, soland_http::error::AppError> {
     if let Some(hlc) = record.envelope.get("hlc").and_then(Value::as_str)
-        && let Ok(parsed) = arkret_core::Hlc::new(hlc.to_owned())
+        && let Ok(parsed) = arkret_identifiers::Hlc::new(hlc.to_owned())
     {
         return Ok(parsed);
     }
@@ -271,19 +272,19 @@ fn event_hlc_or_received_at(
 fn received_at_hlc(
     state: &AppState,
     at: chrono::DateTime<chrono::Utc>,
-) -> Result<arkret_core::Hlc, soland_http::error::AppError> {
+) -> Result<arkret_identifiers::Hlc, soland_http::error::AppError> {
     let node_hash = sha256_hex(state.service_id().as_bytes());
     let node = &node_hash[..8];
-    arkret_core::Hlc::new(format!("{:012x}-0000-{node}", at.timestamp_millis()))
+    arkret_identifiers::Hlc::new(format!("{:012x}-0000-{node}", at.timestamp_millis()))
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
 }
 
 fn snapshot_auth_state_digest(
     service_id: &str,
     realm_id: &str,
-    frontier_event_ids: &[arkret_core::EventId],
+    frontier_event_ids: &[arkret_identifiers::EventId],
     checked_at: chrono::DateTime<chrono::Utc>,
-) -> Result<arkret_core::Hash, soland_http::error::AppError> {
+) -> Result<arkret_identifiers::Hash, soland_http::error::AppError> {
     let commitment = json!({
         "profile": "ak.snapshot.auth_state.issuer_local.v1",
         "issuer": service_id,
@@ -293,7 +294,7 @@ fn snapshot_auth_state_digest(
     });
     let bytes = arkret_canonical::canonical_json_bytes(&commitment)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    arkret_core::Hash::new(arkret_canonical::sha256_digest(&bytes))
+    arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(&bytes))
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
 }
 

@@ -31,7 +31,7 @@
 //! - `content` — canonical-JSON, content-block, mention, and device-message shape checks.
 //! - `payload_schemas` — the static `PayloadRequirement` tables.
 
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use serde_json::Value;
 use soland_application::operation_semantics as kinds;
 

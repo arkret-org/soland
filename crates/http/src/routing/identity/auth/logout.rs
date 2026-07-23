@@ -179,7 +179,7 @@ async fn introspect_session_grant_for_logout(
             "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
         ));
     };
-    let audience = arkret_core::Did::new(state.service_id().clone()).map_err(|error| {
+    let audience = arkret_identifiers::Did::new(state.service_id().clone()).map_err(|error| {
         AppError::internal(format!(
             "runtime principal service_id is not a DID: {error}"
         ))
@@ -474,9 +474,9 @@ async fn verify_cross_session_revoke_proof(
         ));
     }
 
-    let actor = arkret_core::Did::new(session.actor.clone())
+    let actor = arkret_identifiers::Did::new(session.actor.clone())
         .map_err(|_| AppError::invalid_param("session actor is not a valid DID"))?;
-    let service_id = arkret_core::Did::new(state.service_id().clone()).map_err(|error| {
+    let service_id = arkret_identifiers::Did::new(state.service_id().clone()).map_err(|error| {
         AppError::internal(format!("configured service_id is not a valid DID: {error}"))
     })?;
     let session_device = DeviceId::new(session.device_id.clone())

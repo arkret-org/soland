@@ -845,10 +845,8 @@ pub(super) fn validate_applet_package(
             AppError::internal(format!("package proof canonical bytes failed: {error}"))
         })?;
     let expected_payload_digest =
-        arkret_core::Hash::new(arkret_canonical::sha256_digest(&unsigned_canonical_bytes))
-            .map_err(|error| {
-                AppError::internal(format!("package proof digest invalid: {error}"))
-            })?;
+        arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(&unsigned_canonical_bytes))
+            .map_err(|error| AppError::internal(format!("package proof digest invalid: {error}")))?;
     if proof.event_digest != expected_payload_digest {
         return Err(
             AppError::invalid_param("applet package proof payload_digest mismatch")
@@ -1442,7 +1440,8 @@ mod tests {
     /// built-in `DidKeyResolver` resolves the embedded public key.
     fn did_key_for_seed(seed: [u8; 32]) -> (Did, String) {
         let verifying = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
-        let multibase = arkret_core::ed25519_pubkey_to_did_key_multibase(&verifying.to_bytes());
+        let multibase =
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(&verifying.to_bytes());
         let did_str = format!("did:key:{multibase}");
         let vm = format!("{did_str}#{multibase}");
         (Did::new(did_str).unwrap(), vm)
@@ -1587,7 +1586,7 @@ mod tests {
             install_id: "ak:install:01974100-0000-7000-8000-000000000001".to_owned(),
             applet_id: package.applet_id.clone(),
             registration_event_ref: Some(
-                arkret_core::EventId::new(
+                arkret_identifiers::EventId::new(
                     "ak:event:01974100-0000-7000-8000-000000000010".to_owned(),
                 )
                 .unwrap(),
@@ -1595,11 +1594,11 @@ mod tests {
             registration_epoch: package.registration_epoch.clone(),
             bot_actor_id: package.bot_actor_id.clone(),
             capability_grant_refs: vec![
-                arkret_core::GrantId::new(
+                arkret_identifiers::GrantId::new(
                     "ak:grant:01974100-0000-7000-8000-000000000020".to_owned(),
                 )
                 .unwrap(),
-                arkret_core::GrantId::new(
+                arkret_identifiers::GrantId::new(
                     "ak:grant:01974100-0000-7000-8000-000000000021".to_owned(),
                 )
                 .unwrap(),

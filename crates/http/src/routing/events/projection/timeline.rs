@@ -1,4 +1,4 @@
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use soland_application::events::ProjectedEvent as ProjectionEventRecord;
 use soland_application::operation_semantics as kinds;
 

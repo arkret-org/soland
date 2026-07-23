@@ -3,7 +3,7 @@
 //! The collection snapshot already reads `RealmInviteRecord`; this module adds
 //! the operator create/revoke endpoints without physically deleting invite rows.
 
-use arkret_core::RealmId;
+use arkret_identifiers::RealmId;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;

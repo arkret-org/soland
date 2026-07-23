@@ -287,7 +287,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
     .ed25519_bytes()
     .map_err(|error| author_credential_invalid(format!("proof key decode: {error}")))?;
 
-    let actor_did = arkret_core::Did::new(actor_id.to_owned())
+    let actor_did = arkret_identifiers::Did::new(actor_id.to_owned())
         .map_err(|error| author_credential_invalid(format!("actor_id: {error}")))?;
     let view = AuthorGroupStateView {
         group_id: context.coordinates.group_id.clone(),
@@ -306,12 +306,14 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
 
     // The LeafNode signature_key (byte-equal to the proof key after the
     // claim admission) verifies the detached JWS over the proof binding.
-    let proof = arkret_core::Proof {
+    let proof = arkret_wire::Proof {
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method: verification_method.to_owned(),
-        event_digest: arkret_core::Hash::new(arkret_canonical::sha256_digest(proof_binding_bytes))
-            .map_err(|error| author_credential_invalid(format!("binding digest: {error}")))?,
+        event_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
+            proof_binding_bytes,
+        ))
+        .map_err(|error| author_credential_invalid(format!("binding digest: {error}")))?,
         created_at: chrono::Utc::now(),
         domain: None,
         audience: None,
@@ -358,7 +360,7 @@ mod tests {
     // no resolver or directory parameter to call.
     #[test]
     fn admission_maps_every_failure_to_the_canonical_reason() {
-        let actor = arkret_core::Did::new("did:key:z6MkpairwiseAlice").unwrap();
+        let actor = arkret_identifiers::Did::new("did:key:z6MkpairwiseAlice").unwrap();
         let proof_key = vec![0xA1u8; 32];
         let base_claim = MinimalMetadataAuthorClaim {
             group_id: "Zml4dHVyZS1yZWFsbQ",

@@ -343,7 +343,7 @@ pub(super) async fn recovery_session_create(
                     AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
                         .with_wire_code("device_reanchor_frontier_mismatch")
                 })?;
-            Some(arkret_core::SealBasis {
+            Some(arkret_wire::SealBasis {
                 leaves,
                 control_event_set_root: view.control_event_set_root,
                 state_root: view.state_root,
@@ -1190,7 +1190,7 @@ pub(super) async fn recovery_session_complete(
                 .with_wire_code("recovery_authorization_session_mismatch"),
         );
     }
-    let typed_authorize: arkret_core::DeviceAuthorizePayload = serde_json::from_value(
+    let typed_authorize: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload = serde_json::from_value(
         crate::routing::identity::cross_signing::device_authorize_wire_payload(&authorize_payload),
     )
     .map_err(|error| {
@@ -1358,7 +1358,7 @@ pub(super) async fn recovery_session_complete(
             let receipt = receipts
                 .into_iter()
                 .map(|receipt| {
-                    serde_json::from_value::<arkret_core::EventBatchReceipt>(receipt.value).map_err(
+                    serde_json::from_value::<arkret_wire::EventBatchReceipt>(receipt.value).map_err(
                         |error| {
                             AppError::internal(format!(
                                 "stored re-anchor receipt is invalid: {error}"

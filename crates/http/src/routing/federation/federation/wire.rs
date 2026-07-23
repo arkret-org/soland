@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use arkret_core::Did;
+use arkret_identifiers::Did;
 use serde_json::{Value, json};
 
 // ════════════════════════════════════════════════════════════════════════
@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 /// on every inbound federation request.
 #[derive(Debug, Clone)]
 pub(crate) struct FederationTrustHeaders {
-    pub source_trust_domain: arkret_core::TypedTrustDomainId,
-    pub destination_trust_domain: arkret_core::TypedTrustDomainId,
-    pub request_canonical_digest: arkret_core::Hash,
+    pub source_trust_domain: arkret_identifiers::TypedTrustDomainId,
+    pub destination_trust_domain: arkret_identifiers::TypedTrustDomainId,
+    pub request_canonical_digest: arkret_identifiers::Hash,
 }
 
 impl FederationTrustHeaders {
@@ -34,13 +34,14 @@ impl FederationTrustHeaders {
         let source = header_value(arkret_core::HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
         let destination = header_value(arkret_core::HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
         let canonical_hash = header_value(arkret_core::HEADER_REQUEST_CANONICAL_DIGEST)?.to_owned();
-        let source = arkret_core::TypedTrustDomainId::new(source).map_err(|_| {
+        let source = arkret_identifiers::TypedTrustDomainId::new(source).map_err(|_| {
             HeaderViolation::Malformed(arkret_core::HEADER_SOURCE_TRUST_DOMAIN.to_owned())
         })?;
-        let destination = arkret_core::TypedTrustDomainId::new(destination).map_err(|_| {
-            HeaderViolation::Malformed(arkret_core::HEADER_DESTINATION_TRUST_DOMAIN.to_owned())
-        })?;
-        let canonical_hash = arkret_core::Hash::new(canonical_hash).map_err(|_| {
+        let destination =
+            arkret_identifiers::TypedTrustDomainId::new(destination).map_err(|_| {
+                HeaderViolation::Malformed(arkret_core::HEADER_DESTINATION_TRUST_DOMAIN.to_owned())
+            })?;
+        let canonical_hash = arkret_identifiers::Hash::new(canonical_hash).map_err(|_| {
             HeaderViolation::Malformed(arkret_core::HEADER_REQUEST_CANONICAL_DIGEST.to_owned())
         })?;
         Ok(Self {
@@ -55,7 +56,7 @@ impl FederationTrustHeaders {
     /// `cross_domain_replay_rejected`.
     pub(crate) fn verify_destination(
         &self,
-        expected: &arkret_core::TypedTrustDomainId,
+        expected: &arkret_identifiers::TypedTrustDomainId,
     ) -> Result<(), &'static str> {
         if self.destination_trust_domain != *expected {
             return Err(arkret_wire::ReasonCode::CROSS_DOMAIN_REPLAY_REJECTED);
@@ -168,7 +169,7 @@ pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
 pub(crate) fn delivery_binding_stale_response(
     new_recipient_service_id: &Did,
     actor_id: &Did,
-    handover_frontier: &[arkret_core::EventId],
+    handover_frontier: &[arkret_identifiers::EventId],
     witness: Value,
 ) -> Value {
     let witness = match witness {

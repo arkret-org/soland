@@ -16,7 +16,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::RealmId;
+use arkret_identifiers::RealmId;
 use arkret_models_collaboration::governance::realm_governance::{
     RealmOrganizationLifecyclePhase, RealmOrganizationRelationshipList,
     RealmOrganizationRelationshipRow,

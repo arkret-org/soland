@@ -1,15 +1,19 @@
 mod invite_create_schema_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn op(payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000701")
-                .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000701".to_owned())
-                .unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000701",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-000000000701".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::INVITE_CREATE,
             payload,
         )
@@ -136,17 +140,21 @@ mod invite_create_schema_tests {
 }
 
 mod event_projection_dto_boundary_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn join_rule(payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000007a1")
-                .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a1".to_owned())
-                .unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-0000000007a1",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-0000000007a1".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::REALM_JOIN_RULE,
             payload,
         )
@@ -209,10 +217,14 @@ mod event_projection_dto_boundary_tests {
     #[test]
     fn circle_member_convenience_dto_uses_projection_schema() {
         let operation = Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000007a2")
-                .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a2".to_owned())
-                .unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-0000000007a2",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-0000000007a2".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
             json!({
                 "circle_id": "ak:circle:01904100-0000-7000-8000-0000000007a2",
@@ -237,7 +249,7 @@ mod event_projection_dto_boundary_tests {
 }
 
 mod key_backup_active_series_schema_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
@@ -245,12 +257,14 @@ mod key_backup_active_series_schema_tests {
     #[test]
     fn projection_schema_accepts_context_augmented_active_series_payload() {
         let operation = Operation::create(
-            arkret_core::OperationId::new(
+            arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-0000000007a1".to_owned(),
             )
             .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007a1".to_owned())
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-0000000007a1".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             json!({
                 "schema": "ak.schema.key_backup_active_series.v1",
@@ -297,7 +311,7 @@ mod key_backup_active_series_schema_tests {
             soland_storage_postgres::Db { pool: None },
         );
         let mut successor = operation.clone();
-        successor.operation_id = arkret_core::OperationId::new(
+        successor.operation_id = arkret_identifiers::OperationId::new(
             "ak:operation:01904100-0000-7000-8000-0000000007a2".to_owned(),
         )
         .unwrap();
@@ -308,7 +322,7 @@ mod key_backup_active_series_schema_tests {
         );
 
         let mut gap = operation.clone();
-        gap.operation_id = arkret_core::OperationId::new(
+        gap.operation_id = arkret_identifiers::OperationId::new(
             "ak:operation:01904100-0000-7000-8000-0000000007a3".to_owned(),
         )
         .unwrap();
@@ -321,17 +335,21 @@ mod key_backup_active_series_schema_tests {
 }
 
 mod realm_key_share_schema_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn op(payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000007aa")
-                .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007aa".to_owned())
-                .unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-0000000007aa",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-0000000007aa".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::REALM_KEY_SHARE,
             payload,
         )
@@ -399,17 +417,21 @@ mod realm_key_share_schema_tests {
 }
 
 mod read_receipt_policy_schema_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn op(payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000702")
-                .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000702".to_owned())
-                .unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000702",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-000000000702".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::REALM_READ_RECEIPT_POLICY,
             payload,
         )
@@ -442,7 +464,7 @@ mod read_receipt_policy_schema_tests {
 }
 
 mod realm_media_service_schema_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
@@ -450,10 +472,14 @@ mod realm_media_service_schema_tests {
     #[test]
     fn realm_media_service_is_registered_for_projection() {
         let operation = Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000901")
-                .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000901".to_owned())
-                .unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000901",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-000000000901".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::REALM_MEDIA_SERVICE,
             json!({
                 "media_service": {
@@ -475,7 +501,7 @@ mod realm_media_service_schema_tests {
 }
 
 mod realm_plaintext_visible_services_schema_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
@@ -483,10 +509,14 @@ mod realm_plaintext_visible_services_schema_tests {
     #[test]
     fn realm_plaintext_visible_services_is_registered_for_projection() {
         let operation = Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000902")
-                .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000902".to_owned())
-                .unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000902",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-000000000902".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
             json!({
                 "services": [{
@@ -509,10 +539,14 @@ mod realm_plaintext_visible_services_schema_tests {
     #[test]
     fn realm_inheritance_policy_is_registered_for_projection() {
         let operation = Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000904")
-                .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000904".to_owned())
-                .unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000904",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-000000000904".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::REALM_INHERITANCE_POLICY,
             json!({
                 "source_realm_id": "ak:realm:01904100-0000-7000-8000-000000000905",
@@ -542,10 +576,14 @@ mod realm_plaintext_visible_services_schema_tests {
     #[test]
     fn realm_inheritance_policy_rejects_legacy_allowed_policies_wire_shape() {
         let operation = Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000906")
-                .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000906".to_owned())
-                .unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000906",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-000000000906".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::REALM_INHERITANCE_POLICY,
             json!({
                 "source_realm_id": "ak:realm:01904100-0000-7000-8000-000000000905",
@@ -565,9 +603,10 @@ mod realm_plaintext_visible_services_schema_tests {
 
     #[test]
     fn moderation_control_kinds_are_registered_for_projection() {
-        let realm_id =
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000903".to_owned())
-                .unwrap();
+        let realm_id = arkret_identifiers::RealmId::new(
+            "ak:realm:01904100-0000-7000-8000-000000000903".to_owned(),
+        )
+        .unwrap();
         let cases = [
             (
                 arkret_wire::events::EventKind::MODERATION_DECISION,
@@ -630,8 +669,10 @@ mod realm_plaintext_visible_services_schema_tests {
 
         for (kind, payload) in cases {
             let operation = Operation::create(
-                arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000903")
-                    .unwrap(),
+                arkret_identifiers::OperationId::new(
+                    "ak:operation:01904100-0000-7000-8000-000000000903",
+                )
+                .unwrap(),
                 realm_id.clone(),
                 kind,
                 payload,
@@ -644,16 +685,19 @@ mod realm_plaintext_visible_services_schema_tests {
 }
 
 mod message_projection_schema_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d")
                 .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -694,16 +738,19 @@ mod message_projection_schema_tests {
 }
 
 mod agent_action_schema_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d")
                 .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -774,16 +821,19 @@ mod agent_action_schema_tests {
 }
 
 mod spec_sync_validator_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d")
                 .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -927,16 +977,19 @@ mod spec_sync_validator_tests {
 }
 
 mod sdk_artifact_schema_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn cross_signing_reset(payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d")
                 .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             "ak.cross_signing.reset",
             payload,
         )
@@ -944,9 +997,12 @@ mod sdk_artifact_schema_tests {
 
     fn cross_signing_publish(payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6")
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-57d7d85564c6",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d")
                 .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             "ak.cross_signing.publish",
             payload,
         )
@@ -1139,16 +1195,19 @@ mod sdk_artifact_schema_tests {
 }
 
 mod derived_relation_and_morph_immutability_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d")
                 .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )

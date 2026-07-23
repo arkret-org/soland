@@ -388,7 +388,7 @@ impl Handler for RateLimiterMiddleware {
         {
             let retry_after_ms = retry_after.as_millis().try_into().unwrap_or(u64::MAX);
             let retry_after_seconds = retry_after_ms.div_ceil(1000).max(1);
-            let request_id = arkret_core::new_prefixed_uuid7("ak:request:");
+            let request_id = arkret_identifiers::new_prefixed_uuid7("ak:request:");
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
             res.headers_mut()
                 .insert(salvo::http::header::RETRY_AFTER, retry_after_seconds.into());

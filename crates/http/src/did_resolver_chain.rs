@@ -334,7 +334,7 @@ fn valid_trust_domain(value: &str) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
-    use arkret_core::Did;
+    use arkret_identifiers::Did;
     use arkret_identity::DidResolver;
     use serde_json::json;
     use soland_application::identity::DidDocumentState;
@@ -482,7 +482,7 @@ mod tests {
                 id: did.clone(),
                 verification_methods: BTreeMap::from([(
                     verification_method.clone(),
-                    arkret_core::ed25519_pubkey_to_did_key_multibase(&[key_byte; 32]),
+                    arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[key_byte; 32]),
                 )]),
                 also_known_as: Vec::new(),
                 updated_at: Some(chrono::Utc::now()),
@@ -511,7 +511,7 @@ mod tests {
         let resolved = resolver.resolve_did(&did).expect("snapshot resolve");
         assert_eq!(
             resolved.verification_methods[&verification_method],
-            arkret_core::ed25519_pubkey_to_did_key_multibase(&[2u8; 32])
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[2u8; 32])
         );
     }
 
@@ -520,7 +520,7 @@ mod tests {
         let config = base_config();
         let resolver = build_soland_did_resolver(&config);
         let now = chrono::Utc::now();
-        let public_key = arkret_core::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]);
+        let public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]);
         for index in 0..=LOCAL_DID_SNAPSHOT_CAPACITY {
             let did = Did::new(format!("did:web:cache-{index}.example")).expect("valid DID");
             let document =

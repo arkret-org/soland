@@ -1,12 +1,13 @@
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use serde_json::json;
 
 use super::*;
 
 fn op(payload: serde_json::Value) -> Operation {
     Operation::create(
-        arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5").unwrap(),
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+        arkret_identifiers::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
+            .unwrap(),
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
         arkret_wire::events::EventKind::STRAND_TRACKS_UPDATE,
         payload,
     )
@@ -191,8 +192,9 @@ fn create_locked_encryption_profile_detector_matches_update_shapes() {
 
 fn strand_position_op(kind: &'static str, payload: serde_json::Value) -> Operation {
     Operation::create(
-        arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6").unwrap(),
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+        arkret_identifiers::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6")
+            .unwrap(),
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
         kind,
         payload,
     )
@@ -243,8 +245,9 @@ fn canonical_strand_reorder_requires_board_space_and_rank() {
 
 fn space_container_op(kind: &'static str, payload: serde_json::Value) -> Operation {
     Operation::create(
-        arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c7").unwrap(),
-        arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+        arkret_identifiers::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c7")
+            .unwrap(),
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
         kind,
         payload,
     )

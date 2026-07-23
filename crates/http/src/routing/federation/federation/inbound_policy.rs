@@ -1,4 +1,4 @@
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use salvo::http::StatusCode;
 use serde_json::Value;
 use soland_http::error::AppError;
@@ -155,7 +155,7 @@ pub(super) async fn enforce_inbound_operation_batch_policy(
             state,
             policy_actor
                 .as_ref()
-                .map(arkret_core::Did::as_str)
+                .map(arkret_identifiers::Did::as_str)
                 .unwrap_or(origin_service_id),
             operation,
             PolicyGateSurface::FederationInbound {

@@ -430,7 +430,7 @@ pub(crate) async fn validate_realm_key_share_policy(
     let recipient_device_id = share
         .recipient_device_id
         .as_ref()
-        .map(arkret_core::DeviceId::as_str)
+        .map(arkret_identifiers::DeviceId::as_str)
         .ok_or("policy_denied")?;
     let Some(meta) = state
         .realm_query_application()
@@ -656,7 +656,7 @@ fn realm_key_share_source(
     if share
         .recipient_device_id
         .as_ref()
-        .map(arkret_core::DeviceId::as_str)
+        .map(arkret_identifiers::DeviceId::as_str)
         == Some(share.sender_device_id.as_str())
     {
         arkret_core::HistoryKeySource::OwnDevice
@@ -774,7 +774,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
     let authz = state.authorization_application().check(
         soland_application::authorization::AuthorizationCheck {
             actor,
-            action: arkret_core::CapabilityActionId::MESSAGE_MENTION_BROADCAST,
+            action: arkret_wire::CapabilityActionId::MESSAGE_MENTION_BROADCAST,
             resource,
             realm_id,
             owner: owner.as_deref(),
@@ -882,7 +882,7 @@ pub(crate) async fn realm_owner_and_members(
     let owner = meta.map(|meta| meta.owner);
     let members = {
         let realms = state.realm_directory_application().snapshot();
-        arkret_core::RealmId::new(realm_id.to_owned())
+        arkret_identifiers::RealmId::new(realm_id.to_owned())
             .ok()
             .and_then(|id| realms.get(&id))
             .map(|realm| realm.members.iter().map(ToString::to_string).collect())

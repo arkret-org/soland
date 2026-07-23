@@ -212,10 +212,12 @@ pub(crate) async fn build_sync_snapshot(
                 preview_only: None,
                 extra: BTreeMap::new(),
             });
-            entry.state = Some(arkret_core::EventContainer {
-                events: state_events,
-                extra: BTreeMap::new(),
-            });
+            entry.state = Some(
+                arkret_models_collaboration::sync_frames::account_sync::EventContainer {
+                    events: state_events,
+                    extra: BTreeMap::new(),
+                },
+            );
             // Realm display metadata has a canonical account-sync carrier:
             // `state_at_window_start.realm_metadata`. Do not discard the
             // directory title/summary after visibility filtering and force
@@ -353,10 +355,12 @@ pub(crate) async fn build_sync_snapshot(
             extra: BTreeMap::new(),
         }),
         device_lists: Some(device_lists),
-        account_data: Some(arkret_core::EventContainer {
-            events: account_data,
-            extra: BTreeMap::new(),
-        }),
+        account_data: Some(
+            arkret_models_collaboration::sync_frames::account_sync::EventContainer {
+                events: account_data,
+                extra: BTreeMap::new(),
+            },
+        ),
         presence: Some(arkret_core::EphemeralEventContainer { events: presence }),
         notifications: Some(account_notifications),
         partial: None,
@@ -722,7 +726,7 @@ async fn timeline_events_for_realm(
     realm_id: &str,
     after_position: i64,
     session: Option<&SessionRecord>,
-) -> (Vec<arkret_core::Event>, i64) {
+) -> (Vec<arkret_wire::Event>, i64) {
     let mut seen = BTreeSet::new();
     let mut seen_message_ids = BTreeSet::new();
     let mut newest_position = after_position;
@@ -872,7 +876,7 @@ async fn state_events_for_realm(
     after_position: i64,
     session: Option<&SessionRecord>,
     include_current_security_baseline: bool,
-) -> (Vec<arkret_core::Event>, i64) {
+) -> (Vec<arkret_wire::Event>, i64) {
     let events = state
         .event_query_application()
         .projected_events()
@@ -1019,11 +1023,11 @@ async fn device_lists_for_actors(
 
     let changed = changed
         .into_iter()
-        .filter_map(|actor| arkret_core::Did::new(actor).ok())
+        .filter_map(|actor| arkret_identifiers::Did::new(actor).ok())
         .collect();
     let left = left
         .into_iter()
-        .filter_map(|actor| arkret_core::Did::new(actor).ok())
+        .filter_map(|actor| arkret_identifiers::Did::new(actor).ok())
         .collect();
     (
         arkret_core::AccountSubscribeDeviceListChanges { changed, left },
@@ -1045,7 +1049,7 @@ fn stable_position_tie_breaker(key: &str) -> i64 {
     i64::from_str_radix(&digest[..3], 16).unwrap_or_default() & 0x03ff
 }
 
-async fn accepted_event(state: &AppState, event_id: &str) -> Option<arkret_core::Event> {
+async fn accepted_event(state: &AppState, event_id: &str) -> Option<arkret_wire::Event> {
     let record = state
         .event_query_application()
         .canonical_event(event_id)
@@ -1064,11 +1068,11 @@ async fn accepted_event(state: &AppState, event_id: &str) -> Option<arkret_core:
 async fn account_data_events(
     state: &AppState,
     session: Option<&SessionRecord>,
-) -> Vec<arkret_core::Event> {
+) -> Vec<arkret_wire::Event> {
     let Some(session) = session else {
         return Vec::new();
     };
-    let mut latest = BTreeMap::<String, (DateTime<Utc>, arkret_core::Event)>::new();
+    let mut latest = BTreeMap::<String, (DateTime<Utc>, arkret_wire::Event)>::new();
     for record in state
         .event_query_application()
         .canonical_events()
@@ -1123,7 +1127,7 @@ async fn account_data_events(
 async fn notification_account_data_events(
     state: &AppState,
     session: &SessionRecord,
-) -> Vec<arkret_core::Event> {
+) -> Vec<arkret_wire::Event> {
     let rows = state
         .delivery_application()
         .list_recipient_notifications(
@@ -1147,7 +1151,7 @@ async fn notification_account_data_events(
         let Value::Object(payload) = payload else {
             continue;
         };
-        event.actor_id = match arkret_core::Did::new(session.actor.clone()) {
+        event.actor_id = match arkret_identifiers::Did::new(session.actor.clone()) {
             Ok(actor_id) => actor_id,
             Err(_) => continue,
         };

@@ -80,7 +80,7 @@ pub(super) async fn submit_ephemeral(
                 state,
                 realm_id_str,
                 &session.actor,
-                arkret_core::CapabilityActionId::CALL_SIGNAL_SEND,
+                arkret_wire::CapabilityActionId::CALL_SIGNAL_SEND,
             )
             .await
             {

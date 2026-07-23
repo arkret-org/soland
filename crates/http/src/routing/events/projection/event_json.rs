@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use serde_json::json;
 use soland_application::events::ProjectedEvent as ProjectionEventRecord;
 use soland_application::operation_semantics as kinds;

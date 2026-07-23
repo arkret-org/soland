@@ -262,7 +262,7 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
         );
         return;
     };
-    if arkret_core::InviteId::new(invite_id.clone()).is_err() {
+    if arkret_identifiers::InviteId::new(invite_id.clone()).is_err() {
         tracing::warn!(invite_id = %invite_id, "ak.invite.third_party malformed invite id");
         return;
     }
@@ -764,7 +764,7 @@ fn introduction_evidence_digest_for_operation(operation: &Operation) -> Option<S
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
-    if arkret_core::Hash::new(digest.to_owned()).is_err() {
+    if arkret_identifiers::Hash::new(digest.to_owned()).is_err() {
         tracing::warn!(
             operation_id = %operation.operation_id,
             "ak.invite.create supplied invalid introduction_evidence_digest"

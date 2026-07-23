@@ -391,7 +391,7 @@ pub(super) async fn mimi_group_info(
         mls_group_id: MlsGroupId::new(format!("mls:{room_id}"))
             .map_err(|error| AppError::internal(format!("MIMI group id invalid: {error}")))?,
         epoch: 0,
-        group_info: Base64UrlString::new(arkret_core::base64url_encode(&projection_bytes))
+        group_info: Base64UrlString::new(arkret_canonical::base64url_encode(&projection_bytes))
             .map_err(|error| AppError::internal(format!("MIMI group info invalid: {error}")))?,
     };
     let _receipt = mimi_receipt(

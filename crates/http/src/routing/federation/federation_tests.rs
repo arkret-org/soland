@@ -23,7 +23,7 @@ fn config_with_policy(topology: FederationFanoutTopology, peers: Vec<String>) ->
 
 fn verify_actor_body() -> arkret_core::FederationVerifyActorRequestBody {
     arkret_core::FederationVerifyActorRequestBody {
-        actor_id: arkret_core::Did::new("did:web:alice.example").unwrap(),
+        actor_id: arkret_identifiers::Did::new("did:web:alice.example").unwrap(),
         challenge: Some("challenge-1".to_owned()),
         signed_payload_digest: None,
         signature: arkret_models_collaboration::federation::frames::VerifyActorChallengeSignature {
@@ -35,15 +35,15 @@ fn verify_actor_body() -> arkret_core::FederationVerifyActorRequestBody {
     }
 }
 
-fn trust_domain(value: &str) -> arkret_core::TypedTrustDomainId {
-    arkret_core::TypedTrustDomainId::new(value.to_owned()).unwrap()
+fn trust_domain(value: &str) -> arkret_identifiers::TypedTrustDomainId {
+    arkret_identifiers::TypedTrustDomainId::new(value.to_owned()).unwrap()
 }
 
 fn federation_headers(digest: &str) -> FederationTrustHeaders {
     FederationTrustHeaders {
         source_trust_domain: trust_domain("ak:trust_domain:peer.example"),
         destination_trust_domain: trust_domain("ak:trust_domain:soland.local"),
-        request_canonical_digest: arkret_core::Hash::new(digest.to_owned()).unwrap(),
+        request_canonical_digest: arkret_identifiers::Hash::new(digest.to_owned()).unwrap(),
     }
 }
 
@@ -224,7 +224,8 @@ async fn local_invite_membership_and_message_operations_project_invite() {
     let state = AppState::new(cfg, Db { pool: None });
     let realm_id = RealmId::new("ak:realm:01904100-0000-7000-8000-000000000051").unwrap();
     let invite = Operation::create(
-        arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000052").unwrap(),
+        arkret_identifiers::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000052")
+            .unwrap(),
         realm_id.clone(),
         arkret_wire::events::EventKind::MEMBER_STATE,
         json!({
@@ -234,7 +235,8 @@ async fn local_invite_membership_and_message_operations_project_invite() {
         }),
     );
     let invite_create = Operation::create(
-        arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000055").unwrap(),
+        arkret_identifiers::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000055")
+            .unwrap(),
         realm_id.clone(),
         arkret_wire::events::EventKind::INVITE_CREATE,
         json!({
@@ -250,7 +252,8 @@ async fn local_invite_membership_and_message_operations_project_invite() {
         }),
     );
     let message = Operation::create(
-        arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000053").unwrap(),
+        arkret_identifiers::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000053")
+            .unwrap(),
         realm_id,
         arkret_wire::events::EventKind::MESSAGE_CREATE,
         json!({
@@ -300,13 +303,15 @@ async fn operation_frontier_tracks_persisted_operation_ids() {
     let state = AppState::new(cfg, Db { pool: None });
     let realm_id = RealmId::new("ak:realm:01904100-0000-7000-8000-000000000061").unwrap();
     let first = Operation::create(
-        arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000062").unwrap(),
+        arkret_identifiers::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000062")
+            .unwrap(),
         realm_id.clone(),
         arkret_wire::events::EventKind::MESSAGE_CREATE,
         json!({"content": {"kind": "ak.content.text", "body": "one"}}),
     );
     let second = Operation::create(
-        arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000063").unwrap(),
+        arkret_identifiers::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000063")
+            .unwrap(),
         realm_id,
         arkret_wire::events::EventKind::MESSAGE_CREATE,
         json!({"content": {"kind": "ak.content.text", "body": "two"}}),

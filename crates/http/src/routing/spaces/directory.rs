@@ -156,8 +156,10 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_id = Did::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("invalid configured service_id: {error}")))?;
-    let trust_domain = arkret_core::TypedTrustDomainId::new(state.config().trust_domain.clone())
-        .map_err(|error| AppError::internal(format!("invalid configured trust_domain: {error}")))?;
+    let trust_domain = arkret_identifiers::TypedTrustDomainId::new(
+        state.config().trust_domain.clone(),
+    )
+    .map_err(|error| AppError::internal(format!("invalid configured trust_domain: {error}")))?;
     let supported_profiles: Vec<String> = DIRECTORY_DISCOVERY_PROFILES
         .iter()
         .map(|profile| (*profile).to_owned())
@@ -170,7 +172,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let description = ServiceDescribe {
         service_id,
         trust_domain,
-        service_type: arkret_core::ServiceType::DirectoryService,
+        service_type: arkret_wire::ServiceType::DirectoryService,
         protocol_version: arkret_core::PROTOCOL_VERSION.to_owned(),
         supported_profiles: supported_profiles.clone(),
         supported_operations: DIRECTORY_SUPPORTED_OPERATIONS

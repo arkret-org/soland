@@ -128,7 +128,7 @@ pub(super) fn cba_effect_cell_family(effect: &Value) -> Result<&str, EventValida
             "effects[] entries require cell",
         )
     })?;
-    if arkret_core::CellRef::new(cell.to_owned()).is_err() {
+    if arkret_identifiers::CellRef::new(cell.to_owned()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",

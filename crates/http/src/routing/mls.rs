@@ -8,6 +8,7 @@
 //! - `POST /_arkret/self/keys/keypackages/claim`  — op `ak.self.keys.keypackages.command.claim`
 //!   (atomically claim a published KeyPackage; second claim of the same id returns `409
 //!   cas_conflict`).
+//!
 //! MLS *commits* are no longer served by a dedicated REST surface — clients
 //! submit `ak.mls.commit` events via the normal `POST /_arkret/self/events`
 //! pipeline (`ak.self.events.command.submit` of the registered durable `ak.mls.commit`
@@ -762,16 +763,17 @@ fn peer_claim_transport_binding(
         .map_err(|_| peer_claim_schema_violation("source-service-id must be a DID"))?;
     let destination_service_id = Did::new(peer_required_header(req, "destination-service-id")?)
         .map_err(|_| peer_claim_schema_violation("destination-service-id must be a DID"))?;
-    let source_trust_domain =
-        arkret_core::TypedTrustDomainId::new(peer_required_header(req, "source-trust-domain")?)
-            .map_err(|_| peer_claim_schema_violation("source-trust-domain is invalid"))?;
-    let destination_trust_domain = arkret_core::TypedTrustDomainId::new(peer_required_header(
+    let source_trust_domain = arkret_identifiers::TypedTrustDomainId::new(peer_required_header(
         req,
-        "destination-trust-domain",
+        "source-trust-domain",
     )?)
+    .map_err(|_| peer_claim_schema_violation("source-trust-domain is invalid"))?;
+    let destination_trust_domain = arkret_identifiers::TypedTrustDomainId::new(
+        peer_required_header(req, "destination-trust-domain")?,
+    )
     .map_err(|_| peer_claim_schema_violation("destination-trust-domain is invalid"))?;
     let local_trust_domain =
-        arkret_core::TypedTrustDomainId::new(state.config().trust_domain.clone())
+        arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
             .map_err(|_| AppError::internal("configured trust_domain is invalid"))?;
     if destination_service_id.as_str() != state.service_id()
         || source_service_id == destination_service_id
@@ -975,9 +977,9 @@ async fn peer_claim_policy_authorized(
                 return Ok(false);
             }
             let trust_domain =
-                arkret_core::TypedTrustDomainId::new(state.config().trust_domain.clone())
+                arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
                     .map_err(|_| AppError::internal("configured trust_domain is invalid"))?;
-            let expected_pair_key = arkret_core::direct_conversation_pair_key(
+            let expected_pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
                 trust_domain,
                 arkret_core::DirectConversationPairKeyParticipant::unmapped(body.requester.clone()),
                 arkret_core::DirectConversationPairKeyParticipant::unmapped(
@@ -1025,10 +1027,10 @@ fn build_peer_claim_outcome(
         )?,
         expires_at: body.expires_at,
         signature: KeyOperationSignature {
-            kid: arkret_core::NonEmptyString::new(verification_method.clone())
+            kid: arkret_wire::NonEmptyString::new(verification_method.clone())
                 .map_err(|error| AppError::internal(format!("receipt kid invalid: {error}")))?,
-            alg: Some(arkret_core::NonEmptyString::new("EdDSA").expect("EdDSA is non-empty")),
-            sig: arkret_core::Base64UrlString::new("AA")
+            alg: Some(arkret_wire::NonEmptyString::new("EdDSA").expect("EdDSA is non-empty")),
+            sig: arkret_wire::Base64UrlString::new("AA")
                 .expect("placeholder receipt signature is base64url"),
         },
     };
@@ -1036,7 +1038,7 @@ fn build_peer_claim_outcome(
         .map_err(|error| AppError::internal(format!("peer claim receipt transcript: {error}")))?;
     let signature = state.notary_signing_key().sign(&signing_bytes);
     receipt.signature.sig =
-        arkret_core::Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+        arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
             .map_err(|error| AppError::internal(format!("receipt signature invalid: {error}")))?;
     let outcome = PeerKeyPackagesClaimOutcome {
         claim_request_id: body.claim_request_id.clone(),
@@ -1662,7 +1664,7 @@ async fn validate_direct_keypackage_consume(
                 "canonical direct binding Event is missing",
             )
         })?;
-    let binding_event = serde_json::from_value::<arkret_core::Event>(binding_event.envelope)
+    let binding_event = serde_json::from_value::<arkret_wire::Event>(binding_event.envelope)
         .map_err(|error| {
             AppError::internal(format!("stored direct binding Event invalid: {error}"))
         })?;
@@ -1697,7 +1699,7 @@ async fn validate_direct_keypackage_consume(
                 "canonical direct Welcome Event is missing",
             )
         })?;
-    let welcome_event = serde_json::from_value::<arkret_core::Event>(welcome_event.envelope)
+    let welcome_event = serde_json::from_value::<arkret_wire::Event>(welcome_event.envelope)
         .map_err(|error| {
             AppError::internal(format!("stored direct Welcome Event invalid: {error}"))
         })?;
@@ -1794,7 +1796,7 @@ async fn validate_sidecar_keypackage_consume(
                 "Sidecar Welcome Event is not accepted",
             )
         })?;
-    let event = serde_json::from_value::<arkret_core::Event>(stored.envelope)
+    let event = serde_json::from_value::<arkret_wire::Event>(stored.envelope)
         .map_err(|error| AppError::internal(format!("stored Sidecar Welcome invalid: {error}")))?;
     if event.kind.as_str() != arkret_wire::events::EventKind::MLS_WELCOME {
         return Err(AppError::new(
@@ -2100,7 +2102,7 @@ fn entry_signature(
 
 async fn validate_agent_keypackage_upload(
     state: &AppState,
-    principal: &arkret_core::Did,
+    principal: &arkret_identifiers::Did,
     authorize_event_id: &str,
     key_package_bytes: &[u8],
     signature: &KeyOperationSignature,
@@ -2112,7 +2114,7 @@ async fn validate_agent_keypackage_upload(
         .await
         .map_err(|_| "claim_generation_mismatch".to_owned())?
         .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
-    let event = serde_json::from_value::<arkret_core::Event>(accepted.envelope)
+    let event = serde_json::from_value::<arkret_wire::Event>(accepted.envelope)
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
     let payload =
         serde_json::to_value(event.payload).map_err(|_| "claim_generation_mismatch".to_owned())?;
@@ -2164,7 +2166,7 @@ async fn validate_agent_keypackage_upload(
 
 async fn verify_device_keypackage_signature(
     state: &AppState,
-    principal: &arkret_core::Did,
+    principal: &arkret_identifiers::Did,
     device_id: &str,
     signature: &KeyOperationSignature,
     signing_input: &[u8],
@@ -2228,7 +2230,7 @@ async fn verify_session_keypackage_write_signature(
     signature: &KeyOperationSignature,
     signing_input: &[u8],
 ) -> Result<(), AppError> {
-    let principal = arkret_core::Did::new(session.actor.clone())
+    let principal = arkret_identifiers::Did::new(session.actor.clone())
         .map_err(|error| AppError::invalid_param(format!("invalid session principal: {error}")))?;
     if let Some(binding) = current_agent_keypackage_trust_binding(state, &principal).await? {
         let authorize_event_id = binding
@@ -2300,7 +2302,10 @@ fn capabilities_satisfy(published: &[String], required: &BTreeSet<String>) -> bo
     required.is_subset(&published)
 }
 
-fn current_accepted_ssk_generation(state: &AppState, principal: &arkret_core::Did) -> Option<u64> {
+fn current_accepted_ssk_generation(
+    state: &AppState,
+    principal: &arkret_identifiers::Did,
+) -> Option<u64> {
     state
         .identity_application()
         .current_cross_signing(principal)
@@ -2309,7 +2314,7 @@ fn current_accepted_ssk_generation(state: &AppState, principal: &arkret_core::Di
 
 async fn current_agent_keypackage_trust_binding(
     state: &AppState,
-    principal: &arkret_core::Did,
+    principal: &arkret_identifiers::Did,
 ) -> Result<Option<KeyPackageTrustBinding>, AppError> {
     let Some(agent) = state
         .agent_pairing_application()
@@ -2371,7 +2376,7 @@ async fn current_agent_keypackage_trust_binding(
             .with_wire_code("claim_generation_mismatch")
         })?;
     let event =
-        serde_json::from_value::<arkret_core::Event>(accepted.envelope).map_err(|error| {
+        serde_json::from_value::<arkret_wire::Event>(accepted.envelope).map_err(|error| {
             AppError::internal(format!(
                 "stored Agent key authorization Event invalid: {error}"
             ))
@@ -2401,7 +2406,7 @@ async fn current_agent_keypackage_trust_binding(
 
 pub(crate) async fn current_agent_key_authorization_matches(
     state: &AppState,
-    principal: &arkret_core::Did,
+    principal: &arkret_identifiers::Did,
     authorize_event_id: &str,
 ) -> bool {
     current_agent_keypackage_trust_binding(state, principal)
@@ -2415,7 +2420,7 @@ pub(crate) async fn current_agent_key_authorization_matches(
 
 async fn current_keypackage_trust_binding(
     state: &AppState,
-    principal: &arkret_core::Did,
+    principal: &arkret_identifiers::Did,
     device_id: &str,
 ) -> Result<KeyPackageTrustBinding, AppError> {
     if let Some(binding) = current_agent_keypackage_trust_binding(state, principal).await? {
@@ -2450,7 +2455,7 @@ async fn current_keypackage_trust_binding(
 
 async fn current_keypackage_claim_trust_selector(
     state: &AppState,
-    principal: &arkret_core::Did,
+    principal: &arkret_identifiers::Did,
     target_device_ids: &BTreeSet<String>,
 ) -> Result<KeyPackageTrustSelector, AppError> {
     if let Some(binding) = current_agent_keypackage_trust_binding(state, principal).await? {
@@ -2596,7 +2601,7 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
     actor_id: &str,
     intended_realm_id: &str,
 ) -> bool {
-    let Ok(principal) = arkret_core::Did::new(actor_id.to_owned()) else {
+    let Ok(principal) = arkret_identifiers::Did::new(actor_id.to_owned()) else {
         return false;
     };
     let target_device_ids = BTreeSet::new();
@@ -2746,10 +2751,11 @@ mod trust_binding_tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let principal = arkret_core::Did::new("did:web:agent.example".to_owned()).unwrap();
-        let device =
-            arkret_core::DeviceId::new("ak:device:01904100-0000-7000-8000-00000000000f".to_owned())
-                .unwrap();
+        let principal = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
+        let device = arkret_identifiers::DeviceId::new(
+            "ak:device:01904100-0000-7000-8000-00000000000f".to_owned(),
+        )
+        .unwrap();
         let verification_method = "did:web:agent.example#runtime-1";
         let signing_seed = [17_u8; 32];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed);
@@ -2761,15 +2767,16 @@ mod trust_binding_tests {
         });
         let public_key_digest =
             arkret_core::agent_runtime_public_key_digest(&public_key_value).unwrap();
-        let realm_id =
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-00000000000f".to_owned())
-                .unwrap();
-        let authorize_event = arkret_core::Event::new(
+        let realm_id = arkret_identifiers::RealmId::new(
+            "ak:realm:01904100-0000-7000-8000-00000000000f".to_owned(),
+        )
+        .unwrap();
+        let authorize_event = arkret_wire::Event::new(
             arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE,
             realm_id,
             principal.clone(),
             1,
-            arkret_core::Hlc::new("019041000000-0001-0000000f").unwrap(),
+            arkret_identifiers::Hlc::new("019041000000-0001-0000000f").unwrap(),
             json!({
                 "agent_id": principal.as_str(),
                 "key_id": "ak:agent_key:01904100-0000-7000-8000-00000000000f",

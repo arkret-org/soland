@@ -67,7 +67,7 @@ pub(super) fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
     } else {
         return None;
     };
-    arkret_core::Did::new(did.to_owned()).ok()?;
+    arkret_identifiers::Did::new(did.to_owned()).ok()?;
     Some(FederationPeerTarget {
         url: url.trim_end_matches('/').to_owned(),
         did: did.to_owned(),

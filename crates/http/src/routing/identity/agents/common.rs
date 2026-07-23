@@ -678,11 +678,14 @@ pub(super) fn agent_key_state_from_record(
             "persisted Agent controller DID is invalid: {error}"
         ))
     })?;
-    let requested_scope_digest =
-        arkret_core::agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
-            .map_err(|error| {
-                AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
-            })?;
+    let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
+        &agent_id,
+        &controller_id,
+        &requested_scope,
+    )
+    .map_err(|error| {
+        AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
+    })?;
     let pairing_is_open = matches!(record.state.as_str(), "pending_runtime_key" | "paused")
         && agent_pairing_handle_is_open(record)
         && record

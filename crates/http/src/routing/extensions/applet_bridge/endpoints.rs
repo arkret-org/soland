@@ -473,10 +473,10 @@ fn session_revoke_body_for_applet(
             AppError::internal(format!("stored applet_id is invalid: {error}"))
         })?),
         effective_scope: Some(match &revoke.effective_scope {
-            arkret_core::EffectiveScope::Realm { realm_id } => arkret_wire::EffectiveScope::Realm {
+            arkret_wire::EffectiveScope::Realm { realm_id } => arkret_wire::EffectiveScope::Realm {
                 realm_id: realm_id.clone(),
             },
-            arkret_core::EffectiveScope::Circle {
+            arkret_wire::EffectiveScope::Circle {
                 realm_id,
                 circle_id,
             } => arkret_wire::EffectiveScope::Circle {

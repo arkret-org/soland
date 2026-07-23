@@ -1206,13 +1206,13 @@ pub(crate) fn sha256_multihash_base58btc(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {
-    let key_bytes = arkret_core::decode_ed25519_multibase(value)
+    let key_bytes = arkret_canonical::decode_ed25519_multibase(value)
         .map_err(|error| format!("public key must be base58btc ed25519-pub multibase: {error}"))?;
     VerifyingKey::from_bytes(&key_bytes).map_err(|_| "invalid ed25519 public key".to_owned())
 }
 
 pub(crate) fn decode_webvh_signature(value: &str) -> Result<Signature, String> {
-    let signature_bytes = arkret_core::decode_ed25519_signature_multibase(value)
+    let signature_bytes = arkret_canonical::decode_ed25519_signature_multibase(value)
         .map_err(|error| format!("invalid ed25519 proofValue: {error}"))?;
     Ok(Signature::from_bytes(&signature_bytes))
 }

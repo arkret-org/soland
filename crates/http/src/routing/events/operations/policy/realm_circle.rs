@@ -92,7 +92,7 @@ pub(super) async fn validate_circle_create_policy(
         let verdict = state.authorization_application().check(
             soland_application::authorization::AuthorizationCheck {
                 actor,
-                action: arkret_core::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
+                action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
                 resource: realm_id,
                 realm_id,
                 owner: owner.as_deref(),
@@ -130,7 +130,7 @@ pub(super) async fn validate_circle_create_policy(
         .authorization_application()
         .check(soland_application::authorization::AuthorizationCheck {
             actor,
-            action: arkret_core::CapabilityActionId::CIRCLE_CREATE,
+            action: arkret_wire::CapabilityActionId::CIRCLE_CREATE,
             resource: realm_id,
             realm_id,
             owner: owner.as_deref(),

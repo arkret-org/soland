@@ -108,7 +108,7 @@ async fn keys_upload(
         let algorithm = key_id.as_str().split(':').next().unwrap_or(key_id.as_str());
         *one_time_key_alg_counts
             .entry(
-                arkret_core::NonEmptyString::new(algorithm.to_owned()).map_err(|error| {
+                arkret_wire::NonEmptyString::new(algorithm.to_owned()).map_err(|error| {
                     AppError::invalid_param(format!("one-time key algorithm is invalid: {error}"))
                 })?,
             )
@@ -209,7 +209,7 @@ async fn keys_upload(
     }
 
     one_time_key_alg_counts.insert(
-        arkret_core::NonEmptyString::new("total").expect("total is non-empty"),
+        arkret_wire::NonEmptyString::new("total").expect("total is non-empty"),
         one_time_key_count,
     );
     json_ok(KeysUploadOutcome {
@@ -264,7 +264,7 @@ async fn keys_query(
             device_generations.insert(
                 actor.clone(),
                 arkret_core::DeviceGenerationState {
-                    current_device_generation_ref: arkret_core::NonEmptyString::new(
+                    current_device_generation_ref: arkret_wire::NonEmptyString::new(
                         generation.current_ref,
                     )
                     .map_err(|error| {
@@ -333,7 +333,7 @@ async fn keys_query(
                     algorithms,
                     device_signing_key: facet
                         .signing_key_did
-                        .map(arkret_core::DidKey::new)
+                        .map(arkret_wire::DidKey::new)
                         .transpose()
                         .map_err(|error| {
                             AppError::internal(format!(
@@ -342,7 +342,7 @@ async fn keys_query(
                         })?,
                     hpke_key: facet
                         .hpke_key
-                        .map(arkret_core::NonEmptyString::new)
+                        .map(arkret_wire::NonEmptyString::new)
                         .transpose()
                         .map_err(|error| {
                             AppError::internal(format!("stored HPKE key is invalid: {error}"))
@@ -352,7 +352,7 @@ async fn keys_query(
                         .map(|algorithms| {
                             algorithms
                                 .into_iter()
-                                .map(arkret_core::NonEmptyString::new)
+                                .map(arkret_wire::NonEmptyString::new)
                                 .collect::<Result<Vec<_>, _>>()
                         })
                         .transpose()
@@ -383,10 +383,10 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
     if requester == actor {
         return true;
     }
-    let Ok(requester_did) = arkret_core::Did::new(requester.to_owned()) else {
+    let Ok(requester_did) = arkret_identifiers::Did::new(requester.to_owned()) else {
         return false;
     };
-    let Ok(actor_did) = arkret_core::Did::new(actor.to_owned()) else {
+    let Ok(actor_did) = arkret_identifiers::Did::new(actor.to_owned()) else {
         return false;
     };
     state
@@ -468,7 +468,7 @@ fn verify_keys_upload_device_signature(
     let alg = device_signature
         .alg
         .as_ref()
-        .map(arkret_core::NonEmptyString::as_str)
+        .map(arkret_wire::NonEmptyString::as_str)
         .unwrap_or_default();
     if alg != "EdDSA" {
         return Err(AppError::invalid_param(
@@ -643,7 +643,7 @@ async fn device_signing_keys_query(
         let Some(device_signing_key) = facet.signing_key_did else {
             continue;
         };
-        let Ok(typed_device_id) = arkret_core::DeviceId::new(device_id.clone()) else {
+        let Ok(typed_device_id) = arkret_identifiers::DeviceId::new(device_id.clone()) else {
             continue;
         };
         devices.push(AuthorizedDeviceSigningKey {

@@ -655,7 +655,7 @@ async fn handle_rtc_token(
     // exchange so the SFU cannot be linked back to (realm, call, actor, device)
     // by recomputing the id, and the wire form matches the schema pattern
     // `^ak:rtc_participant:<uuidv7>$`.
-    let participant_identity = arkret_core::new_prefixed_uuid7("ak:rtc_participant:");
+    let participant_identity = arkret_identifiers::new_prefixed_uuid7("ak:rtc_participant:");
     let signing_key = state.notary_signing_key();
     // `bindings/livekit.md` §2/§5 — publish grants are derived from the
     // caller's `desired_media`. Absent the field we default to audio+video
@@ -1007,7 +1007,7 @@ fn media_service_epoch_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Result<MediaServiceEpoch, AppError> {
-    let cell_id = arkret_core::CellRef::new(format!(
+    let cell_id = arkret_identifiers::CellRef::new(format!(
         "ak:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
@@ -1458,7 +1458,7 @@ async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<Stri
     let members = {
         let realms = state.realm_directory_application().snapshot();
         Some({
-            arkret_core::RealmId::new(realm_id.to_owned())
+            arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .ok()
                 .and_then(|id| realms.get(&id))
                 .map(|realm| realm.members.iter().map(ToString::to_string).collect())

@@ -320,7 +320,7 @@ fn validate_grant_payload(
     let registry_digest = match grant.get("capability_action_registry_digest") {
         None => None,
         Some(Value::String(value)) if value.starts_with("sha256:") => {
-            Some(arkret_core::Hash::new(value.clone()).map_err(|_| {
+            Some(arkret_identifiers::Hash::new(value.clone()).map_err(|_| {
                 AppError::invalid_param(
                     "payload.grant.capability_action_registry_digest must be sha256",
                 )
@@ -332,7 +332,7 @@ fn validate_grant_payload(
             ));
         }
     };
-    arkret_core::validate_capability_action_registry_binding(&actions, registry_digest.as_ref())
+    arkret_policy::validate_capability_action_registry_binding(&actions, registry_digest.as_ref())
         .map_err(|_| {
             AppError::invalid_param("payload.grant capability registry basis is unavailable")
         })?;

@@ -53,16 +53,19 @@ mod audience_mention_tests {
 }
 
 mod reaction_and_window_policy_tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::super::*;
 
     fn reaction_op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d")
                 .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )

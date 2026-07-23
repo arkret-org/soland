@@ -11,16 +11,16 @@ pub(super) async fn validate_capability_grant_proofs(
     if kind != arkret_wire::events::EventKind::CAPABILITY_GRANT {
         return Ok(());
     }
-    let payload: arkret_core::CapabilityGrantPayload = serde_json::from_value(
-        object.get("payload").cloned().unwrap_or(Value::Null),
-    )
-    .map_err(|error| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            format!("invalid capability grant payload: {error}"),
-        )
-    })?;
+    let payload: arkret_models_collaboration::events_payloads::capability_circle_consent_contact::CapabilityGrantPayload =
+        serde_json::from_value(object.get("payload").cloned().unwrap_or(Value::Null)).map_err(
+            |error| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    format!("invalid capability grant payload: {error}"),
+                )
+            },
+        )?;
     let Some(grant) = payload.grant else {
         // The active schema also permits the compact grant-id/actions/resource
         // carrier. It has no nested proof object; its Event proof remains the
@@ -58,7 +58,7 @@ pub(super) async fn validate_capability_grant_proofs(
             )
         })?;
         if proof.proof_purpose.is_some()
-            && proof.proof_purpose != Some(arkret_core::PayloadProofPurpose::IssuerAttestation)
+            && proof.proof_purpose != Some(arkret_wire::PayloadProofPurpose::IssuerAttestation)
         {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
@@ -139,29 +139,30 @@ mod tests {
 
     fn signed_payload() -> (String, Value) {
         let signing_key = SigningKey::from_bytes(&[31_u8; 32]);
-        let multibase = arkret_core::ed25519_pubkey_to_did_key_multibase(
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
             signing_key.verifying_key().as_bytes(),
         );
         let issuer = format!("did:key:{multibase}");
         let verification_method = format!("{issuer}#{multibase}");
-        let mut grant: arkret_core::CapabilityGrant = serde_json::from_value(json!({
-            "id": "ak:grant:01904100-0000-7000-8000-000000000013",
-            "schema": "ak.schema.capability.v1",
-            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
-            "issuer": issuer,
-            "subject": issuer,
-            "actions": ["ak.realm.configure"],
-            "resources": [{
-                "kind": "realm",
+        let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant =
+            serde_json::from_value(json!({
+                "id": "ak:grant:01904100-0000-7000-8000-000000000013",
+                "schema": "ak.schema.capability.v1",
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
-                "match_scope": "realm_wide"
-            }],
-            "issued_at": "2026-07-21T08:00:00.000Z",
-            "proofs": []
-        }))
-        .expect("grant fixture");
-        let mut proof = arkret_core::PayloadProof {
-            kind: arkret_core::proof_kind::DETACHED_JWS.to_owned(),
+                "issuer": issuer,
+                "subject": issuer,
+                "actions": ["ak.realm.configure"],
+                "resources": [{
+                    "kind": "realm",
+                    "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
+                    "match_scope": "realm_wide"
+                }],
+                "issued_at": "2026-07-21T08:00:00.000Z",
+                "proofs": []
+            }))
+            .expect("grant fixture");
+        let mut proof = arkret_wire::PayloadProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             alg: "EdDSA".to_owned(),
             verification_method,
             payload_digest: grant.payload_digest().expect("grant digest"),
@@ -170,7 +171,7 @@ mod tests {
                 .with_timezone(&chrono::Utc),
             domain: None,
             audience: None,
-            proof_purpose: Some(arkret_core::PayloadProofPurpose::IssuerAttestation),
+            proof_purpose: Some(arkret_wire::PayloadProofPurpose::IssuerAttestation),
             jws: String::new(),
         };
         proof.jws = arkret_signatures::sign_eddsa_detached_jws(

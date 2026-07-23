@@ -9,7 +9,7 @@ use crate::routing::spaces::space::presence_visible_to_session;
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
 pub(super) async fn account_describe(
     depot: &mut Depot,
-) -> soland_http::result::JsonResult<arkret_core::ServiceDescribe> {
+) -> soland_http::result::JsonResult<arkret_models_discovery::ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     soland_http::result::json_ok(crate::routing::system::describe::build_server_description(
         state,

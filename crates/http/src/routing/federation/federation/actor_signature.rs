@@ -55,7 +55,7 @@ fn federation_verify_actor_signature_transcript(
 pub(super) struct VerifiedFederationActor {
     pub(super) verified_key_id: String,
     pub(super) did_document_ref: String,
-    pub(super) key_log_head: arkret_core::Hash,
+    pub(super) key_log_head: arkret_identifiers::Hash,
 }
 
 struct FederationActorSignature {

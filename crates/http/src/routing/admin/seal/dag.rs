@@ -187,13 +187,13 @@ pub(crate) async fn admin_compact_seal_dag(
     // operator attribution (falls back to the service signer when no
     // per-admin key is provisioned).
     let signer = admin_signer_for(state, &admin_session.actor)?;
-    let compaction = arkret_core::Seal::sign_single_kind(
+    let compaction = arkret_wire::Seal::sign_single_kind(
         realm.clone(),
         view.predecessor_refs.clone(),
         Vec::new(),
         view.state_root.clone(),
         fresh_hlc(state)?,
-        arkret_core::SealKind::Compaction,
+        arkret_wire::SealKind::Compaction,
         &signer,
     )
     .map_err(|e| {

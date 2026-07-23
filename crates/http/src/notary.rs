@@ -235,7 +235,7 @@ impl NotaryWorker {
             // Normal delta-accepting Seal. Compaction Seals come
             // through `admin_compact_seal_dag`, not the regular
             // notary pipeline.
-            kind: arkret_core::SealKind::Normal,
+            kind: arkret_wire::SealKind::Normal,
         };
         let canonical_bytes = seal
             .canonical_bytes_for_id()
@@ -603,7 +603,7 @@ impl NotaryWorker {
             sealed_at: chrono::Utc::now(),
             hlc: Hlc::new(state.hlc().now())
                 .map_err(|e| NotaryError::Construction(format!("invalid HLC: {e}")))?,
-            kind: arkret_core::SealKind::Normal,
+            kind: arkret_wire::SealKind::Normal,
         };
         let canonical_bytes = seal
             .canonical_bytes_for_id()
@@ -932,7 +932,7 @@ pub fn ensure_materialized_event_seal(
         sealed_at: chrono::Utc::now(),
         hlc: Hlc::new(state.hlc().now())
             .map_err(|error| NotaryError::Construction(format!("invalid HLC: {error}")))?,
-        kind: arkret_core::SealKind::Compaction,
+        kind: arkret_wire::SealKind::Compaction,
     };
     if first_generation_delta_required
         && let Some(requirement) = generation_fence
@@ -1258,7 +1258,7 @@ mod tests {
     fn state_root_matches_independent_rfc6962_recompute() {
         use std::collections::BTreeMap;
 
-        use arkret_core::CellRef;
+        use arkret_identifiers::CellRef;
         use arkret_state::lattice::CellState;
         use sha2::{Digest, Sha256};
 

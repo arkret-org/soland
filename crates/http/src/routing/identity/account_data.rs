@@ -238,7 +238,7 @@ async fn persist_account_data_event(
     let service_did = Did::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let mut event = Event::new_with_id_at(
-        EventId::new(arkret_core::new_prefixed_uuid7("ak:event:")).map_err(|error| {
+        EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:")).map_err(|error| {
             AppError::internal(format!("account_data Event id invalid: {error}"))
         })?,
         arkret_wire::events::EventKind::ACCOUNT_DATA_SET,

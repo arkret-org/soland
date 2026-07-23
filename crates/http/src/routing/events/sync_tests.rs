@@ -214,7 +214,7 @@ fn test_presence_envelope(
     status: &str,
     sent_at: DateTime<Utc>,
 ) -> arkret_core::EphemeralEnvelope {
-    let envelope_device = if arkret_core::DeviceId::new(device.to_owned()).is_ok() {
+    let envelope_device = if arkret_identifiers::DeviceId::new(device.to_owned()).is_ok() {
         device
     } else {
         "ak:device:01904100-0000-7000-8000-000000000001"
@@ -397,7 +397,7 @@ async fn typing_state_is_emitted_once_per_cursor_revision() {
         updated_at,
     );
     envelope.kind = "ak.typing".to_owned();
-    envelope.realm_id = arkret_core::RealmId::new(ROSTER_REALM.to_owned()).unwrap();
+    envelope.realm_id = arkret_identifiers::RealmId::new(ROSTER_REALM.to_owned()).unwrap();
     envelope.payload = BTreeMap::from([
         ("typing".to_owned(), json!(true)),
         (
@@ -497,9 +497,9 @@ fn sync_test_operation_at(
     kind: &str,
     payload: Value,
     created_at: DateTime<Utc>,
-) -> arkret_core::Operation {
-    let mut operation = arkret_core::Operation::create(
-        arkret_core::OperationId::new(operation_id.to_owned()).unwrap(),
+) -> arkret_event_draft::Operation {
+    let mut operation = arkret_event_draft::Operation::create(
+        arkret_identifiers::OperationId::new(operation_id.to_owned()).unwrap(),
         RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
         kind,
         payload,
@@ -516,11 +516,11 @@ fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
     entry.public = public;
     entry
         .members
-        .insert(arkret_core::Did::new(ROSTER_ACTOR.to_owned()).unwrap());
+        .insert(arkret_identifiers::Did::new(ROSTER_ACTOR.to_owned()).unwrap());
     if include_caller {
         entry
             .members
-            .insert(arkret_core::Did::new(ROSTER_CALLER.to_owned()).unwrap());
+            .insert(arkret_identifiers::Did::new(ROSTER_CALLER.to_owned()).unwrap());
     }
     entry
 }

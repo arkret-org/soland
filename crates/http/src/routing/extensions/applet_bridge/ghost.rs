@@ -202,8 +202,10 @@ pub(super) async fn build_ghost_profile_create_event(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(provision.external_user_id.as_str());
-    let profile_id = ActorProfileId::new(arkret_core::new_prefixed_uuid7("ak:actor_profile:"))
-        .map_err(|error| AppError::internal(format!("profile id generation failed: {error}")))?;
+    let profile_id = ActorProfileId::new(arkret_identifiers::new_prefixed_uuid7(
+        "ak:actor_profile:",
+    ))
+    .map_err(|error| AppError::internal(format!("profile id generation failed: {error}")))?;
     let external_ref = json!({
         "schema": "ak.applet.ghost_actor.external_ref.v1",
         "protocol": provision.protocol,
@@ -347,7 +349,7 @@ pub(super) async fn next_actor_frontier(
     state: &AppState,
     actor_id: &str,
     realm_id: &RealmId,
-) -> Result<(u64, Vec<arkret_core::EventId>), AppError> {
+) -> Result<(u64, Vec<arkret_identifiers::EventId>), AppError> {
     let records = state
         .event_query_application()
         .canonical_events_for_realm_actor(realm_id.as_str(), actor_id)
@@ -367,7 +369,7 @@ pub(super) async fn next_actor_frontier(
         .into_iter()
         .filter(|record| record.actor_seq == max_seq)
         .map(|record| {
-            arkret_core::EventId::new(record.event_id)
+            arkret_identifiers::EventId::new(record.event_id)
                 .map_err(|error| AppError::internal(format!("stored Event id invalid: {error}")))
         })
         .collect::<Result<Vec<_>, _>>()?;

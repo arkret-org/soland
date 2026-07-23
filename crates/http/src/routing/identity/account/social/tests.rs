@@ -93,7 +93,7 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
     let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
     let payload = direct_realm_create_payload(
         &state,
-        arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "did:web:alice.example",
         created_at,
     )
@@ -124,7 +124,7 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
 #[test]
 fn direct_member_join_payload_is_sdk_schema_valid() {
     let payload = direct_member_join_payload(
-        arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "did:web:bob.example",
     )
     .unwrap();
@@ -156,7 +156,7 @@ fn direct_member_join_payload_is_sdk_schema_valid() {
 fn direct_strand_create_payload_is_sdk_schema_valid() {
     let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
     let payload = direct_strand_create_payload(
-        arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
+        arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
         "ak:strand:01964137-0000-7000-8000-000000000102",
         "did:web:alice.example",
         created_at,
@@ -249,16 +249,16 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
     }))
     .unwrap();
     let message_payload = arkret_models_collaboration::events_payloads::morph_message::MessageCreatePayload::with_encrypted_content(
-        arkret_core::StrandId::new(main_strand_id.clone()).unwrap(),
+        arkret_identifiers::StrandId::new(main_strand_id.clone()).unwrap(),
         "discussion",
         encrypted_content,
     )
     .with_message_id(message_id.clone())
     .to_value()
     .unwrap();
-    let mut message_op = arkret_core::Operation::create(
+    let mut message_op = arkret_event_draft::Operation::create(
         direct_operation_id().unwrap(),
-        arkret_core::RealmId::new(realm_id.clone()).unwrap(),
+        arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
         arkret_wire::events::EventKind::MESSAGE_CREATE,
         message_payload,
     );
@@ -327,14 +327,14 @@ async fn participant_leave_retires_direct_binding() {
 
     let leave_payload = arkret_core::MembershipPayload::transition(
         arkret_core::MembershipPayloadState::Leave,
-        arkret_core::Did::new(bob.to_owned()).unwrap(),
+        arkret_identifiers::Did::new(bob.to_owned()).unwrap(),
         "direct conversation participant left",
     )
     .to_value()
     .unwrap();
-    let leave = arkret_core::Operation::create(
+    let leave = arkret_event_draft::Operation::create(
         direct_operation_id().unwrap(),
-        arkret_core::RealmId::new(realm_id).unwrap(),
+        arkret_identifiers::RealmId::new(realm_id).unwrap(),
         arkret_wire::events::EventKind::MEMBER_STATE,
         leave_payload,
     );

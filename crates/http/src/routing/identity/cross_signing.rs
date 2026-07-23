@@ -724,7 +724,7 @@ pub fn validate_device_authorize_binding(
     state: &AppState,
     payload: &Value,
 ) -> Result<(), &'static str> {
-    let payload_shape: arkret_core::DeviceAuthorizePayload =
+    let payload_shape: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
         serde_json::from_value(device_authorize_wire_payload(payload))
             .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
     payload_shape.validate_authorization_binding_one_of()?;
@@ -768,7 +768,7 @@ pub fn validate_device_authorize_binding(
 }
 
 fn verify_device_authorize_device_signature(
-    payload: &arkret_core::DeviceAuthorizePayload,
+    payload: &arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload,
 ) -> Result<(), &'static str> {
     let Some(signature_material) = &payload.device_signature else {
         if payload.recovery_session_id.is_some() {
@@ -1025,7 +1025,7 @@ pub(crate) struct DeviceSigningDirectoryFacet {
     /// projection. Service-attested clients use this with
     /// `enrollment_authority_binding` as the hot-path trust anchor.
     pub device_authorize_event_id: Option<EventId>,
-    pub authorized_generation_ref: Option<arkret_core::NonEmptyString>,
+    pub authorized_generation_ref: Option<arkret_wire::NonEmptyString>,
 }
 
 /// Typed view of the fields the device projection
@@ -1050,7 +1050,7 @@ pub(crate) struct ProjectedDevicePayload {
     #[serde(default)]
     pub device_authorize_event_id: Option<String>,
     #[serde(default)]
-    pub authorized_generation_ref: Option<arkret_core::NonEmptyString>,
+    pub authorized_generation_ref: Option<arkret_wire::NonEmptyString>,
 }
 
 /// Resolve the `keys/query` signing-key directory facet for `(principal_id,
@@ -1185,23 +1185,23 @@ fn revoked_device_signing_directory_facet() -> DeviceSigningDirectoryFacet {
 pub(crate) fn resolve_current_cross_signing_publish(
     state: &AppState,
     principal_id: &str,
-) -> Option<arkret_core::CrossSigningPublish> {
+) -> Option<arkret_models_identity::CrossSigningPublish> {
     let principal = Did::new(principal_id.to_owned()).ok()?;
     let publish = state
         .identity_application()
         .current_cross_signing(&principal)?;
     // Re-serialize the SDK content type into the schema-counterpart publish
     // payload so both crates agree on the wire shape (fields are 1:1).
-    serde_json::to_value(&publish)
-        .ok()
-        .and_then(|value| serde_json::from_value::<arkret_core::CrossSigningPublish>(value).ok())
+    serde_json::to_value(&publish).ok().and_then(|value| {
+        serde_json::from_value::<arkret_models_identity::CrossSigningPublish>(value).ok()
+    })
 }
 
 /// Decode an Ed25519 public key in the declared `key_format`
 /// (`multibase` z-base58btc with the 0xed01 multicodec, or `raw_base64url`).
 pub(crate) fn decode_ed25519_key(material: &str, key_format: &str) -> Result<VerifyingKey, String> {
     let raw: Vec<u8> = match key_format {
-        "multibase" => arkret_core::decode_ed25519_multibase(material)
+        "multibase" => arkret_canonical::decode_ed25519_multibase(material)
             .map(|bytes| bytes.to_vec())
             .map_err(|e| e.to_string())?,
         "raw_base64url" => URL_SAFE_NO_PAD

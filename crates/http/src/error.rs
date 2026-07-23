@@ -69,7 +69,7 @@ pub fn error_http_status(code: ErrorCode) -> StatusCode {
 }
 
 fn request_id() -> String {
-    arkret_core::new_prefixed_uuid7("ak:request:")
+    arkret_identifiers::new_prefixed_uuid7("ak:request:")
 }
 
 pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {

@@ -111,7 +111,7 @@ pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value
     if let Some(state) = state
         && did == state.service_id()
     {
-        let public_key = arkret_core::ed25519_pubkey_to_did_key_multibase(
+        let public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
             state.notary_signing_key().verifying_key().as_bytes(),
         );
         for fragment in ["notary-key", "snapshot-key-1"] {

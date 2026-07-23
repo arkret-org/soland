@@ -5,7 +5,7 @@ pub(crate) fn direct_authorization_basis_from_contact(
 ) -> Result<arkret_core::DirectConversationAuthorizationBasis, AppError> {
     let event_refs = contact_fact_refs(contact)
         .into_iter()
-        .map(arkret_core::EventId::new)
+        .map(arkret_identifiers::EventId::new)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {
             AppError::internal(format!("stored contact event ref is invalid: {error}"))
@@ -78,15 +78,19 @@ pub(crate) fn direct_pair_key(
     left: &str,
     right: &str,
 ) -> Result<String, AppError> {
-    let trust_domain = arkret_core::TypedTrustDomainId::new(state.config().trust_domain.clone())
-        .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
+    let trust_domain = arkret_identifiers::TypedTrustDomainId::new(
+        state.config().trust_domain.clone(),
+    )
+    .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     let left = direct_pair_key_participant(left, "actor")?;
     let right = direct_pair_key_participant(right, "peer")?;
-    arkret_core::direct_conversation_pair_key(trust_domain, left, right)
-        .map(|pair_key| pair_key.into_string())
-        .map_err(|error| {
-            AppError::internal(format!("direct pair key construction failed: {error}"))
-        })
+    arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
+        trust_domain,
+        left,
+        right,
+    )
+    .map(|pair_key| pair_key.into_string())
+    .map_err(|error| AppError::internal(format!("direct pair key construction failed: {error}")))
 }
 
 pub(super) fn direct_pair_key_participant(
@@ -162,7 +166,7 @@ pub(crate) fn direct_binding_matches_projection(
                 && strand.state.as_str() == "active"
                 && strand
                     .tracks
-                    .get(arkret_core::STRAND_TRACK_NAME_DISCUSSION)
+                    .get(arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION)
                     .is_some_and(|discussion| {
                         discussion.enabled != Some(false) && discussion.is_primary == Some(true)
                     })
@@ -171,7 +175,7 @@ pub(crate) fn direct_binding_matches_projection(
 
 pub(crate) async fn retire_direct_bindings_for_operation(
     state: &AppState,
-    operation: &arkret_core::Operation,
+    operation: &arkret_event_draft::Operation,
 ) {
     let kind = soland_application::operation_semantics::canonical_kind_for_operation(operation);
     let member_ended = kind == Some(arkret_wire::events::EventKind::MEMBER_STATE)
@@ -214,7 +218,7 @@ pub(crate) async fn retire_direct_bindings_for_operation(
 }
 
 fn direct_binding_payload_from_operation(
-    operation: &arkret_core::Operation,
+    operation: &arkret_event_draft::Operation,
 ) -> Result<arkret_core::DirectConversationBoundPayload, &'static str> {
     let mut payload = operation.payload.clone();
     let object = payload
@@ -228,7 +232,7 @@ fn direct_binding_payload_from_operation(
 
 pub(crate) async fn validate_direct_binding_operation(
     state: &AppState,
-    operation: &arkret_core::Operation,
+    operation: &arkret_event_draft::Operation,
 ) -> Result<(), &'static str> {
     if soland_application::operation_semantics::canonical_kind_for_operation(operation)
         != Some(arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND)
@@ -248,8 +252,9 @@ pub(crate) async fn validate_direct_binding_operation(
     {
         return Err("direct_conversation_binding_invalid");
     }
-    let trust_domain = arkret_core::TypedTrustDomainId::new(state.config().trust_domain.clone())
-        .map_err(|_| "direct_conversation_binding_invalid")?;
+    let trust_domain =
+        arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
+            .map_err(|_| "direct_conversation_binding_invalid")?;
     payload
         .validate_pair_key(trust_domain)
         .map_err(|_| "direct_conversation_binding_invalid")?;
@@ -320,10 +325,10 @@ pub(crate) async fn validate_direct_binding_operation(
 
 async fn accepted_direct_event(
     state: &AppState,
-    event_id: &arkret_core::EventId,
-    realm_id: &arkret_core::RealmId,
+    event_id: &arkret_identifiers::EventId,
+    realm_id: &arkret_identifiers::RealmId,
     kind: &str,
-) -> Result<arkret_core::Event, &'static str> {
+) -> Result<arkret_wire::Event, &'static str> {
     let accepted = state
         .event_query_application()
         .accepted_event(event_id.as_str())
@@ -470,7 +475,7 @@ async fn validate_direct_binding_event_refs(
                 .authorization_basis
                 .event_refs
                 .iter()
-                .map(arkret_core::EventId::as_str)
+                .map(arkret_identifiers::EventId::as_str)
                 .collect::<BTreeSet<_>>();
             if provided_refs != expected_refs {
                 return Err("direct_conversation_binding_invalid");
@@ -523,7 +528,7 @@ async fn validate_direct_binding_event_refs(
         arkret_wire::events::EventKind::MLS_WELCOME,
     )
     .await?;
-    let group_matches = |event: &arkret_core::Event| {
+    let group_matches = |event: &arkret_wire::Event| {
         event
             .payload
             .get("mls_group_id")
@@ -580,7 +585,7 @@ async fn validate_direct_binding_event_refs(
 
 pub(crate) async fn project_canonical_direct_binding(
     state: &AppState,
-    operation: &arkret_core::Operation,
+    operation: &arkret_event_draft::Operation,
 ) {
     if soland_application::operation_semantics::canonical_kind_for_operation(operation)
         != Some(arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND)
@@ -717,7 +722,7 @@ pub(crate) async fn project_canonical_direct_binding(
     else {
         return;
     };
-    let Ok(event) = serde_json::from_value::<arkret_core::Event>(record.envelope) else {
+    let Ok(event) = serde_json::from_value::<arkret_wire::Event>(record.envelope) else {
         return;
     };
     if let Err(error) = crate::routing::identity::contact_federation::federate_signed_contact_fact(
@@ -1148,7 +1153,7 @@ async fn query_remote_peer_claim(
 ) -> Result<RemotePeerClaimRecovery, AppError> {
     let query = arkret_core::PeerKeyPackagesClaimQueryRequestBody {
         claim_request_id: signed_claim.claim_request_id.clone(),
-        request_digest: arkret_core::Hash::new(request_digest.to_owned())
+        request_digest: arkret_identifiers::Hash::new(request_digest.to_owned())
             .map_err(|error| AppError::internal(format!("remote claim query digest: {error}")))?,
     };
     let query_value = serde_json::to_value(query)
@@ -1252,7 +1257,7 @@ async fn verify_remote_peer_claim_outcome(
             "remote KeyPackage claim receipt signer is invalid",
         ));
     }
-    let destination_did = arkret_core::Did::new(destination_service_id.to_owned())
+    let destination_did = arkret_identifiers::Did::new(destination_service_id.to_owned())
         .map_err(|_| AppError::internal("remote service DID is invalid"))?;
     let key = crate::jws_verify::resolve_ed25519_verification_key_for_did(
         state,
@@ -1487,7 +1492,7 @@ async fn prepare_reserved_direct_materialization(
     ),
     AppError,
 > {
-    let realm_scope = arkret_core::RealmId::new(realm_id.to_owned())
+    let realm_scope = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::internal(format!("direct Realm id invalid: {error}")))?;
     let realm_payload =
         direct_realm_create_payload(state, realm_scope.clone(), actor, reserved.created_at)
@@ -1525,7 +1530,7 @@ async fn prepare_reserved_direct_materialization(
             "issuer": actor,
             "subject": actor,
             "actions": arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS,
-            "capability_action_registry_digest": arkret_core::current_capability_action_registry_digest()
+            "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest()
                 .map_err(|error| AppError::internal(format!("capability registry unavailable: {error}")))?,
             "resources": [{
                 "kind": "realm",
@@ -1582,50 +1587,55 @@ async fn prepare_reserved_direct_materialization(
     let mls_commit_event_ref = crate::ids::generate_event_id();
     let mls_welcome_event_ref = crate::ids::generate_event_id();
     let binding_fact = arkret_core::DirectConversationBoundPayload {
-        pair_key: arkret_core::Hash::new(pair_key.to_owned())
+        pair_key: arkret_identifiers::Hash::new(pair_key.to_owned())
             .map_err(|error| AppError::internal(format!("stored pair key is invalid: {error}")))?,
         participants_unordered: sorted_participants(actor, peer)
             .into_iter()
-            .map(arkret_core::Did::new)
+            .map(arkret_identifiers::Did::new)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 AppError::internal(format!("stored direct participant is invalid: {error}"))
             })?,
-        realm_id: arkret_core::RealmId::new(realm_id.to_owned())
+        realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("stored realm id is invalid: {error}")))?,
-        main_strand_id: arkret_core::StrandId::new(main_strand_id.to_owned()).map_err(|error| {
-            AppError::internal(format!("stored main strand id is invalid: {error}"))
-        })?,
+        main_strand_id: arkret_identifiers::StrandId::new(main_strand_id.to_owned()).map_err(
+            |error| AppError::internal(format!("stored main strand id is invalid: {error}")),
+        )?,
         authorization_basis,
         member_event_refs: member_event_refs
             .into_iter()
-            .map(arkret_core::EventId::new)
+            .map(arkret_identifiers::EventId::new)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 AppError::internal(format!("stored member event ref is invalid: {error}"))
             })?,
-        main_strand_create_ref: arkret_core::EventId::new(main_strand_create_ref.to_owned())
+        main_strand_create_ref: arkret_identifiers::EventId::new(main_strand_create_ref.to_owned())
             .map_err(|error| {
                 AppError::internal(format!("stored strand event ref is invalid: {error}"))
             })?,
         mls_group_id: arkret_core::MlsGroupId::new(mls_group_id.to_owned()).map_err(|error| {
             AppError::internal(format!("stored MLS group id is invalid: {error}"))
         })?,
-        mls_genesis_event_ref: arkret_core::EventId::new(mls_genesis_event_ref.clone()).map_err(
-            |error| AppError::internal(format!("stored MLS genesis Event id is invalid: {error}")),
-        )?,
-        mls_commit_event_ref: arkret_core::EventId::new(mls_commit_event_ref.clone()).map_err(
-            |error| AppError::internal(format!("stored MLS commit Event id is invalid: {error}")),
-        )?,
-        mls_welcome_event_ref: arkret_core::EventId::new(mls_welcome_event_ref.clone()).map_err(
-            |error| AppError::internal(format!("stored MLS Welcome Event id is invalid: {error}")),
-        )?,
+        mls_genesis_event_ref: arkret_identifiers::EventId::new(mls_genesis_event_ref.clone())
+            .map_err(|error| {
+                AppError::internal(format!("stored MLS genesis Event id is invalid: {error}"))
+            })?,
+        mls_commit_event_ref: arkret_identifiers::EventId::new(mls_commit_event_ref.clone())
+            .map_err(|error| {
+                AppError::internal(format!("stored MLS commit Event id is invalid: {error}"))
+            })?,
+        mls_welcome_event_ref: arkret_identifiers::EventId::new(mls_welcome_event_ref.clone())
+            .map_err(|error| {
+                AppError::internal(format!("stored MLS Welcome Event id is invalid: {error}"))
+            })?,
         created_at: reserved.created_at,
         binding_state: arkret_core::DirectConversationAuthoredBindingState::Active,
         supersedes_binding_ref: None,
     };
-    let trust_domain = arkret_core::TypedTrustDomainId::new(state.config().trust_domain.clone())
-        .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
+    let trust_domain = arkret_identifiers::TypedTrustDomainId::new(
+        state.config().trust_domain.clone(),
+    )
+    .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     binding_fact
         .validate_pair_key(trust_domain)
         .map_err(|error| {
@@ -1642,18 +1652,18 @@ async fn prepare_reserved_direct_materialization(
         })?,
     )?;
     let draft = arkret_core::DirectConversationMaterializationDraft {
-        materialization_id: arkret_core::NonEmptyString::new(reserved.binding_event_ref.clone())
+        materialization_id: arkret_wire::NonEmptyString::new(reserved.binding_event_ref.clone())
             .map_err(|error| AppError::internal(format!("materialization id invalid: {error}")))?,
-        claim_nonce: arkret_core::Base64UrlString::new(claim_nonce.to_owned())
+        claim_nonce: arkret_wire::Base64UrlString::new(claim_nonce.to_owned())
             .map_err(|error| AppError::internal(format!("claim nonce invalid: {error}")))?,
         mls_group_id: arkret_core::MlsGroupId::new(mls_group_id.to_owned())
             .map_err(|error| AppError::internal(format!("MLS group id invalid: {error}")))?,
-        mls_genesis_event_ref: arkret_core::EventId::new(mls_genesis_event_ref).map_err(
+        mls_genesis_event_ref: arkret_identifiers::EventId::new(mls_genesis_event_ref).map_err(
             |error| AppError::internal(format!("MLS genesis Event id invalid: {error}")),
         )?,
-        mls_commit_event_ref: arkret_core::EventId::new(mls_commit_event_ref)
+        mls_commit_event_ref: arkret_identifiers::EventId::new(mls_commit_event_ref)
             .map_err(|error| AppError::internal(format!("MLS commit Event id invalid: {error}")))?,
-        mls_welcome_event_ref: arkret_core::EventId::new(mls_welcome_event_ref).map_err(
+        mls_welcome_event_ref: arkret_identifiers::EventId::new(mls_welcome_event_ref).map_err(
             |error| AppError::internal(format!("MLS Welcome Event id invalid: {error}")),
         )?,
         expires_at: claim.expires_at,
@@ -1692,16 +1702,16 @@ fn unsigned_direct_materialization_event(
     realm_id: &str,
     kind: &str,
     payload: Value,
-) -> Result<arkret_core::Event, AppError> {
-    let realm_id = arkret_core::RealmId::new(realm_id.to_owned())
+) -> Result<arkret_wire::Event, AppError> {
+    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::internal(format!("direct Event realm id invalid: {error}")))?;
-    let actor_id = arkret_core::Did::new(actor.to_owned())
+    let actor_id = arkret_identifiers::Did::new(actor.to_owned())
         .map_err(|error| AppError::internal(format!("direct Event actor invalid: {error}")))?;
-    let hlc = arkret_core::Hlc::new(state.hlc().now())
+    let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("direct Event HLC invalid: {error}")))?;
-    let mut event = arkret_core::Event::new(kind, realm_id, actor_id, 0, hlc, payload)
+    let mut event = arkret_wire::Event::new(kind, realm_id, actor_id, 0, hlc, payload)
         .map_err(|error| AppError::internal(format!("direct Event draft invalid: {error}")))?;
-    event.event_id = arkret_core::EventId::new(event_id.to_owned())
+    event.event_id = arkret_identifiers::EventId::new(event_id.to_owned())
         .map_err(|error| AppError::internal(format!("direct Event id invalid: {error}")))?;
     Ok(event)
 }
@@ -1711,16 +1721,16 @@ fn unsigned_direct_binding_event(
     actor: &str,
     event_id: &str,
     payload: Value,
-) -> Result<arkret_core::Event, AppError> {
-    let realm_id = arkret_core::RealmId::new(
+) -> Result<arkret_wire::Event, AppError> {
+    let realm_id = arkret_identifiers::RealmId::new(
         soland_application::identity::principal_control_realm_for_did(actor),
     )
     .map_err(|error| AppError::internal(format!("direct binding PCR id invalid: {error}")))?;
-    let actor_id = arkret_core::Did::new(actor.to_owned())
+    let actor_id = arkret_identifiers::Did::new(actor.to_owned())
         .map_err(|error| AppError::internal(format!("direct binding actor invalid: {error}")))?;
-    let hlc = arkret_core::Hlc::new(state.hlc().now())
+    let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("direct binding HLC invalid: {error}")))?;
-    let mut event = arkret_core::Event::new(
+    let mut event = arkret_wire::Event::new(
         arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND,
         realm_id,
         actor_id,
@@ -1729,19 +1739,22 @@ fn unsigned_direct_binding_event(
         payload,
     )
     .map_err(|error| AppError::internal(format!("direct binding Event invalid: {error}")))?;
-    event.event_id = arkret_core::EventId::new(event_id.to_owned())
+    event.event_id = arkret_identifiers::EventId::new(event_id.to_owned())
         .map_err(|error| AppError::internal(format!("direct binding event id invalid: {error}")))?;
     Ok(event)
 }
 
-fn direct_cell_ref(cell_family: &str, subject: &str) -> Result<arkret_core::CellRef, AppError> {
-    arkret_core::CellRef::new(format!("ak:cell:{cell_family}:{subject}")).map_err(|error| {
+fn direct_cell_ref(
+    cell_family: &str,
+    subject: &str,
+) -> Result<arkret_identifiers::CellRef, AppError> {
+    arkret_identifiers::CellRef::new(format!("ak:cell:{cell_family}:{subject}")).map_err(|error| {
         AppError::internal(format!("direct materialization cell invalid: {error}"))
     })
 }
 
 fn attach_create_cell_contract(
-    event: &mut arkret_core::Event,
+    event: &mut arkret_wire::Event,
     cell_family: &str,
     subject: &str,
 ) -> Result<(), AppError> {
@@ -1760,10 +1773,10 @@ fn attach_create_cell_contract(
             predicate_id: None,
         },
     }];
-    event.effects = vec![arkret_core::Effect {
+    event.effects = vec![arkret_wire::Effect {
         cell,
-        op: arkret_core::LatticeOp {
-            op_type: arkret_core::LatticeOpType::Set,
+        op: arkret_wire::LatticeOp {
+            op_type: arkret_wire::LatticeOpType::Set,
             tag: None,
             value: Some(value),
             from: None,
@@ -1776,7 +1789,7 @@ fn attach_create_cell_contract(
 }
 
 fn attach_member_join_cell_contract(
-    event: &mut arkret_core::Event,
+    event: &mut arkret_wire::Event,
     participant: &str,
 ) -> Result<(), AppError> {
     let cell = direct_cell_ref("ak.component.member.state.v1", participant)?;
@@ -1789,10 +1802,10 @@ fn attach_member_join_cell_contract(
             predicate_id: None,
         },
     }];
-    event.effects = vec![arkret_core::Effect {
+    event.effects = vec![arkret_wire::Effect {
         cell,
-        op: arkret_core::LatticeOp {
-            op_type: arkret_core::LatticeOpType::Transition,
+        op: arkret_wire::LatticeOp {
+            op_type: arkret_wire::LatticeOpType::Transition,
             tag: None,
             value: None,
             from: Some(Value::String("leave".to_owned())),
@@ -1841,7 +1854,7 @@ fn reserve_direct_binding(
     // OpenMLS GroupId and exposes its base64url wire form. Reserve that exact
     // value so the resolver plan and the participant-created group cannot
     // diverge.
-    let mls_group_id = arkret_core::base64url_encode(realm_id.as_bytes());
+    let mls_group_id = arkret_canonical::base64url_encode(realm_id.as_bytes());
     let created_at = direct_now();
     let binding = DirectConversationBindingRecord {
         participants_unordered: sorted_participants(actor, peer),
@@ -2071,7 +2084,7 @@ pub(super) async fn submit_direct_realm_genesis(
     peer: &str,
     contact: Option<&ContactRecord>,
 ) -> Result<(), &'static str> {
-    let realm_scope = arkret_core::RealmId::new(realm_id.to_owned())
+    let realm_scope = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .map_err(|_| "generated invalid direct conversation realm id")?;
 
     // ak.realm.create — DM Realm well-known shape (spec §7): mls_rfc9420
@@ -2095,8 +2108,8 @@ pub(super) async fn submit_direct_realm_genesis(
     Ok(())
 }
 
-pub(super) fn direct_operation_id() -> Result<arkret_core::OperationId, &'static str> {
-    arkret_core::OperationId::new(crate::ids::generate_operation_id())
+pub(super) fn direct_operation_id() -> Result<arkret_identifiers::OperationId, &'static str> {
+    arkret_identifiers::OperationId::new(crate::ids::generate_operation_id())
         .map_err(|_| "generated invalid operation id")
 }
 
@@ -2108,14 +2121,15 @@ pub(super) fn direct_now() -> chrono::DateTime<chrono::Utc> {
 
 pub(super) fn direct_realm_create_payload(
     state: &AppState,
-    realm_scope: arkret_core::RealmId,
+    realm_scope: arkret_identifiers::RealmId,
     creator: &str,
     created_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, &'static str> {
-    let creator_did = arkret_core::Did::new(creator.to_owned())
+    let creator_did = arkret_identifiers::Did::new(creator.to_owned())
         .map_err(|_| "invalid direct realm creator DID")?;
-    let trust_domain = arkret_core::TypedTrustDomainId::new(state.config().trust_domain.clone())
-        .map_err(|_| "invalid direct realm trust domain")?;
+    let trust_domain =
+        arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
+            .map_err(|_| "invalid direct realm trust domain")?;
     let payload = arkret_core::direct_conversation_realm_create_payload(
         realm_scope,
         creator_did.clone(),
@@ -2130,12 +2144,12 @@ pub(super) fn direct_realm_create_payload(
 #[cfg(test)]
 pub(super) fn direct_realm_create_operation(
     state: &AppState,
-    realm_scope: arkret_core::RealmId,
+    realm_scope: arkret_identifiers::RealmId,
     creator: &str,
-) -> Result<arkret_core::Operation, &'static str> {
+) -> Result<arkret_event_draft::Operation, &'static str> {
     let created_at = direct_now();
     let payload = direct_realm_create_payload(state, realm_scope.clone(), creator, created_at)?;
-    let mut operation = arkret_core::Operation::create(
+    let mut operation = arkret_event_draft::Operation::create(
         direct_operation_id()?,
         realm_scope,
         arkret_wire::events::EventKind::REALM_CREATE,
@@ -2147,10 +2161,10 @@ pub(super) fn direct_realm_create_operation(
 
 pub(super) fn direct_member_join_operation(
     state: &AppState,
-    realm_scope: arkret_core::RealmId,
+    realm_scope: arkret_identifiers::RealmId,
     member: &str,
     contact: Option<&ContactRecord>,
-) -> Result<arkret_core::Operation, &'static str> {
+) -> Result<arkret_event_draft::Operation, &'static str> {
     let created_at = direct_now();
     let mut payload = direct_member_join_payload(realm_scope.clone(), member)?;
     if let Some(recipient_service_id) = contact
@@ -2181,7 +2195,7 @@ pub(super) fn direct_member_join_operation(
             "expires_at": arkret_canonical::format_timestamp_canonical(created_at + chrono::Duration::days(30))
         });
     }
-    let mut operation = arkret_core::Operation::create(
+    let mut operation = arkret_event_draft::Operation::create(
         direct_operation_id()?,
         realm_scope,
         arkret_wire::events::EventKind::MEMBER_STATE,
@@ -2192,11 +2206,11 @@ pub(super) fn direct_member_join_operation(
 }
 
 pub(super) fn direct_member_join_payload(
-    realm_scope: arkret_core::RealmId,
+    realm_scope: arkret_identifiers::RealmId,
     member: &str,
 ) -> Result<Value, &'static str> {
-    let member_did =
-        arkret_core::Did::new(member.to_owned()).map_err(|_| "invalid direct peer member DID")?;
+    let member_did = arkret_identifiers::Did::new(member.to_owned())
+        .map_err(|_| "invalid direct peer member DID")?;
     arkret_core::direct_conversation_member_join_payload(
         realm_scope,
         member_did,
@@ -2207,14 +2221,14 @@ pub(super) fn direct_member_join_payload(
 }
 
 pub(super) fn direct_strand_create_payload(
-    realm_scope: arkret_core::RealmId,
+    realm_scope: arkret_identifiers::RealmId,
     main_strand_id: &str,
     creator: &str,
     created_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, &'static str> {
-    let strand_id = arkret_core::StrandId::new(main_strand_id.to_owned())
+    let strand_id = arkret_identifiers::StrandId::new(main_strand_id.to_owned())
         .map_err(|_| "generated invalid direct conversation strand id")?;
-    let creator_did = arkret_core::Did::new(creator.to_owned())
+    let creator_did = arkret_identifiers::Did::new(creator.to_owned())
         .map_err(|_| "invalid direct strand creator DID")?;
     let payload = arkret_core::direct_conversation_main_strand_create_payload(
         strand_id,
@@ -2227,14 +2241,14 @@ pub(super) fn direct_strand_create_payload(
 
 #[cfg(test)]
 pub(super) fn direct_strand_create_operation(
-    realm_scope: arkret_core::RealmId,
+    realm_scope: arkret_identifiers::RealmId,
     main_strand_id: &str,
     creator: &str,
-) -> Result<arkret_core::Operation, &'static str> {
+) -> Result<arkret_event_draft::Operation, &'static str> {
     let created_at = direct_now();
     let payload =
         direct_strand_create_payload(realm_scope.clone(), main_strand_id, creator, created_at)?;
-    let mut operation = arkret_core::Operation::create(
+    let mut operation = arkret_event_draft::Operation::create(
         direct_operation_id()?,
         realm_scope,
         arkret_wire::events::EventKind::STRAND_CREATE,

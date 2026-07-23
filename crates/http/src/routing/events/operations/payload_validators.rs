@@ -1,4 +1,4 @@
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use arkret_models_collaboration::governance::membership_invite::{
     InviteCreatePayload, validate_invite_create_wire_keys,
 };
@@ -69,7 +69,7 @@ pub(crate) fn validate_invite_third_party_payload(
     let invite = payload.get("invite").and_then(Value::as_object);
     let invite_id = invite_field(payload, invite, "invite_id", "id")
         .ok_or("ak.invite.third_party requires invite_id")?;
-    if arkret_core::InviteId::new(invite_id).is_err() {
+    if arkret_identifiers::InviteId::new(invite_id).is_err() {
         return Err("ak.invite.third_party invite_id must be ak:invite:<uuidv7>");
     }
     let realm_id = invite_field(payload, invite, "realm_id", "realm_id")
@@ -79,7 +79,7 @@ pub(crate) fn validate_invite_third_party_payload(
     }
     let inviter = invite_field(payload, invite, "inviter", "inviter")
         .ok_or("ak.invite.third_party requires inviter")?;
-    if arkret_core::Did::new(inviter).is_err() {
+    if arkret_identifiers::Did::new(inviter).is_err() {
         return Err("ak.invite.third_party inviter must be a DID");
     }
     let third_party_id = invite_value(payload, invite, "third_party_id")
@@ -94,7 +94,7 @@ pub(crate) fn validate_invite_third_party_payload(
         .get("verification_service_id")
         .and_then(Value::as_str)
         .ok_or("third_party_id.verification_service_id is required")?;
-    if arkret_core::Did::new(service_id.to_owned()).is_err() {
+    if arkret_identifiers::Did::new(service_id.to_owned()).is_err() {
         return Err("third_party_id.verification_service_id must be a DID");
     }
     if third_party_id
@@ -107,7 +107,7 @@ pub(crate) fn validate_invite_third_party_payload(
     if let Some(token_commitment) = third_party_id
         .get("token_commitment")
         .and_then(Value::as_str)
-        && arkret_core::Hash::new(token_commitment.to_owned()).is_err()
+        && arkret_identifiers::Hash::new(token_commitment.to_owned()).is_err()
     {
         return Err("third_party_id.token_commitment must be a hash");
     }
@@ -131,17 +131,17 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
         .ok_or("ak.invite.claim payload must be an object")?;
     let invite_id =
         payload_string(payload, "invite_id").ok_or("ak.invite.claim requires invite_id")?;
-    if arkret_core::InviteId::new(invite_id).is_err() {
+    if arkret_identifiers::InviteId::new(invite_id).is_err() {
         return Err("ak.invite.claim invite_id must be ak:invite:<uuidv7>");
     }
     let subject_id =
         payload_string(payload, "subject_id").ok_or("ak.invite.claim requires subject_id")?;
-    if arkret_core::Did::new(subject_id.clone()).is_err() {
+    if arkret_identifiers::Did::new(subject_id.clone()).is_err() {
         return Err("ak.invite.claim subject_id must be a DID");
     }
     let token_commitment = payload_string(payload, "token_commitment")
         .ok_or("ak.invite.claim requires token_commitment")?;
-    if arkret_core::Hash::new(token_commitment).is_err() {
+    if arkret_identifiers::Hash::new(token_commitment).is_err() {
         return Err("ak.invite.claim token_commitment must be a hash");
     }
     let claim_nonce =
@@ -188,7 +188,7 @@ pub(crate) fn validate_invite_ref_payload(operation: &Operation) -> Result<(), &
         .ok_or("invite reference payload must be an object")?;
     let invite_id =
         payload_string(payload, "invite_id").ok_or("invite reference requires invite_id")?;
-    if arkret_core::InviteId::new(invite_id).is_err() {
+    if arkret_identifiers::InviteId::new(invite_id).is_err() {
         return Err("invite reference invite_id must be ak:invite:<uuidv7>");
     }
     if let Some(reason) = payload.get("reason")
@@ -536,7 +536,7 @@ pub(crate) fn validate_conflict_repair_payload(operation: &Operation) -> Result<
         .get("cell_id")
         .and_then(serde_json::Value::as_str)
         .ok_or("conflict repair requires cell_id")?;
-    if arkret_core::CellRef::new(cell_id.to_owned()).is_err() {
+    if arkret_identifiers::CellRef::new(cell_id.to_owned()).is_err() {
         return Err(
             "conflict repair cell_id must use canonical ak:cell:ak.component.*.v<n>:<subject> form",
         );
@@ -881,7 +881,7 @@ fn collect_nonempty_unique_string_array(
 pub(crate) fn validate_cross_signing_reset_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let reset: arkret_core::CrossSigningResetPayload =
+    let reset: arkret_models_identity::CrossSigningResetPayload =
         serde_json::from_value(projection_context_stripped_payload(&operation.payload))
             .map_err(|_| "cross_signing reset payload violates reset profile")?;
     reset
@@ -896,7 +896,7 @@ pub(crate) fn validate_cross_signing_reset_payload(
 }
 
 pub(crate) fn validate_device_authorize_payload(operation: &Operation) -> Result<(), &'static str> {
-    let payload: arkret_core::DeviceAuthorizePayload =
+    let payload: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
         serde_json::from_value(device_authorize_wire_payload(&operation.payload))
             .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
     payload.validate_authorization_binding_one_of()
@@ -947,7 +947,7 @@ pub fn validate_encrypted_payload_envelope(
 
 #[cfg(test)]
 mod tests {
-    use arkret_core::Operation;
+    use arkret_event_draft::Operation;
     use serde_json::json;
 
     use super::{
@@ -957,11 +957,12 @@ mod tests {
 
     fn message_operation(expiry: serde_json::Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new(
+            arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned(),
             )
             .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036")
+                .unwrap(),
             arkret_wire::events::EventKind::MESSAGE_CREATE,
             json!({
                 "content": {"kind": "ak.content.text", "body": "secret"},
@@ -999,11 +1000,12 @@ mod tests {
     #[test]
     fn invite_create_validation_ignores_projection_context() {
         let operation = Operation::create(
-            arkret_core::OperationId::new(
+            arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-0000000000e2".to_owned(),
             )
             .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036")
+                .unwrap(),
             arkret_wire::events::EventKind::INVITE_CREATE,
             json!({
                 "invite_id": "ak:invite:01904100-0000-7000-8000-0000000000e2",

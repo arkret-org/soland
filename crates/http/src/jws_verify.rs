@@ -164,7 +164,7 @@ pub async fn verify_jws_ed25519_async(
             id: did.clone(),
             verification_methods: BTreeMap::from([(
                 verification_method.to_owned(),
-                arkret_core::ed25519_pubkey_to_did_key_multibase(
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
                     state.notary_verifying_key().as_bytes(),
                 ),
             )]),
@@ -257,7 +257,7 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
 
     let device_prefix = format!("{principal_id}#");
     if let Some(device_id) = verification_method.strip_prefix(&device_prefix)
-        && arkret_core::DeviceId::new(device_id.to_owned()).is_ok()
+        && arkret_identifiers::DeviceId::new(device_id.to_owned()).is_ok()
     {
         let facet =
             crate::routing::identity::cross_signing::try_resolve_device_signing_directory_facet(
@@ -342,7 +342,7 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
 /// wrapper; it never mutates the Event or its canonical digest.
 pub async fn federated_event_signer_evidence(
     state: &AppState,
-    event: &arkret_core::Event,
+    event: &arkret_wire::Event,
 ) -> Result<Vec<arkret_core::FederatedDeviceSigningKeyEvidence>, String> {
     let actor_id = event.actor_id.as_str();
     let prefix = format!("{actor_id}#");
@@ -352,7 +352,7 @@ pub async fn federated_event_signer_evidence(
         let Some(device_id) = proof.verification_method.strip_prefix(&prefix) else {
             continue;
         };
-        let Ok(device_id) = arkret_core::DeviceId::new(device_id.to_owned()) else {
+        let Ok(device_id) = arkret_identifiers::DeviceId::new(device_id.to_owned()) else {
             // DID-control methods remain independently resolvable and do not
             // use principal device-directory evidence.
             continue;
@@ -375,8 +375,8 @@ pub async fn federated_event_signer_evidence(
 
 pub async fn federated_device_signing_key_evidence(
     state: &AppState,
-    actor_id: &arkret_core::Did,
-    device_id: &arkret_core::DeviceId,
+    actor_id: &arkret_identifiers::Did,
+    device_id: &arkret_identifiers::DeviceId,
     verification_method: &str,
 ) -> Result<arkret_core::FederatedDeviceSigningKeyEvidence, String> {
     let expected_method = format!("{actor_id}#{device_id}");
@@ -407,13 +407,13 @@ pub async fn federated_device_signing_key_evidence(
         .map_err(|error| format!("device authorization Event lookup failed: {error}"))?
         .ok_or_else(|| "device authorization Event is unavailable".to_owned())?;
     let device_authorize_event =
-        serde_json::from_value::<arkret_core::Event>(device_authorize_record.envelope)
+        serde_json::from_value::<arkret_wire::Event>(device_authorize_record.envelope)
             .map_err(|error| format!("device authorization Event is invalid: {error}"))?;
     Ok(arkret_core::FederatedDeviceSigningKeyEvidence {
         actor_id: actor_id.clone(),
         device_id: device_id.clone(),
         verification_method: verification_method.to_owned(),
-        device_signing_key: arkret_core::DidKey::new(device_signing_key)
+        device_signing_key: arkret_wire::DidKey::new(device_signing_key)
             .map_err(|error| format!("device signer key is invalid: {error}"))?,
         authorization_accepted_at: device_authorize_record.received_at,
         device_authorize_event: Box::new(device_authorize_event),

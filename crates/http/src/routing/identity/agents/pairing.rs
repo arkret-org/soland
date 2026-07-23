@@ -680,7 +680,7 @@ async fn validate_requested_scope_disclosure(
     }
     if disclosure.verifier_did.as_str() != state.service_id()
         || disclosure.audience.as_str()
-            != arkret_core::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY
+            != arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY
     {
         return Err(AppError::invalid_param(
             "requested_scope_disclosure verifier or audience does not match this operation",
@@ -718,13 +718,16 @@ async fn validate_requested_scope_disclosure(
     let controller_id = Did::new(agent_record.controller_id.clone()).map_err(|error| {
         AppError::internal(format!("stored Agent controller DID is invalid: {error}"))
     })?;
-    let stored_digest =
-        arkret_core::agent_requested_scope_digest(&agent_id, &controller_id, &stored_scope)
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "stored Agent requested_scope digest failed: {error}"
-                ))
-            })?;
+    let stored_digest = arkret_signatures::agent::agent_requested_scope_digest(
+        &agent_id,
+        &controller_id,
+        &stored_scope,
+    )
+    .map_err(|error| {
+        AppError::internal(format!(
+            "stored Agent requested_scope digest failed: {error}"
+        ))
+    })?;
     if disclosure.requested_scope_digest != stored_digest {
         return Err(AppError::invalid_param(
             "requested_scope_disclosure does not match the provisioned Agent ceiling",

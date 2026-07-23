@@ -1,4 +1,4 @@
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use serde_json::Value;
 use soland_application::governance::RetentionPolicyRecord;
 use soland_application::operation_semantics as kinds;

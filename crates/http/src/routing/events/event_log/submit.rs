@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hasher;
 use std::sync::{Arc, OnceLock};
 
-use arkret_core::EventsSubmitRejectedItem;
+use arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem;
 
 use super::*;
 use crate::invite_claim_proofs::{
@@ -47,7 +47,7 @@ pub(in crate::routing) fn service_event_authoring_lock() -> Arc<tokio::sync::Mut
 }
 
 fn stamp_projection_operation_received_at(
-    operation: &mut arkret_core::Operation,
+    operation: &mut arkret_event_draft::Operation,
     received_at: chrono::DateTime<chrono::Utc>,
 ) {
     if !matches!(
@@ -70,7 +70,7 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
     if envelopes.len() != 1 {
         return false;
     }
-    let Ok(event) = serde_json::from_value::<arkret_core::Event>(envelopes[0].clone()) else {
+    let Ok(event) = serde_json::from_value::<arkret_wire::Event>(envelopes[0].clone()) else {
         return false;
     };
     event.kind.as_str() == arkret_wire::events::EventKind::REALM_CREATE
@@ -1368,13 +1368,13 @@ mod managed_agent_pcr_batch_tests {
     fn managed_agent_create_value() -> Value {
         let realm_id =
             RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe".to_owned()).unwrap();
-        let agent_id = arkret_core::Did::new("did:web:agent.example".to_owned()).unwrap();
-        let mut event = arkret_core::Event::new(
+        let agent_id = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
+        let mut event = arkret_wire::Event::new(
             arkret_wire::events::EventKind::REALM_CREATE,
             realm_id,
             agent_id,
             1,
-            arkret_core::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
+            arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
             json!({
                 "object": {
                     "id": "ak:realm:01999999-0000-7000-8000-00000000cafe",
@@ -1386,7 +1386,7 @@ mod managed_agent_pcr_batch_tests {
         )
         .unwrap();
         event.executed_by =
-            Some(arkret_core::Did::new("did:web:alice.example".to_owned()).unwrap());
+            Some(arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap());
         event.authorization_ref = Some("did:web:agent.example#managed-controller".to_owned());
         event.effects = vec![
             arkret_bootstrap::managed_agent_principal_control_create_effect(

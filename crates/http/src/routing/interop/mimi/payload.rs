@@ -28,7 +28,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .into_iter()
         .filter(|record| Some(record.actor_seq) == max_actor_seq)
         .map(|record| {
-            arkret_core::EventId::new(record.event_id).map_err(|error| {
+            arkret_identifiers::EventId::new(record.event_id).map_err(|error| {
                 AppError::internal(format!("stored MIMI actor frontier id invalid: {error}"))
             })
         })
@@ -47,17 +47,17 @@ pub(super) async fn persist_mimi_canonical_message_event(
         })
         .transpose()?
         .unwrap_or(0);
-    let service_did = arkret_core::Did::new(state.service_id().clone())
+    let service_did = arkret_identifiers::Did::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
-    let mut event = arkret_core::Event::new_with_id_at(
-        arkret_core::EventId::new(event_id.to_owned())
+    let mut event = arkret_wire::Event::new_with_id_at(
+        arkret_identifiers::EventId::new(event_id.to_owned())
             .map_err(|error| AppError::internal(format!("MIMI event id invalid: {error}")))?,
         arkret_wire::events::EventKind::MESSAGE_CREATE,
-        arkret_core::RealmId::new(realm_id.to_owned())
+        arkret_identifiers::RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("MIMI realm id invalid: {error}")))?,
         service_did.clone(),
         actor_seq,
-        arkret_core::Hlc::new(state.hlc().now())
+        arkret_identifiers::Hlc::new(state.hlc().now())
             .map_err(|error| AppError::internal(format!("MIMI HLC invalid: {error}")))?,
         payload,
         created_at,
@@ -194,7 +194,7 @@ pub(super) fn decode_mimi_opaque_bytes(
         }
         _ => return Ok(None),
     };
-    let bytes = arkret_core::base64url_decode(payload).map_err(|error| {
+    let bytes = arkret_canonical::base64url_decode(payload).map_err(|error| {
         AppError::invalid_param(format!("{context} payload is not base64url: {error}"))
             .with_wire_code("mimi_payload_invalid")
     })?;
@@ -220,7 +220,7 @@ pub(super) fn mimi_provider_directory_value(
     ProviderDirectory {
         schema: Some("ak.schema.mimi_interop.v1".to_owned()),
         service_id: Some(
-            arkret_core::Did::new(state.service_id().clone())
+            arkret_identifiers::Did::new(state.service_id().clone())
                 .expect("validated service_id must be a DID"),
         ),
         service_type: "mimi_provider_facade".to_owned(),

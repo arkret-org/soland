@@ -53,7 +53,10 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
     let response = delivery_binding_stale_response(
         &Did::new("did:web:bob.example").unwrap(),
         &Did::new("did:web:alice.example").unwrap(),
-        &[arkret_core::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap()],
+        &[
+            arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001")
+                .unwrap(),
+        ],
         json!({
             "kind": "member_delivery_binding_projection",
             "event_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

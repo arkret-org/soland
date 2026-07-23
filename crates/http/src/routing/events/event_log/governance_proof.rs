@@ -764,7 +764,9 @@ pub(crate) async fn first_generation_event_seal_requirement(
                     "active device re-anchor replacement authorization is missing",
                 )
             })?;
-        let authorize_payload = serde_json::from_value::<arkret_core::DeviceAuthorizePayload>(
+        let authorize_payload = serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload,
+        >(
             authorize
                 .envelope
                 .get("payload")
@@ -1073,13 +1075,13 @@ mod tests {
 
     fn managed_agent_pcr_create() -> Event {
         let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe").unwrap();
-        let actor_id = arkret_core::Did::new("did:web:agent.example").unwrap();
+        let actor_id = arkret_identifiers::Did::new("did:web:agent.example").unwrap();
         let mut event = Event::new(
             arkret_wire::events::EventKind::REALM_CREATE,
             realm_id.clone(),
             actor_id.clone(),
             1,
-            arkret_core::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
+            arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
             serde_json::json!({
                 "object": {
                     "id": realm_id,
@@ -1117,7 +1119,7 @@ mod tests {
     #[test]
     fn governance_materializer_rejects_legacy_managed_agent_create_effect() {
         let mut event = managed_agent_pcr_create();
-        event.effects = vec![arkret_core::Effect {
+        event.effects = vec![arkret_wire::Effect {
             cell: CellRef::new(format!(
                 "ak:cell:ak.component.realm.create.v1:{}",
                 event.realm_id

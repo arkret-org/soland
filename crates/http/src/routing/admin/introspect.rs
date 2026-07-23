@@ -112,7 +112,7 @@ fn admin_grant_from_introspection_outcome(
         )
         .with_status(StatusCode::FORBIDDEN)
     })?;
-    let principal_id = arkret_core::Did::new(grant.subject.clone()).map_err(|error| {
+    let principal_id = arkret_identifiers::Did::new(grant.subject.clone()).map_err(|error| {
         AppError::new(
             ErrorCode::CapabilityDenied,
             format!("admin scope introspection returned invalid subject DID: {error}"),
@@ -161,12 +161,12 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         BOTTOM_REPAIR.to_owned(),
         ADMIN_READ.to_owned(),
     ];
-    let principal_id = arkret_core::Did::new(session.actor.clone()).unwrap_or_else(|_| {
+    let principal_id = arkret_identifiers::Did::new(session.actor.clone()).unwrap_or_else(|_| {
         // Fallback: synthesize a stable did:key when the actor isn't
         // a valid DID. This only kicks in for dev-login tokens whose
         // actor field is a handle, not a DID — production sessions
         // always carry a DID.
-        arkret_core::Did::new(format!("did:web:{}", state.service_id()))
+        arkret_identifiers::Did::new(format!("did:web:{}", state.service_id()))
             .expect("service_id is a valid DID")
     });
     SessionGrantIntrospection {

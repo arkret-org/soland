@@ -838,7 +838,7 @@ impl AppConfig {
             );
         }
         if let Some(value) = account_authority_enrollment_did.as_deref() {
-            arkret_core::Did::new(value.to_owned()).map_err(|error| {
+            arkret_identifiers::Did::new(value.to_owned()).map_err(|error| {
                 anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID is invalid: {error}")
             })?;
         }
@@ -1030,7 +1030,7 @@ impl AppConfig {
         // derives it from the resolved runtime DID before AppState is built.
         let trust_domain = env_non_empty("SOLAND_TRUST_DOMAIN").unwrap_or_default();
         if !trust_domain.is_empty() {
-            arkret_core::TypedTrustDomainId::new(trust_domain.clone()).map_err(|error| {
+            arkret_identifiers::TypedTrustDomainId::new(trust_domain.clone()).map_err(|error| {
                 anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {error}")
             })?;
         }
@@ -1451,13 +1451,13 @@ fn load_notary_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
 ///
 /// Order of resolution:
 /// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as `ak:trust_domain:<scope>` per SDK
-///    [`arkret_core::TypedTrustDomainId`]).
+///    [`arkret_identifiers::TypedTrustDomainId`]).
 /// 2. Synthesised from the configured `service_id` — strip the DID method prefix and lowercase the
 ///    remainder, then prefix with `ak:trust_domain:`.
 pub fn derive_trust_domain(service_id: &str) -> anyhow::Result<String> {
     if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
         // Validate via SDK typed id — rejects bad shape at boot.
-        arkret_core::TypedTrustDomainId::new(value.clone()).map_err(|e| {
+        arkret_identifiers::TypedTrustDomainId::new(value.clone()).map_err(|e| {
             anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {e}")
         })?;
         return Ok(value);
@@ -1479,7 +1479,7 @@ pub fn derive_trust_domain(service_id: &str) -> anyhow::Result<String> {
     };
     let candidate = format!("ak:trust_domain:{scope}");
     // Final safety check.
-    arkret_core::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
+    arkret_identifiers::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
         anyhow::anyhow!(
             "derived trust_domain from service_id {service_id:?} failed validation: {e}"
         )
@@ -1623,14 +1623,14 @@ fn env_csv_cap(name: &str) -> Option<Vec<String>> {
     )
 }
 
-fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<arkret_core::Did>>> {
+fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<arkret_identifiers::Did>>> {
     let Some(values) = env_csv_cap(name) else {
         return Ok(None);
     };
     values
         .into_iter()
         .map(|value| {
-            arkret_core::Did::new(value.clone())
+            arkret_identifiers::Did::new(value.clone())
                 .map_err(|error| anyhow::anyhow!("{name} contains invalid DID `{value}`: {error}"))
         })
         .collect::<anyhow::Result<Vec<_>>>()

@@ -585,7 +585,9 @@ pub(crate) fn event_ref_for_dot(dot: &str) -> Option<&str> {
         Some((prefix, seq)) if seq.chars().all(|c| c.is_ascii_digit()) && !seq.is_empty() => prefix,
         _ => dot,
     };
-    arkret_core::EventId::new(candidate).ok().map(|_| candidate)
+    arkret_identifiers::EventId::new(candidate)
+        .ok()
+        .map(|_| candidate)
 }
 
 /// Spec invite-addressing.md §2 / contact-operations.schema.json — resolve

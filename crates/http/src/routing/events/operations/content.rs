@@ -246,7 +246,7 @@ pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &s
         .is_some_and(|record| {
             !(record.allows_plaintext_data_class(
                 state.service_id(),
-                arkret_core::PlaintextDataClassKind::MessageContent,
+                arkret_wire::PlaintextDataClassKind::MessageContent,
             ) || record.discoverability == "public"
                 && record.history_visibility == "world_readable")
         })

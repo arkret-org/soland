@@ -210,5 +210,5 @@ pub struct AppletGhostIngressOutcome {
 #[derive(Clone)]
 pub(super) struct FormalAppletEvent {
     pub(super) event_id: String,
-    pub(super) event: arkret_core::Event,
+    pub(super) event: arkret_wire::Event,
 }

@@ -80,7 +80,7 @@ async fn authz_check(
             .flatten()
             .map(|m| m.owner);
         let realms = state.realm_directory_application().snapshot();
-        let members = arkret_core::RealmId::new(realm_id.clone())
+        let members = arkret_identifiers::RealmId::new(realm_id.clone())
             .ok()
             .and_then(|realm_id| realms.get(&realm_id))
             .map(|realm| {

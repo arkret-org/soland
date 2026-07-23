@@ -233,7 +233,7 @@ fn validate_watch_audit_payload_fields(
         )
     })?;
     let target_cell_id = required_payload_string(payload, "target_cell_id")?;
-    if arkret_core::CellRef::new(target_cell_id).is_err() {
+    if arkret_identifiers::CellRef::new(target_cell_id).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",

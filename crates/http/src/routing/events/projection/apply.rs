@@ -1,4 +1,4 @@
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use serde_json::{Value, json};
 use soland_application::delivery::DeviceMessageState;
 use soland_application::events::MlsWelcomeState;
@@ -771,7 +771,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     // into the typed SDK counterpart so field access is checked, not stringly.
     let wire_payload =
         crate::routing::identity::cross_signing::device_authorize_wire_payload(payload);
-    let typed: arkret_core::DeviceAuthorizePayload = match serde_json::from_value(wire_payload) {
+    let typed: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload = match serde_json::from_value(wire_payload) {
         Ok(typed) => typed,
         Err(error) => {
             tracing::warn!(%error, "accepted ak.device.authorize payload is not the typed wire shape; skipping projection");
@@ -960,12 +960,14 @@ mod tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let realm_id =
-            arkret_core::RealmId::new("ak:realm:0196419b-1000-7000-8000-000000000101".to_owned())
-                .unwrap();
-        let operation_id =
-            arkret_core::OperationId::new("ak:operation:0196419b-1000-7000-8000-000000000102")
-                .unwrap();
+        let realm_id = arkret_identifiers::RealmId::new(
+            "ak:realm:0196419b-1000-7000-8000-000000000101".to_owned(),
+        )
+        .unwrap();
+        let operation_id = arkret_identifiers::OperationId::new(
+            "ak:operation:0196419b-1000-7000-8000-000000000102",
+        )
+        .unwrap();
         let sender = "did:web:alice.example";
         let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000101";
         let recipient = "did:web:bob.example";
@@ -1087,12 +1089,14 @@ mod tests {
     #[test]
     fn accepted_circle_member_context_does_not_mutate_wire_operation() {
         let operation = Operation::create(
-            arkret_core::OperationId::new(
+            arkret_identifiers::OperationId::new(
                 "ak:operation:0196419b-1000-7000-8000-000000000202".to_owned(),
             )
             .unwrap(),
-            arkret_core::RealmId::new("ak:realm:0196419b-1000-7000-8000-000000000201".to_owned())
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:0196419b-1000-7000-8000-000000000201".to_owned(),
+            )
+            .unwrap(),
             arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
             json!({
                 "circle_id": "ak:circle:0196419b-1000-7000-8000-000000000203",

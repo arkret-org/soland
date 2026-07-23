@@ -20,10 +20,10 @@ use uuid::Uuid;
 /// Generate a new typed wire ID with the given kind prefix.
 ///
 /// Format: `ak:<kind>:<uuid-v7-36-char-lowercase-hex>`. Delegates to the SDK
-/// [`arkret_core::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
+/// [`arkret_identifiers::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
 /// form is produced by the single shared primitive.
 pub fn generate(kind: &str) -> String {
-    arkret_core::new_prefixed_uuid7(&format!("ak:{kind}:"))
+    arkret_identifiers::new_prefixed_uuid7(&format!("ak:{kind}:"))
 }
 
 pub fn generate_space_id() -> String {

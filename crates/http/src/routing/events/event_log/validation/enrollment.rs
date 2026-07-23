@@ -261,7 +261,8 @@ async fn did_document_at(
     did: &str,
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, String> {
-    let typed_did = arkret_core::Did::new(did.to_owned()).map_err(|error| error.to_string())?;
+    let typed_did =
+        arkret_identifiers::Did::new(did.to_owned()).map_err(|error| error.to_string())?;
     if typed_did.method() == "key" {
         let document = crate::jws_verify::resolve_did_document_async(state, &typed_did).await?;
         return serde_json::to_value(document)

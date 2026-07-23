@@ -680,7 +680,7 @@ fn push_rejection(
     let device_id = device
         .get("device_id")
         .and_then(Value::as_str)
-        .and_then(|value| arkret_core::DeviceId::new(value.to_owned()).ok());
+        .and_then(|value| arkret_identifiers::DeviceId::new(value.to_owned()).ok());
     arkret_core::PushNotifyRejection {
         push_target_id: push_target_id.to_owned(),
         device_id,

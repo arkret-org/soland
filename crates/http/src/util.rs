@@ -145,12 +145,12 @@ mod sync_token_tests {
 
 /// `sha256:<64 lowercase hex>` shape.
 pub fn is_valid_sha256_digest(value: &str) -> bool {
-    value.starts_with("sha256:") && arkret_core::Hash::new(value.to_owned()).is_ok()
+    value.starts_with("sha256:") && arkret_identifiers::Hash::new(value.to_owned()).is_ok()
 }
 
 /// Active `<digest-suite>:<64 lowercase hex>` hash shape.
 pub fn is_valid_hash_digest(value: &str) -> bool {
-    arkret_core::Hash::new(value.to_owned()).is_ok()
+    arkret_identifiers::Hash::new(value.to_owned()).is_ok()
 }
 
 /// 64 lowercase hex characters.

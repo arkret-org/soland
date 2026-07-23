@@ -9,7 +9,7 @@ pub(crate) async fn projected_media_plaintext_service_present(
         || realm_allows_plaintext_service_for_data_class(
             state,
             realm_id,
-            arkret_core::PlaintextDataClassKind::MediaPlaintext,
+            arkret_wire::PlaintextDataClassKind::MediaPlaintext,
         )
         .await
 }

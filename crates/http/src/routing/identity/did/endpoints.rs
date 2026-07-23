@@ -155,9 +155,9 @@ pub(crate) async fn identity_describe(
             "ak.root.identity.log.query.list".to_owned(),
             "ak.root.identity.receipts.query.list".to_owned(),
             "ak.root.identity.command.submit_did_operation".to_owned(),
-            arkret_core::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE
+            arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE
                 .to_owned(),
-            arkret_core::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_RESOURCE_GET
+            arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_RESOURCE_GET
                 .to_owned(),
         ],
         supported_bindings: vec![IdentityRegistryBinding {
@@ -960,20 +960,20 @@ pub(crate) async fn identity_log(
             .and_then(Value::as_str)
             .unwrap_or_default();
         let operation = if record.seq == 0 {
-            arkret_core::DidKeyLogOperation::Inception
+            arkret_models_identity::DidKeyLogOperation::Inception
         } else if operation_name.contains("deactivate") {
-            arkret_core::DidKeyLogOperation::Deactivate
+            arkret_models_identity::DidKeyLogOperation::Deactivate
         } else if operation_name.contains("recover") {
-            arkret_core::DidKeyLogOperation::Recover
+            arkret_models_identity::DidKeyLogOperation::Recover
         } else if operation_name.contains("rotate") {
-            arkret_core::DidKeyLogOperation::Rotate
+            arkret_models_identity::DidKeyLogOperation::Rotate
         } else {
-            arkret_core::DidKeyLogOperation::ServiceUpdate
+            arkret_models_identity::DidKeyLogOperation::ServiceUpdate
         };
         let Some(operation_body) = record.operation.as_object().cloned() else {
             continue;
         };
-        let Ok(mut entry) = arkret_core::DidKeyLogEntry::build(
+        let Ok(mut entry) = arkret_models_identity::DidKeyLogEntry::build(
             Did::new(record.did).map_err(|error| AppError::internal(error.to_string()))?,
             record.seq,
             operation,

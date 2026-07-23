@@ -162,9 +162,9 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate == "did:web:legacy.local")
         );
-        assert!(classes[service].contains(&arkret_core::PlaintextDataClassKind::MessageContent));
+        assert!(classes[service].contains(&arkret_wire::PlaintextDataClassKind::MessageContent));
         assert!(
-            classes[service].contains(&arkret_core::PlaintextDataClassKind::NotificationSummary)
+            classes[service].contains(&arkret_wire::PlaintextDataClassKind::NotificationSummary)
         );
         assert!(!classes.contains_key("did:web:legacy.local"));
     }

@@ -1,4 +1,4 @@
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use serde_json::{Value, json};
 use soland_application::identity::AccountDataState;
 use soland_application::operation_semantics as kinds;
@@ -33,7 +33,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     // Synthesize a CellState::Value at the canonical cell ref. This lets
     // the cells-map fast-path serve reads without scanning the durable
     // Event store on every fanout.
-    let cell_id = match arkret_core::CellRef::new(format!(
+    let cell_id = match arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.realm.read_receipt_policy.v1:{}",
         realm_id.as_str()
     )) {

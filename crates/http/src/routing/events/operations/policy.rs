@@ -59,7 +59,7 @@ pub(crate) async fn validate_trusted_sidecar_circle_operation(
 pub(crate) fn validate_trusted_sidecar_create_operation(
     operation: &Operation,
     controller: &str,
-    backing_circle_id: &arkret_core::CircleId,
+    backing_circle_id: &arkret_identifiers::CircleId,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
         != Some(arkret_wire::events::EventKind::SIDECAR_CREATE)
@@ -322,9 +322,12 @@ mod tests {
 
     fn circle_create_with_payload(payload: Value) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01964137-0000-7000-8000-000000000040",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030")
                 .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
             arkret_wire::events::EventKind::CIRCLE_CREATE,
             payload,
         )

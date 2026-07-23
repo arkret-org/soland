@@ -1366,9 +1366,10 @@ fn actor_profile_from_account(
     if let Some(bio) = account.bio.clone() {
         profile_fields.insert("bio".to_owned(), Value::String(bio));
     }
-    let id = ActorProfileId::new(arkret_core::new_prefixed_uuid7("ak:actor_profile:")).map_err(
-        |error| AppError::internal(format!("actor profile id construction failed: {error}")),
-    )?;
+    let id = ActorProfileId::new(arkret_identifiers::new_prefixed_uuid7("ak:actor_profile:"))
+        .map_err(|error| {
+            AppError::internal(format!("actor profile id construction failed: {error}"))
+        })?;
     Ok(ActorProfile {
         id,
         schema: ACTOR_PROFILE_SCHEMA.to_owned(),

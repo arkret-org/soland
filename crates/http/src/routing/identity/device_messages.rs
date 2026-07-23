@@ -559,7 +559,7 @@ async fn active_agent_keypackage_endpoint(
     }) else {
         return Ok(false);
     };
-    let principal = arkret_core::Did::new(principal_id.to_owned())
+    let principal = arkret_identifiers::Did::new(principal_id.to_owned())
         .map_err(|error| AppError::internal(format!("invalid Agent principal: {error}")))?;
     Ok(
         crate::routing::mls::current_agent_key_authorization_matches(
@@ -620,13 +620,13 @@ fn device_message_envelope_from_record(
         None => None,
     };
     Some(DeviceMessageEnvelope {
-        message_id: arkret_core::DeviceMessageId::new(
+        message_id: arkret_identifiers::DeviceMessageId::new(
             message.content.get("message_id")?.as_str()?.to_owned(),
         )
         .ok()?,
         kind,
-        sender_principal_id: arkret_core::Did::new(message.sender.clone()).ok()?,
-        sender_device_id: arkret_core::DeviceId::new(
+        sender_principal_id: arkret_identifiers::Did::new(message.sender.clone()).ok()?,
+        sender_device_id: arkret_identifiers::DeviceId::new(
             message
                 .content
                 .get("sender_device_id")
@@ -634,8 +634,8 @@ fn device_message_envelope_from_record(
                 .to_owned(),
         )
         .ok()?,
-        recipient_principal_id: arkret_core::Did::new(message.recipient.clone()).ok()?,
-        recipient_device_id: arkret_core::DeviceId::new(message.device_id.clone()).ok()?,
+        recipient_principal_id: arkret_identifiers::Did::new(message.recipient.clone()).ok()?,
+        recipient_device_id: arkret_identifiers::DeviceId::new(message.device_id.clone()).ok()?,
         sent_at: message.created_at,
         expires_at,
         content,

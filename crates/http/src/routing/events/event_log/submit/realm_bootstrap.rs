@@ -42,7 +42,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .iter()
         .cloned()
         .map(|envelope| {
-            serde_json::from_value::<arkret_core::Event>(envelope).map_err(|error| {
+            serde_json::from_value::<arkret_wire::Event>(envelope).map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
                     "schema_violation",

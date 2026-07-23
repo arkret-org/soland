@@ -625,7 +625,7 @@ fn sdk_event_from_record(
     let realm_id = RealmId::new(realm_id).map_err(|error| AppError::internal(error.to_string()))?;
     let event_id = EventId::new(record.event_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let actor_id = arkret_core::Did::new(record.actor_id.clone())
+    let actor_id = arkret_identifiers::Did::new(record.actor_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
     let created_at = object
         .get("created_at")
@@ -698,7 +698,7 @@ fn sdk_event_from_record(
         seal_ref: object
             .get("seal_ref")
             .and_then(Value::as_str)
-            .and_then(|value| arkret_core::SealId::new(value.to_owned()).ok()),
+            .and_then(|value| arkret_identifiers::SealId::new(value.to_owned()).ok()),
         auth_context: object
             .get("auth_context")
             .cloned()
@@ -722,7 +722,7 @@ fn sdk_event_from_record(
         executed_by: object
             .get("executed_by")
             .and_then(Value::as_str)
-            .and_then(|value| arkret_core::Did::new(value.to_owned()).ok()),
+            .and_then(|value| arkret_identifiers::Did::new(value.to_owned()).ok()),
         authorization_ref: object
             .get("authorization_ref")
             .and_then(Value::as_str)
@@ -830,7 +830,7 @@ fn sdk_effective_scope(
     }
     match effective_scope_for_envelope(&record.envelope).as_deref() {
         Some(scope) if scope.starts_with("ak:circle:") => {
-            arkret_core::CircleId::new(scope.to_owned())
+            arkret_identifiers::CircleId::new(scope.to_owned())
                 .ok()
                 .map(|circle_id| arkret_wire::EffectiveScope::Circle {
                     realm_id: realm_id.clone(),
@@ -1043,7 +1043,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     // kind.)
     {
         let proj = state.projection_application().snapshot();
-        let cell_id = arkret_core::CellRef::new(format!(
+        let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.read_receipt_policy.v1:{realm_id}"
         ))
         .ok()?;

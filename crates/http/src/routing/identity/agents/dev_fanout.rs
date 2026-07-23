@@ -367,7 +367,7 @@ pub(super) async fn attach_agent_grant_event(
     state: &AppState,
     session: &SessionRecord,
     agent_id: &str,
-    supplied_grant: &arkret_core::CapabilityGrant,
+    supplied_grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
 ) -> Result<String, AppError> {
     let realm_id = supplied_grant
         .realm_id
@@ -473,7 +473,11 @@ pub(super) async fn submit_durable_agent_lifecycle(
     if event.kind.as_str() != event_kind
         || event.realm_id.as_str() != realm_id
         || event.actor_id.as_str() != agent_id
-        || event.executed_by.as_ref().map(arkret_core::Did::as_str) != Some(session.actor.as_str())
+        || event
+            .executed_by
+            .as_ref()
+            .map(arkret_identifiers::Did::as_str)
+            != Some(session.actor.as_str())
         || event.authorization_ref.as_deref() != Some(authorization_ref)
     {
         return Err(AppError::capability_denied(

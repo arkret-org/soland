@@ -879,7 +879,7 @@ struct AccountEraseOutcome {
 /// rewrite worker; this is the v1 "memory ledger" cascade. Spec: A.3
 /// + identity/account-lifecycle.md.
 fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
-    let actor_id = match arkret_core::Did::new(actor.to_owned()) {
+    let actor_id = match arkret_identifiers::Did::new(actor.to_owned()) {
         Ok(did) => did,
         Err(_) => return 0,
     };
@@ -1030,7 +1030,7 @@ fn build_erasure_receipt_value(
     let retained_stub = erasure_retained_stub(&receipt_id, &subject, &scope, completed_at)?;
     let retained_stub_value = serde_json::to_value(&retained_stub)
         .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?;
-    let retained_stub_digest = arkret_core::Hash::new(
+    let retained_stub_digest = arkret_identifiers::Hash::new(
         arkret_canonical::canonical_sha256(&retained_stub_value)
             .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?,
     )
@@ -1083,15 +1083,16 @@ fn build_erasure_receipt_value(
         .map_err(|error| AppError::internal(format!("erasure receipt encode: {error}")))
 }
 
-fn erasure_receipt_operation(receipt: Value) -> Option<arkret_core::Operation> {
+fn erasure_receipt_operation(receipt: Value) -> Option<arkret_event_draft::Operation> {
     let realm_id = receipt
         .get("scope")
         .and_then(Value::as_object)
         .and_then(|scope| scope.get("realm_id"))
         .and_then(Value::as_str)?;
-    let operation_id = arkret_core::OperationId::new(crate::ids::generate_operation_id()).ok()?;
-    let realm_id = arkret_core::RealmId::new(realm_id.to_owned()).ok()?;
-    Some(arkret_core::Operation::create(
+    let operation_id =
+        arkret_identifiers::OperationId::new(crate::ids::generate_operation_id()).ok()?;
+    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
+    Some(arkret_event_draft::Operation::create(
         operation_id,
         realm_id,
         arkret_wire::events::EventKind::AUDIT_ERASURE_RECEIPT,

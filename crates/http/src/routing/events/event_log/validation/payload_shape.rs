@@ -44,7 +44,7 @@ pub(super) fn validate_conflict_repair_event_payload(
                 "conflict repair payload requires cell_id",
             )
         })?;
-    if arkret_core::CellRef::new(cell_id.to_owned()).is_err() {
+    if arkret_identifiers::CellRef::new(cell_id.to_owned()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",

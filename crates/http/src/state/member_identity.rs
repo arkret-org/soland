@@ -95,7 +95,7 @@ pub struct MemberIdentityReplacementEdge {
     pub payload_digest: String,
 }
 
-pub type EffectiveIdentityEntry = arkret_core::EffectiveIdentityEntry;
+pub type EffectiveIdentityEntry = arkret_models_identity::EffectiveIdentityEntry;
 
 /// Per-`(realm_id, actor_id)` snapshot derived on demand by
 /// [`MemberIdentityRegistry::snapshot_for_actor`]. Drives the sync
@@ -305,9 +305,9 @@ impl MemberIdentityRegistry {
             .iter()
             .map(|r| {
                 Some(EffectiveIdentityEntry {
-                    event_id: arkret_core::EventId::new(r.event_id.clone()).ok()?,
+                    event_id: arkret_identifiers::EventId::new(r.event_id.clone()).ok()?,
                     segment: arkret_core::MemberIdentitySegment::MemberIdentity,
-                    payload_digest: arkret_core::Hash::new(r.payload_digest.clone()).ok()?,
+                    payload_digest: arkret_identifiers::Hash::new(r.payload_digest.clone()).ok()?,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -377,8 +377,8 @@ fn effective_set_digest(
     actor_id: &str,
     entries: &[EffectiveIdentityEntry],
 ) -> Option<String> {
-    let realm_id = arkret_core::RealmId::new(realm_id.to_owned()).ok()?;
-    let actor_id = arkret_core::Did::new(actor_id.to_owned()).ok()?;
+    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
+    let actor_id = arkret_identifiers::Did::new(actor_id.to_owned()).ok()?;
     arkret_core::member_identity_effective_set_digest(
         &realm_id,
         &actor_id,
@@ -405,7 +405,7 @@ pub(crate) fn display_state_digest(
         .iter()
         .map(|claim| {
             Some(arkret_core::RosterHandleClaimDigestEntry {
-                claim_digest: arkret_core::Hash::new(claim.claim_digest.clone()).ok()?,
+                claim_digest: arkret_identifiers::Hash::new(claim.claim_digest.clone()).ok()?,
                 binding_state: serde_json::from_value(Value::String(claim.binding_state.clone()))
                     .ok()?,
                 expires_at: match claim.expires_at.as_deref() {
@@ -419,8 +419,8 @@ pub(crate) fn display_state_digest(
             })
         })
         .collect::<Option<Vec<_>>>()?;
-    let realm_id = arkret_core::RealmId::new(realm_id.to_owned()).ok()?;
-    let actor_id = arkret_core::Did::new(actor_id.to_owned()).ok()?;
+    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
+    let actor_id = arkret_identifiers::Did::new(actor_id.to_owned()).ok()?;
     arkret_core::member_display_state_digest(&realm_id, &actor_id, entries, &handle_claims).ok()
 }
 

@@ -91,7 +91,9 @@ async fn submit_event_seal(
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "events_describe"))]
-async fn events_describe(depot: &mut Depot) -> JsonResult<arkret_core::ServiceDescribe> {
+async fn events_describe(
+    depot: &mut Depot,
+) -> JsonResult<arkret_models_discovery::ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut description = describe(
         state.service_id(),
@@ -174,7 +176,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     };
     if let Err(error) = super::super::require_agent_session_scope(
         &session,
-        arkret_core::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
+        arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
     ) {
         render_error(res, error.http_status(), error.wire_code(), &error.message);
         return;
@@ -340,7 +342,9 @@ async fn submit_event_dispatch(
     }
 }
 
-fn submit_outcome_value(outcome: &arkret_core::EventsSubmitOutcome) -> Value {
+fn submit_outcome_value(
+    outcome: &arkret_models_collaboration::http_bodies::EventsSubmitOutcome,
+) -> Value {
     serde_json::to_value(outcome).unwrap_or_else(|_| json!({"status": "accepted"}))
 }
 
@@ -350,7 +354,7 @@ fn submit_outcome_value(outcome: &arkret_core::EventsSubmitOutcome) -> Value {
 fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
     if let Some(event_id) = error.quarantine_event_id {
         let outcome = events_submit_outcome(
-            arkret_core::EventsSubmitStatus::Partial,
+            arkret_models_collaboration::http_bodies::EventsSubmitStatus::Partial,
             Vec::new(),
             Vec::new(),
             Vec::new(),

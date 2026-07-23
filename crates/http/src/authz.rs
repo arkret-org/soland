@@ -115,7 +115,7 @@ impl SolandAuthzEngine {
         subject: String,
         resource: String,
         actions: Vec<String>,
-        capability_action_registry_digest: Option<arkret_core::Hash>,
+        capability_action_registry_digest: Option<arkret_identifiers::Hash>,
         constraints: Vec<Constraint>,
         delegated_from: Option<String>,
         expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -161,7 +161,7 @@ impl SolandAuthzEngine {
         subject: String,
         resource: String,
         actions: Vec<String>,
-        capability_action_registry_digest: Option<arkret_core::Hash>,
+        capability_action_registry_digest: Option<arkret_identifiers::Hash>,
         constraints: Vec<Constraint>,
         expires_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Grant, DelegationError> {
@@ -1044,10 +1044,10 @@ impl MergedAuthzDecision {
 /// keys decisions on (NOT the SDK `RealmId` newtype — pass the wire string).
 pub(crate) fn revocation_freshness_fail_closed(
     action: &str,
-    freshness_state: arkret_core::FreshnessState,
+    freshness_state: arkret_wire::FreshnessState,
 ) -> bool {
-    use arkret_core::FreshnessState;
     use arkret_schema::CapabilityRiskTier;
+    use arkret_wire::FreshnessState;
 
     match freshness_state {
         FreshnessState::Fresh => false,
