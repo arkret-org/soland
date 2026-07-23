@@ -30,7 +30,7 @@ use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, query_param};
 use crate::authz::{Constraint, GrantDecisionVerdict};
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::routing::spaces::space::realm_has_member_by_id;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;

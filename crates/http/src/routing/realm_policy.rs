@@ -22,7 +22,7 @@ use soland_http::error::AppError;
 use soland_http::result::{EmptyResult, JsonResult, empty_ok, json_ok};
 
 use super::{AuthArgs, accept_local_operations};
-use crate::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::ids;
 use crate::state::AppState;
 

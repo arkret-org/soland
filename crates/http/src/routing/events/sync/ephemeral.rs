@@ -22,7 +22,7 @@ use crate::state::{AppState, EventNotification};
 #[tracing::instrument(skip_all, fields(op = "ak.self.ephemeral.command.send"))]
 pub(super) async fn submit_ephemeral(
     aa: crate::routing::system::extract::AuthArgs,
-    body: crate::extract::JsonBody<
+    body: salvo::oapi::extract::JsonBody<
         arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
     >,
     depot: &mut Depot,

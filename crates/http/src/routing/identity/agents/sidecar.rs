@@ -13,7 +13,7 @@ use soland_application::identity::{
 };
 
 use super::*;
-use crate::extract::QueryParam;
+use salvo::oapi::extract::QueryParam;
 
 pub(super) const ADDRESSED_AGENT_NOT_ELIGIBLE: &str = "addressed_agent_not_eligible";
 pub(super) const CONTROLLER_IN_ADDRESSED_AGENTS: &str = "controller_in_addressed_agents";

@@ -43,7 +43,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::query_param;
 
 use super::util::{canonical_json, order_hlc_clocks, sha256_digest};
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

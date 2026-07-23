@@ -70,7 +70,7 @@ use soland_http::util::bearer_token;
 use subtle::ConstantTimeEq as _;
 
 use super::{AuthArgs, append_audit_log, now, validate_did};
-use crate::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::ids;
 use crate::routing::accept_local_operations;
 use crate::routing::events::event_log::submit_event_value;

@@ -57,7 +57,7 @@ use super::{
     validate_operation_policy, validate_operation_policy_with_plaintext_service_binding,
     validate_operation_semantics, validate_space_id,
 };
-use crate::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::routing::organizations;
 use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::routing::system::extract::AuthArgs;

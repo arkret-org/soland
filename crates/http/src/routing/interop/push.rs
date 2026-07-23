@@ -29,7 +29,7 @@ use super::audit::append_audit_log;
 use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
 use super::push_outbound::{derive_push_gateway_service_base_url, join_push_gateway_url};
 use super::{authenticated_session, now, sha256_hex};
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{

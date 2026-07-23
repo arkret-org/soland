@@ -16,7 +16,7 @@ use serde_json::json;
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, accept_local_operations, now};
-use crate::extract::{JsonBody, QueryParam};
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use crate::routing::identity::device_messages::{
     READ_MARKER_UPDATE_TYPE, fanout_actor_private_update,
 };

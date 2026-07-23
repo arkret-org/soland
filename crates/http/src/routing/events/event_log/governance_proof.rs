@@ -15,7 +15,7 @@ use arkret_wire::{CellId, EffectiveScope as GovernanceScope, Event};
 use salvo::prelude::*;
 
 use super::*;
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 
 const SUPPORTED_REDUCER_PROFILE: &str = "ak.reducer.v1";
 

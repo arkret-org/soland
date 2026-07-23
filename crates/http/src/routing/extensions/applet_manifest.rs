@@ -38,7 +38,7 @@ use sha2::{Digest, Sha256};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 
 /// Registered applet capabilities recognised by the verifier. Anything
 /// not in this set fails closed with `unknown_capability`. The list is

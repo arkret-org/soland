@@ -37,7 +37,7 @@ use soland_application::operation_semantics::CHILD_ORDER_CELL_FAMILY;
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, accept_local_operations};
-use crate::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::routing::events::operations::operation_policy_reason_code;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry};

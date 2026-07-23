@@ -34,7 +34,7 @@ use soland_contracts::admin::handles::{
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use crate::extract::{JsonBody, PathParam, QueryParam};
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::state::{AppState, HandleClaimEvidenceRecord};
 
 const DESTRUCTIVE_REASON_MAX_CHARS: usize = 512;

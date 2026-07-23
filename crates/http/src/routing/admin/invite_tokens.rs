@@ -12,7 +12,7 @@ use soland_contracts::admin::invite_tokens::{AdminInviteTokenItem, CreateInviteT
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use crate::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 

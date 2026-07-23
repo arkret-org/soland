@@ -1,48 +1,50 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-use anyhow::{Context, bail};
+use anyhow::bail;
+use salvo::oapi::OpenApi;
 use salvo::prelude::*;
 use salvo::routing::FilterInfo;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::openapi_routes::{ArkretOpenApiDoc, populate_known_routes};
 
 static ARKRET_OPENAPI_DOC: OnceLock<Value> = OnceLock::new();
 static PRODUCT_OPENAPI_APPENDIX: OnceLock<std::result::Result<Value, String>> = OnceLock::new();
 
-pub fn cached_arkret_openapi_doc(
-    router: &Router,
-    artifact_registry_summary: serde_json::Value,
-) -> Value {
-    let doc = ARKRET_OPENAPI_DOC
-        .get_or_init(|| {
-            arkret_openapi_doc(router, artifact_registry_summary)
-                .unwrap_or_else(|error| panic!("failed to build artifact-first OpenAPI: {error:#}"))
-        })
-        .clone();
-    // The same artifact-derived implementation doc is also the source of
-    // truth for the 404/405 known-routes table used by `api_not_found`.
-    populate_known_routes(&doc);
-    doc
+/// Build (once) and return the served OpenAPI document.
+///
+/// The document is generated from the live salvo router via salvo-oapi
+/// (`OpenApi::merge_router`) rather than from any embedded/static artifact, so
+/// every advertised operation comes from a real registered `#[endpoint]`
+/// handler. Handlers still declared with `#[handler]` carry no OpenAPI metadata
+/// and are intentionally absent from the document until they are migrated;
+/// coverage therefore grows incrementally rather than being backed by a curated
+/// static file.
+///
+/// The 404/405 `Allow`-header table (`KNOWN_ROUTES`) is populated separately
+/// from a direct router walk (`collect_registered_routes`), so error-envelope
+/// correctness never depends on OpenAPI annotation coverage.
+pub fn cached_arkret_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Value {
+    let registered_routes = collect_registered_routes(router)
+        .unwrap_or_else(|error| panic!("failed to walk router for OpenAPI: {error:#}"));
+    populate_known_routes(&registered_routes);
+    ARKRET_OPENAPI_DOC
+        .get_or_init(|| generate_openapi_doc(router, artifact_registry_summary))
+        .clone()
 }
 
-fn arkret_openapi_doc(
-    router: &Router,
-    artifact_registry_summary: serde_json::Value,
-) -> anyhow::Result<Value> {
-    let registered_routes = collect_registered_routes(router)?;
-    let appendix = product_openapi_appendix()?;
-
-    let mut artifact: Value = serde_saphyr::from_str(arkret_schema::embedded_openapi_yaml()?)
-        .context("failed to parse the embedded canonical OpenAPI artifact")?;
-    select_implemented_protocol_paths(&mut artifact, &registered_routes)?;
-    append_product_paths(&mut artifact, appendix, &registered_routes)?;
-    merge_missing_components(&mut artifact, appendix)?;
-
-    let root = artifact
+fn generate_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Value {
+    let generated =
+        OpenApi::new("Arkret Service API", env!("CARGO_PKG_VERSION")).merge_router(router);
+    let mut doc = serde_json::to_value(&generated)
+        .unwrap_or_else(|error| panic!("failed to serialize generated OpenAPI: {error:#}"));
+    let root = doc
         .as_object_mut()
-        .context("canonical OpenAPI artifact root must be an object")?;
+        .expect("generated OpenAPI root must be an object");
+    // Soland-specific extension metadata carried over from the previous
+    // artifact-first document. Operation aliases map spec stream/command kinds
+    // onto their canonical operationIds for clients that resolve by alias.
     root.insert(
         "x-operation-aliases".to_owned(),
         json!({
@@ -56,18 +58,14 @@ fn arkret_openapi_doc(
         "x-arkret-artifacts".to_owned(),
         json!({
             "registries": artifact_registry_summary,
-            "openapi_source": "arkret-schema::embedded_openapi_yaml",
-            "canonical_source": "arkret-spec/spec/v1/artifacts/openapi/arkret-service-api.openapi.yaml",
-            "protocol_path_policy": "implemented_intersection",
+            "openapi_source": "salvo-oapi::OpenApi::merge_router",
             "registered_route_source": "salvo::routing::FilterInfo",
-            "product_appendix_source": "soland-http/product_openapi_appendix.json",
-            // The historical entity/view scaffold was removed alongside the
-            // entity abstraction. View facets are declared by individual spec
-            // event kinds and bound through cell-family registry mappings.
+            // View facets are declared by individual spec event kinds and bound
+            // through cell-family registry mappings.
             "authz_constraint_kinds": ["allowed_object_facets"],
         }),
     );
-    Ok(artifact)
+    doc
 }
 
 const OPENAPI_METHODS: &[&str] = &[
@@ -86,6 +84,9 @@ fn product_openapi_appendix() -> anyhow::Result<&'static Value> {
     }
 }
 
+/// Walk the live salvo router and collect every registered `path -> methods`
+/// pair. This is the single source of truth for the 404/405 known-route table
+/// and is independent of OpenAPI generation.
 fn collect_registered_routes(router: &Router) -> anyhow::Result<RegisteredRoutes> {
     fn walk(
         router: &Router,
@@ -150,171 +151,13 @@ fn join_route_path(parent: &str, fragment: &str) -> String {
     }
 }
 
-fn select_implemented_protocol_paths(
-    artifact: &mut Value,
-    registered_routes: &RegisteredRoutes,
-) -> anyhow::Result<()> {
-    let artifact_paths = artifact
-        .get_mut("paths")
-        .and_then(Value::as_object_mut)
-        .context("canonical OpenAPI artifact must contain a paths object")?;
-    let canonical_paths = std::mem::take(artifact_paths);
-    let mut selected = Map::new();
-
-    for (path, mut canonical_item) in canonical_paths {
-        let Some(registered_methods) = registered_routes.get(&path) else {
-            continue;
-        };
-        let canonical_item_object = canonical_item
-            .as_object_mut()
-            .with_context(|| format!("canonical OpenAPI path `{path}` must be an object"))?;
-        let mut implemented = false;
-        for method in OPENAPI_METHODS {
-            if !registered_methods.contains(*method) {
-                canonical_item_object.remove(*method);
-                continue;
-            }
-            let Some(canonical_operation) = canonical_item_object.get(*method) else {
-                bail!(
-                    "Soland registers {method} {path}, but the canonical OpenAPI artifact does not"
-                );
-            };
-            if canonical_operation
-                .get("operationId")
-                .and_then(Value::as_str)
-                .is_none()
-            {
-                bail!("canonical OpenAPI operation {method} {path} has no operationId");
-            }
-            implemented = true;
-        }
-        if implemented {
-            selected.insert(path, canonical_item);
-        }
-    }
-
-    for (path, registered_methods) in registered_routes {
-        if !is_protocol_contract_path(path) {
-            continue;
-        }
-        for method in registered_methods {
-            if !selected
-                .get(path)
-                .and_then(Value::as_object)
-                .is_some_and(|item| item.contains_key(method))
-            {
-                bail!(
-                    "registered protocol operation {method} {path} is absent from the canonical OpenAPI artifact"
-                );
-            }
-        }
-    }
-
-    *artifact_paths = selected;
-    Ok(())
-}
-
-fn append_product_paths(
-    artifact: &mut Value,
-    appendix: &Value,
-    registered_routes: &RegisteredRoutes,
-) -> anyhow::Result<()> {
-    let appendix_paths = appendix
-        .get("paths")
-        .and_then(Value::as_object)
-        .context("product OpenAPI appendix must contain a paths object")?;
-    let artifact_paths = artifact
-        .get_mut("paths")
-        .and_then(Value::as_object_mut)
-        .context("canonical OpenAPI artifact must contain a paths object")?;
-    let mut missing = Vec::new();
-    for (path, registered_methods) in registered_routes {
-        if is_protocol_contract_path(path) {
-            continue;
-        }
-        let Some(mut item) = appendix_paths.get(path).cloned() else {
-            missing.push(format!(
-                "{path} [{}]",
-                registered_methods
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ));
-            continue;
-        };
-        let item_object = item
-            .as_object_mut()
-            .with_context(|| format!("product OpenAPI path `{path}` must be an object"))?;
-        for method in OPENAPI_METHODS {
-            if registered_methods.contains(*method) {
-                if !item_object.contains_key(*method) {
-                    bail!(
-                        "registered product operation {method} {path} is absent from the product OpenAPI appendix"
-                    );
-                }
-            } else {
-                item_object.remove(*method);
-            }
-        }
-        artifact_paths.insert(path.clone(), item);
-    }
-    if !missing.is_empty() {
-        bail!(
-            "registered product routes are absent from appendix: {}",
-            missing.join("; ")
-        );
-    }
-    Ok(())
-}
-
-fn is_test_only_protocol_path(path: &str) -> bool {
-    path.starts_with("/_arkret/_conformance/")
-}
-
-fn is_transport_binding_path(path: &str) -> bool {
-    path == "/_arkret/self/blob/resumable" || path.starts_with("/_arkret/self/blob/resumable/")
-}
-
-fn is_protocol_contract_path(path: &str) -> bool {
-    path.starts_with("/_arkret/")
-        && !is_test_only_protocol_path(path)
-        && !is_transport_binding_path(path)
-}
-
-fn merge_missing_components(artifact: &mut Value, appendix: &Value) -> anyhow::Result<()> {
-    let Some(appendix_components) = appendix.get("components").and_then(Value::as_object) else {
-        return Ok(());
-    };
-    let artifact_root = artifact
-        .as_object_mut()
-        .context("canonical OpenAPI artifact root must be an object")?;
-    let artifact_components = artifact_root
-        .entry("components")
-        .or_insert_with(|| Value::Object(Map::new()))
-        .as_object_mut()
-        .context("canonical OpenAPI components must be an object")?;
-
-    for (section, appendix_entries) in appendix_components {
-        let Some(appendix_entries) = appendix_entries.as_object() else {
-            continue;
-        };
-        let artifact_entries = artifact_components
-            .entry(section.clone())
-            .or_insert_with(|| Value::Object(Map::new()))
-            .as_object_mut()
-            .with_context(|| {
-                format!("canonical OpenAPI component section `{section}` is invalid")
-            })?;
-        for (name, entry) in appendix_entries {
-            artifact_entries
-                .entry(name.clone())
-                .or_insert_with(|| entry.clone());
-        }
-    }
-    Ok(())
-}
-
+/// The soland extension operationIds advertised through `*.describe`.
+///
+/// Sourced from the product appendix registry (an operation-id catalog, not a
+/// served OpenAPI document). This is deliberately independent of the generated
+/// OpenAPI surface and remains the describe-time source of truth for
+/// `org.arkret.soland.*` extension operations until they are migrated onto
+/// annotated `#[endpoint]` handlers.
 pub fn soland_extension_operation_ids() -> Vec<String> {
     let appendix = product_openapi_appendix()
         .unwrap_or_else(|error| panic!("failed to load product OpenAPI appendix: {error:#}"));

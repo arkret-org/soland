@@ -818,7 +818,7 @@ pub(crate) async fn identity_resolve(
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.document.resource.get"))]
 pub(crate) async fn identity_document(
-    did: crate::extract::QueryParam<String, true>,
+    did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<IdentityDocumentViewOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -905,7 +905,7 @@ pub(crate) async fn identity_did_document(
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.log.query.list"))]
 pub(crate) async fn identity_log(
-    did: crate::extract::QueryParam<String, true>,
+    did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<IdentityLogListOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -966,7 +966,7 @@ pub(crate) async fn identity_log(
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.receipts.query.list"))]
 pub(crate) async fn identity_receipts(
-    did: crate::extract::QueryParam<String, true>,
+    did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<IdentityReceiptListOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");

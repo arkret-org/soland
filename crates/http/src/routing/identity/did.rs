@@ -37,7 +37,7 @@ use super::webvh_validation::{
     verify_scid_against_did, verify_webvh_log_proof, webvh_entry_hash_multibase,
 };
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 use crate::wire::{IdentityLogListOutcome, IdentityReceiptListOutcome, IdentityResolveRequestBody};
 

@@ -787,7 +787,7 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.command.revoke_cursor"))]
 pub(super) async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,
-    body: crate::extract::JsonBody<arkret_models_identity::account::AccountCursorRevokeRequestBody>,
+    body: salvo::oapi::extract::JsonBody<arkret_models_identity::account::AccountCursorRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> soland_http::result::JsonResult<arkret_models_identity::account::AccountCursorRevokeOutcome> {

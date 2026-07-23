@@ -41,7 +41,7 @@ use soland_http::result::{JsonResult, json_ok};
 
 use super::audit::append_audit_log;
 use super::require_admin_principal;
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 

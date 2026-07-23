@@ -37,7 +37,7 @@ use super::{
     append_audit_log, bearer_token, handle_for_did, normalize_localpart, now, render_error,
     validate_device_id, validate_did,
 };
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 use crate::wire::{
     DevLoginRequestBody, LogoutOutcome, SessionGrantIntrospectOutcome,

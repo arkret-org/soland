@@ -36,7 +36,7 @@ use soland_application::federation::{
 use soland_http::error::AppError;
 
 use crate::config::AppConfig;
-use crate::extract::{JsonBody, PathParam, QueryParam};
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::routing::admin::{RequireAdmin, require_admin_principal};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;

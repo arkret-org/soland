@@ -47,7 +47,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{AuthArgs, append_audit_log};
-use crate::extract::{JsonBody, PathParam, QueryParam};
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::state::AppState;
 
 mod errors;

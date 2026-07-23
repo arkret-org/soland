@@ -24,7 +24,7 @@ use soland_application::identity::{
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, now};
-use crate::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

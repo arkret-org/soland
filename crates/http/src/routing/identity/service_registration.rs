@@ -22,7 +22,7 @@ use super::webvh_validation::{
     validate_witness_policy_for_log, verify_log_subject, verify_scid_against_did,
     verify_webvh_log_proof,
 };
-use crate::extract::{JsonBody, QueryParam};
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use crate::state::AppState;
 
 #[handler]

@@ -24,7 +24,7 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::extract::QueryParam;
+use salvo::oapi::extract::QueryParam;
 use crate::state::AppState;
 use crate::wire::{
     AuthBridgeAuthDescriptor, AuthBridgeDescribeOutcome, AuthBridgeExamples,

@@ -23,7 +23,7 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::query_param;
 
 use super::{now, realm_has_member};
-use crate::extract::{JsonBody, QueryParam};
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;

@@ -188,11 +188,7 @@ fn response_from_value(
     Ok((record, response))
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.join_application.command.submit",
-    tags("join_applications"),
-    summary = "Submit a profile-private signed join application"
-)]
+#[handler]
 async fn submit_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
@@ -326,11 +322,7 @@ async fn submit_join_application(
     json_ok(response)
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.join_application.command.review",
-    tags("join_applications"),
-    summary = "Submit a reviewer-signed join-application decision"
-)]
+#[handler]
 async fn review_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
@@ -403,11 +395,7 @@ async fn review_join_application(
     json_ok(response)
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.join_application.command.cancel",
-    tags("join_applications"),
-    summary = "Cancel a profile-private join application"
-)]
+#[handler]
 async fn cancel_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
@@ -564,11 +552,7 @@ async fn audit_body_read(
     Ok(())
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.join_application.query.list",
-    tags("join_applications"),
-    summary = "List viewer-scoped join applications"
-)]
+#[handler]
 async fn list_join_applications(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
@@ -629,11 +613,7 @@ async fn list_join_applications(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.join_application.resource.get",
-    tags("join_applications"),
-    summary = "Read one authorized join application"
-)]
+#[handler]
 async fn get_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
@@ -663,11 +643,7 @@ async fn get_join_application(
     json_ok(JoinApplicationGetOutcome { application })
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.join_application.audit.query.list",
-    tags("join_applications"),
-    summary = "Read one join application's audit trail"
-)]
+#[handler]
 async fn list_join_application_audit(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,

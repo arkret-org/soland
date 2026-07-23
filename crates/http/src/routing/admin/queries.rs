@@ -40,7 +40,7 @@ use soland_http::error::{AppError, ErrorCode};
 use util::query_param;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal, util};
-use crate::extract::QueryParam;
+use salvo::oapi::extract::QueryParam;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

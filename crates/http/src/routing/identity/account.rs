@@ -70,7 +70,7 @@ use super::consent::{
 };
 use super::did::require_embedded_webvh_registration_bearer;
 use super::{AuthArgs, append_audit_log, bearer_token, now, sha256_hex, validate_did};
-use crate::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::routing::validate_device_id;
 use crate::state::AppState;
 use crate::wire::SolandAccountRegisterOutcome;

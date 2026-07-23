@@ -51,7 +51,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{AuthArgs, accept_local_operations};
-use crate::extract::{JsonBody, PathParam, QueryParam};
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::ids;
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;

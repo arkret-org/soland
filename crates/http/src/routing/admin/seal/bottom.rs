@@ -16,7 +16,7 @@ use soland_contracts::admin::seal::{
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, admin_signer_for, fresh_hlc, pick_admin_seal_basis};
-use crate::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 

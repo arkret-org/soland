@@ -32,7 +32,7 @@ use super::{
     federation_destination_matches, ingest_federation_operations, now, operation_is_visible,
     redaction_targets_from_operations, sync_token, verify_federation_origin,
 };
-use crate::extract::{JsonBody, PathParam, QueryParam};
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::state::AppState;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

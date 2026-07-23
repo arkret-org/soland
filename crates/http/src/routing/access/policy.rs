@@ -39,7 +39,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, validate_canonical_json_value, validate_did};
-use crate::extract::{JsonBody, PathParam, QueryParam};
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::ids;
 use crate::routing::append_audit_log;
 use crate::routing::system::extract::AuthArgs;

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
-use crate::extract::PathParam;
+use salvo::oapi::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

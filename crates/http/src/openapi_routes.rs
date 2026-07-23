@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use salvo::http::Method;
@@ -51,26 +52,25 @@ pub async fn api_not_found(req: &mut Request, res: &mut Response) {
 }
 
 /// Map of registered route patterns → supported HTTP methods. Populated
-/// once at startup from the cached OpenAPI doc (see
-/// [`cached_arkret_openapi_doc`]) so that [`api_not_found`] can decide
-/// whether to return 404 (`unrecognized_endpoint`) or 405
-/// (`method_not_allowed` + `Allow` header) for a given request path.
+/// once at startup from a direct walk of the live salvo router (see
+/// [`cached_arkret_openapi_doc`] / `collect_registered_routes`) so that
+/// [`api_not_found`] can decide whether to return 404
+/// (`unrecognized_endpoint`) or 405 (`method_not_allowed` + `Allow` header)
+/// for a given request path. This is deliberately independent of the
+/// generated OpenAPI document, so 404/405 correctness never depends on
+/// `#[endpoint]` annotation coverage.
 ///
-/// Keys are OpenAPI-style patterns with `{param}` segments, e.g.
+/// Keys are route patterns with `{param}` segments, e.g.
 /// `/_soland/self/spaces/{space_id}`. Pattern→URI matching is segment-based
 /// (see [`pattern_matches_path`]) so concrete URIs like
 /// `/_soland/self/spaces/ak:space:abc` resolve back to their declaring
 /// pattern without any regex compilation.
 static KNOWN_ROUTES: OnceLock<Vec<(String, Vec<Method>)>> = OnceLock::new();
 
-pub fn populate_known_routes(doc: &Value) {
+pub fn populate_known_routes(registered_routes: &BTreeMap<String, BTreeSet<String>>) {
     let _ = KNOWN_ROUTES.get_or_init(|| {
         let mut out: Vec<(String, Vec<Method>)> = Vec::new();
-        let paths = doc
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("OpenAPI artifact must contain a paths object");
-        for (path, item) in paths {
+        for (path, methods) in registered_routes {
             // The protocol surface (`/_arkret/...`, trust segments
             // self/gate/root/find/peer/open/edge) is spec-mandated to return
             // the canonical error envelope; the `/_soland/...` compat mirror
@@ -82,10 +82,8 @@ pub fn populate_known_routes(doc: &Value) {
             if !(path.starts_with("/_arkret/") || path.starts_with("/_soland/")) {
                 continue;
             }
-            let methods: Vec<Method> = item
-                .as_object()
-                .into_iter()
-                .flat_map(|item| item.keys())
+            let methods: Vec<Method> = methods
+                .iter()
                 .filter_map(|method| method_name_to_method(method))
                 .collect();
             if methods.is_empty() {

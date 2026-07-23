@@ -35,7 +35,7 @@ use super::{
     is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service_for_data_class,
     realm_has_member, render_error, sha256_hex,
 };
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 
 pub(super) fn router() -> Router {

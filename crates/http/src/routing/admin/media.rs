@@ -11,7 +11,7 @@ use soland_application::delivery::BlobState as BlobRecord;
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use crate::extract::PathParam;
+use salvo::oapi::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

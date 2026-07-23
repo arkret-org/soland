@@ -44,7 +44,7 @@ use super::types::{
     AppletProtocolDescribeOutcome, AppletRecord, AppletRevokeRecordOutcome, AppletView,
     GhostActorRecord, SOLAND_EDGE_APPLET_ID,
 };
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::routing::identity::auth::revoke_delegated_sessions_for_applet;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;

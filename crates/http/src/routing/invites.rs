@@ -44,7 +44,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::sha256_hex;
 
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
 };

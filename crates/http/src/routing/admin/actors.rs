@@ -9,7 +9,7 @@ use serde_json::json;
 use soland_contracts::admin::AdminActor;
 
 use super::{AuthArgs, append_audit_log, queries, require_admin_principal};
-use crate::extract::PathParam;
+use salvo::oapi::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

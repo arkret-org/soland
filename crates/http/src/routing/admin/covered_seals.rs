@@ -29,7 +29,7 @@ use soland_contracts::admin::covered_seals::{
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use crate::extract::PathParam;
+use salvo::oapi::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 

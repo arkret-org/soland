@@ -22,7 +22,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync};
-use crate::extract::{JsonBody, QueryParam};
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{

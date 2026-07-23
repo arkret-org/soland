@@ -36,7 +36,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;

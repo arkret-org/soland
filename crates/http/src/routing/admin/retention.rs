@@ -14,7 +14,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::audit::append_audit_log;
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::routing::events::projection::retention_ttl_seconds_from_value;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, EventNotification, EventNotificationKind};

@@ -22,7 +22,7 @@ use soland_application::identity::{AccountDataState, ConsentCellRecord, FindAcco
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
-use crate::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
 };

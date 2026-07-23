@@ -735,7 +735,7 @@ pub(crate) async fn events_query(
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan_body"))]
 pub(crate) async fn events_query_post(
-    body: crate::extract::JsonBody<EventsQueryPostRequestBody>,
+    body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> soland_http::result::JsonResult<EventsQueryOutcome> {

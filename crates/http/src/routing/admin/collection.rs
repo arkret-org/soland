@@ -36,7 +36,7 @@ use super::{
     policy_document_to_response, projection_event_from_operation, strand_id_for_projection_event,
     strand_id_from_realm_id, strand_projection_for_realm,
 };
-use crate::extract::{JsonBody, PathParam, QueryParam};
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RealmDirectoryEntry};

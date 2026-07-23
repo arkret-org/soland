@@ -13,7 +13,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::{bearer_token, sha256_hex};
 
-use crate::extract::JsonBody;
+use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 
 const FANOUT_KIND: &str = "org.arkret.coauth.collaboration_capability.fanout.v1";

@@ -17,7 +17,7 @@ use soland_contracts::admin::seal::{MultisigPendingEntry, MultisigPendingOutcome
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
-use crate::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
