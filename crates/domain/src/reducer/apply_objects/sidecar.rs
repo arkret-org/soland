@@ -7,9 +7,9 @@ impl ProjectionState {
                 reason: "sidecar_create_invalid".to_owned(),
             };
         };
-        let Ok(sidecar) =
-            serde_json::from_value::<arkret_core::models::AgentSidecar>(object.clone())
-        else {
+        let Ok(sidecar) = serde_json::from_value::<
+            arkret_models_collaboration::agent_operations::AgentSidecar,
+        >(object.clone()) else {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_create_invalid".to_owned(),
             };
@@ -22,7 +22,8 @@ impl ProjectionState {
         if let Some(existing) = self.sidecars.values().find(|existing| {
             existing.realm_id == sidecar.realm_id.as_str()
                 && existing.controller_id == sidecar.controller_id.as_str()
-                && existing.state != arkret_core::models::AgentSidecarState::Tombstoned
+                && existing.state
+                    != arkret_models_collaboration::agent_operations::AgentSidecarState::Tombstoned
         }) {
             return if existing.sidecar_id == sidecar.id.as_str() {
                 ProjectionEffect::Ignored

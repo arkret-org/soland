@@ -345,7 +345,7 @@ fn validate_scope_rotate_events(
             ));
         }
         match event.effective_scope.as_ref() {
-            Some(arkret_core::models::EffectiveScope::Circle {
+            Some(arkret_wire::EffectiveScope::Circle {
                 realm_id,
                 circle_id,
             }) if realm_id.as_str() == circle.realm_id

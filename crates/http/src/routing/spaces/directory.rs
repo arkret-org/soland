@@ -25,9 +25,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
-use arkret_core::models::{
-    Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
-};
 use arkret_core::{
     AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, BlobRef,
     DeliveryBindingHint, DeliveryMode, Did, DirectoryActorSearchOutcome,
@@ -51,6 +48,9 @@ use arkret_core::{
     UserSearchOutcome, parse_address, proof_kind, target_digest, validate_agent_slug,
 };
 use arkret_hlc::CursorPurpose;
+use arkret_models_identity::{
+    Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
+};
 use arkret_server::{
     CursorAuthority, CursorAuthorityError, CursorBindingContext, CursorBindingRecord,
 };

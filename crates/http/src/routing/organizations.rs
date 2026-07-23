@@ -547,7 +547,7 @@ pub(crate) fn verified_moderation_organization_ids(
     let proj = state.projection_application().snapshot();
     let mut ids = proj.verified_organizations_with_scope(
         realm_id,
-        arkret_core::models::RealmOrganizationControlScope::ModerationPolicy,
+        arkret_models_collaboration::RealmOrganizationControlScope::ModerationPolicy,
         now,
     );
     ids.sort();

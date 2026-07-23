@@ -29,25 +29,32 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::models::{
-    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentKeyScope,
-    AgentLifecycleOutcome, AgentLifecycleState, AgentList, AgentPairingBootstrap, AgentPairingMode,
-    AgentPairingResolveRequestBody, AgentParticipation, AgentParticipationEntry,
-    AgentParticipationOutcome, AgentParticipationReplaceRequestBody, AgentParticipationScope,
-    AgentPauseRequestBody, AgentProjection, AgentProvisionOutcome, AgentProvisionPcrRecovery,
-    AgentProvisionRequestBody, AgentRenewPairingOutcome, AgentRenewPairingRequestBody,
-    AgentResumeRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
-    AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody,
-    AgentSidecarExposureAck, AgentStatus, AgentView, GrantSnapshot, KeyState, PublicKey,
-    effective_participation, validate_agent_slug, validate_selection_within_ceiling,
-};
-#[cfg(test)]
-use arkret_core::models::{AgentSidecarContextRef, AgentSidecarEnsureRequestBody};
 use arkret_core::{
     BlobRef, CircleId, Did, EventId, GrantId, Hash, Operation, OperationId, RealmId, RelationId,
     StrandId,
 };
+use arkret_models_collaboration::agent_operations::{
+    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
+    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
+    AgentLifecycleState, AgentList, AgentPairingBootstrap, AgentPairingMode,
+    AgentPairingResolveRequestBody, AgentPauseRequestBody, AgentProjection, AgentProvisionOutcome,
+    AgentProvisionPcrRecovery, AgentProvisionRequestBody, AgentRenewPairingOutcome,
+    AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRuntimeApprovalOutcome,
+    AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
+    AgentRuntimeApprovalStatusRequestBody, AgentStatus, AgentView, KeyState,
+};
+#[cfg(test)]
+use arkret_models_collaboration::agent_operations::{
+    AgentSidecarContextRef, AgentSidecarEnsureRequestBody,
+};
+use arkret_models_collaboration::events_payloads::agent::{AgentKeyScope, AgentSidecarExposureAck};
+use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
+use arkret_models_collaboration::governance::agent_participation::{
+    AgentParticipation, AgentParticipationEntry, AgentParticipationOutcome,
+    AgentParticipationReplaceRequestBody, AgentParticipationScope, effective_participation,
+    validate_selection_within_ceiling,
+};
+use arkret_models_identity::validate_agent_slug;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Verifier as _;

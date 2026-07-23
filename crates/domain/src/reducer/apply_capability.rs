@@ -1288,8 +1288,9 @@ impl ProjectionState {
 
 #[cfg(test)]
 mod agent_key_tests {
-    use arkret_core::models::{Operation, OperationType};
     use arkret_core::{OperationId, RealmId};
+    use arkret_event_draft::Operation;
+    use arkret_wire::OperationType;
     use serde_json::json;
 
     use crate::reducer::{ProjectionState, SolandRealmState};

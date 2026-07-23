@@ -819,7 +819,7 @@ where
 fn sdk_effective_scope(
     record: &CanonicalEventRecord,
     realm_id: &RealmId,
-) -> Option<arkret_core::models::EffectiveScope> {
+) -> Option<arkret_wire::EffectiveScope> {
     if let Some(scope) = record
         .envelope
         .get("effective_scope")
@@ -832,16 +832,14 @@ fn sdk_effective_scope(
         Some(scope) if scope.starts_with("ak:circle:") => {
             arkret_core::CircleId::new(scope.to_owned())
                 .ok()
-                .map(|circle_id| arkret_core::models::EffectiveScope::Circle {
+                .map(|circle_id| arkret_wire::EffectiveScope::Circle {
                     realm_id: realm_id.clone(),
                     circle_id,
                 })
         }
-        Some(scope) if scope.starts_with("realm:") => {
-            Some(arkret_core::models::EffectiveScope::Realm {
-                realm_id: realm_id.clone(),
-            })
-        }
+        Some(scope) if scope.starts_with("realm:") => Some(arkret_wire::EffectiveScope::Realm {
+            realm_id: realm_id.clone(),
+        }),
         _ => None,
     }
 }

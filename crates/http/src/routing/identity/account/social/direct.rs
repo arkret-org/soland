@@ -2200,7 +2200,7 @@ pub(super) fn direct_member_join_payload(
     arkret_core::direct_conversation_member_join_payload(
         realm_scope,
         member_did,
-        arkret_core::models::DeliveryStatus::Unroutable,
+        arkret_models_identity::DeliveryStatus::Unroutable,
     )
     .to_value()
     .map_err(|_| "direct peer member join payload serialization failed")

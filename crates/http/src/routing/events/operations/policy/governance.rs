@@ -324,19 +324,19 @@ pub(super) async fn validate_set_default_strand_policy(
 /// (`authorization.verification_method`); soland resolves that document from its
 /// own DID store and verifies the detached Ed25519 signature over the
 /// SDK-canonical statement transcript
-/// ([`arkret_core::models::realm_organization_statement_signing_bytes`]). This is
+/// ([`arkret_models_collaboration::realm_organization_statement_signing_bytes`]). This is
 /// the cryptographic anchor that makes "organization consent" unforgeable: only
 /// a holder of the organization's own DID key can produce an accepted statement,
 /// and no external party (not even a Realm admin) can forge it.
 pub(super) async fn verify_realm_organization_proof_signature(
     state: &AppState,
-    payload: &arkret_core::models::RealmOrganizationPayload,
+    payload: &arkret_models_collaboration::RealmOrganizationPayload,
 ) -> Result<(), &'static str> {
     use base64::Engine as _;
 
     let proof_b64 = match &payload.authorization.proof {
-        arkret_core::models::SignatureMaterial::NonEmptyString(value) => value.as_str(),
-        arkret_core::models::SignatureMaterial::Variant1(_) => {
+        arkret_models_collaboration::SignatureMaterial::NonEmptyString(value) => value.as_str(),
+        arkret_models_collaboration::SignatureMaterial::Variant1(_) => {
             return Err("organization_statement_unverified");
         }
     };
@@ -356,8 +356,9 @@ pub(super) async fn verify_realm_organization_proof_signature(
     .await
     .map_err(|_| "organization_statement_unverified")?;
 
-    let signing_bytes = arkret_core::models::realm_organization_statement_signing_bytes(payload)
-        .map_err(|_| "organization_statement_unverified")?;
+    let signing_bytes =
+        arkret_models_collaboration::realm_organization_statement_signing_bytes(payload)
+            .map_err(|_| "organization_statement_unverified")?;
     resolved
         .public_key
         .verify_strict(&signing_bytes, &signature)

@@ -222,7 +222,7 @@ pub(super) fn key_backup_metadata_for_list(mut backup: Value) -> Value {
 
 pub(super) fn key_backup_summary_for_list(
     backup: Value,
-) -> Result<arkret_core::models::KeyBackupSummary, AppError> {
+) -> Result<arkret_models_crypto::KeyBackupSummary, AppError> {
     serde_json::from_value(key_backup_metadata_for_list(backup)).map_err(|error| {
         AppError::internal(format!(
             "stored key backup metadata does not match SDK summary: {error}"

@@ -12,14 +12,17 @@
 
 use std::collections::BTreeMap;
 
-use arkret_core::models::{
-    AuthzDecision, CapabilityGrant, CapabilitySubject, Facet,
-    GrantConstraint as WireGrantConstraint, GrantConstraintEffect as WireGrantConstraintEffect,
-    GrantConstraintExtensionKey, GrantConstraintSubtype as WireGrantConstraintSubtype,
-    GrantConstraintType as WireGrantConstraintType, GrantList, Invite, InviteDeliveryTarget,
-    InviteState,
-};
 use arkret_core::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
+use arkret_models_collaboration::governance::authorization::GrantList;
+use arkret_models_collaboration::governance::grant_constraint::{
+    CapabilityGrant, CapabilitySubject, GrantConstraint as WireGrantConstraint,
+    GrantConstraintEffect as WireGrantConstraintEffect, GrantConstraintExtensionKey,
+    GrantConstraintSubtype as WireGrantConstraintSubtype,
+    GrantConstraintType as WireGrantConstraintType,
+};
+use arkret_models_collaboration::governance::invite_addressing::InviteDeliveryTarget;
+use arkret_models_collaboration::governance::operation_wire::Invite;
+use arkret_wire::{AuthzDecision, Facet, InviteState};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};

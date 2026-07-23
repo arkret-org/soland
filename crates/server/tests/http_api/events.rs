@@ -1075,7 +1075,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         }),
     )
     .unwrap();
-    event.effective_scope = Some(arkret_core::models::EffectiveScope::Realm {
+    event.effective_scope = Some(arkret_wire::EffectiveScope::Realm {
         realm_id: typed_realm.clone(),
     });
     event.effects = vec![arkret_core::Effect {

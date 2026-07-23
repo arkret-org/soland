@@ -70,7 +70,12 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
         .payload
         .get("object")
         .cloned()
-        .and_then(|value| serde_json::from_value::<arkret_core::models::AgentSidecar>(value).ok())
+        .and_then(|value| {
+            serde_json::from_value::<arkret_models_collaboration::agent_operations::AgentSidecar>(
+                value,
+            )
+            .ok()
+        })
         .ok_or("sidecar_create_denied")?;
     if sidecar.validate().is_err()
         || sidecar.realm_id != operation.realm_id

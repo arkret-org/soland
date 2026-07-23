@@ -11,10 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-// `arkret_core::InviteReceivePolicy` also resolves at the crate root, but the
-// invite-addressing strong type lives under `model`; import it via the
-// `model` path to avoid binding the wrong same-named re-export.
-use arkret_core::models::InviteReceivePolicy;
 use arkret_core::{
     ACTOR_PROFILE_SCHEMA, AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody,
     AccountRegistrationAudit, AccountRegistrationAuditOutcome, AccountRegistrationEvidenceSummary,
@@ -24,6 +20,10 @@ use arkret_core::{
     ContactIntroductionEvidence, DeviceId, Did, EventId, Hash, Patch, PatchOpKind, RealmId,
     StrandId,
 };
+// `arkret_core::InviteReceivePolicy` also resolves at the crate root, but the
+// invite-addressing strong type lives under `model`; import it via the
+// `model` path to avoid binding the wrong same-named re-export.
+use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
 use arkret_models_collaboration::http_bodies::{
     ContactAgentProjection, ContactList, ContactListRow, ContactRequestOutcome,
     ContactRequestRequestBody, ContactRespondOutcome, ContactRespondRequestBody, ContactState,

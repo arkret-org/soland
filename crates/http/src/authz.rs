@@ -1127,7 +1127,7 @@ pub async fn check_with_policy_server(
         }
     };
 
-    use arkret_core::models::AuthzDecision;
+    use arkret_wire::AuthzDecision;
     let allow = matches!(remote.decision, AuthzDecision::Allow);
     if !allow {
         return MergedAuthzDecision::RemoteDeny { local, remote };

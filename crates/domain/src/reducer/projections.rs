@@ -674,8 +674,9 @@ pub struct SidecarProjection {
     pub realm_id: String,
     pub controller_id: String,
     pub backing_circle_id: String,
-    pub encryption_profile: arkret_core::models::AgentSidecarEncryptionProfile,
-    pub state: arkret_core::models::AgentSidecarState,
+    pub encryption_profile:
+        arkret_models_collaboration::agent_operations::AgentSidecarEncryptionProfile,
+    pub state: arkret_models_collaboration::agent_operations::AgentSidecarState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,

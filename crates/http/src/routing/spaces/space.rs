@@ -923,7 +923,7 @@ pub async fn realm_recovery_recipient_principal(
     realm_id: &str,
     actor: &str,
 ) -> bool {
-    use arkret_core::models::DurabilityMode;
+    use arkret_models_collaboration::objects::realm::DurabilityMode;
     let Some(realm_id) = realm_scope_to_realm_id(realm_id) else {
         return false;
     };

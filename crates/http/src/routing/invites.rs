@@ -8,7 +8,6 @@
 // invite-addressing one from the `model::*` glob. Import the
 // invite-addressing variant via its `model` module path to disambiguate.
 use arkret_canonical as canonical;
-use arkret_core::models::{DisclosurePolicy, HandleClaim};
 use arkret_core::{
     CandidateIntent, CandidateValidationContext, ContactIntroductionEvidence, DetachedPayloadProof,
     Did, DirectoryIntent, DisclosedOutcome, DisclosureLevel, Handle, HandleBindingState, Hash,
@@ -20,6 +19,8 @@ use arkret_core::{
     PrincipalLocatorProofPurpose, ReceivePolicyConstraints, ReceivePolicySurface,
     UnknownInviteAction,
 };
+use arkret_models_collaboration::governance::invite_addressing::DisclosurePolicy;
+use arkret_models_identity::HandleClaim;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;

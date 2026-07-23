@@ -361,7 +361,7 @@ pub fn realm_policy_components_check(
                         .to_owned(),
                 )
             })?;
-            if arkret_core::models::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
+            if arkret_models_crypto::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
                 return Err((
                     ErrorCode::FailedPrecondition,
                     "media_service_decrypts=true fact recomputed from the policy \
@@ -375,7 +375,7 @@ pub fn realm_policy_components_check(
     Ok(())
 }
 
-/// SEC-03 — build a `arkret_core::models::MediaDecryptPolicyValue`
+/// SEC-03 — build a `arkret_models_crypto::MediaDecryptPolicyValue`
 /// from a `ak.realm.policy_components` payload and derive its canonical
 /// `discussion_metadata_digest`. Returns `None` only when the SDK's canonical
 /// digest derivation fails (it never does for well-formed input), so callers
@@ -386,7 +386,7 @@ pub fn realm_policy_components_check(
 /// `plaintext_visible_services[]`). Free-text purposes do not grant authority
 /// and are excluded from the digest input.
 fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_core::Hash> {
-    use arkret_core::models::{
+    use arkret_models_crypto::{
         MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
     };
 

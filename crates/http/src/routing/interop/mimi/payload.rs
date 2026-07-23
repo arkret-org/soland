@@ -210,8 +210,10 @@ pub(super) fn decode_mimi_opaque_bytes(
 
 pub(super) fn mimi_provider_directory_value(
     state: &AppState,
-) -> arkret_core::models::ProviderDirectory {
-    use arkret_core::models::{ProviderDirectory, ProviderDirectoryMimi, ProviderDirectoryProof};
+) -> arkret_models_collaboration::objects::interop::ProviderDirectory {
+    use arkret_models_collaboration::objects::interop::{
+        ProviderDirectory, ProviderDirectoryMimi, ProviderDirectoryProof,
+    };
 
     let signature =
         sha256_hex(format!("{}:ak.profile.mimi_interop.v1", state.service_id()).as_bytes());

@@ -5019,6 +5019,7 @@ version = "0.3.0"
 dependencies = [
  "arkret-canonical",
  "arkret-core",
+ "arkret-event-draft",
  "arkret-hlc",
  "arkret-lattice-registry",
  "arkret-models-collaboration",

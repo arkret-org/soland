@@ -289,7 +289,7 @@ fn proof_digest(proof: &SignatureMaterial) -> Option<String> {
 }
 
 fn relationship_str(payload: &RealmOrganizationPayload) -> &'static str {
-    use arkret_core::models::RealmOrganizationRelationship as R;
+    use arkret_models_collaboration::RealmOrganizationRelationship as R;
     match payload.relationship {
         R::Owner => "owner",
         R::Governance => "governance",
@@ -299,7 +299,7 @@ fn relationship_str(payload: &RealmOrganizationPayload) -> &'static str {
 }
 
 fn issuer_role_str(payload: &RealmOrganizationPayload) -> &'static str {
-    use arkret_core::models::RealmOrganizationIssuerRole as Role;
+    use arkret_models_collaboration::RealmOrganizationIssuerRole as Role;
     match payload.authorization.issuer_role {
         Role::OrganizationDid => "organization_did",
         Role::GovernanceService => "governance_service",
@@ -334,8 +334,8 @@ fn control_scopes_str(payload: &RealmOrganizationPayload) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use arkret_core::models::RealmOrganizationControlScope as Scope;
     use arkret_core::{Operation, OperationId, RealmId};
+    use arkret_models_collaboration::RealmOrganizationControlScope as Scope;
     use serde_json::{Value, json};
 
     use super::*;

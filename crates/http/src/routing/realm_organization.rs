@@ -17,10 +17,11 @@
 use std::collections::BTreeSet;
 
 use arkret_core::RealmId;
-use arkret_core::models::{
-    Did, Hash, RealmOrganizationLifecyclePhase, RealmOrganizationRelationshipList,
+use arkret_models_collaboration::governance::realm_governance::{
+    RealmOrganizationLifecyclePhase, RealmOrganizationRelationshipList,
     RealmOrganizationRelationshipRow,
 };
+use arkret_wire::{Did, Hash};
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::de::DeserializeOwned;

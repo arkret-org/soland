@@ -562,7 +562,7 @@ fn validate_rrk_targeted_realm_key_share(
     realm_id: &str,
     share: &arkret_core::RealmKeySharePayload,
 ) -> Option<Result<(), &'static str>> {
-    use arkret_core::models::DurabilityMode;
+    use arkret_models_collaboration::objects::realm::DurabilityMode;
     // Snapshot the durability policy off the projection without holding the lock
     // across any await (this function is sync).
     let durability = {

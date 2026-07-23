@@ -54,7 +54,7 @@ fn state_with_direct_binding() -> (AppState, arkret_core::RealmId) {
         arkret_core::direct_conversation_member_join_payload(
             realm_id.clone(),
             bob,
-            arkret_core::models::DeliveryStatus::Unroutable,
+            arkret_models_identity::DeliveryStatus::Unroutable,
         )
         .to_value()
         .unwrap(),
@@ -579,21 +579,22 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
     )
     .await;
 
-    let scope = arkret_core::models::AgentParticipationScope::Strand {
+    let scope = arkret_models_collaboration::governance::agent_participation::AgentParticipationScope::Strand {
         realm_id,
         strand_id,
     };
     let ceiling =
         crate::routing::agent_participation::resolve_effective_ceiling(&state, &scope).await;
     assert!(!ceiling.accept_third_party_mention);
-    let selection = arkret_core::models::AgentParticipation {
-        reply: true,
-        accept_third_party_mention: true,
-        act_on_behalf: false,
-    };
+    let selection =
+        arkret_models_collaboration::governance::agent_participation::AgentParticipation {
+            reply: true,
+            accept_third_party_mention: true,
+            act_on_behalf: false,
+        };
     assert!(matches!(
-        arkret_core::models::validate_selection_within_ceiling(ceiling, selection),
-        Err(arkret_core::models::AgentParticipationError::ExceedsCeiling { .. })
+        arkret_models_collaboration::governance::agent_participation::validate_selection_within_ceiling(ceiling, selection),
+        Err(arkret_models_collaboration::governance::agent_participation::AgentParticipationError::ExceedsCeiling { .. })
     ));
 }
 

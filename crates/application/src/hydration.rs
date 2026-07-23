@@ -284,9 +284,13 @@ pub async fn hydrate_sidecar_projections(
         .collect::<std::collections::BTreeSet<_>>();
     for record in records {
         let state = match record.state.as_str() {
-            "active" => arkret_core::models::AgentSidecarState::Active,
-            "suspended" => arkret_core::models::AgentSidecarState::Suspended,
-            "tombstoned" => arkret_core::models::AgentSidecarState::Tombstoned,
+            "active" => arkret_models_collaboration::agent_operations::AgentSidecarState::Active,
+            "suspended" => {
+                arkret_models_collaboration::agent_operations::AgentSidecarState::Suspended
+            }
+            "tombstoned" => {
+                arkret_models_collaboration::agent_operations::AgentSidecarState::Tombstoned
+            }
             unknown => {
                 tracing::warn!(
                     sidecar_id = %record.sidecar_id,
@@ -303,7 +307,7 @@ pub async fn hydrate_sidecar_projections(
                 realm_id: record.realm_id,
                 controller_id: record.controller_id,
                 backing_circle_id: record.backing_circle_id,
-                encryption_profile: arkret_core::models::AgentSidecarEncryptionProfile::MlsRfc9420,
+                encryption_profile: arkret_models_collaboration::agent_operations::AgentSidecarEncryptionProfile::MlsRfc9420,
                 state,
                 state_changed_at: record.state_changed_at,
                 created_at: record.created_at,

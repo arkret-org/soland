@@ -19,10 +19,10 @@ pub(super) fn agent_participation_ceiling_change(
 ) -> Option<(
     &'static str,
     String,
-    arkret_core::models::AgentParticipation,
+    arkret_models_collaboration::governance::agent_participation::AgentParticipation,
     Vec<String>,
 )> {
-    use arkret_core::models::AgentParticipation;
+    use arkret_models_collaboration::governance::agent_participation::AgentParticipation;
     let payload = &operation.payload;
     let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
     let find = || -> Option<Value> {
@@ -157,7 +157,9 @@ pub async fn validate_agent_participation_ceiling(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    use arkret_core::models::{AgentParticipation, validate_agent_participation_tightens};
+    use arkret_models_collaboration::governance::agent_participation::{
+        AgentParticipation, validate_agent_participation_tightens,
+    };
     for operation in operations {
         let Some((scope_kind, _scope_key, child, parent_keys)) =
             agent_participation_ceiling_change(operation)
@@ -219,7 +221,7 @@ impl AgentParticipationMode {
 
 fn ap_effective_for_mode(
     mode: AgentParticipationMode,
-    effective: arkret_core::models::AgentParticipation,
+    effective: arkret_models_collaboration::governance::agent_participation::AgentParticipation,
 ) -> bool {
     match mode {
         AgentParticipationMode::Reply => effective.reply,

@@ -134,7 +134,7 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
     // service: the digest the governance binding covers MUST equal the
     // digest recomputed from the policy cell value, else fail closed with
     // `mls_governance_binding_stale` (media-service-binding.md §8.2 rule 5).
-    use arkret_core::models::{
+    use arkret_models_crypto::{
         MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
     };
 

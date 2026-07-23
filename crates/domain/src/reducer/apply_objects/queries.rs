@@ -294,7 +294,10 @@ impl ProjectionState {
             .and_then(|entries| entries.last())
             .and_then(|entry| entry.get("object"))
             .and_then(|object| {
-                serde_json::from_value::<arkret_core::models::Realm>(object.clone()).ok()
+                serde_json::from_value::<arkret_models_collaboration::objects::realm::Realm>(
+                    object.clone(),
+                )
+                .ok()
             })
             .is_some_and(|realm| arkret_core::DirectConversationRealmRole::matches(&realm))
     }
@@ -765,13 +768,13 @@ impl ProjectionState {
     /// §2.3.1) projected from the `ak.component.realm.policy_components.v1` cell.
     /// `None` means no policy has been declared yet — callers treat that as the
     /// spec default `mode=none` (no organizational recovery path). Deserialized
-    /// into the authoritative SDK [`arkret_core::models::DurabilityPolicy`] strong
-    /// type (soland does not redefine the spec shape). The RRK share-acceptance
+    /// into the authoritative SDK [`arkret_models_collaboration::objects::realm::DurabilityPolicy`]
+    /// strong type (soland does not redefine the spec shape). The RRK share-acceptance
     /// gate reads this to confirm a recipient is a declared recovery recipient.
     pub fn realm_durability_policy(
         &self,
         realm_id: &str,
-    ) -> Option<arkret_core::models::DurabilityPolicy> {
+    ) -> Option<arkret_models_collaboration::objects::realm::DurabilityPolicy> {
         let components = self.realm_policy_components_cell_value(realm_id)?;
         let durability = crate::reducer::durability_policy_field(components)?;
         serde_json::from_value(durability.clone()).ok()

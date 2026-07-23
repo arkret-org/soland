@@ -958,7 +958,8 @@ fn controller_sidecar_circles_since(
         .values()
         .filter(|sidecar| {
             sidecar.controller_id == controller
-                && sidecar.state == arkret_core::models::AgentSidecarState::Active
+                && sidecar.state
+                    == arkret_models_collaboration::agent_operations::AgentSidecarState::Active
                 && since.is_none_or(|since| sidecar.created_at > since)
         })
         .map(|sidecar| sidecar.backing_circle_id.clone())

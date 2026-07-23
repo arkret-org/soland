@@ -248,7 +248,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     }))
     .unwrap();
-    let message_payload = arkret_core::models::MessageCreatePayload::with_encrypted_content(
+    let message_payload = arkret_models_collaboration::events_payloads::morph_message::MessageCreatePayload::with_encrypted_content(
         arkret_core::StrandId::new(main_strand_id.clone()).unwrap(),
         "discussion",
         encrypted_content,

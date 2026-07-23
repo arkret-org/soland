@@ -1,4 +1,6 @@
-use arkret_core::models::{AgentParticipation, AgentParticipationScope, effective_participation};
+use arkret_models_collaboration::governance::agent_participation::{
+    AgentParticipation, AgentParticipationScope, effective_participation,
+};
 use serde_json::Value;
 
 use crate::state::AppState;

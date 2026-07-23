@@ -36,12 +36,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use arkret_core::models::AuthzDecision;
 use arkret_core::{
     Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
     PolicyCheckSignature, PolicyCheckSource, RealmId,
 };
 use arkret_identity::DidResolver;
+use arkret_wire::AuthzDecision;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};

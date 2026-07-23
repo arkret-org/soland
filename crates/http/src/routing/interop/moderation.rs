@@ -8,11 +8,11 @@
 //!   authoritative in the reducer (`soland_domain::reducer::apply_moderation`), surfaced at ingest
 //!   by the moderation projection preflight.
 
-use arkret_core::models::EffectiveScope;
 use arkret_core::{
     Did, EventId, FrankingProof, FrankingProofEventTimeAnchor, Hash,
     MODERATION_FRANKING_PROOF_KIND, RealmId,
 };
+use arkret_wire::EffectiveScope;
 use chrono::Utc;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;

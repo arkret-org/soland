@@ -385,15 +385,19 @@ pub use arkret_core::SyncRequestBody;
 // (allow / soft_deny / hard_deny / quarantine / require_review) and
 // `AuthzCheckRequestBody` to `{ actor_id, action, resource?, context? }`,
 // so soland re-uses them directly instead of carrying local copies.
-pub use arkret_core::models::{
-    AuthzCheckOutcome, AuthzCheckRequestBody, PushRegisterDeviceRequestBody,
-    PushUnregisterDeviceRequestBody,
+pub use arkret_models_collaboration::governance::authorization::{
+    AuthzCheckOutcome, AuthzCheckRequestBody,
 };
-// Moderation report request/outcome are the SDK DTOs (`arkret_core::models` carries
+// Moderation report request/outcome are the SDK DTOs (`arkret-models-collaboration` carries
 // `service-operation-dtos.schema.json#/$defs/ModerationReportOutcome`:
 // `status` enum `submitted|resolved`, `routed_to` is an array of bare DIDs);
 // no soland mirrors.
-pub use arkret_core::models::{ModerationReportOutcome, ModerationReportRequestBody};
+pub use arkret_models_collaboration::governance::moderation::{
+    ModerationReportOutcome, ModerationReportRequestBody,
+};
+pub use arkret_models_integration::{
+    PushRegisterDeviceRequestBody, PushUnregisterDeviceRequestBody,
+};
 
 fn default_true() -> bool {
     true
@@ -459,10 +463,10 @@ pub struct SolandAccountRegisterOutcome {
     pub created_at: DateTime<Utc>,
 }
 
-// Identity log / receipts outcomes are the SDK DTOs (`arkret_core::models` is the
+// Identity log / receipts outcomes are owned by the corresponding SDK model crates;
 // authoritative carrier for identity operation shapes); no soland mirrors.
 // AKP-0008 / AKP-0009 — Personal Agent operations. Every request/response
-// DTO is the SDK-authoritative `arkret_core::models::Agent*` shape (spec
+// DTO is the SDK-authoritative `arkret_models_collaboration::agent_operations` shape (spec
 // `agent-operations.schema.json`): `agent_view`/`agent_list` carry the spec
 // `agent_projection`; the `agent_key_pair` outcome is
 // `{ok, authorized_event_ref}`; grant attach/detach outcomes are
@@ -479,30 +483,30 @@ pub struct SolandAccountRegisterOutcome {
 // `capability_refs`/`desired_media` inputs; `CallMediaTokenExchangeOutcome`
 // / `CallMediaParticipantBinding` derive ToSchema under the `salvo` feature),
 // so soland no longer mints private mirrors that can drift from the spec DTOs.
-pub use arkret_core::models::{
+pub use arkret_core::{
+    CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
+    IdentityLogListOutcome, IdentityReceiptListOutcome, KeysBackupsPutRequestBody,
+};
+pub use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
     AgentPauseRequestBody, AgentResumeRequestBody, AgentSidecarEnsureOutcome,
     AgentSidecarEnsureRequestBody, AgentSidecarList, AgentSidecarView, AgentView,
-    CallMediaTokenExchangeRequestBody,
 };
+pub use arkret_models_collaboration::objects::media::CallMediaTokenExchangeRequestBody;
 // Key-backup replace/delete outcomes are the SDK server-side DTOs
-// (`arkret_core::models` is the authoritative carrier for
+// (`arkret-models-crypto` is the authoritative carrier for
 // `keys-operations.schema.json#/$defs/keys_backups_replace_outcome` /
 // `keys_backups_delete_outcome`); no soland mirrors.
-pub use arkret_core::models::{
+pub use arkret_models_crypto::{
     KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsReplaceOutcome,
-};
-pub use arkret_core::{
-    CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
-    IdentityLogListOutcome, IdentityReceiptListOutcome, KeysBackupsPutRequestBody,
 };
 
 // Recovery policy / receipt endpoints validate against the spec REC-1 shapes in
 // `routing::identity::recovery`: policy publish uses the SDK request body,
 // while receipt write keeps a signed JSON wrapper so the raw signed fields can
 // be verified before being projected into typed outcomes. The SDK carries the
-// authoritative typed forms (`arkret_core::models::{RecoveryPolicy,
+// authoritative typed forms (`arkret_models_crypto::{RecoveryPolicy,
 // RecoveryReceipt}`) for clients; no soland-private mirror exists.
 
 const SUPPORTED_OPERATION_SURFACES: &[&str] = &[

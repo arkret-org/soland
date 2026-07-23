@@ -524,7 +524,7 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
         .expect("durability policy projected");
     assert!(matches!(
         projected.mode,
-        arkret_core::models::DurabilityMode::OrgRecoveryKey
+        arkret_models_collaboration::objects::realm::DurabilityMode::OrgRecoveryKey
     ));
     assert_eq!(projected.recovery_recipients.len(), 1);
 }

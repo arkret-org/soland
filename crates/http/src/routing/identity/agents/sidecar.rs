@@ -1,13 +1,13 @@
-use arkret_core::models::{
+use arkret_core::{
+    MlsGovernanceBindingPayload, MlsGroupId, NonEmptyString, SidecarId, SidecarMlsBinding,
+    agent_sidecar_desired_access_digest,
+};
+use arkret_models_collaboration::agent_operations::{
     AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
     AgentSidecarEncryptionProfile, AgentSidecarEnsureOutcome, AgentSidecarEnsureRequestBody,
     AgentSidecarList, AgentSidecarMlsContext, AgentSidecarSchema, AgentSidecarState,
     AgentSidecarView, PendingSidecarAccessReconciliationItem,
     PendingSidecarAccessReconciliationStage,
-};
-use arkret_core::{
-    MlsGovernanceBindingPayload, MlsGroupId, NonEmptyString, SidecarId, SidecarMlsBinding,
-    agent_sidecar_desired_access_digest,
 };
 use salvo::oapi::extract::QueryParam;
 use soland_application::identity::{

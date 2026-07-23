@@ -167,7 +167,9 @@ impl RateLimiterConfig {
             // NOTE: `arkret_core::RateLimitScope` (crate root) is the authz
             // constraints enum; the describe entry needs the service-description
             // scope, which lives under `models`.
-            rate_limit_scope: Some(arkret_core::models::RateLimitScope::Single("ip".to_owned())),
+            rate_limit_scope: Some(arkret_models_discovery::RateLimitScope::Single(
+                "ip".to_owned(),
+            )),
             window_seconds: Some(window_seconds),
             max_requests: Some(max_requests.max(1)),
             ..arkret_core::RateLimitEntry::default()
