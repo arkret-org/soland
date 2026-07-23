@@ -3,8 +3,8 @@ use diesel::sql_query;
 use diesel::sql_types::{BigInt, Binary, Integer, Jsonb, Nullable, Text, Timestamptz, Uuid};
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use soland_storage::{
-    CanonicalEventRecord, EventCommitOutcome, EventCommitRequest, EventCommitUnitOfWork,
-    PersistenceError, PersistenceResult, ids, validate_actor_scope_commit,
+    CanonicalEventRecord, EventBatchCommitRequest, EventCommitOutcome, EventCommitRequest,
+    EventCommitUnitOfWork, PersistenceError, PersistenceResult, ids, validate_actor_scope_commit,
 };
 
 use crate::events::CanonicalEventRow;
@@ -27,8 +27,27 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
         &self,
         request: EventCommitRequest,
     ) -> PersistenceResult<EventCommitOutcome> {
+        self.commit_event_batch(EventBatchCommitRequest {
+            events: vec![request],
+            applet_ghosts: None,
+        })
+        .await
+    }
+
+    async fn commit_event_batch(
+        &self,
+        request: EventBatchCommitRequest,
+    ) -> PersistenceResult<EventCommitOutcome> {
+        if request.events.is_empty() {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: empty event batch".to_owned(),
+            ));
+        }
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let mut projections_inserted = 0;
+            let mut outbox_inserted = 0;
+            for request in request.events {
             let event_id = ids::typed_uuid_part_or_schema_violation(&request.event.event_id)?;
             let realm_id = request
                 .event
@@ -85,7 +104,6 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             .await
             .map_err(PersistenceError::database)?;
 
-            let mut projections_inserted = 0;
             for projection in request.projections {
                 let event_id = ids::typed_uuid_part_or_schema_violation(&projection.event_id)?;
                 let realm_id = ids::typed_uuid_part_or_schema_violation(&projection.realm_id)?;
@@ -115,7 +133,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             }
 
             if let Some(record) = request.idempotency {
-                sql_query(
+                let inserted = sql_query(
                     "INSERT INTO idempotency_keys \
                      (principal_id, idempotency_key, service_id, request_hash, response_status, \
                       response_body, created_at, expires_at) \
@@ -133,9 +151,13 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)?;
+                if inserted != 1 {
+                    return Err(
+                        PersistenceError::Conflict("duplicate_conflict".to_owned()).into(),
+                    );
+                }
             }
 
-            let mut outbox_inserted = 0;
             for record in request.outbox {
                 outbox_inserted += sql_query(
                     "INSERT INTO federation_outbox \
@@ -159,6 +181,30 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)?;
+            }
+            }
+
+            if let Some(mutation) = request.applet_ghosts {
+                let updated = sql_query(
+                    "UPDATE applet_registrations \
+                     SET ghosts = COALESCE(ghosts, '[]'::jsonb) || jsonb_build_array($2::jsonb), \
+                         updated_at = NOW() \
+                     WHERE id = $1 AND revoked_at IS NULL \
+                     AND status IN ('installed', 'partially_installed') \
+                     AND NOT EXISTS ( \
+                         SELECT 1 FROM jsonb_array_elements(COALESCE(ghosts, '[]'::jsonb)) existing \
+                         WHERE existing->>'external_id' = ($2::jsonb)->>'external_id' \
+                            OR existing->>'ghost_actor_id' = ($2::jsonb)->>'ghost_actor_id' \
+                     )",
+                )
+                .bind::<Text, _>(&mutation.applet_id)
+                .bind::<Jsonb, _>(&mutation.ghost)
+                .execute(conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                if updated != 1 {
+                    return Err(PersistenceError::Conflict("applet_revoked".to_owned()).into());
+                }
             }
 
             Ok(EventCommitOutcome {

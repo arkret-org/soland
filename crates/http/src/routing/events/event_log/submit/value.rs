@@ -139,19 +139,6 @@ pub(in crate::routing) async fn submit_account_data_event_value(
     submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission)).await
 }
 
-pub(in crate::routing) async fn submit_applet_event_value(
-    state: &AppState,
-    session: &SessionRecord,
-    envelope: Value,
-    realm_id: &str,
-    kind: &str,
-    event_id: &str,
-) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let admission =
-        InternalEventAdmission::applet_formal(realm_id, session.actor.as_str(), kind, event_id);
-    submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission)).await
-}
-
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
     state: &AppState,
     session: &SessionRecord,

@@ -18,6 +18,20 @@ pub struct EventCommitRequest {
     pub outbox: Vec<FederationOutboxRecord>,
 }
 
+/// Applet projection mutation committed with a closed Event aggregate.
+#[derive(Clone, Debug)]
+pub struct AppletGhostCommit {
+    pub applet_id: String,
+    pub ghost: serde_json::Value,
+}
+
+/// All durable writes produced by accepting a closed multi-Event aggregate.
+#[derive(Clone, Debug)]
+pub struct EventBatchCommitRequest {
+    pub events: Vec<EventCommitRequest>,
+    pub applet_ghosts: Option<AppletGhostCommit>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EventCommitOutcome {
     pub event_inserted: bool,
@@ -30,6 +44,11 @@ pub trait EventCommitUnitOfWork: Send + Sync {
     async fn commit_event(
         &self,
         request: EventCommitRequest,
+    ) -> PersistenceResult<EventCommitOutcome>;
+
+    async fn commit_event_batch(
+        &self,
+        request: EventBatchCommitRequest,
     ) -> PersistenceResult<EventCommitOutcome>;
 }
 

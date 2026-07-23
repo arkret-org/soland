@@ -20,10 +20,9 @@ use soland_http::result::{JsonResult, json_ok};
 
 use super::super::applet_manifest::verify_manifest;
 use super::ghost::{
-    build_ghost_accountability_grant_event, build_ghost_profile_create_event,
-    ensure_formal_ghost_provision_allowed, external_user_from_ghost_request,
-    persist_formal_applet_event, provision_ghost, revoke_applet_record,
-    revoke_applet_record_after_admin_gate, validate_ghost_actor_provision_request,
+    ensure_formal_ghost_provision_allowed, external_user_from_ghost_request, provision_ghost,
+    revoke_applet_record, revoke_applet_record_after_admin_gate,
+    validate_ghost_actor_provision_request, validate_signed_ghost_provision_events,
 };
 use super::install::{
     append_portal_message, applet_response, approved_scopes_from_approval_request,
@@ -33,7 +32,7 @@ use super::install::{
 };
 use super::record::{
     accountability_chain, applet_display_name, applet_id_param, applet_record, applet_records,
-    ensure_not_revoked, idempotency_key, persist_applet_record, query_value,
+    ensure_not_revoked, idempotency_key, query_value,
 };
 use super::signature::{
     VerifiedInboundTransactionSignature, require_inbound_transaction_signature,
@@ -487,16 +486,52 @@ async fn provision_ghost_actor_endpoint(
     res: &mut Response,
 ) -> JsonResult<GhostActorProvisionOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
+    let session = aa.authenticated_session(state, req).await?;
     let path_applet_id = applet_id_param(req)?;
     let provision = body.into_inner();
     validate_ghost_actor_provision_request(&path_applet_id, &provision)?;
+    if session.actor != provision.service_id.as_str() {
+        return Err(AppError::capability_denied(
+            "authenticated caller must be the installed Applet service DID",
+        )
+        .with_wire_code("applet_registration_unauthorized"));
+    }
+    let idempotency_key = idempotency_key(req)
+        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
+    if idempotency_key.len() > 128 {
+        return Err(AppError::invalid_param(
+            "Idempotency-Key length exceeds 128 bytes",
+        ));
+    }
+    let request_value = serde_json::to_value(&provision)
+        .map_err(|error| AppError::invalid_param(format!("provision request invalid: {error}")))?;
+    let request_digest = arkret_canonical::canonical_sha256(&request_value)
+        .map_err(|error| AppError::invalid_param(format!("provision request invalid: {error}")))?
+        .to_string();
+    if let Some(replay) = state
+        .jobs_application()
+        .idempotency_record(&session.actor, &idempotency_key)
+        .await
+        .map_err(|error| AppError::internal(format!("idempotency lookup failed: {error}")))?
+    {
+        if replay.request_hash != request_digest {
+            return Err(AppError::conflict(
+                "Idempotency-Key was already used with different Ghost provisioning Events",
+            )
+            .with_wire_code("duplicate_conflict"));
+        }
+        let outcome: GhostActorProvisionOutcome = serde_json::from_value(replay.response_body)
+            .map_err(|error| {
+                AppError::internal(format!("stored Ghost provision outcome invalid: {error}"))
+            })?;
+        res.status_code(StatusCode::OK);
+        return json_ok(outcome);
+    }
 
     // Wire ids are validated at deserialization (typed AppletId/Did/RealmId).
-    let applet_id = provision.applet_id.clone();
     let service_id = provision.service_id.clone();
     let ghost_actor_id = provision.ghost_actor_id.clone();
-    // G3.S9 â€” ghost actor DID recorded against the applet MUST be a
+    // G3.S9 — ghost actor DID recorded against the applet MUST be a
     // well-formed bare DID scalar (no DID URL fragment).
     crate::routing::extensions::bot_actor::validate_extension_actor_did(ghost_actor_id.as_str())?;
     let realm_id = provision.realm_id.clone();
@@ -506,41 +541,112 @@ async fn provision_ghost_actor_endpoint(
         .ok_or_else(|| AppError::not_found("applet is not installed"))?;
     ensure_not_revoked(&record)?;
     ensure_formal_ghost_provision_allowed(&record, &provision)?;
+    if let Some(existing) = record.ghosts.iter().find(|ghost| {
+        ghost.external_id == provision.external_user_id
+            || ghost.ghost_actor_id == provision.ghost_actor_id.as_str()
+    }) {
+        if existing.request_digest.as_deref() != Some(request_digest.as_str()) {
+            return Err(AppError::conflict(
+                "Ghost provisioning tuple already exists with different signed Events",
+            )
+            .with_wire_code("duplicate_conflict"));
+        }
+        let outcome = GhostActorProvisionOutcome {
+            ghost_actor_id,
+            profile_event_ref: existing.profile_event_ref.clone().ok_or_else(|| {
+                AppError::internal("stored Ghost record is missing profile_event_ref")
+            })?,
+            accountability_grant_ref: existing.accountability_grant_ref.clone().ok_or_else(
+                || AppError::internal("stored Ghost record is missing accountability_grant_ref"),
+            )?,
+            authorization_ref: existing.authorization_ref.clone().ok_or_else(|| {
+                AppError::internal("stored Ghost record is missing authorization_ref")
+            })?,
+            display_name: existing.display_name.clone(),
+        };
+        res.status_code(StatusCode::OK);
+        return json_ok(outcome);
+    }
 
     let now = chrono::Utc::now();
-    let grant_event = build_ghost_accountability_grant_event(
+    let authorization_ref =
+        validate_signed_ghost_provision_events(state, &record, &provision).await?;
+    let profile_event_ref = provision.profile_event.event_id.to_string();
+    let accountability_grant_ref = provision.accountability_grant_event.event_id.to_string();
+    let outcome = GhostActorProvisionOutcome {
+        ghost_actor_id: ghost_actor_id.clone(),
+        profile_event_ref: profile_event_ref.clone(),
+        accountability_grant_ref: accountability_grant_ref.clone(),
+        authorization_ref: authorization_ref.clone(),
+        display_name: provision.display_name.clone(),
+    };
+    let ghost = GhostActorRecord {
+        ghost_actor_id: ghost_actor_id.to_string(),
+        external_id: provision.external_user_id.clone(),
+        display_name: provision.display_name.clone(),
+        request_digest: Some(request_digest.clone()),
+        profile_event_ref: Some(profile_event_ref.clone()),
+        accountability_grant_ref: Some(accountability_grant_ref.clone()),
+        authorization_ref: Some(authorization_ref.clone()),
+        created_at: now,
+        revoked_at: None,
+    };
+    let commit_result = crate::routing::events::event_log::submit_ghost_provision_batch(
         state,
-        &provision,
-        &service_id,
-        &ghost_actor_id,
-        &realm_id,
-        now,
+        service_id.as_str(),
+        ghost_actor_id.as_str(),
+        realm_id.as_str(),
+        provision.accountability_grant_event.clone(),
+        provision.profile_event.clone(),
+        path_applet_id,
+        serde_json::to_value(&ghost)
+            .map_err(|error| AppError::internal(format!("Ghost record invalid: {error}")))?,
+        crate::routing::events::event_log::EventCommitIdempotency {
+            principal_id: session.actor.clone(),
+            key: idempotency_key.clone(),
+            service_id: state.service_id().clone(),
+            request_hash: request_digest.clone(),
+        },
+        serde_json::to_value(&outcome)
+            .map_err(|error| AppError::internal(format!("Ghost outcome invalid: {error}")))?,
     )
-    .await?;
-    let authorization_ref = grant_event.event_id.clone();
-
-    let profile_event = build_ghost_profile_create_event(
-        state,
-        &provision,
-        applet_id,
-        &service_id,
-        &ghost_actor_id,
-        &realm_id,
-        &authorization_ref,
-    )
-    .await?;
-
-    persist_formal_applet_event(state, grant_event).await?;
-    persist_formal_applet_event(state, profile_event.clone()).await?;
-    persist_formal_ghost_record(
-        state,
-        record,
-        &ghost_actor_id,
-        &provision.external_user_id,
-        provision.display_name.clone(),
-        now,
-    )
-    .await?;
+    .await;
+    if let Err(error) = commit_result {
+        // A replica or concurrent request may win after the optimistic lookup
+        // above. Re-read the durable first response so an exact retry still
+        // receives replay semantics; a different body remains a conflict.
+        if matches!(error.code.as_str(), "duplicate" | "duplicate_conflict")
+            && let Some(replay) = state
+                .jobs_application()
+                .idempotency_record(&session.actor, &idempotency_key)
+                .await
+                .map_err(|lookup_error| {
+                    AppError::internal(format!("idempotency lookup failed: {lookup_error}"))
+                })?
+        {
+            if replay.request_hash != request_digest {
+                return Err(AppError::conflict(
+                    "Idempotency-Key was already used with different Ghost provisioning Events",
+                )
+                .with_wire_code("duplicate_conflict"));
+            }
+            let replayed: GhostActorProvisionOutcome = serde_json::from_value(replay.response_body)
+                .map_err(|decode_error| {
+                    AppError::internal(format!(
+                        "stored Ghost provision outcome invalid: {decode_error}"
+                    ))
+                })?;
+            res.status_code(StatusCode::OK);
+            return json_ok(replayed);
+        }
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::from_wire(&error.code)
+                .unwrap_or(soland_http::error::ErrorCode::InvalidParam),
+            error.message,
+        )
+        .with_status(error.status)
+        .with_wire_code(error.code));
+    }
 
     crate::routing::append_audit_log(
         state,
@@ -551,47 +657,16 @@ async fn provision_ghost_actor_endpoint(
             "service_id": service_id,
             "ghost_actor_id": ghost_actor_id,
             "realm_id": realm_id,
-            "profile_event_ref": profile_event.event_id,
-            "accountability_grant_ref": authorization_ref,
+            "profile_event_ref": profile_event_ref,
+            "accountability_grant_ref": accountability_grant_ref,
+            "authorization_ref": authorization_ref,
         }),
         "accepted",
     )
     .await;
 
     res.status_code(StatusCode::CREATED);
-    let outcome = GhostActorProvisionOutcome {
-        ghost_actor_id,
-        profile_event_ref: profile_event.event_id.clone(),
-        accountability_grant_ref: authorization_ref.clone(),
-        authorization_ref,
-        display_name: provision.display_name,
-    };
     json_ok(outcome)
-}
-
-async fn persist_formal_ghost_record(
-    state: &AppState,
-    mut record: AppletRecord,
-    ghost_actor_id: &Did,
-    external_id: &str,
-    display_name: Option<String>,
-    created_at: chrono::DateTime<chrono::Utc>,
-) -> Result<(), AppError> {
-    if record
-        .ghosts
-        .iter()
-        .any(|ghost| ghost.ghost_actor_id == ghost_actor_id.as_str())
-    {
-        return Ok(());
-    }
-    record.ghosts.push(GhostActorRecord {
-        ghost_actor_id: ghost_actor_id.to_string(),
-        external_id: external_id.to_owned(),
-        display_name,
-        created_at,
-        revoked_at: None,
-    });
-    persist_applet_record(state, &record).await
 }
 
 #[handler]
@@ -978,6 +1053,10 @@ async fn bot_message_endpoint(
         ghost_actor_id: record.bot_actor_id.clone(),
         external_id: "bot".to_owned(),
         display_name: Some("Applet Bot".to_owned()),
+        request_digest: None,
+        profile_event_ref: None,
+        accountability_grant_ref: None,
+        authorization_ref: None,
         created_at: record.registered_at,
         revoked_at: None,
     };

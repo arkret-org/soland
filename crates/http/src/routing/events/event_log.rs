@@ -96,15 +96,16 @@ use realm_index::{
 
 mod submit;
 pub(super) use submit::submit_federation_events;
-use submit::{
-    EventCommitIdempotency, EventValidationError, IDEMPOTENCY_KEY_TTL_SECONDS,
-    RealmBootstrapBatchContext, SubmitOneError, SubmittedEventOutcome, ValidatedEventEnvelope,
-    event_validation_error, events_submit_outcome, render_submit_one_error, submit_event_batch,
-    submit_event_batch_outcome, submit_event_value_with_idempotency,
-};
 pub(in crate::routing) use submit::{
-    InternalEventAdmission, service_event_authoring_lock, submit_account_data_event_value,
-    submit_applet_event_value, submit_event_value, submit_mimi_event_value,
+    EventCommitIdempotency, InternalEventAdmission, service_event_authoring_lock,
+    submit_account_data_event_value, submit_event_value, submit_ghost_provision_batch,
+    submit_mimi_event_value,
+};
+use submit::{
+    EventValidationError, IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError,
+    SubmittedEventOutcome, ValidatedEventEnvelope, event_validation_error, events_submit_outcome,
+    render_submit_one_error, submit_event_batch, submit_event_batch_outcome,
+    submit_event_value_with_idempotency,
 };
 
 mod validation;

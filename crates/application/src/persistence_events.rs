@@ -1406,6 +1406,32 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
             deliveries_inserted: outcome.outbox_inserted,
         })
     }
+
+    async fn commit_accepted_event_batch(
+        &self,
+        command: crate::events::CommitAcceptedEventBatchCommand,
+    ) -> crate::ApplicationResult<crate::events::CommitAcceptedEventResult> {
+        let outcome = self
+            .0
+            .commit_event_batch(soland_storage::EventBatchCommitRequest {
+                events: command
+                    .events
+                    .into_iter()
+                    .map(persistence_event_commit_request)
+                    .collect(),
+                applet_ghosts: command.applet_ghosts.map(|mutation| {
+                    soland_storage::AppletGhostCommit {
+                        applet_id: mutation.applet_id,
+                        ghost: mutation.ghost,
+                    }
+                }),
+            })
+            .await?;
+        Ok(crate::events::CommitAcceptedEventResult {
+            projections_inserted: outcome.projections_inserted,
+            deliveries_inserted: outcome.outbox_inserted,
+        })
+    }
 }
 
 #[derive(Clone)]

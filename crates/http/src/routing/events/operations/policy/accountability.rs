@@ -147,9 +147,25 @@ pub(super) fn accountability_grant_value_active_for(
     subject: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
+    let mut grant_value = value.clone();
+    if let Some(object) = grant_value.as_object_mut() {
+        // Projection operations carry trusted envelope metadata beside the
+        // schema-closed payload. Strip that transport context before decoding
+        // the accountability grant itself, including for a grant and profile
+        // admitted atomically in the same batch.
+        for field in [
+            "event_id",
+            "sender",
+            "hlc",
+            "executed_by",
+            "authorization_ref",
+        ] {
+            object.remove(field);
+        }
+    }
     let Ok(grant) = serde_json::from_value::<
         arkret_models_collaboration::governance::accountability::AccountabilityGrantPayload,
-    >(value.clone()) else {
+    >(grant_value) else {
         return false;
     };
     grant.issuer.as_str() == issuer

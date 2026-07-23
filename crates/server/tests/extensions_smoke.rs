@@ -67,8 +67,27 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
 }
 
 async fn dev_token(state: AppState) -> String {
+    dev_token_for(state, "did:web:alice.example", "a11ce0000001").await
+}
+
+async fn dev_login_token(state: AppState, actor: &str, device_suffix: &str) -> String {
     state.hydrate().await.unwrap();
-    let actor = "did:web:alice.example";
+    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
+        .json(&json!({
+            "actor": actor,
+            "device_id": format!("ak:device:01904100-0000-7000-8000-{device_suffix}"),
+            "display_name": "Applet service"
+        }))
+        .send(&service(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    login["session_credential"].as_str().unwrap().to_owned()
+}
+
+async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> String {
+    state.hydrate().await.unwrap();
     let typed_realm_id = arkret_identifiers::RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
     let actor_did = Did::new(actor.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -98,18 +117,166 @@ async fn dev_token(state: AppState) -> String {
             reason: None,
         },
     );
-    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
-        .json(&json!({
-            "actor": actor,
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "display_name": "Alice"
-        }))
-        .send(&service(state))
-        .await
-        .take_json()
-        .await
+    dev_login_token(state, actor, device_suffix).await
+}
+
+fn signed_ghost_provision_body(
+    package: &AppletPackage,
+    install: &Value,
+    ghost_actor_id: &str,
+    protocol: &str,
+    tenant: &str,
+    external_user_id: &str,
+    display_name: Option<&str>,
+) -> Value {
+    use arkret_models_collaboration::governance::accountability::{
+        AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind,
+    };
+
+    let realm_id = arkret_identifiers::RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
+    let ghost_actor_id = Did::new(ghost_actor_id.to_owned()).unwrap();
+    let applet_id =
+        arkret_identifiers::AppletId::new(package.applet_id.clone()).expect("valid applet id");
+    let authorization_ref = if install["effective_status"] == json!("installed") {
+        capability_grant_ref_for_action(
+            install,
+            &package.requested_scopes,
+            "ak.applet.ghost.provision",
+        )
+    } else {
+        "ak:grant:01904100-0000-7000-8000-000000000099".to_owned()
+    };
+    let verification_method = package.webhook_auth.key_ref.clone();
+    let signing_key = applet_service_signing_key(&verification_method);
+    let signer = Ed25519MoveSigner::new(
+        signing_key.clone(),
+        package.service_id.clone(),
+        verification_method.clone(),
+    );
+    let now =
+        chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
+    let mut grant = AccountabilityGrantPayload::new(
+        package.service_id.clone(),
+        ghost_actor_id.clone(),
+        AccountabilityScope::Single(AccountabilityScopeKind::ContractedService),
+        now - chrono::Duration::seconds(1),
+        None,
+        arkret_wire::PayloadProof {
+            kind: "detached_jws".to_owned(),
+            alg: "EdDSA".to_owned(),
+            verification_method: verification_method.clone(),
+            payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+            created_at: now,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: "pending".to_owned(),
+        },
+    );
+    grant.proof.payload_digest = grant.payload_digest().unwrap();
+    let grant_binding = grant.canonical_proof_binding_bytes().unwrap();
+    grant.proof.jws =
+        arkret_signatures::jws::sign_jws_ed25519(&grant_binding, &signing_key).unwrap();
+    let mut accountability_event = arkret_event_draft::accountability_grant_event(
+        &grant,
+        realm_id.clone(),
+        0,
+        arkret_identifiers::Hlc::new(format!(
+            "{:012x}-0000-a11ce001",
+            now.timestamp_millis().max(0) as u64
+        ))
+        .unwrap(),
+        None,
+    )
+    .unwrap();
+    accountability_event.applet_id = Some(applet_id.clone());
+    accountability_event.authorization_ref = Some(authorization_ref.clone());
+    let event_grant: AccountabilityGrantPayload =
+        serde_json::from_value(serde_json::to_value(&accountability_event.payload).unwrap())
+            .unwrap();
+    assert_eq!(
+        event_grant.canonical_proof_binding_bytes().unwrap(),
+        grant_binding
+    );
+    arkret_signatures::sign_event(
+        &mut accountability_event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .unwrap();
+
+    let profile_external_ref = json!({
+        "schema": "ak.applet.ghost_actor.external_ref.v1",
+        "protocol": protocol,
+        "tenant": tenant,
+        "external_user_id": external_user_id,
+        "realm_id": realm_id,
+        "external_ref": {
+            "protocol": protocol,
+            "external_id": external_user_id,
+            "instance_id": tenant,
+        },
+    });
+    let profile = arkret_event_draft::GhostActorProfileRequest::new(
+        arkret_identifiers::ActorProfileId::new(arkret_identifiers::new_prefixed_uuid7(
+            "ak:actor_profile:",
+        ))
+        .unwrap(),
+        ghost_actor_id.clone(),
+        display_name.unwrap_or(external_user_id),
+        applet_id.clone(),
+    )
+    .with_realm_id(realm_id.clone())
+    .with_accountable_principal_ids(vec![package.service_id.clone()])
+    .with_external_ref(serde_json::from_value(profile_external_ref).unwrap());
+    let delegation = arkret_models_integration::AppletDelegatedEventAuthorization::new(
+        package.service_id.clone(),
+        authorization_ref,
+        applet_id,
+    );
+    let mut profile_event = profile
+        .profile_create_event(
+            realm_id,
+            0,
+            arkret_identifiers::Hlc::new(format!(
+                "{:012x}-0001-a11ce001",
+                now.timestamp_millis().max(0) as u64
+            ))
+            .unwrap(),
+            Some(&delegation),
+        )
         .unwrap();
-    login["session_credential"].as_str().unwrap().to_owned()
+    profile_event.refs.push(arkret_wire::EventRef::new(
+        accountability_event.event_id.as_str(),
+        "accountability",
+    ));
+    arkret_signatures::sign_event(
+        &mut profile_event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .unwrap();
+    json!({
+        "schema": "ak.applet.ghost_actor.provision_request.v1",
+        "applet_id": package.applet_id,
+        "service_id": package.service_id,
+        "ghost_actor_id": ghost_actor_id,
+        "protocol": protocol,
+        "tenant": tenant,
+        "external_user_id": external_user_id,
+        "display_name": display_name,
+        "realm_id": DEMO_REALM_ID,
+        "external_ref": {
+            "protocol": protocol,
+            "external_id": external_user_id,
+            "instance_id": tenant,
+        },
+        "accountability_grant_event": accountability_event,
+        "profile_event": profile_event,
+    })
 }
 
 #[tokio::test]
@@ -261,31 +428,94 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     )
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
+    let service_token =
+        dev_login_token(state.clone(), package.service_id.as_str(), "a11ce0000002").await;
 
     let ghost_actor_id = format!(
         "did:web:{}.applet.example:ghost:u123",
         safe_did_token(&namespace)
     );
+    let mut rejected_body = signed_ghost_provision_body(
+        &package,
+        &install,
+        &ghost_actor_id,
+        "slack",
+        "T123",
+        "U123",
+        Some("Alice on Slack"),
+    );
+    let rejected_profile_ref = rejected_body["profile_event"]["event_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let rejected_grant_ref = rejected_body["accountability_grant_event"]["event_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    rejected_body["accountability_grant_event"]["payload"]["proof"]["jws"] = json!("invalid-jws");
+    let rejected: Value = TestClient::post(format!(
+        "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
+    ))
+    .add_header("Authorization", format!("Bearer {service_token}"), true)
+    .add_header("Idempotency-Key", format!("invalid-proof-{suffix}"), true)
+    .json(&rejected_body)
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(
+        rejected["error"]["code"],
+        json!("invalid_proof"),
+        "rejection: {rejected}"
+    );
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .get(&rejected_profile_ref)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .get(&rejected_grant_ref)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        state
+            .test_persistence()
+            .applets()
+            .get(&applet_id)
+            .await
+            .unwrap()
+            .unwrap()["ghosts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let provision_body = signed_ghost_provision_body(
+        &package,
+        &install,
+        &ghost_actor_id,
+        "slack",
+        "T123",
+        "U123",
+        Some("Alice on Slack"),
+    );
+    let idempotency_key = format!("provision-{suffix}");
     let mut response = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
     ))
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&json!({
-        "schema": "ak.applet.ghost_actor.provision_request.v1",
-        "applet_id": applet_id,
-        "service_id": package.service_id.to_string(),
-        "ghost_actor_id": ghost_actor_id,
-        "protocol": "slack",
-        "tenant": "T123",
-        "external_user_id": "U123",
-        "display_name": "Alice on Slack",
-        "realm_id": realm_id,
-        "external_ref": {
-            "protocol": "slack",
-            "external_id": "U123",
-            "instance_id": "T123"
-        }
-    }))
+    .add_header("Authorization", format!("Bearer {service_token}"), true)
+    .add_header("Idempotency-Key", &idempotency_key, true)
+    .json(&provision_body)
     .send(&app)
     .await;
     let status = response.status_code.unwrap();
@@ -302,7 +532,14 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     let authorization_ref = provision["authorization_ref"].as_str().unwrap();
     assert!(profile_event_ref.starts_with("ak:event:"));
     assert!(accountability_grant_ref.starts_with("ak:event:"));
-    assert_eq!(authorization_ref, accountability_grant_ref);
+    assert_eq!(
+        authorization_ref,
+        capability_grant_ref_for_action(
+            &install,
+            &package.requested_scopes,
+            "ak.applet.ghost.provision"
+        )
+    );
 
     let profile_event = state
         .test_persistence()
@@ -321,11 +558,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         profile_event.envelope["authorization_ref"],
         json!(authorization_ref)
     );
-    // The applet binding is carried by `executed_by` + `authorization_ref`
-    // (AKP-0008/0009 delegated authorization) and by the profile's
-    // `managed_by_applet` below — NOT by a top-level envelope `applet_id`.
-    // `event-envelope.schema.json` is `additionalProperties:false` and has no
-    // `applet_id`, so asserting one here contradicts the canonical wire shape.
+    assert_eq!(profile_event.envelope["applet_id"], json!(applet_id));
     assert_eq!(
         profile_event.envelope["payload"]["object"]["profile_fields"]["managed_by_applet"],
         json!(applet_id)
@@ -381,6 +614,32 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         event.event_id == accountability_grant_ref
             && event.event_kind == "ak.identity.accountability_grant"
     }));
+
+    let mut replay_response = TestClient::post(format!(
+        "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
+    ))
+    .add_header("Authorization", format!("Bearer {service_token}"), true)
+    .add_header("Idempotency-Key", &idempotency_key, true)
+    .json(&provision_body)
+    .send(&app)
+    .await;
+    assert_eq!(replay_response.status_code.unwrap(), StatusCode::OK);
+    let replay: Value = replay_response.take_json().await.unwrap();
+    assert_eq!(replay, provision);
+
+    let mut conflicting_body = provision_body;
+    conflicting_body["display_name"] = json!("Changed on retry");
+    let mut conflict_response = TestClient::post(format!(
+        "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
+    ))
+    .add_header("Authorization", format!("Bearer {service_token}"), true)
+    .add_header("Idempotency-Key", idempotency_key, true)
+    .json(&conflicting_body)
+    .send(&app)
+    .await;
+    assert_eq!(conflict_response.status_code.unwrap(), StatusCode::CONFLICT);
+    let conflict: Value = conflict_response.take_json().await.unwrap();
+    assert_eq!(conflict["error"]["code"], json!("duplicate_conflict"));
 }
 
 #[tokio::test]
@@ -404,6 +663,8 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     )
     .await;
     assert_eq!(install["effective_status"], json!("partially_installed"));
+    let service_token =
+        dev_login_token(state.clone(), package.service_id.as_str(), "a11ce0000003").await;
 
     let ghost_actor_id = format!(
         "did:web:{}.applet.example:ghost:u-denied",
@@ -412,22 +673,17 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     let rejected: Value = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
     ))
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&json!({
-        "schema": "ak.applet.ghost_actor.provision_request.v1",
-        "applet_id": applet_id,
-        "service_id": package.service_id.to_string(),
-        "ghost_actor_id": ghost_actor_id,
-        "protocol": "slack",
-        "tenant": "T123",
-        "external_user_id": "U-denied",
-        "realm_id": realm_id,
-        "external_ref": {
-            "protocol": "slack",
-            "external_id": "U-denied",
-            "instance_id": "T123"
-        }
-    }))
+    .add_header("Authorization", format!("Bearer {service_token}"), true)
+    .add_header("Idempotency-Key", format!("denied-{suffix}"), true)
+    .json(&signed_ghost_provision_body(
+        &package,
+        &install,
+        &ghost_actor_id,
+        "slack",
+        "T123",
+        "U-denied",
+        None,
+    ))
     .send(&app)
     .await
     .take_json()
@@ -456,26 +712,24 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     )
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
+    let service_token =
+        dev_login_token(state.clone(), package.service_id.as_str(), "a11ce0000004").await;
+    let mismatched_ghost = "did:web:other.applet.example:ghost:u123";
 
     let rejected: Value = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
     ))
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&json!({
-        "schema": "ak.applet.ghost_actor.provision_request.v1",
-        "applet_id": applet_id,
-        "service_id": package.service_id.to_string(),
-        "ghost_actor_id": "did:web:other.applet.example:ghost:u123",
-        "protocol": "slack",
-        "tenant": "T123",
-        "external_user_id": "U123",
-        "realm_id": realm_id,
-        "external_ref": {
-            "protocol": "slack",
-            "external_id": "U123",
-            "instance_id": "T123"
-        }
-    }))
+    .add_header("Authorization", format!("Bearer {service_token}"), true)
+    .add_header("Idempotency-Key", format!("namespace-{suffix}"), true)
+    .json(&signed_ghost_provision_body(
+        &package,
+        &install,
+        mismatched_ghost,
+        "slack",
+        "T123",
+        "U123",
+        None,
+    ))
     .send(&app)
     .await
     .take_json()
@@ -675,7 +929,6 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    allow_service_message_plaintext(&state, DEMO_REALM_ID).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
@@ -692,6 +945,9 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     )
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
+    let service_token =
+        dev_login_token(state.clone(), package.service_id.as_str(), "a11ce0000005").await;
+    allow_service_message_plaintext(&state, DEMO_REALM_ID).await;
     let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
     let message_grant_ref =
         capability_grant_ref_for_action(&install, &package.requested_scopes, "ak.message.create");
@@ -703,23 +959,17 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let mut provision_response = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
     ))
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&json!({
-        "schema": "ak.applet.ghost_actor.provision_request.v1",
-        "applet_id": applet_id,
-        "service_id": package.service_id.to_string(),
-        "ghost_actor_id": ghost_actor_id,
-        "protocol": "smoke",
-        "tenant": "T-smoke",
-        "external_user_id": "ext-user-x",
-        "display_name": "External X",
-        "realm_id": realm_id,
-        "external_ref": {
-            "protocol": "smoke",
-            "external_id": "ext-user-x",
-            "instance_id": "T-smoke"
-        }
-    }))
+    .add_header("Authorization", format!("Bearer {service_token}"), true)
+    .add_header("Idempotency-Key", format!("ghost-{suffix}"), true)
+    .json(&signed_ghost_provision_body(
+        &package,
+        &install,
+        &ghost_actor_id,
+        "smoke",
+        "T-smoke",
+        "ext-user-x",
+        Some("External X"),
+    ))
     .send(&app)
     .await;
     let provision_status = provision_response.status_code.unwrap();

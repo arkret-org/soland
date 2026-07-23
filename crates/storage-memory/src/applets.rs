@@ -3,7 +3,7 @@ use super::{
     PersistenceError, PersistenceResult, Value, async_trait,
 };
 pub(crate) struct MemoryAppletStore {
-    records: Mutex<BTreeMap<String, Value>>,
+    pub(crate) records: Mutex<BTreeMap<String, Value>>,
     transactions: Mutex<BTreeMap<(String, String), AppletTransactionReplayRecord>>,
 }
 impl MemoryAppletStore {

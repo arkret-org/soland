@@ -144,6 +144,13 @@ impl EventCommitUnitOfWork for PgPersistenceStore {
     ) -> PersistenceResult<EventCommitOutcome> {
         self.event_commits.commit_event(request).await
     }
+
+    async fn commit_event_batch(
+        &self,
+        request: soland_storage::EventBatchCommitRequest,
+    ) -> PersistenceResult<EventCommitOutcome> {
+        self.event_commits.commit_event_batch(request).await
+    }
 }
 
 impl IdentityStoreRegistry for PgPersistenceStore {

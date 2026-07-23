@@ -87,7 +87,7 @@ pub struct SolandMemoryPersistenceStore {
     realm_invites: MemoryRealmInviteStore,
     pub(crate) events: MemoryEventStore,
     pub(crate) projection_events: MemoryProjectionEventStore,
-    applets: MemoryAppletStore,
+    pub(crate) applets: MemoryAppletStore,
     device_messages: MemoryDeviceMessageStore,
     device_keys: MemoryDeviceKeyStore,
     one_time_keys: MemoryOneTimeKeyStore,

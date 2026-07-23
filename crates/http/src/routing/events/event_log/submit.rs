@@ -24,6 +24,8 @@ static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = Onc
 
 mod identity_anchor;
 use identity_anchor::{batch_contains_identity_anchor, submit_identity_anchor_batch};
+mod ghost_provision;
+pub(in crate::routing) use ghost_provision::submit_ghost_provision_batch;
 mod realm_bootstrap;
 use realm_bootstrap::{batch_begins_realm_create, submit_realm_bootstrap_batch};
 
@@ -1311,8 +1313,7 @@ use preflight::*;
 pub(in crate::routing::events::event_log) use value::submit_event_value_with_idempotency;
 use value::*;
 pub(in crate::routing) use value::{
-    submit_account_data_event_value, submit_applet_event_value, submit_event_value,
-    submit_mimi_event_value,
+    submit_account_data_event_value, submit_event_value, submit_mimi_event_value,
 };
 
 #[cfg(test)]

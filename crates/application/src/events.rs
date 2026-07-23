@@ -484,6 +484,18 @@ pub struct CommitAcceptedEventCommand {
     pub deliveries: Vec<FederationDelivery>,
 }
 
+#[derive(Clone, Debug)]
+pub struct CommitAppletGhosts {
+    pub applet_id: String,
+    pub ghost: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct CommitAcceptedEventBatchCommand {
+    pub events: Vec<CommitAcceptedEventCommand>,
+    pub applet_ghosts: Option<CommitAppletGhosts>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommitAcceptedEventResult {
     pub projections_inserted: usize,
@@ -1485,6 +1497,11 @@ pub trait EventCommitPort: Send + Sync {
         &self,
         command: CommitAcceptedEventCommand,
     ) -> ApplicationResult<CommitAcceptedEventResult>;
+
+    async fn commit_accepted_event_batch(
+        &self,
+        command: CommitAcceptedEventBatchCommand,
+    ) -> ApplicationResult<CommitAcceptedEventResult>;
 }
 
 impl EventApplicationService {
@@ -1497,6 +1514,13 @@ impl EventApplicationService {
         command: CommitAcceptedEventCommand,
     ) -> ApplicationResult<CommitAcceptedEventResult> {
         self.commits.commit_accepted_event(command).await
+    }
+
+    pub async fn commit_accepted_event_batch(
+        &self,
+        command: CommitAcceptedEventBatchCommand,
+    ) -> ApplicationResult<CommitAcceptedEventResult> {
+        self.commits.commit_accepted_event_batch(command).await
     }
 }
 
@@ -1520,6 +1544,18 @@ mod tests {
             Ok(CommitAcceptedEventResult {
                 projections_inserted: 1,
                 deliveries_inserted: 1,
+            })
+        }
+
+        async fn commit_accepted_event_batch(
+            &self,
+            command: CommitAcceptedEventBatchCommand,
+        ) -> ApplicationResult<CommitAcceptedEventResult> {
+            assert_eq!(command.events.len(), 2);
+            assert!(command.applet_ghosts.is_some());
+            Ok(CommitAcceptedEventResult {
+                projections_inserted: 2,
+                deliveries_inserted: 0,
             })
         }
     }

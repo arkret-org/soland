@@ -63,6 +63,14 @@ pub struct GhostActorRecord {
     pub external_id: String,
     #[serde(default)]
     pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_event_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accountability_grant_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization_ref: Option<String>,
     #[serde(
         serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp",
         deserialize_with = "arkret_canonical::serde_helpers::deserialize_canonical_timestamp"
@@ -204,10 +212,4 @@ pub struct AppletGhostIngressOutcome {
     pub realm_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub portal_realm_id: Option<String>,
-}
-
-#[derive(Clone)]
-pub(super) struct FormalAppletEvent {
-    pub(super) event_id: String,
-    pub(super) event: arkret_wire::Event,
 }
