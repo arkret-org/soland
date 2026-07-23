@@ -86,7 +86,7 @@ pub struct SpaceContainerProjectionRecord {
 pub struct StrandProjectionRecord {
     pub strand_id: String,
     pub realm_id: String,
-    pub tracks: BTreeMap<String, arkret_core::StrandTrackConfig>,
+    pub tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
     pub title: String,
     pub summary: Option<String>,
     /// One of `active` / `archived` / `deleted` / `redacted` per spec.
@@ -211,7 +211,7 @@ pub fn projected_operation_realm_discoverability(operation: &Operation) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use arkret_core::{OperationId, RealmId};
+    use arkret_identifiers::{OperationId, RealmId};
     use serde_json::json;
 
     use super::*;

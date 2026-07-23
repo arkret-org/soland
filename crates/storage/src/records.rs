@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{
-    BlobRef, BlobVisibility, DeviceGenerationStatus, FreshnessState, Hash, NonEmptyString,
-    PlaintextDataClassKind, RecoveryIdentityModel, SealBasis,
-};
+use arkret_identifiers::{BlobRef, Hash};
+use arkret_models_collaboration::objects::blob::BlobVisibility;
+use arkret_models_crypto::{DeviceGenerationStatus, RecoveryIdentityModel};
+use arkret_wire::{FreshnessState, NonEmptyString, PlaintextDataClassKind, SealBasis};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -572,7 +572,7 @@ pub struct PresenceRecord {
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Original proof-bearing broadcast envelope delivered to subscribers.
-    pub envelope: arkret_core::EphemeralEnvelope,
+    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
 }
 
 #[derive(Clone, Debug)]
@@ -586,7 +586,7 @@ pub struct TypingRecord {
     pub position: i64,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     /// Original proof-bearing broadcast envelope delivered to subscribers.
-    pub envelope: arkret_core::EphemeralEnvelope,
+    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
 }
 
 /// Relayed `ak.call.signal` envelope for realm-broadcast ephemeral delivery
@@ -599,7 +599,7 @@ pub struct CallSignalRelayRecord {
     pub sender_device: String,
     pub call_id: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub envelope: arkret_core::EphemeralEnvelope,
+    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
     /// Monotonic per-Realm position assigned by `CallSignalRelayStore::append`.
     /// Drives per-subscriber-device deliver-once: a subscriber's watermark
     /// records the highest `position` already delivered to that device, so an
@@ -621,7 +621,7 @@ pub struct ReadReceiptRelayRecord {
     pub target_actor: Option<String>,
     pub visibility: String,
     pub receipt: serde_json::Value,
-    pub envelope: arkret_core::EphemeralEnvelope,
+    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     /// Monotonic per-Realm position assigned by `ReadReceiptRelayStore::append`.

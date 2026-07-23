@@ -1,4 +1,4 @@
-use arkret_core::PrincipalLocatorDisplayHint;
+use arkret_models_collaboration::governance::invite_addressing::PrincipalLocatorDisplayHint;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

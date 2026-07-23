@@ -163,8 +163,8 @@ pub fn identity_anchor_slot_conflicts<'a>(
 #[doc(hidden)]
 pub fn receipt_covers_event(receipt: &EventBatchReceipt, event_id: &str) -> bool {
     receipt.events.iter().any(|event| match event {
-        arkret_core::EventBatchReceiptEvent::Item(item) => item.event_id.as_str() == event_id,
-        arkret_core::EventBatchReceiptEvent::Digest(_) => false,
+        arkret_wire::EventBatchReceiptEvent::Item(item) => item.event_id.as_str() == event_id,
+        arkret_wire::EventBatchReceiptEvent::Digest(_) => false,
     })
 }
 #[doc(hidden)]

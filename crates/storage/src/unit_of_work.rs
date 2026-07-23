@@ -73,7 +73,7 @@ pub fn validate_actor_scope_commit<'a>(
         .copied()
         .filter(|record| record.actor_seq == event.actor_seq)
         .collect::<Vec<_>>();
-    if same_height.len() >= arkret_core::MAX_ACTOR_SEQ_TOTAL_SIBLINGS {
+    if same_height.len() >= arkret_wire::MAX_ACTOR_SEQ_TOTAL_SIBLINGS {
         return Err(crate::PersistenceError::Conflict(
             "fork_quarantine: actor sequence sibling limit".to_owned(),
         ));
@@ -86,7 +86,7 @@ pub fn validate_actor_scope_commit<'a>(
         .flatten()
         .filter_map(serde_json::Value::as_str)
         .collect::<Vec<_>>();
-    let digest = arkret_core::prev_frontier_digest(prev_refs)
+    let digest = arkret_wire::prev_frontier_digest(prev_refs)
         .map_err(|error| crate::PersistenceError::Conflict(format!("schema_violation: {error}")))?;
     let same_bucket = same_height
         .iter()
@@ -99,10 +99,10 @@ pub fn validate_actor_scope_commit<'a>(
                 .flatten()
                 .filter_map(serde_json::Value::as_str)
                 .collect::<Vec<_>>();
-            arkret_core::prev_frontier_digest(refs).ok().as_deref() == Some(digest.as_str())
+            arkret_wire::prev_frontier_digest(refs).ok().as_deref() == Some(digest.as_str())
         })
         .count();
-    if same_bucket >= arkret_core::MAX_ACTOR_SEQ_SIBLINGS {
+    if same_bucket >= arkret_wire::MAX_ACTOR_SEQ_SIBLINGS {
         return Err(crate::PersistenceError::Conflict(
             "fork_quarantine: actor predecessor bucket limit".to_owned(),
         ));
