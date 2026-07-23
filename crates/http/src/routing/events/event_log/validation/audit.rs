@@ -5,34 +5,9 @@ pub(crate) async fn append_encrypted_message_franking(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) {
-    if parsed.kind != arkret_wire::events::EventKind::MESSAGE_CREATE {
-        return;
-    }
-    let Some(policy) = audit_disclosure_policy_for_realm(state, &parsed.realm_id).await else {
+    let Some(proof) = encrypted_message_franking_proof(state.service_id(), parsed, envelope) else {
         return;
     };
-    if policy.get("enabled").and_then(Value::as_bool) == Some(false) {
-        return;
-    }
-    let Some(ciphertext_digest) = encrypted_message_ciphertext_digest(envelope) else {
-        return;
-    };
-    let mut proof = json!({
-        "kind": arkret_wire::events::EventKind::MODERATION_FRANKING_PROOF,
-        "realm_id": parsed.realm_id,
-        "target_event_id": parsed.event_id,
-        "sender_did": parsed.actor_id,
-        "receiving_service_id": state.service_id(),
-        "ciphertext_digest": ciphertext_digest,
-        "event_canonical_digest": parsed.canonical_digest,
-        "timestamp": now(),
-        "audit_disclosure_policy": {
-            "agent_id": policy.get("agent_id").cloned().unwrap_or(Value::Null),
-            "trigger": policy.get("trigger").cloned().unwrap_or(Value::Null),
-        },
-    });
-    let proof_digest = franking_proof_digest(&proof);
-    proof["proof_digest"] = json!(proof_digest);
     append_audit_log(
         state,
         Some(&parsed.actor_id),
@@ -41,6 +16,30 @@ pub(crate) async fn append_encrypted_message_franking(
         "accepted",
     )
     .await;
+}
+
+fn encrypted_message_franking_proof(
+    service_id: &str,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+) -> Option<Value> {
+    if parsed.kind != arkret_wire::events::EventKind::MESSAGE_CREATE {
+        return None;
+    }
+    let ciphertext_digest = encrypted_message_ciphertext_digest(envelope)?;
+    let mut proof = json!({
+        "kind": arkret_wire::events::EventKind::MODERATION_FRANKING_PROOF,
+        "realm_id": parsed.realm_id,
+        "target_event_id": parsed.event_id,
+        "sender_did": parsed.actor_id,
+        "receiving_service_id": service_id,
+        "ciphertext_digest": ciphertext_digest,
+        "event_canonical_digest": parsed.canonical_digest,
+        "timestamp": now(),
+    });
+    let proof_digest = franking_proof_digest(&proof);
+    proof["proof_digest"] = json!(proof_digest);
+    Some(proof)
 }
 
 fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
@@ -52,27 +51,6 @@ fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
         return Some(digest.to_owned());
     }
     None
-}
-
-async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
-    state
-        .event_query_application()
-        .canonical_events()
-        .await
-        .ok()?
-        .into_iter()
-        .filter(|record| {
-            record.kind == arkret_wire::events::EventKind::REALM_CREATE
-                && canonical_realm_id_for_record(record).as_deref() == Some(realm_id)
-        })
-        .rev()
-        .find_map(|record| {
-            record
-                .envelope
-                .pointer("/payload/object/audit_disclosure_policy")
-                .or_else(|| record.envelope.pointer("/payload/audit_disclosure_policy"))
-                .cloned()
-        })
 }
 
 fn franking_proof_digest(proof: &Value) -> String {
@@ -394,4 +372,66 @@ fn manage_others_audit_error(message: impl Into<String>) -> EventValidationError
         arkret_wire::ReasonCode::WATCH_SET_OTHERS_AUDIT_MISSING,
         message,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(kind: &str) -> ValidatedEventEnvelope {
+        ValidatedEventEnvelope {
+            event_id: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
+            actor_id: "did:web:alice.example".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
+            actor_seq: 1,
+            realm_id: "ak:realm:01904100-0000-7000-8000-000000000003".to_owned(),
+            kind: kind.to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
+            prev_refs: Vec::new(),
+            authorized_refs: Vec::new(),
+            canonical_digest:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            canonical_bytes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn encrypted_message_franking_is_not_gated_by_audit_applet_policy() {
+        let proof = encrypted_message_franking_proof(
+            "did:web:soland.example",
+            &parsed(arkret_wire::events::EventKind::MESSAGE_CREATE),
+            &json!({
+                "payload": {
+                    "encrypted_content": {
+                        "payload_digest":
+                            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    }
+                }
+            }),
+        )
+        .expect("encrypted messages get a local moderation franking proof");
+
+        assert_eq!(
+            proof.get("kind").and_then(Value::as_str),
+            Some(arkret_wire::events::EventKind::MODERATION_FRANKING_PROOF)
+        );
+        assert_eq!(
+            proof.get("receiving_service_id").and_then(Value::as_str),
+            Some("did:web:soland.example")
+        );
+        assert!(proof.get("audit_disclosure_policy").is_none());
+        assert!(proof.get("proof_digest").is_some());
+    }
+
+    #[test]
+    fn plaintext_messages_do_not_get_a_franking_proof() {
+        assert!(
+            encrypted_message_franking_proof(
+                "did:web:soland.example",
+                &parsed(arkret_wire::events::EventKind::MESSAGE_CREATE),
+                &json!({"payload": {"content": {"body": "hello"}}}),
+            )
+            .is_none()
+        );
+    }
 }
