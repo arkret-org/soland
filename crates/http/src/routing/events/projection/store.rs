@@ -298,11 +298,11 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
     } else if kinds::canonical_kind_string(operation) == "ak.invite.accept" {
         project_invite_accept_operation(state, origin, operation).await;
     } else if kinds::canonical_kind_string(operation)
-        == arkret_core::events::EventKind::INVITE_CANCEL
+        == arkret_wire::events::EventKind::INVITE_CANCEL
     {
         project_invite_cancel_operation(state, origin, operation).await;
     } else if kinds::canonical_kind_string(operation)
-        == arkret_core::events::EventKind::INVITE_REVOKE
+        == arkret_wire::events::EventKind::INVITE_REVOKE
     {
         project_invite_revoke_operation(state, origin, operation).await;
     } else if kinds::operation_is_membership(operation)

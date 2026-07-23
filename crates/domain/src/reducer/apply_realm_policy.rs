@@ -13,17 +13,17 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         let kind = operation.object_type.as_str();
-        if kind == arkret_core::events::EventKind::REALM_POLICY_COMPONENTS {
+        if kind == arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS {
             return self.apply_realm_policy_components(operation);
         }
         if !matches!(
             kind,
-            arkret_core::events::EventKind::REALM_JOIN_RULE
-                | arkret_core::events::EventKind::REALM_HISTORY_VISIBILITY
-                | arkret_core::events::EventKind::REALM_HISTORY_SHARING_POLICY
-                | arkret_core::events::EventKind::REALM_DISCOVERY
-                | arkret_core::events::EventKind::REALM_DELIVERY_BINDING_POLICY
-                | arkret_core::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
+            arkret_wire::events::EventKind::REALM_JOIN_RULE
+                | arkret_wire::events::EventKind::REALM_HISTORY_VISIBILITY
+                | arkret_wire::events::EventKind::REALM_HISTORY_SHARING_POLICY
+                | arkret_wire::events::EventKind::REALM_DISCOVERY
+                | arkret_wire::events::EventKind::REALM_DELIVERY_BINDING_POLICY
+                | arkret_wire::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
         ) {
             return ProjectionEffect::Rejected {
                 reason: "out_of_order_bootstrap".to_owned(),

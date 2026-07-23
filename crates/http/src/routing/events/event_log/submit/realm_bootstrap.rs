@@ -3,7 +3,7 @@ use super::*;
 
 pub(super) fn batch_begins_realm_create(envelopes: &[Value]) -> bool {
     event_string_field_from_value(envelopes.first().unwrap_or(&Value::Null), "kind").as_deref()
-        == Some(arkret_core::events::EventKind::REALM_CREATE)
+        == Some(arkret_wire::events::EventKind::REALM_CREATE)
 }
 
 fn bootstrap_error(
@@ -113,7 +113,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             )
         })?;
     if existing.iter().any(|record| {
-        record.kind == arkret_core::events::EventKind::REALM_CREATE
+        record.kind == arkret_wire::events::EventKind::REALM_CREATE
             && record.realm_id.as_deref() == Some(unit.realm_id.as_str())
     }) {
         return Err(realm_already_exists_error());
@@ -173,7 +173,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             let operation = &operations[error.operation_index];
             let code = if !error.ignored
                 && operation.object_type.as_str()
-                    == arkret_core::events::EventKind::CAPABILITY_GRANT
+                    == arkret_wire::events::EventKind::CAPABILITY_GRANT
             {
                 "invalid_realm_founding_grant"
             } else {

@@ -52,8 +52,8 @@ fn stamp_projection_operation_received_at(
 ) {
     if !matches!(
         operation.object_type.as_str(),
-        arkret_core::events::EventKind::MEMBER_STATE
-            | arkret_core::events::EventKind::CIRCLE_MEMBER_STATE
+        arkret_wire::events::EventKind::MEMBER_STATE
+            | arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE
     ) {
         return;
     }
@@ -75,7 +75,7 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
     let Ok(event) = serde_json::from_value::<arkret_core::Event>(envelopes[0].clone()) else {
         return false;
     };
-    event.kind.as_str() == arkret_core::events::EventKind::REALM_CREATE
+    event.kind.as_str() == arkret_wire::events::EventKind::REALM_CREATE
         && event.executed_by.as_ref() != Some(&event.actor_id)
         && arkret_bootstrap::materialize_managed_agent_pcr_control(std::slice::from_ref(&event))
             .is_ok()
@@ -181,7 +181,7 @@ impl InternalEventAdmission {
         Self {
             realm_id: realm_id.into(),
             actor_id: actor_id.into(),
-            kind: arkret_core::events::EventKind::MESSAGE_CREATE.to_owned(),
+            kind: arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned(),
             device_id: "mimi-provider-facade".to_owned(),
             binding: InternalEventBinding::MimiProvider {
                 binding_ref: binding_ref.into(),
@@ -199,7 +199,7 @@ impl InternalEventAdmission {
         Self {
             realm_id: realm_id.into(),
             actor_id: actor_id.into(),
-            kind: arkret_core::events::EventKind::ACCOUNT_DATA_SET.to_owned(),
+            kind: arkret_wire::events::EventKind::ACCOUNT_DATA_SET.to_owned(),
             device_id: device_id.into(),
             binding: InternalEventBinding::AccountData {
                 owner: owner.into(),
@@ -218,7 +218,7 @@ impl InternalEventAdmission {
         Self {
             realm_id: realm_id.into(),
             actor_id: actor_id.into(),
-            kind: arkret_core::events::EventKind::DIRECT_CONVERSATION_BOUND.to_owned(),
+            kind: arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND.to_owned(),
             device_id: device_id.into(),
             binding: InternalEventBinding::PeerDirectBinding {
                 subject_id: subject_id.into(),
@@ -569,7 +569,7 @@ pub(super) async fn submit_event_batch_outcome(
                     duplicate.push(response.event_id);
                 }
                 if !response.duplicate
-                    && kind.as_deref() == Some(arkret_core::events::EventKind::REALM_CREATE)
+                    && kind.as_deref() == Some(arkret_wire::events::EventKind::REALM_CREATE)
                     && let (Some(realm_id), Some(actor_id)) = (realm_id, actor_id)
                 {
                     realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
@@ -623,7 +623,7 @@ async fn direct_bootstrap_source_is_contact_authority(
         return false;
     };
     if event_string_field_from_value(first, "kind").as_deref()
-        != Some(arkret_core::events::EventKind::REALM_CREATE)
+        != Some(arkret_wire::events::EventKind::REALM_CREATE)
     {
         return false;
     }
@@ -643,7 +643,7 @@ async fn direct_bootstrap_source_is_contact_authority(
     }
     let peer = events.iter().find_map(|event| {
         if event_string_field_from_value(event, "kind").as_deref()
-            != Some(arkret_core::events::EventKind::MEMBER_STATE)
+            != Some(arkret_wire::events::EventKind::MEMBER_STATE)
         {
             return None;
         }
@@ -1017,7 +1017,7 @@ pub(crate) async fn submit_federation_events(
         for (index, event) in events.iter().enumerate() {
             let profile_result = if index == 1
                 && event_string_field_from_value(event, "kind").as_deref()
-                    == Some(arkret_core::events::EventKind::CAPABILITY_GRANT)
+                    == Some(arkret_wire::events::EventKind::CAPABILITY_GRANT)
             {
                 // An ordinary Realm bootstrap cannot be federated without its
                 // mandatory founding grant. The bootstrap reducer below
@@ -1079,7 +1079,7 @@ pub(crate) async fn submit_federation_events(
     if !crate::routing::events::event_log::realm_is_indexed(state, &binding_realm)
         && events.iter().any(|event| {
             event_string_field_from_value(event, "kind").as_deref()
-                != Some(arkret_core::events::EventKind::INVITE_CREATE)
+                != Some(arkret_wire::events::EventKind::INVITE_CREATE)
         })
     {
         render_error(
@@ -1128,7 +1128,7 @@ pub(crate) async fn submit_federation_events(
             continue;
         }
         if event_string_field_from_value(&envelope, "kind").as_deref()
-            == Some(arkret_core::events::EventKind::MLS_WELCOME)
+            == Some(arkret_wire::events::EventKind::MLS_WELCOME)
         {
             let Some(payload) = envelope.get("payload") else {
                 rejected.push(EventsSubmitRejectedItem {
@@ -1337,9 +1337,9 @@ mod received_at_stamp_tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut device_authorize = operation_for_kind("ak.device.authorize", 1);
-        let mut member_state = operation_for_kind(arkret_core::events::EventKind::MEMBER_STATE, 2);
+        let mut member_state = operation_for_kind(arkret_wire::events::EventKind::MEMBER_STATE, 2);
         let mut circle_member_state =
-            operation_for_kind(arkret_core::events::EventKind::CIRCLE_MEMBER_STATE, 3);
+            operation_for_kind(arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE, 3);
 
         stamp_projection_operation_received_at(&mut device_authorize, received_at);
         stamp_projection_operation_received_at(&mut member_state, received_at);
@@ -1372,7 +1372,7 @@ mod managed_agent_pcr_batch_tests {
             RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe".to_owned()).unwrap();
         let agent_id = arkret_core::Did::new("did:web:agent.example".to_owned()).unwrap();
         let mut event = arkret_core::Event::new(
-            arkret_core::events::EventKind::REALM_CREATE,
+            arkret_wire::events::EventKind::REALM_CREATE,
             realm_id,
             agent_id,
             1,

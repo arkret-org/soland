@@ -784,7 +784,7 @@ impl PeerReadAuthz {
     }
 
     fn apply_member_record(&mut self, record: &CanonicalEventRecord) {
-        if record.kind != arkret_core::events::EventKind::MEMBER_STATE {
+        if record.kind != arkret_wire::events::EventKind::MEMBER_STATE {
             return;
         }
         let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
@@ -869,7 +869,7 @@ impl PeerReadAuthz {
     }
 
     fn apply_circle_member_record(&mut self, record: &CanonicalEventRecord) {
-        if record.kind != arkret_core::events::EventKind::CIRCLE_MEMBER_STATE {
+        if record.kind != arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE {
             return;
         }
         let Some(payload) = record_payload(record) else {

@@ -912,7 +912,7 @@ pub(crate) fn validate_cross_signing_reset_replay_batch(
     let mut seen = std::collections::BTreeSet::new();
     for operation in operations {
         if kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::CROSS_SIGNING_RESET)
+            != Some(arkret_wire::events::EventKind::CROSS_SIGNING_RESET)
         {
             continue;
         }
@@ -962,7 +962,7 @@ mod tests {
             )
             .unwrap(),
             arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
-            arkret_core::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
             json!({
                 "content": {"kind": "ak.content.text", "body": "secret"},
                 "expiry": expiry
@@ -1004,7 +1004,7 @@ mod tests {
             )
             .unwrap(),
             arkret_core::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892036").unwrap(),
-            arkret_core::events::EventKind::INVITE_CREATE,
+            arkret_wire::events::EventKind::INVITE_CREATE,
             json!({
                 "invite_id": "ak:invite:01904100-0000-7000-8000-0000000000e2",
                 "invitee": "did:web:bob.example",

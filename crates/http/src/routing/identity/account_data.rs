@@ -241,7 +241,7 @@ async fn persist_account_data_event(
         EventId::new(arkret_core::new_prefixed_uuid7("ak:event:")).map_err(|error| {
             AppError::internal(format!("account_data Event id invalid: {error}"))
         })?,
-        arkret_core::events::EventKind::ACCOUNT_DATA_SET,
+        arkret_wire::events::EventKind::ACCOUNT_DATA_SET,
         realm_id.clone(),
         service_did.clone(),
         actor_seq,

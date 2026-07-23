@@ -8,7 +8,7 @@ pub(super) async fn validate_capability_grant_proofs(
     object: &serde_json::Map<String, Value>,
     internal_admission: Option<&crate::routing::events::event_log::submit::InternalEventAdmission>,
 ) -> Result<(), EventValidationError> {
-    if kind != arkret_core::events::EventKind::CAPABILITY_GRANT {
+    if kind != arkret_wire::events::EventKind::CAPABILITY_GRANT {
         return Ok(());
     }
     let payload: arkret_core::CapabilityGrantPayload = serde_json::from_value(
@@ -215,7 +215,7 @@ mod tests {
         validate_capability_grant_proofs(
             &state,
             &session,
-            arkret_core::events::EventKind::CAPABILITY_GRANT,
+            arkret_wire::events::EventKind::CAPABILITY_GRANT,
             &issuer,
             event.as_object().unwrap(),
             None,
@@ -230,7 +230,7 @@ mod tests {
             validate_capability_grant_proofs(
                 &state,
                 &session,
-                arkret_core::events::EventKind::CAPABILITY_GRANT,
+                arkret_wire::events::EventKind::CAPABILITY_GRANT,
                 &issuer,
                 event.as_object().unwrap(),
                 None,

@@ -450,7 +450,7 @@ pub(crate) async fn active_series_pointer_is_current(
                 return Ok(false);
             };
             if authorize.actor_id != controller_id
-                || authorize.kind != arkret_core::events::EventKind::DEVICE_AUTHORIZE
+                || authorize.kind != arkret_wire::events::EventKind::DEVICE_AUTHORIZE
             {
                 return Ok(false);
             }
@@ -477,7 +477,7 @@ pub(crate) async fn validate_active_series_operation_authority(
     operation: &arkret_core::Operation,
 ) -> Result<(), &'static str> {
     if soland_application::operation_semantics::canonical_kind_for_operation(operation)
-        != Some(arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+        != Some(arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
     {
         return Ok(());
     }
@@ -817,7 +817,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
             "managed_agent_delegation_scope",
         ));
     }
-    if kind == arkret_core::events::EventKind::REALM_CREATE {
+    if kind == arkret_wire::events::EventKind::REALM_CREATE {
         let object = envelope
             .get("payload")
             .and_then(|payload| payload.get("object"))

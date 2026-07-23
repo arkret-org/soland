@@ -1472,7 +1472,7 @@ fn validate_invite_delivery_consistency(
         ));
     }
     if body.pointer("/invite_event/kind").and_then(Value::as_str)
-        != Some(arkret_core::events::EventKind::INVITE_CREATE)
+        != Some(arkret_wire::events::EventKind::INVITE_CREATE)
     {
         return Err(super::events::peer::schema_violation(
             "invite_event.kind must be ak.invite.create",

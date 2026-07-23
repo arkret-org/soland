@@ -48,7 +48,7 @@ fn realm_key_share_dispatch_projects_effect() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_KEY_SHARE,
+            arkret_wire::events::EventKind::REALM_KEY_SHARE,
             REALM,
             realm_key_share_payload(realm_scope(REALM)),
         ),
@@ -78,7 +78,7 @@ fn realm_key_share_dispatch_accepts_projection_metadata() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_KEY_SHARE,
+            arkret_wire::events::EventKind::REALM_KEY_SHARE,
             REALM,
             payload,
         ),
@@ -113,7 +113,7 @@ fn realm_key_share_requires_material() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_KEY_SHARE,
+            arkret_wire::events::EventKind::REALM_KEY_SHARE,
             REALM,
             payload,
         ),
@@ -134,7 +134,7 @@ fn realm_key_share_rejects_scope_mismatch() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_KEY_SHARE,
+            arkret_wire::events::EventKind::REALM_KEY_SHARE,
             REALM,
             realm_key_share_payload(realm_scope(OTHER_REALM)),
         ),
@@ -158,7 +158,7 @@ fn realm_key_share_rejects_inverted_epoch_range() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_KEY_SHARE,
+            arkret_wire::events::EventKind::REALM_KEY_SHARE,
             REALM,
             payload,
         ),
@@ -175,7 +175,7 @@ fn realm_key_share_rejects_inverted_epoch_range() {
 #[test]
 fn realm_key_share_is_registered_in_default_apply_registry() {
     assert!(
-        default_apply_registry().contains_key(arkret_core::events::EventKind::REALM_KEY_SHARE),
+        default_apply_registry().contains_key(arkret_wire::events::EventKind::REALM_KEY_SHARE),
         "ak.realm_key.share should dispatch through the reducer registry"
     );
 }

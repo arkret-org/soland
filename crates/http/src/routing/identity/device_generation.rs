@@ -116,7 +116,7 @@ async fn bootstrap_generation_ref(
 ) -> Result<Option<String>, ApplicationError> {
     let bootstrap = records.iter().find(|record| {
         record.actor_id == principal_id
-            && record.kind == arkret_core::events::EventKind::REALM_CREATE
+            && record.kind == arkret_wire::events::EventKind::REALM_CREATE
             && record
                 .envelope
                 .pointer("/payload/object/fields/purpose")
@@ -137,7 +137,7 @@ async fn bootstrap_generation_ref(
     };
     let paired = records.iter().any(|record| {
         record.actor_id == principal_id
-            && record.kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
+            && record.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
             && record
                 .envelope
                 .get("prev_refs")
@@ -197,7 +197,7 @@ fn reanchor_unit_fingerprint(
         .and_then(Value::as_str)?;
     let authorize = records.iter().find(|record| {
         record.event_id == authorize_id
-            && record.kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
+            && record.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
             && record.canonical_digest == authorize_digest
             && record
                 .envelope

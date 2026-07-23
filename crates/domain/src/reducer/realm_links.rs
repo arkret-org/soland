@@ -433,7 +433,7 @@ mod tests {
 
     fn link_op(source: &str, target: &str, link_kind: &str, status: &str) -> Operation {
         op(
-            arkret_core::events::EventKind::REALM_LINK,
+            arkret_wire::events::EventKind::REALM_LINK,
             source,
             json!({
                 "target_realm_id": target,
@@ -445,7 +445,7 @@ mod tests {
 
     fn inherit_op(child: &str, parent: &str, allowed_policies: &[&str]) -> Operation {
         op(
-            arkret_core::events::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_wire::events::EventKind::REALM_INHERITANCE_POLICY,
             child,
             json!({
                 "source_realm_id": parent,
@@ -457,7 +457,7 @@ mod tests {
 
     fn inherit_op_spec_payload(child: &str, parent: &str, policy_rules: &[&str]) -> Operation {
         op(
-            arkret_core::events::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_wire::events::EventKind::REALM_INHERITANCE_POLICY,
             child,
             json!({
                 "source_realm_id": parent,

@@ -4981,8 +4981,10 @@ version = "0.3.0"
 dependencies = [
  "arkret-core",
  "arkret-identity",
+ "arkret-models-collaboration",
  "arkret-policy",
  "arkret-state",
+ "arkret-wire",
  "async-trait",
  "bytes",
  "chrono",
@@ -5102,6 +5104,7 @@ name = "soland-storage"
 version = "0.3.0"
 dependencies = [
  "arkret-core",
+ "arkret-wire",
  "async-trait",
  "base64",
  "chrono",
@@ -5117,6 +5120,7 @@ name = "soland-storage-memory"
 version = "0.3.0"
 dependencies = [
  "arkret-core",
+ "arkret-wire",
  "async-trait",
  "chrono",
  "parking_lot",

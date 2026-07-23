@@ -966,24 +966,24 @@ impl ProjectionState {
         // `ak.strand.archive` requires Active source.
         // `ak.strand.restore` requires Archived source.
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            arkret_core::events::EventKind::STRAND_CREATE => return Ok(()),
-            arkret_core::events::EventKind::STRAND_UPDATE => {
+            arkret_wire::events::EventKind::STRAND_CREATE => return Ok(()),
+            arkret_wire::events::EventKind::STRAND_UPDATE => {
                 (&[ObjectLifecycleState::Active], "strand_not_active")
             }
-            arkret_core::events::EventKind::STRAND_ARCHIVE => {
+            arkret_wire::events::EventKind::STRAND_ARCHIVE => {
                 (&[ObjectLifecycleState::Active], "strand_not_active")
             }
-            arkret_core::events::EventKind::STRAND_RESTORE => {
+            arkret_wire::events::EventKind::STRAND_RESTORE => {
                 (&[ObjectLifecycleState::Archived], "strand_not_archived")
             }
             _ => return Ok(()),
         };
         let strand_id = match kind {
-            arkret_core::events::EventKind::STRAND_UPDATE => {
+            arkret_wire::events::EventKind::STRAND_UPDATE => {
                 strand_id_from_payload(&operation.payload)
             }
-            arkret_core::events::EventKind::STRAND_ARCHIVE
-            | arkret_core::events::EventKind::STRAND_RESTORE => operation
+            arkret_wire::events::EventKind::STRAND_ARCHIVE
+            | arkret_wire::events::EventKind::STRAND_RESTORE => operation
                 .payload
                 .get("target_ref")
                 .and_then(Value::as_str)
@@ -1013,7 +1013,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::STRAND_UPDATE)
+            != Some(arkret_wire::events::EventKind::STRAND_UPDATE)
         {
             return Ok(());
         }
@@ -1035,7 +1035,7 @@ impl ProjectionState {
         actor_id: &str,
     ) -> Option<Value> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::STRAND_UPDATE)
+            != Some(arkret_wire::events::EventKind::STRAND_UPDATE)
         {
             return None;
         }
@@ -1074,7 +1074,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::REDACTION)
+            != Some(arkret_wire::events::EventKind::REDACTION)
         {
             return Ok(());
         }
@@ -1107,14 +1107,14 @@ impl ProjectionState {
             None => return Ok(()),
         };
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            arkret_core::events::EventKind::MORPH_CREATE => return Ok(()),
-            arkret_core::events::EventKind::MORPH_UPDATE => {
+            arkret_wire::events::EventKind::MORPH_CREATE => return Ok(()),
+            arkret_wire::events::EventKind::MORPH_UPDATE => {
                 (&[ObjectLifecycleState::Active], "morph_not_active")
             }
-            arkret_core::events::EventKind::MORPH_ARCHIVE => {
+            arkret_wire::events::EventKind::MORPH_ARCHIVE => {
                 (&[ObjectLifecycleState::Active], "morph_not_active")
             }
-            arkret_core::events::EventKind::MORPH_RESTORE => {
+            arkret_wire::events::EventKind::MORPH_RESTORE => {
                 (&[ObjectLifecycleState::Archived], "morph_not_archived")
             }
             _ => return Ok(()),
@@ -1150,7 +1150,7 @@ impl ProjectionState {
     ///   `morph_schema_refs_precondition_mismatch`.
     pub fn check_morph_schema_migrate(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::MORPH_SCHEMA_MIGRATE)
+            != Some(arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE)
         {
             return Ok(());
         }

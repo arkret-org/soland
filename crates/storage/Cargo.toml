@@ -11,6 +11,7 @@ description = "Persistence records and storage ports for Soland."
 
 [dependencies]
 arkret-core.workspace = true
+arkret-wire.workspace = true
 async-trait = {workspace = true}
 base64 = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}

@@ -11,6 +11,7 @@ description = "In-memory Soland storage adapter."
 
 [dependencies]
 arkret-core.workspace = true
+arkret-wire.workspace = true
 async-trait = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}
 parking_lot = {workspace = true}

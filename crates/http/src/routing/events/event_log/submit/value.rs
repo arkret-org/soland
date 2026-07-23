@@ -40,7 +40,7 @@ async fn validate_active_series_authority_before_commit(
     parsed: &ValidatedEventEnvelope,
     operation: &Operation,
 ) -> Result<(), SubmitOneError> {
-    if parsed.kind != arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
+    if parsed.kind != arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
         return Ok(());
     }
     let record: arkret_core::KeyBackupActiveSeries = serde_json::from_value(
@@ -90,7 +90,7 @@ pub(in crate::routing) async fn submit_event_value(
     envelope: Value,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
-        == Some(arkret_core::events::EventKind::REALM_CREATE)
+        == Some(arkret_wire::events::EventKind::REALM_CREATE)
         && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
         return Err(SubmitOneError::new(
@@ -159,7 +159,7 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
     idempotency: EventCommitIdempotency,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
-        == Some(arkret_core::events::EventKind::REALM_CREATE)
+        == Some(arkret_wire::events::EventKind::REALM_CREATE)
         && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
         return Err(SubmitOneError::new(
@@ -271,7 +271,7 @@ pub(super) async fn submit_event_value_with_context(
             "event_id already exists with different canonical bytes",
         ));
     }
-    if parsed.kind == arkret_core::events::EventKind::REALM_CREATE
+    if parsed.kind == arkret_wire::events::EventKind::REALM_CREATE
         && service
             .realm_event_stats(parsed.realm_id.as_str())
             .await
@@ -878,7 +878,7 @@ pub(super) async fn submit_event_value_with_context(
     // MUST emit a `schema_migration_breaking` audit record carrying issuer,
     // from/to schema sets, compatibility class, the capability action used, and
     // the opt-in profile ref. (additive migrations need no audit-grade record.)
-    if parsed.kind == arkret_core::events::EventKind::MORPH_SCHEMA_MIGRATE {
+    if parsed.kind == arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE {
         let migrate_payload = envelope.get("payload");
         let compatibility_class = migrate_payload
             .and_then(|payload| payload.get("compatibility_class"))
@@ -926,14 +926,14 @@ pub(super) async fn submit_event_value_with_context(
     let scope_strand_id: Option<String> = envelope
         .get("payload")
         .and_then(|payload| match parsed.kind.as_str() {
-            arkret_core::events::EventKind::MESSAGE_CREATE
-            | arkret_core::events::EventKind::STRAND_MOVE
-            | arkret_core::events::EventKind::STRAND_REORDER => {
+            arkret_wire::events::EventKind::MESSAGE_CREATE
+            | arkret_wire::events::EventKind::STRAND_MOVE
+            | arkret_wire::events::EventKind::STRAND_REORDER => {
                 payload.get("strand_id").and_then(Value::as_str)
             }
-            arkret_core::events::EventKind::STRAND_UPDATE
-            | arkret_core::events::EventKind::STRAND_ARCHIVE
-            | arkret_core::events::EventKind::STRAND_RESTORE => {
+            arkret_wire::events::EventKind::STRAND_UPDATE
+            | arkret_wire::events::EventKind::STRAND_ARCHIVE
+            | arkret_wire::events::EventKind::STRAND_RESTORE => {
                 payload.get("target_ref").and_then(Value::as_str)
             }
             _ => None,
@@ -1095,7 +1095,7 @@ pub(super) async fn submit_event_value_with_context(
         .commit_accepted_event(command)
         .await
     {
-        if parsed.kind == arkret_core::events::EventKind::REALM_CREATE
+        if parsed.kind == arkret_wire::events::EventKind::REALM_CREATE
             && error.is_realm_already_exists()
         {
             return Err(realm_already_exists_error());

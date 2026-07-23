@@ -1094,7 +1094,7 @@ fn erasure_receipt_operation(receipt: Value) -> Option<arkret_core::Operation> {
     Some(arkret_core::Operation::create(
         operation_id,
         realm_id,
-        arkret_core::events::EventKind::AUDIT_ERASURE_RECEIPT,
+        arkret_wire::events::EventKind::AUDIT_ERASURE_RECEIPT,
         receipt,
     ))
 }

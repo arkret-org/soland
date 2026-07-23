@@ -12,7 +12,7 @@ fn media_service_projects_cell_and_rejects_empty_foci() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::REALM_MEDIA_SERVICE,
+                arkret_wire::events::EventKind::REALM_MEDIA_SERVICE,
                 realm,
                 serde_json::json!({ "service_id": "did:web:media.example", "foci": [] }),
             ),
@@ -34,7 +34,7 @@ fn media_service_projects_cell_and_rejects_empty_foci() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::REALM_MEDIA_SERVICE,
+                arkret_wire::events::EventKind::REALM_MEDIA_SERVICE,
                 realm,
                 payload
             ),
@@ -64,7 +64,7 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({ "call_id": call_id, "state": "ringing" }),
             ),
@@ -80,7 +80,7 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -109,7 +109,7 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -126,7 +126,7 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -155,7 +155,7 @@ fn call_state_removed_participants_ban_set_is_monotonic() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({ "call_id": call_id, "state": "ringing" }),
             ),
@@ -168,7 +168,7 @@ fn call_state_removed_participants_ban_set_is_monotonic() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -192,7 +192,7 @@ fn call_state_removed_participants_ban_set_is_monotonic() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({ "call_id": call_id, "state": "ended" }),
             ),
@@ -223,7 +223,7 @@ fn call_state_participant_mute_overrides_are_current_set() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({ "call_id": call_id, "state": "ringing" }),
             ),
@@ -235,7 +235,7 @@ fn call_state_participant_mute_overrides_are_current_set() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -262,7 +262,7 @@ fn call_state_participant_mute_overrides_are_current_set() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -289,7 +289,7 @@ fn call_state_lifecycle_fsm_enforces_transition_table() {
     let apply_state = |state: &mut ProjectionState, hlc: &ServerHlc, call_id: &str, value: &str| {
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({ "call_id": call_id, "state": value }),
             ),
@@ -386,7 +386,7 @@ fn call_state_same_basis_sibling_state_conflict_projects_bottom() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -400,7 +400,7 @@ fn call_state_same_basis_sibling_state_conflict_projects_bottom() {
     ));
 
     let first = make_operation(
-        arkret_core::events::EventKind::CALL_STATE,
+        arkret_wire::events::EventKind::CALL_STATE,
         realm,
         serde_json::json!({
             "call_id": call_id,
@@ -415,7 +415,7 @@ fn call_state_same_basis_sibling_state_conflict_projects_bottom() {
     ));
 
     let second = make_operation(
-        arkret_core::events::EventKind::CALL_STATE,
+        arkret_wire::events::EventKind::CALL_STATE,
         realm,
         serde_json::json!({
             "call_id": call_id,
@@ -460,7 +460,7 @@ fn call_state_same_basis_sibling_state_conflict_projects_bottom() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({ "call_id": call_id, "state": "failed" }),
             ),
@@ -482,7 +482,7 @@ fn call_state_rejects_recording_artifact_pipeline_bypass() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -502,7 +502,7 @@ fn call_state_rejects_recording_artifact_pipeline_bypass() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -532,7 +532,7 @@ fn call_state_recording_capture_requires_second_consent() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({ "call_id": call_id, "state": "connecting" }),
             ),
@@ -548,7 +548,7 @@ fn call_state_recording_capture_requires_second_consent() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -565,7 +565,7 @@ fn call_state_recording_capture_requires_second_consent() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -591,7 +591,7 @@ fn call_state_transcript_capture_requires_consent_and_rejects_unknown_state() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -607,7 +607,7 @@ fn call_state_transcript_capture_requires_consent_and_rejects_unknown_state() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -623,7 +623,7 @@ fn call_state_transcript_capture_requires_consent_and_rejects_unknown_state() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -643,7 +643,7 @@ fn call_state_transcript_capture_requires_consent_and_rejects_unknown_state() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -669,7 +669,7 @@ fn call_state_capture_failure_reason_uses_closed_sdk_type() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({ "call_id": call_id, "state": "connecting" }),
             ),
@@ -680,7 +680,7 @@ fn call_state_capture_failure_reason_uses_closed_sdk_type() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -696,7 +696,7 @@ fn call_state_capture_failure_reason_uses_closed_sdk_type() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,
@@ -716,7 +716,7 @@ fn call_state_capture_failure_reason_uses_closed_sdk_type() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_STATE,
+                arkret_wire::events::EventKind::CALL_STATE,
                 realm,
                 serde_json::json!({
                     "call_id": invalid_call_id,
@@ -743,7 +743,7 @@ fn call_summary_requires_terminal_state_and_is_write_once() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_SUMMARY,
+                arkret_wire::events::EventKind::CALL_SUMMARY,
                 realm,
                 serde_json::json!({ "call_id": call_id, "final_state": "ended" }),
             ),
@@ -759,7 +759,7 @@ fn call_summary_requires_terminal_state_and_is_write_once() {
             matches!(
                 state.apply(
                     &make_operation(
-                        arkret_core::events::EventKind::CALL_STATE,
+                        arkret_wire::events::EventKind::CALL_STATE,
                         realm,
                         serde_json::json!({ "call_id": call_id, "state": next_state }),
                     ),
@@ -775,7 +775,7 @@ fn call_summary_requires_terminal_state_and_is_write_once() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_SUMMARY,
+                arkret_wire::events::EventKind::CALL_SUMMARY,
                 realm,
                 serde_json::json!({ "call_id": call_id, "final_state": "active" }),
             ),
@@ -794,7 +794,7 @@ fn call_summary_requires_terminal_state_and_is_write_once() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_SUMMARY,
+                arkret_wire::events::EventKind::CALL_SUMMARY,
                 realm,
                 summary.clone()
             ),
@@ -805,7 +805,7 @@ fn call_summary_requires_terminal_state_and_is_write_once() {
     // Identical replay is an idempotent no-op.
     assert!(matches!(
         state.apply(
-            &make_operation(arkret_core::events::EventKind::CALL_SUMMARY, realm, summary),
+            &make_operation(arkret_wire::events::EventKind::CALL_SUMMARY, realm, summary),
             &hlc,
         ),
         ProjectionEffect::CallSummaryProjected { .. }
@@ -814,7 +814,7 @@ fn call_summary_requires_terminal_state_and_is_write_once() {
     assert!(matches!(
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::CALL_SUMMARY,
+                arkret_wire::events::EventKind::CALL_SUMMARY,
                 realm,
                 serde_json::json!({
                     "call_id": call_id,

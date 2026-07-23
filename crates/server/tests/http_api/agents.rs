@@ -164,7 +164,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         recovery_session_id: None,
     };
     let mut authorize = arkret_core::Event::new_at(
-        arkret_core::events::EventKind::DEVICE_AUTHORIZE,
+        arkret_wire::events::EventKind::DEVICE_AUTHORIZE,
         realm,
         actor.clone(),
         1,
@@ -560,7 +560,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
     let hlc =
         arkret_core::Hlc::new(format!("{:012x}-0000-a13f9c2e", now.timestamp_millis())).unwrap();
     let accountability = arkret_core::Event::new(
-        arkret_core::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
+        arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
         controller_realm_id.clone(),
         controller_id.clone(),
         1,
@@ -569,7 +569,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
     )
     .unwrap();
     let selector = arkret_core::Event::new(
-        arkret_core::events::EventKind::AGENT_SELECTOR_CLAIM,
+        arkret_wire::events::EventKind::AGENT_SELECTOR_CLAIM,
         controller_realm_id,
         controller_id,
         2,

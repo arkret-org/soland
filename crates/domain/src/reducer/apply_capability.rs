@@ -975,7 +975,7 @@ impl ProjectionState {
     /// the delegate cell / authz index.
     pub fn check_delegation_cycle(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::CAPABILITY_DELEGATE)
+            != Some(arkret_wire::events::EventKind::CAPABILITY_DELEGATE)
         {
             return Ok(());
         }
@@ -1703,7 +1703,7 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_core::events::EventKind::CAPABILITY_DELEGATE,
+            arkret_wire::events::EventKind::CAPABILITY_DELEGATE,
             json!({
                 "grant_id": grant_id,
                 "grant": {
@@ -1730,7 +1730,7 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fd").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_core::events::EventKind::CAPABILITY_GRANT,
+            arkret_wire::events::EventKind::CAPABILITY_GRANT,
             json!({
                 "grant_id": grant_id,
                 "grant": {
@@ -1949,7 +1949,7 @@ mod federation_revoke_fanout_tests {
         let effect = state.apply_capability_grant(
             &capability_op(
                 "ak:operation:01970000-0000-7000-8000-0000000000a1",
-                arkret_core::events::EventKind::CAPABILITY_GRANT,
+                arkret_wire::events::EventKind::CAPABILITY_GRANT,
                 delivery_binding_grant_payload(),
             ),
             now,
@@ -1967,7 +1967,7 @@ mod federation_revoke_fanout_tests {
         let effect = state.apply_capability_revoke(
             &capability_op(
                 "ak:operation:01970000-0000-7000-8000-0000000000a2",
-                arkret_core::events::EventKind::CAPABILITY_REVOKE,
+                arkret_wire::events::EventKind::CAPABILITY_REVOKE,
                 json!({ "grant_id": GRANT, "realm_id": REALM }),
             ),
             now,

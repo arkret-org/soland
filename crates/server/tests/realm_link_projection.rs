@@ -32,7 +32,7 @@ fn link_op(source: &str, target: &str, link_kind: &str, status: Option<&str>) ->
     if let Some(s) = status {
         payload["status"] = json!(s);
     }
-    op(arkret_core::events::EventKind::REALM_LINK, source, payload)
+    op(arkret_wire::events::EventKind::REALM_LINK, source, payload)
 }
 
 #[test]

@@ -62,7 +62,7 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
     backing_circle_id: &arkret_core::CircleId,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_core::events::EventKind::SIDECAR_CREATE)
+        != Some(arkret_wire::events::EventKind::SIDECAR_CREATE)
     {
         return Err("sidecar_create_denied");
     }
@@ -226,7 +226,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
     for operation in operations {
         validate_realm_lifecycle_write_gate(state, operation)?;
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_core::events::EventKind::SIDECAR_CREATE)
+            == Some(arkret_wire::events::EventKind::SIDECAR_CREATE)
         {
             // Only the authenticated ensure aggregate may construct this
             // reducer-derived event; the generic submit path is closed.
@@ -243,7 +243,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
             );
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_core::events::EventKind::MORPH_SCHEMA_MIGRATE)
+            == Some(arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE)
         {
             validate_morph_schema_migrate_capability(operation)?;
             validate_morph_schema_migrate_authz(state, operation).await?;
@@ -320,7 +320,7 @@ mod tests {
             arkret_core::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
                 .unwrap(),
             arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
-            arkret_core::events::EventKind::CIRCLE_CREATE,
+            arkret_wire::events::EventKind::CIRCLE_CREATE,
             payload,
         )
     }
@@ -372,7 +372,7 @@ async fn validate_managed_agent_grant_ceiling(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_core::events::EventKind::CAPABILITY_GRANT)
+        != Some(arkret_wire::events::EventKind::CAPABILITY_GRANT)
     {
         return Ok(());
     }

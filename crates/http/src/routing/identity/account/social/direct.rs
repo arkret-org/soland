@@ -174,7 +174,7 @@ pub(crate) async fn retire_direct_bindings_for_operation(
     operation: &arkret_core::Operation,
 ) {
     let kind = soland_application::operation_semantics::canonical_kind_for_operation(operation);
-    let member_ended = kind == Some(arkret_core::events::EventKind::MEMBER_STATE)
+    let member_ended = kind == Some(arkret_wire::events::EventKind::MEMBER_STATE)
         && matches!(
             operation.payload.get("membership").and_then(Value::as_str),
             Some("leave" | "ban")
@@ -182,11 +182,11 @@ pub(crate) async fn retire_direct_bindings_for_operation(
     let realm_ended = matches!(
         kind,
         Some(
-            arkret_core::events::EventKind::REALM_TOMBSTONE
-                | arkret_core::events::EventKind::REALM_DESTROY
+            arkret_wire::events::EventKind::REALM_TOMBSTONE
+                | arkret_wire::events::EventKind::REALM_DESTROY
         )
     );
-    let archived_strand = (kind == Some(arkret_core::events::EventKind::STRAND_ARCHIVE))
+    let archived_strand = (kind == Some(arkret_wire::events::EventKind::STRAND_ARCHIVE))
         .then(|| operation.payload.get("target_ref").and_then(Value::as_str))
         .flatten();
     if !member_ended && !realm_ended && archived_strand.is_none() {
@@ -231,7 +231,7 @@ pub(crate) async fn validate_direct_binding_operation(
     operation: &arkret_core::Operation,
 ) -> Result<(), &'static str> {
     if soland_application::operation_semantics::canonical_kind_for_operation(operation)
-        != Some(arkret_core::events::EventKind::DIRECT_CONVERSATION_BOUND)
+        != Some(arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND)
     {
         return Ok(());
     }
@@ -353,10 +353,10 @@ async fn validate_direct_binding_event_refs(
             .map_err(|_| "direct_conversation_binding_invalid")?
             .ok_or("direct_conversation_binding_invalid")?;
         match accepted.kind.as_str() {
-            arkret_core::events::EventKind::REALM_CREATE if realm_create_ref.is_none() => {
+            arkret_wire::events::EventKind::REALM_CREATE if realm_create_ref.is_none() => {
                 realm_create_ref = Some(event_id)
             }
-            arkret_core::events::EventKind::MEMBER_STATE if peer_member_ref.is_none() => {
+            arkret_wire::events::EventKind::MEMBER_STATE if peer_member_ref.is_none() => {
                 peer_member_ref = Some(event_id)
             }
             _ => return Err("direct_conversation_binding_invalid"),
@@ -368,7 +368,7 @@ async fn validate_direct_binding_event_refs(
         state,
         realm_create_ref,
         &payload.realm_id,
-        arkret_core::events::EventKind::REALM_CREATE,
+        arkret_wire::events::EventKind::REALM_CREATE,
     )
     .await?;
     let creator = realm_create
@@ -388,7 +388,7 @@ async fn validate_direct_binding_event_refs(
         state,
         peer_member_ref,
         &payload.realm_id,
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
     )
     .await?;
     let peer = peer_member
@@ -423,8 +423,8 @@ async fn validate_direct_binding_event_refs(
     match payload.authorization_basis.kind {
         arkret_core::DirectConversationAuthorizationKind::AcceptedContact => {
             let expected = BTreeSet::from([
-                arkret_core::events::EventKind::CONTACT_REQUESTED.to_owned(),
-                arkret_core::events::EventKind::CONTACT_ACCEPTED.to_owned(),
+                arkret_wire::events::EventKind::CONTACT_REQUESTED.to_owned(),
+                arkret_wire::events::EventKind::CONTACT_ACCEPTED.to_owned(),
             ]);
             if payload.authorization_basis.event_refs.len() != 2 || authorization_kinds != expected
             {
@@ -433,9 +433,9 @@ async fn validate_direct_binding_event_refs(
         }
         arkret_core::DirectConversationAuthorizationKind::ManagedAgentController => {
             let expected = BTreeSet::from([
-                arkret_core::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT.to_owned(),
-                arkret_core::events::EventKind::AGENT_SELECTOR_CLAIM.to_owned(),
-                arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT.to_owned(),
+                arkret_wire::events::EventKind::AGENT_SELECTOR_CLAIM.to_owned(),
+                arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
             ]);
             if payload.authorization_basis.event_refs.len() != 3 || authorization_kinds != expected
             {
@@ -489,7 +489,7 @@ async fn validate_direct_binding_event_refs(
         state,
         &payload.main_strand_create_ref,
         &payload.realm_id,
-        arkret_core::events::EventKind::STRAND_CREATE,
+        arkret_wire::events::EventKind::STRAND_CREATE,
     )
     .await?;
     if strand
@@ -506,21 +506,21 @@ async fn validate_direct_binding_event_refs(
         state,
         &payload.mls_genesis_event_ref,
         &payload.realm_id,
-        arkret_core::events::EventKind::MLS_GENESIS,
+        arkret_wire::events::EventKind::MLS_GENESIS,
     )
     .await?;
     let commit = accepted_direct_event(
         state,
         &payload.mls_commit_event_ref,
         &payload.realm_id,
-        arkret_core::events::EventKind::MLS_COMMIT,
+        arkret_wire::events::EventKind::MLS_COMMIT,
     )
     .await?;
     let welcome = accepted_direct_event(
         state,
         &payload.mls_welcome_event_ref,
         &payload.realm_id,
-        arkret_core::events::EventKind::MLS_WELCOME,
+        arkret_wire::events::EventKind::MLS_WELCOME,
     )
     .await?;
     let group_matches = |event: &arkret_core::Event| {
@@ -583,7 +583,7 @@ pub(crate) async fn project_canonical_direct_binding(
     operation: &arkret_core::Operation,
 ) {
     if soland_application::operation_semantics::canonical_kind_for_operation(operation)
-        != Some(arkret_core::events::EventKind::DIRECT_CONVERSATION_BOUND)
+        != Some(arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND)
     {
         return;
     }
@@ -1497,7 +1497,7 @@ async fn prepare_reserved_direct_materialization(
         actor,
         actor_member_event_ref,
         realm_id,
-        arkret_core::events::EventKind::REALM_CREATE,
+        arkret_wire::events::EventKind::REALM_CREATE,
         realm_payload,
     )?;
     attach_create_cell_contract(&mut realm_event, "ak.component.realm.create.v1", realm_id)?;
@@ -1541,7 +1541,7 @@ async fn prepare_reserved_direct_materialization(
         actor,
         &crate::ids::generate_event_id(),
         realm_id,
-        arkret_core::events::EventKind::CAPABILITY_GRANT,
+        arkret_wire::events::EventKind::CAPABILITY_GRANT,
         founding_payload,
     )?;
 
@@ -1553,7 +1553,7 @@ async fn prepare_reserved_direct_materialization(
         actor,
         peer_member_event_ref,
         realm_id,
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         member_payload,
     )?;
     attach_member_join_cell_contract(&mut peer_member_event, peer)?;
@@ -1565,7 +1565,7 @@ async fn prepare_reserved_direct_materialization(
         actor,
         main_strand_create_ref,
         realm_id,
-        arkret_core::events::EventKind::STRAND_CREATE,
+        arkret_wire::events::EventKind::STRAND_CREATE,
         strand_payload,
     )?;
     attach_create_cell_contract(
@@ -1721,7 +1721,7 @@ fn unsigned_direct_binding_event(
     let hlc = arkret_core::Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("direct binding HLC invalid: {error}")))?;
     let mut event = arkret_core::Event::new(
-        arkret_core::events::EventKind::DIRECT_CONVERSATION_BOUND,
+        arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND,
         realm_id,
         actor_id,
         0,
@@ -2138,7 +2138,7 @@ pub(super) fn direct_realm_create_operation(
     let mut operation = arkret_core::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        arkret_core::events::EventKind::REALM_CREATE,
+        arkret_wire::events::EventKind::REALM_CREATE,
         payload,
     );
     operation.created_at = created_at;
@@ -2184,7 +2184,7 @@ pub(super) fn direct_member_join_operation(
     let mut operation = arkret_core::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         payload,
     );
     operation.created_at = created_at;
@@ -2237,7 +2237,7 @@ pub(super) fn direct_strand_create_operation(
     let mut operation = arkret_core::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        arkret_core::events::EventKind::STRAND_CREATE,
+        arkret_wire::events::EventKind::STRAND_CREATE,
         payload,
     );
     operation.created_at = created_at;

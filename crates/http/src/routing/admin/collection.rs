@@ -286,7 +286,7 @@ pub(super) async fn admin_create_realm(
     let operation = Operation::create(
         op_id,
         realm_scope,
-        arkret_core::events::EventKind::REALM_CREATE,
+        arkret_wire::events::EventKind::REALM_CREATE,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
@@ -336,7 +336,7 @@ pub(super) async fn admin_delete_realm(
     let operation = Operation::create(
         op_id,
         realm_scope,
-        arkret_core::events::EventKind::REALM_DESTROY,
+        arkret_wire::events::EventKind::REALM_DESTROY,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))

@@ -818,8 +818,8 @@ async fn timeline_events_for_realm(
     {
         if !matches!(
             record.kind.as_str(),
-            arkret_core::events::EventKind::REACTION_ADD
-                | arkret_core::events::EventKind::REACTION_REMOVE
+            arkret_wire::events::EventKind::REACTION_ADD
+                | arkret_wire::events::EventKind::REACTION_REMOVE
         ) || !seen.insert(record.event_id.clone())
         {
             continue;
@@ -917,7 +917,7 @@ async fn state_events_for_realm(
     let mut newest_position = after_position;
     let mut state_entries = Vec::new();
     for event in events {
-        if event.event_kind == arkret_core::events::EventKind::MESSAGE_CREATE {
+        if event.event_kind == arkret_wire::events::EventKind::MESSAGE_CREATE {
             continue;
         }
         let position = projection_event_position(&event);
@@ -1075,7 +1075,7 @@ async fn account_data_events(
         .await
         .unwrap_or_default()
     {
-        if record.kind != arkret_core::events::EventKind::ACCOUNT_DATA_SET {
+        if record.kind != arkret_wire::events::EventKind::ACCOUNT_DATA_SET {
             continue;
         }
         let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record) else {
@@ -1412,7 +1412,7 @@ fn projection_event_scope_circle_id(
     projection: &ProjectionState,
     event: &ProjectionEventRecord,
 ) -> Option<String> {
-    if event.event_kind == arkret_core::events::EventKind::MESSAGE_CREATE {
+    if event.event_kind == arkret_wire::events::EventKind::MESSAGE_CREATE {
         return event
             .payload
             .get("strand_id")

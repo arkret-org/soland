@@ -68,7 +68,7 @@ fn circle_manage_pull_realm_member_succeeds() {
     // Circle; bob performs no action and lands in `members` immediately.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op = make_operation(
-        arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle,
@@ -95,7 +95,7 @@ fn circle_pull_without_manage_rejected() {
     // (e.g. the HTTP gate was bypassed). The reducer fails closed.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op = make_operation(
-        arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle,
@@ -121,7 +121,7 @@ fn circle_pull_non_realm_member_rejected() {
     // violates the strict-subset invariant.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op = make_operation(
-        arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle,
@@ -149,7 +149,7 @@ fn circle_self_join_requires_open_rule() {
     // capability.
     let (mut state, hlc, realm, circle) = seed_circle_authz_state();
     let op_invite = make_operation(
-        arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle, "actor_id": "did:web:bob",
@@ -164,7 +164,7 @@ fn circle_self_join_requires_open_rule() {
         "self-join on a non-open Circle must be rejected"
     );
     let op_invite_with_manage = make_operation(
-        arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle, "actor_id": "did:web:alice",
@@ -183,7 +183,7 @@ fn circle_self_join_requires_open_rule() {
     // Flip the Circle to open and retry.
     state.circles.get_mut(&circle).unwrap().join_rule = "public".to_owned();
     let op_open = make_operation(
-        arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
         &realm,
         serde_json::json!({
             "circle_id": circle, "actor_id": "did:web:bob",
@@ -215,7 +215,7 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
         };
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+                arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
                 realm,
                 payload,
             ),
@@ -252,7 +252,7 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     let apply_meta = |state: &mut ProjectionState, level: &str| {
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+                arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
                 realm,
                 serde_json::json!({ "metadata_encryption_floor": level }),
             ),
@@ -285,7 +285,7 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
         };
         state.apply(
             &make_operation(
-                arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+                arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
                 realm,
                 payload,
             ),
@@ -328,7 +328,7 @@ fn content_scheme_rejects_unknown_value() {
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892064";
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({ "content_scheme": "aes-gcm-siv-handrolled" }),
         ),
@@ -368,7 +368,7 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({ "content_scheme": "mls-rfc9420" }),
         ),
@@ -405,7 +405,7 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({ "content_scheme": "mls-exporter-aead-v1" }),
         ),
@@ -442,7 +442,7 @@ fn content_scheme_falls_back_to_realm_create_log() {
     );
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({ "content_scheme": "mls-rfc9420" }),
         ),
@@ -471,7 +471,7 @@ fn durability_policy_requires_exporter_aead_scheme() {
     // No scheme committed yet (defaults to mls-rfc9420) → incompatible.
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
                 "durability_policy": {
@@ -503,7 +503,7 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
     // Same-update set of scheme + durability policy is accepted.
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
                 "content_scheme": "mls-exporter-aead-v1",
@@ -538,7 +538,7 @@ fn durability_policy_rejects_empty_recipients() {
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d003";
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
                 "content_scheme": "mls-exporter-aead-v1",
@@ -569,7 +569,7 @@ fn durability_policy_threshold_validates_k_of_n() {
     // n=3 but only 2 recipients → invalid.
     let effect = state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
                 "content_scheme": "mls-exporter-aead-v1",

@@ -10,7 +10,7 @@ const MESSAGE_EVENT_ID: &str = "ak:event:01904100-0000-7000-8000-0000000000a1";
 fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REALM_CREATE,
+            arkret_wire::events::EventKind::REALM_CREATE,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -26,7 +26,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     state.apply(
         &make_operation(
-            arkret_core::events::EventKind::CIRCLE_CREATE,
+            arkret_wire::events::EventKind::CIRCLE_CREATE,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -43,7 +43,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     state.apply(
         &make_operation(
-            arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
+            arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
             REALM_ID,
             serde_json::json!({
                 "circle_id": CIRCLE_ID,
@@ -56,7 +56,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     state.apply(
         &make_operation(
-            arkret_core::events::EventKind::STRAND_CREATE,
+            arkret_wire::events::EventKind::STRAND_CREATE,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -72,7 +72,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     state.apply(
         &make_operation(
-            arkret_core::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
             REALM_ID,
             serde_json::json!({
                 "event_id": MESSAGE_EVENT_ID,
@@ -87,7 +87,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
 
 fn pin_add(pin_scope: serde_json::Value) -> Operation {
     make_operation(
-        arkret_core::events::EventKind::PIN_ADD,
+        arkret_wire::events::EventKind::PIN_ADD,
         REALM_ID,
         serde_json::json!({
             "pin_scope": pin_scope,
@@ -140,7 +140,7 @@ fn pin_rejects_redacted_message_target() {
 
     state.apply(
         &make_operation(
-            arkret_core::events::EventKind::REDACTION,
+            arkret_wire::events::EventKind::REDACTION,
             REALM_ID,
             serde_json::json!({
                 "target_event_id": MESSAGE_EVENT_ID,

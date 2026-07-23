@@ -61,7 +61,7 @@ pub(super) fn actor_private_read_cursor_matches_origin(
     operation: &Operation,
 ) -> bool {
     if kinds::canonical_kind_string(operation)
-        != arkret_core::events::EventKind::READ_CURSOR_ADVANCE
+        != arkret_wire::events::EventKind::READ_CURSOR_ADVANCE
         || source_device_id.is_empty()
     {
         return true;

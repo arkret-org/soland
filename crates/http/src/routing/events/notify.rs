@@ -243,7 +243,7 @@ async fn put_message_notification(
         realm_id,
         source_event_id,
         notification_type,
-        arkret_core::events::EventKind::MESSAGE_CREATE,
+        arkret_wire::events::EventKind::MESSAGE_CREATE,
         source_ref,
         strand_id,
         track_name,
@@ -435,7 +435,7 @@ pub(crate) async fn dispatch_assignment_notifications(
         realm_id,
         &source_event_id,
         "assignment",
-        arkret_core::events::EventKind::RELATION_CREATE,
+        arkret_wire::events::EventKind::RELATION_CREATE,
         relation_id,
         Some(strand_id),
         None,
@@ -564,7 +564,7 @@ pub(crate) async fn dispatch_schedule_notifications(
             realm_id,
             &source_event_id,
             "schedule",
-            arkret_core::events::EventKind::STRAND_UPDATE,
+            arkret_wire::events::EventKind::STRAND_UPDATE,
             Some(strand_id),
             Some(strand_id),
             None,
@@ -741,7 +741,7 @@ mod tests {
             arkret_core::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
                 .unwrap(),
             arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_core::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
             payload,
         )
     }
@@ -814,7 +814,7 @@ mod tests {
             arkret_core::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
                 .unwrap(),
             arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_core::events::EventKind::RELATION_CREATE,
+            arkret_wire::events::EventKind::RELATION_CREATE,
             json!({
                 "sender": sender,
                 "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
@@ -836,7 +836,7 @@ mod tests {
             arkret_core::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
                 .unwrap(),
             arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_core::events::EventKind::STRAND_UPDATE,
+            arkret_wire::events::EventKind::STRAND_UPDATE,
             json!({
                 "sender": sender,
                 "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
@@ -888,7 +888,7 @@ mod tests {
             arkret_core::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
                 .unwrap(),
             arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_core::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
             payload,
         )
     }
@@ -902,7 +902,7 @@ mod tests {
             arkret_core::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
                 .unwrap(),
             arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_core::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
             json!({
                 "sender": sender,
                 "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),

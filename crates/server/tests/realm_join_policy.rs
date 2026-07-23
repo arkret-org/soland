@@ -27,7 +27,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value) {
     let effect = state.apply(
         &op(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             REALM_A,
             json!({
                 "value": {
@@ -49,7 +49,7 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value
 
 fn join_op(member: &str) -> Operation {
     op(
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         REALM_A,
         json!({
             "actor_id": member,
@@ -62,7 +62,7 @@ fn join_op(member: &str) -> Operation {
 
 fn member_state_op(realm_id: &str, member: &str, membership: &str) -> Operation {
     op(
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         realm_id,
         json!({
             "actor_id": member,
@@ -166,7 +166,7 @@ fn principal_admission_requires_selector_on_policy_write() {
 
     let effect = state.apply(
         &op(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             REALM_A,
             json!({
                 "value": {
@@ -200,7 +200,7 @@ fn join_policy_requires_explicit_combinator_on_policy_write() {
 
     let effect = state.apply(
         &op(
-            arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             REALM_A,
             json!({
                 "value": {

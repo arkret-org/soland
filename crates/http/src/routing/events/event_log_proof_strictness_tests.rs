@@ -363,7 +363,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
             arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
             arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_core::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
             payload,
         )
     };
@@ -452,7 +452,7 @@ async fn circle_scoped_write_requires_circle_membership() {
             arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d8550abc")
                 .unwrap(),
             arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_core::events::EventKind::STRAND_CREATE,
+            arkret_wire::events::EventKind::STRAND_CREATE,
             json!({"sender": sender, "object": object}),
         )
     };
@@ -571,7 +571,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
             arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-c2c2e000000a")
                 .unwrap(),
             arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_core::events::EventKind::REACTION_ADD,
+            arkret_wire::events::EventKind::REACTION_ADD,
             json!({"sender": sender, "target_event_id": event_id, "key": "👍"}),
         )
     };
@@ -662,7 +662,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
             arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-c3c3e000000a")
                 .unwrap(),
             arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_core::events::EventKind::MORPH_UPDATE,
+            arkret_wire::events::EventKind::MORPH_UPDATE,
             json!({
                 "sender": sender,
                 "target_ref": morph_id,
@@ -738,7 +738,7 @@ async fn applet_registration_requires_realm_admin() {
             arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d855a99e")
                 .unwrap(),
             arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_core::events::EventKind::APPLET_REGISTRATION,
+            arkret_wire::events::EventKind::APPLET_REGISTRATION,
             json!({
                 "sender": sender,
                 "applet_id": "ak:applet:01904100-0000-7000-8000-000000000a01",
@@ -797,7 +797,7 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
     let op = arkret_core::Operation::create(
         arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6").unwrap(),
         arkret_core::RealmId::new(realm_id.to_owned()).unwrap(),
-        arkret_core::events::EventKind::MESSAGE_CREATE,
+        arkret_wire::events::EventKind::MESSAGE_CREATE,
         json!({
             "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001",
             "track_name": "main",
@@ -939,7 +939,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
     let session = session();
     let envelope = json!({
         "event_id": "ak:event:01904100-0000-7000-8000-00000000eff0",
-        "kind": arkret_core::events::EventKind::REALM_CREATE,
+        "kind": arkret_wire::events::EventKind::REALM_CREATE,
         "requirements": { "schema": ["ak.schema.event.v1"] },
         "actor_id": session.actor.clone(),
         "effective_scope": "ak:realm:01904100-0000-7000-8000-a11ce0000001"
@@ -1091,14 +1091,14 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
 #[test]
 fn event_payload_validator_catalog_covers_active_standard_durable_events() {
     const SIBLING_SCHEMA_EVENT_KINDS: &[&str] = &[
-        arkret_core::events::EventKind::MODERATION_FRANKING_PROOF,
-        arkret_core::events::EventKind::RELATION_TOMBSTONE,
+        arkret_wire::events::EventKind::MODERATION_FRANKING_PROOF,
+        arkret_wire::events::EventKind::RELATION_TOMBSTONE,
     ];
     let catalog = arkret_schema::event_payload_validator_catalog().unwrap();
     let event_kinds = soland_application::protocol_artifacts::active_durable_event_kinds()
         .iter()
         .map(String::as_str)
-        .filter(|kind| arkret_core::events::is_standard_event_kind(kind))
+        .filter(|kind| arkret_wire::events::is_standard_event_kind(kind))
         .filter(|kind| !SIBLING_SCHEMA_EVENT_KINDS.contains(kind))
         .collect::<Vec<_>>();
     let missing = catalog.missing_payload_validators_for(event_kinds.iter().copied());

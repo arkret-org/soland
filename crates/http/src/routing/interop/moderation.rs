@@ -945,7 +945,7 @@ async fn moderation_appeal_submit(
         "evidence_refs": body.evidence_refs,
         "evidence_visibility": evidence_visibility,
         "created_at": arkret_core::canonical::format_timestamp_canonical(Utc::now()),
-        "event_kind": arkret_core::events::EventKind::MODERATION_APPEAL_SUBMIT,
+        "event_kind": arkret_wire::events::EventKind::MODERATION_APPEAL_SUBMIT,
         "appeal_state": "submitted",
     });
     if let Err(error) = state

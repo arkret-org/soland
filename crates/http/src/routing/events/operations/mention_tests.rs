@@ -71,7 +71,7 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn reaction_on_message_target_is_accepted() {
         let op = reaction_op(
-            arkret_core::events::EventKind::REACTION_ADD,
+            arkret_wire::events::EventKind::REACTION_ADD,
             json!({
                 "target_ref": "ak:message:01904100-0000-7000-8000-000000000001",
                 "actor": "did:web:alice",
@@ -79,7 +79,7 @@ mod reaction_and_window_policy_tests {
             }),
         );
         assert!(
-            validate_reaction_target_kind(arkret_core::events::EventKind::REACTION_ADD, &op)
+            validate_reaction_target_kind(arkret_wire::events::EventKind::REACTION_ADD, &op)
                 .is_ok()
         );
     }
@@ -87,11 +87,11 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn reaction_on_event_storage_id_is_accepted() {
         let op = reaction_op(
-            arkret_core::events::EventKind::REACTION_ADD,
+            arkret_wire::events::EventKind::REACTION_ADD,
             json!({ "target_ref": "ak:event:01904100-0000-7000-8000-000000000001" }),
         );
         assert!(
-            validate_reaction_target_kind(arkret_core::events::EventKind::REACTION_ADD, &op)
+            validate_reaction_target_kind(arkret_wire::events::EventKind::REACTION_ADD, &op)
                 .is_ok()
         );
     }
@@ -104,11 +104,11 @@ mod reaction_and_window_policy_tests {
             "ak:circle:01904100-0000-7000-8000-000000000001",
         ] {
             let op = reaction_op(
-                arkret_core::events::EventKind::REACTION_ADD,
+                arkret_wire::events::EventKind::REACTION_ADD,
                 json!({ "target_ref": target }),
             );
             assert_eq!(
-                validate_reaction_target_kind(arkret_core::events::EventKind::REACTION_ADD, &op),
+                validate_reaction_target_kind(arkret_wire::events::EventKind::REACTION_ADD, &op),
                 Err(arkret_wire::ReasonCode::REACTION_TARGET_UNSUPPORTED),
                 "target {target} must be rejected",
             );
@@ -118,11 +118,11 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn non_reaction_kinds_skip_target_check() {
         let op = reaction_op(
-            arkret_core::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
             json!({ "target_ref": "ak:strand:01904100-0000-7000-8000-000000000001" }),
         );
         assert!(
-            validate_reaction_target_kind(arkret_core::events::EventKind::MESSAGE_CREATE, &op)
+            validate_reaction_target_kind(arkret_wire::events::EventKind::MESSAGE_CREATE, &op)
                 .is_ok()
         );
     }

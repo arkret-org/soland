@@ -597,7 +597,7 @@ impl ProjectionState {
     /// capability path with projection-time `ReferenceProjectionStatus`).
     pub fn check_relation_cross_realm(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::RELATION_CREATE)
+            != Some(arkret_wire::events::EventKind::RELATION_CREATE)
         {
             return Ok(());
         }
@@ -637,14 +637,14 @@ impl ProjectionState {
         };
         if !matches!(
             kind,
-            arkret_core::events::EventKind::RELATION_CREATE
-                | arkret_core::events::EventKind::RELATION_UPDATE
-                | arkret_core::events::EventKind::RELATION_TOMBSTONE
+            arkret_wire::events::EventKind::RELATION_CREATE
+                | arkret_wire::events::EventKind::RELATION_UPDATE
+                | arkret_wire::events::EventKind::RELATION_TOMBSTONE
         ) {
             return Ok(());
         }
 
-        if kind == arkret_core::events::EventKind::RELATION_CREATE {
+        if kind == arkret_wire::events::EventKind::RELATION_CREATE {
             let relation_kind = operation
                 .payload
                 .get("relation_kind")
@@ -659,7 +659,7 @@ impl ProjectionState {
             return Ok(());
         }
 
-        if kind == arkret_core::events::EventKind::RELATION_UPDATE {
+        if kind == arkret_wire::events::EventKind::RELATION_UPDATE {
             let relation_id = operation
                 .payload
                 .get("relation_id")
@@ -722,7 +722,7 @@ impl ProjectionState {
             return Ok(());
         }
 
-        if kind == arkret_core::events::EventKind::RELATION_TOMBSTONE {
+        if kind == arkret_wire::events::EventKind::RELATION_TOMBSTONE {
             if operation
                 .payload
                 .get("relation_kind")
@@ -1132,7 +1132,7 @@ mod cross_realm_relation_tests {
             arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
             arkret_core::RealmId::new(REALM_A.to_owned()).unwrap(),
-            arkret_core::events::EventKind::RELATION_CREATE,
+            arkret_wire::events::EventKind::RELATION_CREATE,
             json!({"relation_kind": relation_kind, "from_ref": from, "to_ref": to}),
         )
     }
@@ -1149,7 +1149,7 @@ mod cross_realm_relation_tests {
             arkret_core::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
                 .unwrap(),
             arkret_core::RealmId::new(REALM_A.to_owned()).unwrap(),
-            arkret_core::events::EventKind::RELATION_CREATE,
+            arkret_wire::events::EventKind::RELATION_CREATE,
             json!({
                 "relation_id": relation_id,
                 "relation_kind": relation_kind,
@@ -1361,7 +1361,7 @@ mod cross_realm_relation_tests {
             arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000ab")
                 .unwrap(),
             arkret_core::RealmId::new(REALM_A.to_owned()).unwrap(),
-            arkret_core::events::EventKind::RELATION_UPDATE,
+            arkret_wire::events::EventKind::RELATION_UPDATE,
             json!({"relation_id": relation_id, "fields": {"level": "muted"}}),
         );
         assert!(matches!(
@@ -1373,7 +1373,7 @@ mod cross_realm_relation_tests {
             arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000ac")
                 .unwrap(),
             arkret_core::RealmId::new(REALM_A.to_owned()).unwrap(),
-            arkret_core::events::EventKind::RELATION_TOMBSTONE,
+            arkret_wire::events::EventKind::RELATION_TOMBSTONE,
             json!({"relation_id": "ak:relation:01904100-0000-7000-8000-0000000000aa"}),
         );
         assert!(matches!(
@@ -1475,7 +1475,7 @@ mod cross_realm_relation_tests {
             arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000001001")
                 .unwrap(),
             arkret_core::RealmId::new(REALM_A.to_owned()).unwrap(),
-            arkret_core::events::EventKind::RELATION_CREATE,
+            arkret_wire::events::EventKind::RELATION_CREATE,
             json!({
                 "relation_kind": "contains",
                 "from_ref": STRAND_A,

@@ -55,7 +55,7 @@ pub fn redaction_target_event_ids_from_events(
 ) -> HashSet<String> {
     events
         .iter()
-        .filter(|event| arkret_core::events::kinds::is_redaction_kind(&event.event_kind))
+        .filter(|event| arkret_wire::events::kinds::is_redaction_kind(&event.event_kind))
         .filter_map(|event| soland_domain::reducer::message_redaction_target_ref(&event.payload))
         .map(|target_ref| projection.redaction_key_for_message_target(&target_ref))
         .filter(|target_ref| !target_ref.trim().is_empty())
@@ -63,7 +63,7 @@ pub fn redaction_target_event_ids_from_events(
 }
 
 pub fn event_is_visible(event: &ProjectionEventRecord, _redacted: &HashSet<String>) -> bool {
-    !arkret_core::events::kinds::is_redaction_kind(&event.event_kind)
+    !arkret_wire::events::kinds::is_redaction_kind(&event.event_kind)
 }
 
 pub fn actor_erased_in_realm(
@@ -105,7 +105,7 @@ pub fn tombstone_projection_event_for_erased_actor(
     projection: &soland_domain::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
 ) {
-    if event.event_kind == arkret_core::events::EventKind::AUDIT_ERASURE_RECEIPT {
+    if event.event_kind == arkret_wire::events::EventKind::AUDIT_ERASURE_RECEIPT {
         return;
     }
     let Some(actor) = projection_event_actor(event) else {
@@ -124,8 +124,8 @@ pub fn tombstone_projection_event_for_message_redaction(
 ) {
     if !matches!(
         event.event_kind.as_str(),
-        arkret_core::events::EventKind::MESSAGE_CREATE
-            | arkret_core::events::EventKind::MESSAGE_REVISE
+        arkret_wire::events::EventKind::MESSAGE_CREATE
+            | arkret_wire::events::EventKind::MESSAGE_REVISE
     ) {
         return;
     }
@@ -135,7 +135,7 @@ pub fn tombstone_projection_event_for_message_redaction(
     let Some(cell) = projection.redaction_cell_for_message(message) else {
         return;
     };
-    arkret_core::events::redaction_tombstone_message_value(
+    arkret_models_collaboration::events_payloads::redaction::redaction_tombstone_message_value(
         &mut event.payload,
         cell.redacted_at,
         cell.redaction_event_id.as_deref(),
@@ -147,7 +147,7 @@ pub fn stub_projection_event_for_message_expiry(
     event: &mut ProjectionEventRecord,
     now: DateTime<Utc>,
 ) {
-    if event.event_kind != arkret_core::events::EventKind::MESSAGE_CREATE {
+    if event.event_kind != arkret_wire::events::EventKind::MESSAGE_CREATE {
         return;
     }
     let expiry = projection
@@ -177,7 +177,7 @@ pub fn stub_pin_projection_event_for_invisible_target(
     projection: &soland_domain::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
 ) {
-    if !arkret_core::events::kinds::is_pin_kind(&event.event_kind) {
+    if !arkret_wire::events::kinds::is_pin_kind(&event.event_kind) {
         return;
     }
     let Some(target_ref) = event.payload.get("target_ref").and_then(Value::as_str) else {
@@ -556,7 +556,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: event_id.to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: arkret_core::events::EventKind::MESSAGE_CREATE.to_owned(),
+            event_kind: arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned(),
             operation_type: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
@@ -702,7 +702,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: "ak:operation:01904100-0000-7000-8000-0000000000a3".to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: arkret_core::events::EventKind::PIN_ADD.to_owned(),
+            event_kind: arkret_wire::events::EventKind::PIN_ADD.to_owned(),
             operation_type: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
@@ -736,7 +736,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: "ak:operation:01904100-0000-7000-8000-0000000000d3".to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: arkret_core::events::EventKind::PIN_ADD.to_owned(),
+            event_kind: arkret_wire::events::EventKind::PIN_ADD.to_owned(),
             operation_type: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),

@@ -136,7 +136,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::MEMBER_STATE)
+            != Some(arkret_wire::events::EventKind::MEMBER_STATE)
         {
             return Ok(());
         }
@@ -227,7 +227,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::INVITE_CREATE)
+            != Some(arkret_wire::events::EventKind::INVITE_CREATE)
         {
             return Ok(());
         }
@@ -452,7 +452,7 @@ impl ProjectionState {
     /// second invite cannot replay the same authorisation (§7.5 #3).
     pub(crate) fn consume_join_authorisation(&mut self, operation: &Operation) {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::INVITE_CREATE)
+            != Some(arkret_wire::events::EventKind::INVITE_CREATE)
         {
             return;
         }

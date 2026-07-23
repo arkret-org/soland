@@ -36,7 +36,7 @@ fn state_with_direct_binding() -> (AppState, arkret_core::RealmId) {
     let realm_create = op(
         realm_id.clone(),
         "000000000691",
-        arkret_core::events::EventKind::REALM_CREATE,
+        arkret_wire::events::EventKind::REALM_CREATE,
         serde_json::to_value(arkret_core::direct_conversation_realm_create_payload(
             realm_id.clone(),
             alice.clone(),
@@ -50,7 +50,7 @@ fn state_with_direct_binding() -> (AppState, arkret_core::RealmId) {
     let peer_join = op(
         realm_id.clone(),
         "000000000692",
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         arkret_core::direct_conversation_member_join_payload(
             realm_id.clone(),
             bob,
@@ -62,7 +62,7 @@ fn state_with_direct_binding() -> (AppState, arkret_core::RealmId) {
     let strand_create = op(
         realm_id.clone(),
         "000000000693",
-        arkret_core::events::EventKind::STRAND_CREATE,
+        arkret_wire::events::EventKind::STRAND_CREATE,
         serde_json::to_value(arkret_core::direct_conversation_main_strand_create_payload(
             strand_id,
             realm_id.clone(),
@@ -124,7 +124,7 @@ fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
         let operation = op(
             realm_id.clone(),
             "000000000611",
-            arkret_core::events::EventKind::VIEW_UPDATE,
+            arkret_wire::events::EventKind::VIEW_UPDATE,
             json!({
                 "view_id": "ak:view:01904100-0000-7000-8000-000000000611",
                 "patch": definition
@@ -138,7 +138,7 @@ fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
     let current = op(
         realm_id,
         "000000000612",
-        arkret_core::events::EventKind::VIEW_UPDATE,
+        arkret_wire::events::EventKind::VIEW_UPDATE,
         json!({
             "view_id": "ak:view:01904100-0000-7000-8000-000000000611",
             "patch": {"state": "tombstoned"}
@@ -263,7 +263,7 @@ fn grant_moderation_decision(state: &AppState, realm_id: &arkret_core::RealmId, 
         "did:web:owner.example".to_owned(),
         actor.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::MODERATION_DECISION.to_owned()],
+        vec![arkret_wire::events::EventKind::MODERATION_DECISION.to_owned()],
         Vec::new(),
     );
 }
@@ -345,7 +345,7 @@ async fn read_receipt_child_policy_rejects_visibility_loosening() {
     let child_policy = op(
         child_realm,
         "000000009913",
-        arkret_core::events::EventKind::REALM_READ_RECEIPT_POLICY,
+        arkret_wire::events::EventKind::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "optional",
             "visibility": "public"
@@ -380,7 +380,7 @@ async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
     let child_policy = op(
         child_realm,
         "000000009923",
-        arkret_core::events::EventKind::REALM_READ_RECEIPT_POLICY,
+        arkret_wire::events::EventKind::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "disabled",
             "visibility": "private"
@@ -418,7 +418,7 @@ async fn read_receipt_child_policy_allows_required_floor_escape() {
     let child_policy = op(
         child_realm,
         "000000009933",
-        arkret_core::events::EventKind::REALM_READ_RECEIPT_POLICY,
+        arkret_wire::events::EventKind::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "disabled",
             "visibility": "private"
@@ -450,7 +450,7 @@ async fn read_receipt_child_policy_rejects_any_change_when_overrides_disabled() 
     let child_policy = op(
         child_realm,
         "000000009943",
-        arkret_core::events::EventKind::REALM_READ_RECEIPT_POLICY,
+        arkret_wire::events::EventKind::REALM_READ_RECEIPT_POLICY,
         json!({
             "disclosure": "disabled",
             "visibility": "private"
@@ -509,7 +509,7 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
     let strand_create = op(
         realm_id,
         "000000009954",
-        arkret_core::events::EventKind::STRAND_CREATE,
+        arkret_wire::events::EventKind::STRAND_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "object": {
@@ -772,7 +772,7 @@ async fn register_native_agent_membership_context(
         "expires_at": "2099-01-01T00:00:00.000Z"
     });
     let authorize_event = arkret_core::Event::new(
-        arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE,
+        arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE,
         realm_id.clone(),
         arkret_core::Did::new(agent.to_owned()).unwrap(),
         1,
@@ -790,7 +790,7 @@ async fn register_native_agent_membership_context(
             actor_id: agent.to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
-            kind: arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+            kind: arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             canonical_digest: format!("sha256:{}", "5".repeat(64)),
             canonical_bytes: Vec::new(),
@@ -802,7 +802,7 @@ async fn register_native_agent_membership_context(
     let authorize_projection = op(
         realm_id.clone(),
         "0000000007d4",
-        arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE,
+        arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE,
         json!({
             "agent_id": agent,
             "key_id": "ak:agent_key:01904100-0000-7000-8000-0000000007d2",
@@ -853,7 +853,7 @@ async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
     let operation = op(
         realm_id,
         "0000000007d1",
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "actor_id": "did:web:agent.example",
@@ -880,7 +880,7 @@ async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage
     let operation = op(
         realm_id,
         "0000000007d2",
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "actor_id": "did:web:agent.example",
@@ -904,7 +904,7 @@ async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
     let operation = op(
         realm_id,
         "0000000007d3",
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "actor_id": "did:web:agent.example",
@@ -937,7 +937,7 @@ fn reply_message(
     op(
         realm_id,
         seed,
-        arkret_core::events::EventKind::MESSAGE_CREATE,
+        arkret_wire::events::EventKind::MESSAGE_CREATE,
         json!({
             "sender": agent_id,
             "content": [{"type": "text", "text": "agent reply"}],
@@ -974,7 +974,7 @@ fn act_on_behalf_message(
     op(
         realm_id,
         seed,
-        arkret_core::events::EventKind::MESSAGE_CREATE,
+        arkret_wire::events::EventKind::MESSAGE_CREATE,
         payload,
     )
 }
@@ -1019,7 +1019,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
     let invite = op(
         realm_id.clone(),
         "000000000601",
-        arkret_core::events::EventKind::INVITE_CREATE,
+        arkret_wire::events::EventKind::INVITE_CREATE,
         json!({
             "invite_id": "ak:invite:01904100-0000-7000-8000-000000000601",
             "inviter": "did:web:alice.example",
@@ -1041,7 +1041,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
     let space_create = op(
         realm_id.clone(),
         "000000000602",
-        arkret_core::events::EventKind::SPACE_CREATE,
+        arkret_wire::events::EventKind::SPACE_CREATE,
         json!({
             "space_id": "ak:space:01904100-0000-7000-8000-000000000602",
             "title": "Third participant space"
@@ -1057,7 +1057,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
     let member_add = op(
         realm_id,
         "000000000603",
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         json!({
             "actor_id": "did:web:charlie.example",
             "membership": "invite",
@@ -1082,7 +1082,7 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
     let invite = op(
         realm_id.clone(),
         "000000000604",
-        arkret_core::events::EventKind::INVITE_CREATE,
+        arkret_wire::events::EventKind::INVITE_CREATE,
         json!({
             "invite_id": "ak:invite:01904100-0000-7000-8000-000000000604",
             "inviter": "did:web:alice.example",
@@ -1099,7 +1099,7 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
     let member_add = op(
         realm_id,
         "000000000605",
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         json!({
             "actor_id": "did:web:charlie.example",
             "membership": "join",
@@ -1127,7 +1127,7 @@ async fn act_on_behalf_agent_requires_participation_bit() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::MESSAGE_CREATE.to_owned()],
+        vec![arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1159,7 +1159,7 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::REACTION_ADD.to_owned()],
+        vec![arkret_wire::events::EventKind::REACTION_ADD.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1189,7 +1189,7 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
     let operation = op(
         realm_id,
         "0000000007a2",
-        arkret_core::events::EventKind::STRAND_CREATE,
+        arkret_wire::events::EventKind::STRAND_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -1221,13 +1221,13 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::STRAND_CREATE.to_owned()],
+        vec![arkret_wire::events::EventKind::STRAND_CREATE.to_owned()],
         Vec::new(),
     );
     let operation = op(
         realm_id,
         "0000000007c1",
-        arkret_core::events::EventKind::STRAND_CREATE,
+        arkret_wire::events::EventKind::STRAND_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -1258,7 +1258,7 @@ async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
     let operation = op(
         realm_id,
         "0000000007b1",
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "actor_id": agent,
@@ -1286,7 +1286,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::RELATION_CREATE.to_owned()],
+        vec![arkret_wire::events::EventKind::RELATION_CREATE.to_owned()],
         Vec::new(),
     );
     let context_grant = state.authorization_application().create_grant(
@@ -1294,13 +1294,13 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::RELATION_CREATE.to_owned()],
+        vec![arkret_wire::events::EventKind::RELATION_CREATE.to_owned()],
         Vec::new(),
     );
     let operation = op(
         realm_id,
         "0000000007c2",
-        arkret_core::events::EventKind::RELATION_CREATE,
+        arkret_wire::events::EventKind::RELATION_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -1330,7 +1330,7 @@ async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_writ
     let operation = op(
         realm_id,
         "0000000007c3",
-        arkret_core::events::EventKind::RELATION_CREATE,
+        arkret_wire::events::EventKind::RELATION_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "provenance": {
@@ -1364,14 +1364,14 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::VIEW_CREATE.to_owned()],
+        vec![arkret_wire::events::EventKind::VIEW_CREATE.to_owned()],
         Vec::new(),
     );
     let grant_id = grant.grant_id.clone();
     let operation = op(
         realm_id,
         "0000000007c4",
-        arkret_core::events::EventKind::VIEW_CREATE,
+        arkret_wire::events::EventKind::VIEW_CREATE,
         json!({
             "sender": "did:web:alice.example",
             "executed_by": agent,
@@ -1474,7 +1474,7 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::MESSAGE_CREATE.to_owned()],
+        vec![arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let mut record = state
@@ -1512,7 +1512,7 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::MESSAGE_CREATE.to_owned()],
+        vec![arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     state.test_projection().lock().agent_lifecycles.insert(
@@ -1655,7 +1655,7 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
     let member_add = op(
         realm_id,
         "000000000881",
-        arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "circle_id": "ak:circle:01904100-0000-7000-8000-000000000881",
@@ -1695,7 +1695,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
     let member_add = op(
         realm_id,
         "000000000882",
-        arkret_core::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
             "circle_id": circle_id,
@@ -1725,7 +1725,7 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
     let tombstone = op(
         realm_id.clone(),
         "000000000883",
-        arkret_core::events::EventKind::CIRCLE_TOMBSTONE,
+        arkret_wire::events::EventKind::CIRCLE_TOMBSTONE,
         json!({
             "sender": "did:web:alice.example",
             "circle_id": circle_id
@@ -1764,7 +1764,7 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::MESSAGE_CREATE.to_owned()],
+        vec![arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1794,7 +1794,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::MESSAGE_CREATE.to_owned()],
+        vec![arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1826,7 +1826,7 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
-        vec![arkret_core::events::EventKind::MESSAGE_CREATE.to_owned()],
+        vec![arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned()],
         Vec::new(),
     );
     let message = act_on_behalf_message(
@@ -1913,7 +1913,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let bob_update = op(
         realm_id.clone(),
         "000000000802",
-        arkret_core::events::EventKind::RELATION_UPDATE,
+        arkret_wire::events::EventKind::RELATION_UPDATE,
         json!({
             "relation_id": relation_id,
             "sender": "did:web:bob.example",
@@ -1930,7 +1930,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let alice_update = op(
         realm_id.clone(),
         "000000000803",
-        arkret_core::events::EventKind::RELATION_UPDATE,
+        arkret_wire::events::EventKind::RELATION_UPDATE,
         json!({
             "relation_id": relation_id,
             "sender": "did:web:alice.example",
@@ -1944,7 +1944,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let bob_delete = op(
         realm_id,
         "000000000804",
-        arkret_core::events::EventKind::RELATION_TOMBSTONE,
+        arkret_wire::events::EventKind::RELATION_TOMBSTONE,
         json!({
             "relation_id": relation_id,
             "sender": "did:web:bob.example"
@@ -1968,7 +1968,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
     let decision = op(
         realm_id,
         "000000000901",
-        arkret_core::events::EventKind::MODERATION_DECISION,
+        arkret_wire::events::EventKind::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
             "issuer": "did:web:impostor.example",
@@ -1996,7 +1996,7 @@ async fn moderation_decision_allows_authorized_issuer() {
     let decision = op(
         realm_id,
         "000000000902",
-        arkret_core::events::EventKind::MODERATION_DECISION,
+        arkret_wire::events::EventKind::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
             "issuer": "did:web:moderator.example",
@@ -2021,7 +2021,7 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
     let decision = op(
         realm_id,
         "000000000903",
-        arkret_core::events::EventKind::MODERATION_DECISION,
+        arkret_wire::events::EventKind::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
             "target_ref": "ak:message:01904100-0000-7000-8000-000000000903",
@@ -2053,7 +2053,7 @@ async fn call_recording_start_defaults_to_record_capability() {
     let start = op(
         realm_id,
         "000000000904",
-        arkret_core::events::EventKind::CALL_RECORDING_START,
+        arkret_wire::events::EventKind::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
             "call_id": "ak:call:01904100-0000-7000-8000-000000000904",
@@ -2083,7 +2083,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
     let start = op(
         realm_id,
         "000000000905",
-        arkret_core::events::EventKind::CALL_RECORDING_START,
+        arkret_wire::events::EventKind::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
             "call_id": "ak:call:01904100-0000-7000-8000-000000000905",
@@ -2124,7 +2124,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
     let start = op(
         realm_id,
         "000000000906",
-        arkret_core::events::EventKind::CALL_RECORDING_START,
+        arkret_wire::events::EventKind::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
             "call_id": "ak:call:01904100-0000-7000-8000-000000000906",
@@ -2161,7 +2161,7 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
     let missing_mode = op(
         realm_id.clone(),
         "000000000907",
-        arkret_core::events::EventKind::CALL_RECORDING_START,
+        arkret_wire::events::EventKind::CALL_RECORDING_START,
         payload.clone(),
     );
     assert_eq!(
@@ -2177,7 +2177,7 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
     let invalid_recording_id = op(
         realm_id,
         "000000000908",
-        arkret_core::events::EventKind::CALL_RECORDING_START,
+        arkret_wire::events::EventKind::CALL_RECORDING_START,
         invalid_recording_id_payload,
     );
     assert_eq!(
@@ -2197,7 +2197,7 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
     let create = op(
         realm_id.clone(),
         "00000000c101",
-        arkret_core::events::EventKind::REALM_CREATE,
+        arkret_wire::events::EventKind::REALM_CREATE,
         json!({
             "object": {
                 "id": realm_id.as_str(),
@@ -2210,7 +2210,7 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
     let strict_scheme = op(
         realm_id,
         "00000000c102",
-        arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+        arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
         json!({
             "value": {
                 "content_scheme": "mls-rfc9420"
@@ -2243,7 +2243,7 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
     let create = op(
         realm_id.clone(),
         "00000000c201",
-        arkret_core::events::EventKind::REALM_CREATE,
+        arkret_wire::events::EventKind::REALM_CREATE,
         json!({
             "object": {
                 "id": realm_id.as_str(),
@@ -2256,7 +2256,7 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
     let exporter_scheme = op(
         realm_id,
         "00000000c202",
-        arkret_core::events::EventKind::REALM_POLICY_COMPONENTS,
+        arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
         json!({
             "value": {
                 "content_scheme": "mls-exporter-aead-v1"
@@ -2278,7 +2278,7 @@ async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme(
     let create = op(
         realm_id.clone(),
         "00000000c211",
-        arkret_core::events::EventKind::REALM_CREATE,
+        arkret_wire::events::EventKind::REALM_CREATE,
         json!({
             "object": {
                 "id": realm_id.as_str(),
@@ -2304,7 +2304,7 @@ async fn mls_prejoin_history_rejects_create_object_strict_content_scheme() {
     let create = op(
         realm_id.clone(),
         "00000000c221",
-        arkret_core::events::EventKind::REALM_CREATE,
+        arkret_wire::events::EventKind::REALM_CREATE,
         json!({
             "object": {
                 "id": realm_id.as_str(),
@@ -2376,7 +2376,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
     let history_visibility = op(
         realm_id,
         "00000000c301",
-        arkret_core::events::EventKind::REALM_HISTORY_VISIBILITY,
+        arkret_wire::events::EventKind::REALM_HISTORY_VISIBILITY,
         json!({
             "value": "shared"
         }),
@@ -2433,7 +2433,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
     let share = op(
         realm_id.clone(),
         "00000000d100",
-        arkret_core::events::EventKind::REALM_KEY_SHARE,
+        arkret_wire::events::EventKind::REALM_KEY_SHARE,
         json!({
             "share_class": "realm_recovery_key",
             "recipient_principal_id": recovery_principal,
@@ -2553,7 +2553,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
     let share = op(
         realm_id.clone(),
         "00000000d300",
-        arkret_core::events::EventKind::REALM_KEY_SHARE,
+        arkret_wire::events::EventKind::REALM_KEY_SHARE,
         json!({
             "share_class": "member_device",
             "recipient_principal_id": bob,
@@ -2616,7 +2616,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
     let share = op(
         realm_id.clone(),
         "00000000d200",
-        arkret_core::events::EventKind::REALM_KEY_SHARE,
+        arkret_wire::events::EventKind::REALM_KEY_SHARE,
         json!({
             "share_class": "member_device",
             "recipient_principal_id": "did:web:stranger.example",

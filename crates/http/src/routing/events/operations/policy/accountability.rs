@@ -5,7 +5,7 @@ pub(super) fn validate_pin_scope_safety(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if !kinds::canonical_kind_for_operation(operation)
-        .is_some_and(arkret_core::events::kinds::is_pin_kind)
+        .is_some_and(arkret_wire::events::kinds::is_pin_kind)
     {
         return Ok(());
     }
@@ -183,9 +183,9 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
     let is_message_or_reaction = matches!(
         kind,
         Some(
-            arkret_core::events::EventKind::MESSAGE_CREATE
-                | arkret_core::events::EventKind::REACTION_ADD
-                | arkret_core::events::EventKind::REACTION_REMOVE
+            arkret_wire::events::EventKind::MESSAGE_CREATE
+                | arkret_wire::events::EventKind::REACTION_ADD
+                | arkret_wire::events::EventKind::REACTION_REMOVE
         )
     );
     if !is_message_or_reaction {

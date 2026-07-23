@@ -52,7 +52,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
     let mut event = arkret_core::Event::new_with_id_at(
         arkret_core::EventId::new(event_id.to_owned())
             .map_err(|error| AppError::internal(format!("MIMI event id invalid: {error}")))?,
-        arkret_core::events::EventKind::MESSAGE_CREATE,
+        arkret_wire::events::EventKind::MESSAGE_CREATE,
         arkret_core::RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("MIMI realm id invalid: {error}")))?,
         service_did.clone(),

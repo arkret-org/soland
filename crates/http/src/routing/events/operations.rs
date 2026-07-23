@@ -60,7 +60,7 @@ pub(crate) async fn lock_active_series_operations(
     let mut shards = BTreeSet::new();
     for operation in operations {
         if kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+            != Some(arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
         {
             continue;
         }

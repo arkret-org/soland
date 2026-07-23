@@ -39,7 +39,7 @@ fn op(payload: Value) -> Operation {
     Operation::create(
         arkret_core::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         arkret_core::RealmId::new(PLACEHOLDER_REALM).unwrap(),
-        arkret_core::events::EventKind::DEVICE_PUSH_ROUTE,
+        arkret_wire::events::EventKind::DEVICE_PUSH_ROUTE,
         payload,
     )
 }

@@ -1025,7 +1025,7 @@ impl AppState {
             .await?
             .into_iter()
             .filter(|record| {
-                record.kind == arkret_core::events::EventKind::DIRECT_CONVERSATION_BOUND
+                record.kind == arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND
             })
             .collect::<Vec<_>>();
         // Fold active candidates before explicit retirements so a retirement
@@ -1691,7 +1691,7 @@ mod membership_hydration_tests {
                 actor_id: "did:web:alice.example".to_owned(),
                 actor_seq: 2,
                 realm_id: Some(realm_id.to_owned()),
-                kind: arkret_core::events::EventKind::MEMBER_STATE.to_owned(),
+                kind: arkret_wire::events::EventKind::MEMBER_STATE.to_owned(),
                 schema_id: "ak.schema.event.v1".to_owned(),
                 canonical_digest: "sha256:membership".to_owned(),
                 canonical_bytes: Vec::new(),
@@ -1700,7 +1700,7 @@ mod membership_hydration_tests {
                     "actor_id": "did:web:alice.example",
                     "actor_seq": 2,
                     "realm_id": realm_id,
-                    "kind": arkret_core::events::EventKind::MEMBER_STATE,
+                    "kind": arkret_wire::events::EventKind::MEMBER_STATE,
                     "created_at": "2026-07-20T00:00:00.000Z",
                     "payload": {
                         "actor_id": member,
@@ -1899,7 +1899,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775902".to_owned(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
+                event_kind: arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
                 operation_type: "event".to_owned(),
                 operation_id: Some(
                     "ak:operation:019f0dd3-081c-7f03-b388-e0399e775903".to_owned(),
@@ -1963,7 +1963,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775904".to_owned(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_core::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
+                event_kind: arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
                 operation_type: "event".to_owned(),
                 operation_id: Some(
                     "ak:operation:019f0dd3-081c-7f03-b388-e0399e775905".to_owned(),
@@ -2030,7 +2030,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: event_id.to_owned(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                event_kind: arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
                 operation_type: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775904".to_owned()),
                 sender: Some(agent_id.to_owned()),
@@ -2050,7 +2050,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775905".to_owned(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_core::events::EventKind::AGENT_KEY_REVOKE.to_owned(),
+                event_kind: arkret_wire::events::EventKind::AGENT_KEY_REVOKE.to_owned(),
                 operation_type: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775906".to_owned()),
                 sender: Some(agent_id.to_owned()),
@@ -2068,7 +2068,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: replacement_event_id.to_owned(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                event_kind: arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
                 operation_type: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775908".to_owned()),
                 sender: Some(agent_id.to_owned()),

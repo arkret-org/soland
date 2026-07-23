@@ -154,7 +154,7 @@ async fn materialize_realm_control(
     let principal_control_actor = realm_records
         .iter()
         .find(|record| {
-            record.kind == arkret_core::events::EventKind::REALM_CREATE
+            record.kind == arkret_wire::events::EventKind::REALM_CREATE
                 && record
                     .envelope
                     .pointer("/payload/object/fields/purpose")
@@ -250,7 +250,7 @@ async fn materialize_realm_control(
         })
         .collect::<BTreeSet<_>>();
     for bootstrap in realm_records.iter().filter(|record| {
-        record.kind == arkret_core::events::EventKind::REALM_CREATE
+        record.kind == arkret_wire::events::EventKind::REALM_CREATE
             && record
                 .envelope
                 .pointer("/payload/object/fields/purpose")
@@ -262,7 +262,7 @@ async fn materialize_realm_control(
             realm_records
                 .iter()
                 .filter(|record| {
-                    record.kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
+                    record.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
                         && record
                             .envelope
                             .get("prev_refs")
@@ -748,7 +748,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
             .iter()
             .find(|record| {
                 record.event_id == payload.replacement_authorize_event_id.as_str()
-                    && record.kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
+                    && record.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
                     && record.canonical_digest == payload.replacement_authorize_digest.as_str()
                     && record
                         .envelope
@@ -866,7 +866,7 @@ pub(crate) fn canonical_event_ops(
     event: &Event,
     move_id: &MoveId,
 ) -> Result<Vec<(CellRef, SealedOp)>, AppError> {
-    if event.kind.as_str() != arkret_core::events::EventKind::REALM_CREATE {
+    if event.kind.as_str() != arkret_wire::events::EventKind::REALM_CREATE {
         return Ok(event
             .effects
             .iter()
@@ -1075,7 +1075,7 @@ mod tests {
         let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe").unwrap();
         let actor_id = arkret_core::Did::new("did:web:agent.example").unwrap();
         let mut event = Event::new(
-            arkret_core::events::EventKind::REALM_CREATE,
+            arkret_wire::events::EventKind::REALM_CREATE,
             realm_id.clone(),
             actor_id.clone(),
             1,

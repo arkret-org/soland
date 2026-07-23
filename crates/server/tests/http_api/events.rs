@@ -762,7 +762,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     .unwrap();
     let founding = signed_canonical_event(
         "ak:event:01904100-0000-7000-8000-c7ea7e000002",
-        arkret_core::events::EventKind::CAPABILITY_GRANT,
+        arkret_wire::events::EventKind::CAPABILITY_GRANT,
         &actor,
         "01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
@@ -806,7 +806,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         "ak:event:01904100-0000-7000-8000-c7ea7e000003",
         2,
         founding["event_id"].as_str().unwrap(),
-        arkret_core::events::EventKind::REALM_JOIN_RULE,
+        arkret_wire::events::EventKind::REALM_JOIN_RULE,
         "ak.component.realm.join_rule.v1",
         serde_json::json!("invite"),
     );
@@ -814,7 +814,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         "ak:event:01904100-0000-7000-8000-c7ea7e000004",
         3,
         join_rule["event_id"].as_str().unwrap(),
-        arkret_core::events::EventKind::REALM_HISTORY_VISIBILITY,
+        arkret_wire::events::EventKind::REALM_HISTORY_VISIBILITY,
         "ak.component.realm.history_visibility.v1",
         serde_json::json!("shared"),
     );
@@ -822,7 +822,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         "ak:event:01904100-0000-7000-8000-c7ea7e000005",
         4,
         history_visibility["event_id"].as_str().unwrap(),
-        arkret_core::events::EventKind::REALM_DISCOVERY,
+        arkret_wire::events::EventKind::REALM_DISCOVERY,
         "ak.component.realm.discovery.v1",
         serde_json::json!("listed"),
     );
@@ -1064,7 +1064,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     let typed_realm = RealmId::new(realm_id.clone()).unwrap();
     let actor = Did::new("did:web:alice.example").unwrap();
     let mut event = arkret_core::Event::new(
-        arkret_core::events::EventKind::MEMBER_STATE,
+        arkret_wire::events::EventKind::MEMBER_STATE,
         typed_realm.clone(),
         actor,
         1,
@@ -1278,7 +1278,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     .unwrap()
     .with_timezone(&chrono::Utc);
     let mut create = arkret_core::Event::new(
-        arkret_core::events::EventKind::REALM_CREATE,
+        arkret_wire::events::EventKind::REALM_CREATE,
         RealmId::new(realm_id.clone()).unwrap(),
         Did::new(agent_id.clone()).unwrap(),
         0,
@@ -1440,7 +1440,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     // predecessor (including its full receipt) so the controller can author
     // that successor; it must not ask the service notary to synthesize one.
     let mut pending = arkret_core::Event::new(
-        arkret_core::events::EventKind::MLS_GENESIS,
+        arkret_wire::events::EventKind::MLS_GENESIS,
         RealmId::new(realm_id.clone()).unwrap(),
         Did::new(agent_id.clone()).unwrap(),
         2,

@@ -3,7 +3,7 @@ use super::*;
 impl ProjectionState {
     pub(crate) fn apply_realm_key_share(&mut self, operation: &Operation) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_core::events::EventKind::REALM_KEY_SHARE)
+            != Some(arkret_wire::events::EventKind::REALM_KEY_SHARE)
         {
             return ProjectionEffect::Ignored;
         }

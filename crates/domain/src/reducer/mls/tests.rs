@@ -512,7 +512,7 @@ fn welcome_enqueue_accepts_current_agent_key_authorization() {
     let authorize_event_id = "ak:event:0196419b-0000-7000-8000-0000000000a2";
     let authorize = op_at(
         200,
-        arkret_core::events::EventKind::AGENT_KEY_AUTHORIZE,
+        arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE,
         json!({
             "agent_id": "did:web:bob.example",
             "key_id": "ak:agent_key:0196419b-0000-7000-8000-0000000000a2",

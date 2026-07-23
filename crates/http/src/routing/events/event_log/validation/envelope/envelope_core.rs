@@ -231,7 +231,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     // store.put succeeds, so any follow-up facet event in the same
     // session naturally passes the regular realm_has_member check.
     let realm_exists = realm_exists_in_index(state, &realm_id);
-    if kind == arkret_core::events::EventKind::REALM_CREATE && realm_exists {
+    if kind == arkret_wire::events::EventKind::REALM_CREATE && realm_exists {
         return Err(event_validation_error(
             StatusCode::CONFLICT,
             "realm_already_exists",
@@ -266,13 +266,13 @@ pub(crate) async fn validate_event_envelope_with_context(
         && realm_bootstrap_contexts
             .iter()
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id);
-    let is_realm_founding_grant = kind == arkret_core::events::EventKind::CAPABILITY_GRANT
+    let is_realm_founding_grant = kind == arkret_wire::events::EventKind::CAPABILITY_GRANT
         && realm_bootstrap_contexts.iter().any(|context| {
             context.ordinary_realm_bootstrap
                 && context.realm_id == realm_id
                 && context.actor_id == actor_id
         });
-    let is_identity_anchor_authorize = kind == arkret_core::events::EventKind::DEVICE_AUTHORIZE
+    let is_identity_anchor_authorize = kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id
                 && context.actor_id == actor_id
@@ -315,7 +315,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     }
     require_object_field(object, "payload")?;
     let is_self_principal_pcr_bootstrap_create = kind
-        == arkret_core::events::EventKind::REALM_CREATE
+        == arkret_wire::events::EventKind::REALM_CREATE
         && realm_bootstrap_contexts.iter().any(|context| {
             context.self_principal_pcr_bootstrap
                 && context.realm_id == realm_id
@@ -345,7 +345,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         object,
         is_realm_bootstrap_followup || is_realm_founding_grant || is_identity_anchor_authorize,
     )?;
-    if kind == arkret_core::events::EventKind::MEMBER_IDENTITY_UPDATE {
+    if kind == arkret_wire::events::EventKind::MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
             .await?;
     }

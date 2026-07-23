@@ -356,7 +356,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         .unwrap_or_else(|| panic!("latest account_data Event missing: {phone_sync}"));
     assert_eq!(
         event["kind"],
-        arkret_core::events::EventKind::ACCOUNT_DATA_SET
+        arkret_wire::events::EventKind::ACCOUNT_DATA_SET
     );
     assert_eq!(
         event["actor_id"].as_str(),
@@ -406,7 +406,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         .unwrap()
         .into_iter()
         .filter(|record| {
-            record.kind == arkret_core::events::EventKind::ACCOUNT_DATA_SET
+            record.kind == arkret_wire::events::EventKind::ACCOUNT_DATA_SET
                 && record
                     .envelope
                     .get("payload")

@@ -111,7 +111,7 @@ fn patch_operation_value_has_direct_field(value: &Value, field: &str) -> bool {
 
 pub(crate) fn strand_operation_carries_plaintext_private_content(operation: &Operation) -> bool {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_core::events::EventKind::STRAND_CREATE) => [
+        Some(arkret_wire::events::EventKind::STRAND_CREATE) => [
             &["synthesis"][..],
             &["object", "synthesis"][..],
             &["content"][..],
@@ -123,7 +123,7 @@ pub(crate) fn strand_operation_carries_plaintext_private_content(operation: &Ope
         .any(|path| {
             value_at_path(&operation.payload, path).is_some_and(value_is_plaintext_content)
         }),
-        Some(arkret_core::events::EventKind::STRAND_UPDATE) => {
+        Some(arkret_wire::events::EventKind::STRAND_UPDATE) => {
             patch_touches_plaintext_content_path(
                 &operation.payload,
                 &["synthesis", "content", "attachments"],

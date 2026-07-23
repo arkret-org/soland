@@ -1,6 +1,6 @@
 use arkret_core::Operation;
 // Standard protocol event kind constants intentionally live in the SDK.
-// Soland code should refer to `arkret_core::events::kinds::*` directly instead
+// Soland code should refer to `arkret_wire::events::kinds::*` directly instead
 // of re-exporting legacy aliases from this module.
 use serde_json::Value;
 
@@ -17,7 +17,7 @@ pub const MLS_REDUCER_PROFILE_V1: &str = "ak.reducer.v1";
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
 // COT-06-004: Realm default-Strand pointer event. The canonical event kind
-// constant is exposed as `arkret_core::events::EventKind::REALM_SET_DEFAULT_STRAND`.
+// constant is exposed as `arkret_wire::events::EventKind::REALM_SET_DEFAULT_STRAND`.
 
 // Morph lifecycle (round 13). Same shape as Strand — no dedicated tombstone.
 // `ak.field.position.move` and `ak.field.position.reorder` were removed in
@@ -266,39 +266,39 @@ pub fn canonical_kind_string(operation: &Operation) -> String {
 }
 
 pub fn operation_is_message_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_core::events::EventKind::MESSAGE_CREATE)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::events::EventKind::MESSAGE_CREATE)
 }
 
 pub fn operation_is_redaction(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(arkret_core::events::kinds::is_redaction_kind)
+        .is_some_and(arkret_wire::events::kinds::is_redaction_kind)
 }
 
 pub fn operation_is_membership(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(arkret_core::events::kinds::is_membership_kind)
+        .is_some_and(arkret_wire::events::kinds::is_membership_kind)
 }
 
 pub fn operation_is_invite(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation).is_some_and(arkret_core::events::kinds::is_invite_kind)
+    canonical_kind_for_operation(operation).is_some_and(arkret_wire::events::kinds::is_invite_kind)
 }
 
 pub fn operation_is_invite_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_core::events::EventKind::INVITE_CREATE)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::events::EventKind::INVITE_CREATE)
 }
 
 pub fn operation_is_invite_claim(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_core::events::EventKind::INVITE_CLAIM)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::events::EventKind::INVITE_CLAIM)
 }
 
 pub fn operation_is_invite_third_party(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        == Some(arkret_core::events::EventKind::INVITE_THIRD_PARTY)
+        == Some(arkret_wire::events::EventKind::INVITE_THIRD_PARTY)
 }
 
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(arkret_core::events::kinds::is_realm_lifecycle_kind)
+        .is_some_and(arkret_wire::events::kinds::is_realm_lifecycle_kind)
 }
 
 // ────────────────────────────────────────────────────────────────────────

@@ -180,8 +180,8 @@ fn build_projectable_operation(
     }
 
     let expected_event_kind = match operation_name.as_str() {
-        "grant" => arkret_core::events::EventKind::CAPABILITY_GRANT,
-        "revoke" => arkret_core::events::EventKind::CAPABILITY_REVOKE,
+        "grant" => arkret_wire::events::EventKind::CAPABILITY_GRANT,
+        "revoke" => arkret_wire::events::EventKind::CAPABILITY_REVOKE,
         _ => return Err(AppError::invalid_param("operation must be grant or revoke")),
     };
     if event_kind != expected_event_kind {
@@ -493,7 +493,7 @@ mod tests {
             kind: FANOUT_KIND.to_owned(),
             operation: "grant".to_owned(),
             issuer_service_id: ISSUER.to_owned(),
-            event_kind: arkret_core::events::EventKind::CAPABILITY_GRANT.to_owned(),
+            event_kind: arkret_wire::events::EventKind::CAPABILITY_GRANT.to_owned(),
             event_id: EVENT.to_owned(),
             capability_grant_id: GRANT.to_owned(),
             payload: json!({
@@ -521,7 +521,7 @@ mod tests {
         assert_eq!(draft.event_id, EVENT);
         assert_eq!(
             draft.operation.object_type,
-            arkret_core::events::EventKind::CAPABILITY_GRANT
+            arkret_wire::events::EventKind::CAPABILITY_GRANT
         );
         assert_eq!(draft.realm_id, REALM);
         assert_eq!(draft.subject.as_deref(), Some(SUBJECT));

@@ -1415,8 +1415,8 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 
 fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        arkret_core::events::EventKind::SPACE_ARCHIVE
-        | arkret_core::events::EventKind::SPACE_RESTORE => {
+        arkret_wire::events::EventKind::SPACE_ARCHIVE
+        | arkret_wire::events::EventKind::SPACE_RESTORE => {
             serde_json::to_value(arkret_core::SpaceStateTransitionPayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
@@ -1424,7 +1424,7 @@ fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
             })
             .expect("space lifecycle payload serialization")
         }
-        arkret_core::events::EventKind::SPACE_TOMBSTONE => {
+        arkret_wire::events::EventKind::SPACE_TOMBSTONE => {
             serde_json::to_value(arkret_core::SpaceObjectTombstonePayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
@@ -1595,19 +1595,19 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
 
 fn typed_morph_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        arkret_core::events::EventKind::MORPH_ARCHIVE => arkret_core::ObjectLifecyclePayload::new(
+        arkret_wire::events::EventKind::MORPH_ARCHIVE => arkret_core::ObjectLifecyclePayload::new(
             required_string(&payload, "target_ref", "morph lifecycle target_ref"),
         )
         .with_target_state("archived")
         .to_value()
         .expect("morph archive payload serialization"),
-        arkret_core::events::EventKind::MORPH_RESTORE => arkret_core::ObjectLifecyclePayload::new(
+        arkret_wire::events::EventKind::MORPH_RESTORE => arkret_core::ObjectLifecyclePayload::new(
             required_string(&payload, "target_ref", "morph lifecycle target_ref"),
         )
         .with_target_state("active")
         .to_value()
         .expect("morph restore payload serialization"),
-        arkret_core::events::EventKind::MORPH_UPDATE => {
+        arkret_wire::events::EventKind::MORPH_UPDATE => {
             let morph_id = arkret_core::MorphId::new(required_string(
                 &payload,
                 "target_ref",

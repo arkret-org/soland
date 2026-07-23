@@ -49,7 +49,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
     let registry_digest = arkret_core::current_capability_action_registry_digest()
         .expect("embedded capability action registry");
     op(
-        arkret_core::events::EventKind::CAPABILITY_GRANT,
+        arkret_wire::events::EventKind::CAPABILITY_GRANT,
         REALM,
         json!({
             "grant_id": grant_id,
@@ -69,7 +69,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
 
 fn revoke_op(grant_id: &str) -> Operation {
     op(
-        arkret_core::events::EventKind::CAPABILITY_REVOKE,
+        arkret_wire::events::EventKind::CAPABILITY_REVOKE,
         REALM,
         json!({ "grant_id": grant_id }),
     )
@@ -159,7 +159,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
     let hlc = ServerHlc::new("test");
     let effect = state.apply(
         &op(
-            arkret_core::events::EventKind::CAPABILITY_GRANT,
+            arkret_wire::events::EventKind::CAPABILITY_GRANT,
             REALM,
             json!({
                 "grant_id": GRANT_ID,

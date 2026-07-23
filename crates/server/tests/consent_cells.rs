@@ -446,7 +446,7 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
         seed,
         actor,
         &realm_id,
-        arkret_core::events::EventKind::CAPABILITY_GRANT,
+        arkret_wire::events::EventKind::CAPABILITY_GRANT,
         1,
         serde_json::json!({
             "grant_id": grant_id,

@@ -1140,8 +1140,8 @@ fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
     matches!(
         row.get("event_kind").and_then(Value::as_str),
         Some(
-            arkret_core::events::EventKind::MESSAGE_CREATE
-                | arkret_core::events::EventKind::MESSAGE_REVISE
+            arkret_wire::events::EventKind::MESSAGE_CREATE
+                | arkret_wire::events::EventKind::MESSAGE_REVISE
         )
     ) && row.get("payload").is_some_and(|payload| {
         payload.get("redacted").and_then(Value::as_bool) == Some(true)
@@ -1280,19 +1280,19 @@ mod tests {
         });
         let message = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa41",
-            arkret_core::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
             plaintext_payload.clone(),
             created_at,
         );
         let revise = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa43",
-            arkret_core::events::EventKind::MESSAGE_REVISE,
+            arkret_wire::events::EventKind::MESSAGE_REVISE,
             revised_payload.clone(),
             revised_at,
         );
         let redaction = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa42",
-            arkret_core::events::EventKind::MESSAGE_REDACT,
+            arkret_wire::events::EventKind::MESSAGE_REDACT,
             json!({
                 "event_id": TEST_REDACTION_EVENT,
                 "message_id": TEST_MESSAGE_ID,
@@ -1310,10 +1310,10 @@ mod tests {
         put_durable_event(
             &state,
             TEST_MESSAGE_EVENT,
-            arkret_core::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
             json!({
                 "event_id": TEST_MESSAGE_EVENT,
-                "kind": arkret_core::events::EventKind::MESSAGE_CREATE,
+                "kind": arkret_wire::events::EventKind::MESSAGE_CREATE,
                 "realm_id": TEST_REALM,
                 "actor_id": TEST_ACTOR,
                 "actor_seq": 1,
@@ -1329,10 +1329,10 @@ mod tests {
         put_durable_event(
             &state,
             TEST_REVISE_EVENT,
-            arkret_core::events::EventKind::MESSAGE_REVISE,
+            arkret_wire::events::EventKind::MESSAGE_REVISE,
             json!({
                 "event_id": TEST_REVISE_EVENT,
-                "kind": arkret_core::events::EventKind::MESSAGE_REVISE,
+                "kind": arkret_wire::events::EventKind::MESSAGE_REVISE,
                 "realm_id": TEST_REALM,
                 "actor_id": TEST_ACTOR,
                 "actor_seq": 2,

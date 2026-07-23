@@ -488,7 +488,7 @@ async fn mls_lifecycle_end_to_end() {
         alice_did,
         alice_device,
         realm_id,
-        arkret_core::events::EventKind::CAPABILITY_GRANT,
+        arkret_wire::events::EventKind::CAPABILITY_GRANT,
         json!({"grant_id": grant_id, "grant": grant}),
     );
     set_event_prev_refs(
